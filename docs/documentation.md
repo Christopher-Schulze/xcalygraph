@@ -12,6 +12,8 @@ xcalygraph is a single-binary CLI for AI agents. It turns any directory (code re
 
 It is a clean-room rewrite of a selected subset of Graphify, without LLM calls, without visualization, without runtime dependencies and optimized for build speed, incremental updates and token efficiency of its output. Target blueprint: `docs/spec.md`; deferred features: `docs/deferred.md`.
 
+License: MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`).
+
 ## Command line
 
 Implemented commands; the full target surface is `docs/spec.md` section 2.
@@ -45,6 +47,7 @@ Single binary crate without dependencies. Layers, each a module under `src/` cre
 - Gate: `scripts/tests/test.sh` runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` with `RUSTFLAGS=-Dwarnings`; any finding fails the run. Below 2 GiB free disk space it runs `cargo clean` first and aborts if that is not enough.
 - Lints: clippy denies `unwrap_used`, `expect_used`, `panic`, `todo` and `unimplemented` for all targets (`Cargo.toml`); tests return `Result` instead of unwrapping.
 - Tests: unit tests next to the code in `#[cfg(test)]` modules; end-to-end tests of the binary (stdout, stderr, exit codes) in `tests/`.
+- Publication check: `scripts/audits/check-publication.sh [RANGE]` runs before every push and fails on tracked local-only files, absolute home paths and private names (extended regexes in the gitignored `scripts/audits/private-patterns.txt`) in the tree or message of each commit; RANGE defaults to the commits not yet on `origin/main`.
 
 ## Upstream reference
 

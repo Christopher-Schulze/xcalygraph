@@ -23,3 +23,6 @@
 # Development index, benchmark output and private evaluation corpora
 /.cache/
 /scripts/benchmarks/questions/private/
+
+# Private names for scripts/audits/check-publication.sh
+/scripts/audits/private-patterns.txt

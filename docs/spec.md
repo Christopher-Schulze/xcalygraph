@@ -380,7 +380,6 @@ Reference: Apple Silicon laptop, warm filesystem cache, corpus of 8,000 tracked 
 | index size | max 20 MB |
 | bytes written per single-file change | max 5 MB |
 | peak RSS, full build | max 400 MB |
-| binary size, release build with all grammars | max 64 MB |
 | skill size | max 1500 tokens |
 
 ## 12. Evaluation
