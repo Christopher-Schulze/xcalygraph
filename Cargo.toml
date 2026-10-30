@@ -1,0 +1,15 @@
+[package]
+name = "xcalygraph"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+description = "Dense, agent-readable code graphs and analyses for AI agents"
+repository = "https://github.com/Christopher-Schulze/xcalygraph"
+publish = false
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"

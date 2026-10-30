@@ -17,6 +17,9 @@
 /docs/tasks.md
 /docs/tasks/
 
+# Rust build output
+/target/
+
 # Development index, benchmark output and private evaluation corpora
 /.cache/
 /scripts/benchmarks/questions/private/

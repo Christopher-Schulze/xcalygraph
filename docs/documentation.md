@@ -1,6 +1,9 @@
 # xcalygraph Documentation
 
 - [Overview](#overview)
+- [Command line](#command-line)
+- [Architecture](#architecture)
+- [Build and test](#build-and-test)
 - [Upstream reference](#upstream-reference)
 
 ## Overview
@@ -8,6 +11,40 @@
 xcalygraph is a single-binary CLI for AI agents. It turns any directory (code repository, server filesystem, document corpus) into a dense, agent-readable knowledge graph plus precomputed analyses, so an agent gets verified structural context with few tokens and little orchestration work. It ships with one compact agent skill that the binary installs and updates together with itself.
 
 It is a clean-room rewrite of a selected subset of Graphify, without LLM calls, without visualization, without runtime dependencies and optimized for build speed, incremental updates and token efficiency of its output. Target blueprint: `docs/spec.md`; deferred features: `docs/deferred.md`.
+
+## Command line
+
+Implemented commands; the full target surface is `docs/spec.md` section 2.
+
+| command | aliases | output |
+|---------|---------|--------|
+| `help [COMMAND]` | `-h`, `--help`, `<command> -h\|--help` | syntax overview, or the entry of COMMAND |
+| `version` | `-V`, `--version` | `xcalygraph <version>` |
+
+- Exit codes: 0 answer, 1 runtime error (for example a failed stdout write), 2 usage error.
+- Usage errors print one stderr line `xcalygraph: <error>; run 'xcalygraph help'` and nothing on stdout.
+- A reader that closes stdout early (`| head`) is not an error.
+
+## Architecture
+
+Single binary crate without dependencies. Layers, each a module under `src/` created with its first code:
+
+| layer | responsibility | may use |
+|-------|----------------|---------|
+| `cli` | argument parsing, help text, exit statuses, output rendering | `app` |
+| `app` | one use case per command; defines ports (traits) for IO | `domain` |
+| `domain` | pure graph model and algorithms, no IO | none |
+| `infra` | filesystem walk, index store, git; implements `app` ports | `app`, `domain` |
+
+`src/main.rs` wires the layers and owns process IO: stdout, stderr and the exit code.
+
+## Build and test
+
+- Toolchain: `rust-toolchain.toml` pins Rust 1.99.1 with rustfmt and clippy; rustup selects it inside the repository. `Cargo.toml` sets `rust-version` to the same release.
+- Development builds: `cargo build` (debug profile).
+- Gate: `scripts/tests/test.sh` runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` with `RUSTFLAGS=-Dwarnings`; any finding fails the run. Below 2 GiB free disk space it runs `cargo clean` first and aborts if that is not enough.
+- Lints: clippy denies `unwrap_used`, `expect_used`, `panic`, `todo` and `unimplemented` for all targets (`Cargo.toml`); tests return `Result` instead of unwrapping.
+- Tests: unit tests next to the code in `#[cfg(test)]` modules; end-to-end tests of the binary (stdout, stderr, exit codes) in `tests/`.
 
 ## Upstream reference
 

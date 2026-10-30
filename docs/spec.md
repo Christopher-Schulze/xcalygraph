@@ -35,6 +35,8 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 
 - Query commands (`map`, `find`, `ctx`, `show`, `impact`, `path`, `audit`) refresh the index first (section 4) unless `--read-only`.
 - NAME forms: `qualified.name`; `path:line`; `path::name`; bare name (must be unique).
+- Aliases: `-h`, `--help` = `help`; `<command> -h|--help` = `help <command>`; `-V`, `--version` = `version`.
+- Usage errors: one stderr line `xcalygraph: <error>; run 'xcalygraph help'`, exit 2. A reader that closes stdout early is not an error.
 
 | exit code | meaning |
 |-----------|---------|
