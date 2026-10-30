@@ -281,7 +281,8 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
             }
         }
     }
-    assemble(Assembly {
+    let doc = file_doc(root, source);
+    let mut facts = assemble(Assembly {
         hooks,
         path,
         source,
@@ -294,7 +295,9 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
         returns,
         fields,
         envs,
-    })
+    });
+    facts.doc = doc;
+    facts
 }
 
 struct Assembly<'a, 'tree> {
@@ -758,6 +761,24 @@ fn decorations(node: Node, source: &[u8]) -> String {
     }
     parts.reverse();
     parts.join(" ")
+}
+
+/// Leading comments of the file before its first other node: module or package documentation.
+fn file_doc(root: Node, source: &[u8]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for index in 0..root.named_child_count() {
+        let Some(child) = root.named_child(index as u32) else {
+            break;
+        };
+        if !child.kind().contains("comment") {
+            break;
+        }
+        let text = child.utf8_text(source).unwrap_or_default();
+        lines.push(strip_comment(
+            text.trim_start_matches("//!").trim_start_matches("/*!"),
+        ));
+    }
+    facts::clip(&facts::normalize_space(&lines.join(" ")), 400)
 }
 
 /// First sentence of the comment block directly above the definition.

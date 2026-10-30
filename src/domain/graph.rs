@@ -87,6 +87,8 @@ pub struct GraphFile {
     /// Unresolved references counted as ambiguous (resolution step 8).
     pub ambiguous: u32,
     pub entry: bool,
+    /// Leading file comment (module documentation).
+    pub doc: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

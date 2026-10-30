@@ -242,7 +242,7 @@ Resolution order for a reference, first hit wins:
 | unreferenced assets | `asset` files without incoming `references` |
 | search index | token -> symbol postings from name, parent chain, path, signature, doc; token -> file postings from text segments and config key paths |
 
-- Tokenization: split on non-alphanumerics, camelCase and PascalCase boundaries and letter-digit boundaries; lowercase; an English stopword list applies to query terms only.
+- Tokenization: split on non-alphanumerics, camelCase and PascalCase boundaries and letter-digit boundaries; lowercase; light English suffix stripping (`-s`, `-es` after sibilants, `-ies`, `-ed`, `-ing`); common code abbreviations and their spelled-out words map to one form (`dir`, `config`, `repo`, `env`, `error`, `context`); an English stopword list applies to query terms only. File nodes index their leading comment (module documentation) in the doc field.
 
 Git data requires `git` on PATH and a git work tree; otherwise git sections print `! git unavailable`. Cached in the `git` store file keyed by HEAD.
 
@@ -266,7 +266,7 @@ Sections in priority order: root line (name, files per language, symbol count) -
 
 1. Tokenize the query; look up exact names for the raw query and each term.
 2. Candidates = union of the postings.
-3. Score = BM25F (k1 1.2, b 0.75; field weights name 3, parent 1.5, path 1, signature 0.5, doc 0.5) + exact-name bonus 5, multiplied by the role weight (src 1, test 0.3, gen 0.2, doc 0.5, config 0.5, manifest 0.5, asset 0.3), + 0.5 x normalized log rank.
+3. Score = BM25F (k1 1.2, b 0.75; field weights name 3, parent 1.5, path 1, signature 0.5, doc 1; tokens stemmed and code abbreviations canonicalized) + exact-name bonus 5 when the whole query names the symbol, multiplied by the role weight (src 1, test 0.3, gen 0.2, doc 0.5, config 0.5, manifest 0.5, asset 0.3), + 0.5 x normalized log rank.
 4. Order: score descending, then path, then line; files matched by path tokens appear as file lines.
 
 ### 7.3 ctx

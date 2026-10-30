@@ -86,12 +86,10 @@ pub fn search(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
             let mut rank = 0.0;
             if let Node::Symbol(symbol) = index.node(node) {
                 let name = index.string(symbol.name).to_lowercase().replace('_', "");
-                // The whole query naming the symbol earns the full bonus; one term of a
-                // multi-term query only its share, so a common word cannot outrank the topic.
+                // Only the whole query naming the symbol earns the bonus; single terms are already
+                // weighted by the name field, and a bonus per term lets common words win.
                 if name == raw {
                     score += EXACT_NAME_BONUS;
-                } else if terms.contains(&name) {
-                    score += EXACT_NAME_BONUS / terms.len() as f32;
                 }
                 if let Some(qualified) = &qualified_query
                     && index

@@ -17,13 +17,17 @@ unimplemented = "deny"
 
 [dependencies]
 bytemuck = { version = "1.25.2", features = ["derive"] }
+flate2 = "1.1.10"
 ignore = "0.4.34"
 memmap2 = "0.9.12"
 rayon = "1.12.0"
+sha2 = "0.11.1"
+tar = "0.4.46"
 tree-sitter = "0.27.1"
 tree-sitter-go = { version = "0.25.0", optional = true }
 tree-sitter-language = "0.1.9"
 tree-sitter-rust = { version = "0.24.2", optional = true }
+ureq = "3.5.0"
 xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 
 [features]

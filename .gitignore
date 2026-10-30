@@ -26,3 +26,6 @@
 
 # Private names for scripts/audits/check-publication.sh
 /scripts/audits/private-patterns.txt
+
+# Release archives (scripts/build/build-release.sh)
+/dist/

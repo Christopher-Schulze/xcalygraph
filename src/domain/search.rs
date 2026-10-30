@@ -7,7 +7,7 @@ pub const PARENT: usize = 1;
 pub const PATH: usize = 2;
 pub const SIGNATURE: usize = 3;
 pub const DOC: usize = 4;
-pub const FIELD_WEIGHTS: [f32; FIELDS] = [3.0, 1.5, 1.0, 0.5, 0.5];
+pub const FIELD_WEIGHTS: [f32; FIELDS] = [3.0, 1.5, 1.0, 0.5, 1.0];
 pub const K1: f32 = 1.2;
 pub const B: f32 = 0.75;
 
@@ -61,12 +61,16 @@ pub fn for_each_token(text: &str, buffer: &mut String, mut emit: impl FnMut(&str
             if boundary {
                 buffer.clear();
                 buffer.push_str(&word[chars[start].0..chars[index].0].to_lowercase());
+                stem(buffer);
+                canonicalize(buffer);
                 emit(buffer);
                 start = index;
             }
         }
         buffer.clear();
         buffer.push_str(&word[chars[start].0..].to_lowercase());
+        stem(buffer);
+        canonicalize(buffer);
         emit(buffer);
     }
 }
@@ -77,7 +81,79 @@ fn emit_lower(part: &str, buffer: &mut String, emit: &mut impl FnMut(&str)) {
         part.bytes()
             .map(|byte| char::from(byte.to_ascii_lowercase())),
     );
+    stem(buffer);
+    canonicalize(buffer);
     emit(buffer);
+}
+
+/// Maps common code abbreviations and their spelled-out words to one form, so `dir` matches
+/// "directory" and "config" matches `cfg`; applied to indexed text and queries alike.
+pub fn canonicalize(word: &mut String) {
+    let canonical = match word.as_str() {
+        "directory" | "directory's" => "dir",
+        "cfg" | "configuration" | "conf" => "config",
+        "repository" => "repo",
+        "environment" => "env",
+        "err" => "error",
+        "ctx" => "context",
+        "idx" => "index",
+        "buf" => "buffer",
+        "str" => "string",
+        "num" => "number",
+        "len" => "length",
+        "cnt" => "count",
+        "pkg" => "package",
+        "impl" | "implementation" => "implement",
+        "param" | "parameter" => "param",
+        "arg" | "argument" => "arg",
+        "attr" | "attribute" => "attr",
+        "init" | "initialize" | "initialization" => "init",
+        "auth" | "authentication" | "authorization" => "auth",
+        "db" | "database" => "db",
+        "msg" | "message" => "message",
+        "tmp" | "temporary" => "temp",
+        "doc" | "document" | "documentation" => "doc",
+        "info" | "information" => "info",
+        "spec" | "specification" => "spec",
+        "var" | "variable" => "var",
+        "fs" | "filesystem" => "fs",
+        _ => return,
+    };
+    word.clear();
+    word.push_str(canonical);
+}
+
+/// Light English suffix stripping, applied identically to indexed text and queries:
+/// `trees` -> `tree`, `expanded` -> `expand`, `imports` -> `import`, `entries` -> `entry`.
+/// Stems keep at least 3 letters; `ss`, `us` and `is` endings stay.
+pub fn stem(word: &mut String) {
+    if word.len() <= 4 || !word.is_ascii() {
+        return;
+    }
+    let strip = |word: &mut String, suffix: &str, replacement: &str| -> bool {
+        if word.ends_with(suffix) && word.len() - suffix.len() >= 3 {
+            word.truncate(word.len() - suffix.len());
+            word.push_str(replacement);
+            return true;
+        }
+        false
+    };
+    if strip(word, "ies", "y") || strip(word, "sses", "ss") {
+        return;
+    }
+    if word.ends_with("ss") || word.ends_with("us") || word.ends_with("is") {
+        return;
+    }
+    for suffix in ["ches", "shes", "xes", "zes"] {
+        if word.ends_with(suffix) {
+            word.truncate(word.len() - 2);
+            return;
+        }
+    }
+    if strip(word, "ing", "") || strip(word, "ed", "") {
+        return;
+    }
+    strip(word, "s", "");
 }
 
 /// English stopwords dropped from query terms only.
@@ -142,10 +218,17 @@ mod tests {
 
     #[test]
     fn tokens_split_case_digits_and_separators() {
-        let cases: [(&str, &[&str]); 6] = [
+        let cases: [(&str, &[&str]); 10] = [
             ("NewStore", &["new", "store"]),
             ("HTTPServer2", &["http", "server", "2"]),
-            ("parse_json_file", &["parse", "json", "file"]),
+            ("parse_json_files", &["parse", "json", "file"]),
+            ("expanded use trees", &["expand", "use", "tree"]),
+            ("entries process status", &["entry", "process", "status"]),
+            ("classes matches boxes", &["class", "match", "box"]),
+            (
+                "index directories cfgDir",
+                &["index", "dir", "config", "dir"],
+            ),
             ("src/infra/scan.rs", &["src", "infra", "scan", "rs"]),
             ("getV2Config", &["get", "v", "2", "config"]),
             ("ÜberCase", &["über", "case"]),
@@ -159,7 +242,7 @@ mod tests {
     fn query_terms_drop_stopwords_unless_nothing_remains() {
         assert_eq!(
             query_terms("where is the config loaded"),
-            ["config", "loaded"]
+            ["config", "load"]
         );
         assert_eq!(query_terms("the"), ["the"]);
         assert_eq!(query_terms("store Store"), ["store"]);

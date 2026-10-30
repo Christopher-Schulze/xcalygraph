@@ -304,6 +304,9 @@ pub struct Facts {
     pub manifest: Option<Manifest>,
     /// Number of lines of the file.
     pub lines: u32,
+    /// Leading comment of the file (module or package documentation), whitespace-normalized,
+    /// max 400 chars.
+    pub doc: String,
     /// The file is an executable entrypoint (shebang, `__main__` block).
     pub entry: bool,
 }

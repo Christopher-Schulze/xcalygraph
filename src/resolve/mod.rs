@@ -1405,6 +1405,7 @@ impl<'a> Index<'a> {
                 symbol_count: facts.map_or(0, |facts| facts.symbols.len() as u32),
                 ambiguous: 0,
                 entry: facts.is_some_and(|facts| facts.entry),
+                doc: facts.map(|facts| facts.doc.clone()).unwrap_or_default(),
             });
         }
         let mut edges: Vec<Edge> = Vec::new();

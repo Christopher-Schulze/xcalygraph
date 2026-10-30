@@ -18,6 +18,7 @@ fn read_opt_index(decoder: &mut Decoder) -> DecodeResult<Option<u32>> {
 pub fn encode(encoder: &mut Encoder, facts: &Facts) {
     encoder.opt_str(facts.package.as_deref());
     encoder.var_u32(facts.lines);
+    encoder.str(&facts.doc);
     encoder.u8(u8::from(facts.entry));
     encoder.var_usize(facts.symbols.len());
     for symbol in &facts.symbols {
@@ -116,6 +117,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
     let mut facts = Facts {
         package: decoder.opt_string()?,
         lines: decoder.var_u32()?,
+        doc: decoder.string()?,
         entry: decoder.u8()? != 0,
         ..Facts::default()
     };
@@ -238,6 +240,7 @@ mod tests {
         Facts {
             package: Some("store".to_owned()),
             lines: 40,
+            doc: "Package store keeps rows.".to_owned(),
             entry: true,
             symbols: vec![
                 Symbol {

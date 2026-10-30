@@ -22,6 +22,9 @@ pub fn render(facts: &Facts) -> String {
     if let Some(package) = &facts.package {
         let _ = writeln!(out, "package {package}");
     }
+    if !facts.doc.is_empty() {
+        let _ = writeln!(out, "doc {:?}", facts.doc);
+    }
     for symbol in &facts.symbols {
         let _ = writeln!(
             out,

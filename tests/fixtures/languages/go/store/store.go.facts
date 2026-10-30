@@ -1,4 +1,5 @@
 package store
+doc "Package store keeps rows in memory."
 sym 12-12 const MaxRows parent=- owner= pub flags=0 sig="const MaxRows = 100" doc="MaxRows limits the table size."
 sym 14-14 var defaultName parent=- owner= priv flags=0 sig="var defaultName = \"rows\"" doc=""
 sym 17-20 iface Reader parent=- owner= pub flags=0 sig="type Reader interface" doc="Reader reads rows."

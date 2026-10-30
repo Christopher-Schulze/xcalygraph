@@ -10,19 +10,31 @@ type TestResult = Result<(), Box<dyn Error>>;
 
 const BINARY: &str = env!("CARGO_BIN_EXE_xcalygraph");
 
+/// Runs the binary with a HOME that never points at the real one.
 fn run(args: &[&str]) -> io::Result<Output> {
-    Command::new(BINARY).args(args).output()
+    Command::new(BINARY)
+        .args(args)
+        .env(
+            "HOME",
+            std::env::temp_dir().join("xcalygraph-it-empty-home"),
+        )
+        .output()
 }
 
 #[test]
-fn version_prints_binary_version() -> TestResult {
+fn version_prints_binary_index_and_skill_versions() -> TestResult {
     for args in [&["version"][..], &["--version"], &["-V"]] {
         let output = run(args)?;
         assert_eq!(output.status.code(), Some(0), "args {args:?}");
-        assert_eq!(
-            String::from_utf8(output.stdout)?,
-            format!("xcalygraph {}\n", env!("CARGO_PKG_VERSION"))
+        let text = String::from_utf8(output.stdout)?;
+        assert!(
+            text.starts_with(&format!(
+                "xcalygraph {}\nindex format ",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "{text}"
         );
+        assert!(text.ends_with("skill not installed\n"), "{text}");
         assert!(output.stderr.is_empty(), "args {args:?}");
     }
     Ok(())
@@ -41,7 +53,7 @@ fn help_prints_overview_and_command_entries() -> TestResult {
     assert_eq!(entry.status.code(), Some(0));
     assert_eq!(
         String::from_utf8(entry.stdout)?,
-        "xcalygraph version\n  binary version; also -V, --version\n"
+        "xcalygraph version\n  binary, index format and installed skill versions; also -V, --version\n"
     );
     Ok(())
 }
@@ -164,5 +176,75 @@ fn missing_root_is_a_runtime_error() -> TestResult {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8(output.stderr)?.starts_with("xcalygraph: root "));
+    Ok(())
+}
+
+#[test]
+fn install_writes_the_skill_and_version_reports_mismatches() -> TestResult {
+    let dir = TempDir::new("install")?;
+    let home = dir.0.join("home");
+    let with_home = |args: &[&str]| Command::new(BINARY).args(args).env("HOME", &home).output();
+    let installed = with_home(&["install", "--link", "claude"])?;
+    assert_eq!(
+        installed.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    let text = String::from_utf8(installed.stdout)?;
+    assert!(
+        text.contains("written") && text.contains("created"),
+        "{text}"
+    );
+    let skill = fs::read_to_string(home.join(".agents/skills/xcalygraph/SKILL.md"))?;
+    assert!(skill.starts_with("---\nname: xcalygraph\n"));
+    assert!(
+        fs::symlink_metadata(home.join(".claude/skills/xcalygraph"))?
+            .file_type()
+            .is_symlink()
+    );
+    let version = String::from_utf8(with_home(&["version"])?.stdout)?;
+    assert!(
+        version.ends_with(&format!("skill {}\n", env!("CARGO_PKG_VERSION"))),
+        "{version}"
+    );
+    fs::write(home.join(".agents/skills/xcalygraph/.version"), "0.0.1\n")?;
+    let stale = String::from_utf8(with_home(&["version"])?.stdout)?;
+    assert!(stale.contains("! installed skill 0.0.1"), "{stale}");
+    let bad = with_home(&["install", "--link", "vim"])?;
+    assert_eq!(bad.status.code(), Some(2));
+    Ok(())
+}
+
+#[test]
+fn update_check_compares_with_the_latest_release() -> TestResult {
+    let dir = TempDir::new("update")?;
+    dir.write("latest.json", "{\"tag_name\": \"v0.0.1\", \"assets\": []}")?;
+    let output = Command::new(BINARY)
+        .args(["update", "--check"])
+        .env("HOME", dir.0.join("home"))
+        .env(
+            "XCALYGRAPH_UPDATE_URL",
+            format!("file://{}", dir.0.join("latest.json").display()),
+        )
+        .output()?;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout)?;
+    assert!(text.contains("is current (latest release 0.0.1)"), "{text}");
+    dir.write("latest.json", "{\"tag_name\": \"v99.0.0\", \"assets\": []}")?;
+    let newer = Command::new(BINARY)
+        .args(["update", "--check"])
+        .env("HOME", dir.0.join("home"))
+        .env(
+            "XCALYGRAPH_UPDATE_URL",
+            format!("file://{}", dir.0.join("latest.json").display()),
+        )
+        .output()?;
+    assert!(String::from_utf8(newer.stdout)?.contains("update available"));
     Ok(())
 }

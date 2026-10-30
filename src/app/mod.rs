@@ -1,8 +1,10 @@
 //! Use cases: one per command.
 
 pub mod error;
+pub mod install;
 pub mod query;
 pub mod refresh;
+pub mod update;
 pub mod workspace;
 
 use crate::cli::{CommandName, Invocation};
@@ -12,11 +14,28 @@ use workspace::Workspace;
 
 /// Runs a command that needs the index and returns its stdout text.
 pub fn run(invocation: &Invocation) -> Result<String, AppError> {
-    let workspace = Workspace::resolve(&invocation.options)?;
     let options = &invocation.options;
     match invocation.command {
+        CommandName::Version => return Ok(version()),
+        CommandName::Install => {
+            let home = install::home()?;
+            return install::install(&home, options.link.is_some());
+        }
+        CommandName::Update => {
+            let mut out = update::update(options.check)?;
+            if let Ok(home) = install::home() {
+                out.push_str(&install::mismatch_line(&home));
+            }
+            return Ok(out);
+        }
+        _ => {}
+    }
+    let workspace = Workspace::resolve(&invocation.options)?;
+    match invocation.command {
         CommandName::Index => index(&workspace, options.drop),
-        CommandName::Help | CommandName::Version => Ok(String::new()),
+        CommandName::Help | CommandName::Version | CommandName::Install | CommandName::Update => {
+            Ok(String::new())
+        }
         command => {
             let mode = if options.read_only {
                 Mode::ReadOnly
@@ -98,8 +117,29 @@ fn run_query(
                 AppError::NoMatch(format!("no path from '{}' to '{}'", args[0], args[1]))
             })
         }
-        CommandName::Index | CommandName::Help | CommandName::Version => Ok(String::new()),
+        CommandName::Index
+        | CommandName::Help
+        | CommandName::Version
+        | CommandName::Install
+        | CommandName::Update => Ok(String::new()),
     }
+}
+
+/// Binary version, index format and installed skill version; a mismatch adds one notice line.
+fn version() -> String {
+    let mut out = format!(
+        "xcalygraph {}\nindex format {}\n",
+        install::VERSION,
+        crate::infra::store::container::FORMAT_VERSION
+    );
+    if let Ok(home) = install::home() {
+        match install::installed_version(&home) {
+            Some(skill) => out.push_str(&format!("skill {skill}\n")),
+            None => out.push_str("skill not installed\n"),
+        }
+        out.push_str(&install::mismatch_line(&home));
+    }
+    out
 }
 
 fn index(workspace: &Workspace, drop: bool) -> Result<String, AppError> {

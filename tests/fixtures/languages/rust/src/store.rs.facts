@@ -1,3 +1,4 @@
+doc "Row storage."
 sym 10-10 const MAX_ROWS parent=- owner= pub flags=0 sig="pub const MAX_ROWS: usize = 100" doc="Maximum number of rows."
 sym 12-12 var NAME parent=- owner= priv flags=0 sig="static NAME: &str = \"rows\"" doc=""
 sym 15-19 trait Reader parent=- owner= pub flags=0 sig="pub trait Reader: Send" doc="Reads rows."

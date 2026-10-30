@@ -134,14 +134,19 @@ fn header(index: &Index, writer: &mut Writer, node: u32) {
                 "{path} {kind} {} lines {} symbols",
                 file.lines, file.symbol_count
             );
+            let doc = crate::domain::facts::first_sentence(index.string(file.doc));
             writer.line(
                 &text,
                 &[
                     ("t", Value::Str("file")),
                     ("path", Value::Str(path)),
                     ("kind", Value::Str(kind)),
+                    ("doc", Value::Str(&doc)),
                 ],
             );
+            if !writer.is_json() && !doc.is_empty() {
+                writer.line(&format!("// {doc}"), &[]);
+            }
             let symbols = index.derived.symbols();
             let top: Vec<u32> = (file.first_symbol..file.first_symbol + file.symbol_count)
                 .filter(|&s| symbols[s as usize].parent == u32::MAX)

@@ -1,0 +1,33 @@
+question	expected
+how does the freshness check treat files modified right before the last index write	src/domain/corpus.rs::compare
+where are index files replaced atomically without fsync	src/infra/store/container.rs::write
+which function walks the root with gitignore rules in parallel	src/infra/walk.rs::walk
+where is decided that a file must never be read because it holds secrets	src/domain/role.rs::is_sensitive
+how is the role of a file chosen	src/domain/role.rs::classify
+where is the BM25F relevance score of find computed	src/app/query/find.rs::search
+personalized pagerank for the context bundle	src/app/query/ctx.rs::personalized_rank
+where are rust use trees expanded into imports	src/extract/lang/rust.rs::expand_import
+how is the type of a method call receiver determined	src/resolve/mod.rs::receiver_type
+compute the go import path of a package directory from go.mod	src/resolve/modules.rs::go_import_path
+where does a second writer wait for the index lock	src/infra/lock.rs::acquire
+split identifiers on camelCase boundaries for search	src/domain/search.rs::for_each_token
+find import cycles between modules	src/resolve/derive.rs::strongly_connected
+where is the symbol rank computed	src/resolve/derive.rs::rank
+parse command line flags and arguments	src/cli.rs::parse
+how is the token budget of an answer enforced	src/app/query/output.rs::item
+build the compressed sparse row adjacency of the graph	src/infra/store/derived.rs::adjacency
+open and validate the derived index file	src/infra/store/derived.rs::open
+verify the checksum of an index container	src/infra/store/container.rs::validate
+dispatch extraction to the language pack of a file	src/extract/lang/mod.rs::lookup
+attach doc comments to definitions	src/extract/engine.rs::doc_comment
+cut a definition signature before its body	src/extract/engine.rs::signature
+go types satisfying interfaces by method set	src/resolve/mod.rs::go_structural_implementations
+compute layers of the module dependency graph	src/resolve/derive.rs::layers
+shortest dependency path between two symbols	src/app/query/path.rs::shortest
+resolve a name given as path and line	src/app/query/names.rs::at_line
+where is the per root index directory named	src/infra/store/mod.rs::index_dir
+read package name and members from Cargo.toml	src/extract/manifest.rs::cargo_toml
+rewrite only the fact shards touched by a change	src/app/refresh.rs::write_shards
+list the largest modules in the orientation map	src/app/query/map.rs::modules
+decide whether a header file is C, C++ or Objective-C	src/domain/filetype.rs::resolve_ambiguous
+fall back to a unique name when nothing else resolves	src/resolve/mod.rs::unique_fallback

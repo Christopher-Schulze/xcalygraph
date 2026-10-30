@@ -1,0 +1,46 @@
+---
+name: xcalygraph
+description: Code graph CLI for structure questions: where something is defined or handled, who calls or uses it, what implements an interface, what a change affects, how a repository is laid out. Use before reading files when locating code or tracing relations; use rg or direct reads for exact text, known files, logs and non-code content.
+---
+
+# xcalygraph
+
+Local, deterministic index of the repository (symbols, calls, type uses, imports, implementations, tests, env reads). Every query refreshes the index incrementally first; answers cite `path:line`.
+
+## When
+
+- Unknown code: `map`, then `find` or `ctx`.
+- "Where is X handled", "who calls X", "what implements X", "path from A to B": `find`, `show`, `path`.
+- Exact strings, config values, logs, prose: `rg` and direct reads are better.
+
+## Commands
+
+| command | use |
+|---|---|
+| `xcalygraph map` | languages, largest modules with top symbols, entrypoints, hubs, cycles, layers, external deps, env vars |
+| `xcalygraph find TERMS...` | ranked symbols and files, one line each; natural-language terms work |
+| `xcalygraph ctx TERMS...` | best matches with doc sentence plus related symbols, grouped by file |
+| `xcalygraph show NAME` | card: signature, doc, members, supertypes, implementations, callers, callees, tests, env reads |
+| `xcalygraph path FROM TO` | shortest dependency path |
+| `xcalygraph help [COMMAND]` | full syntax |
+
+NAME: `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get`), `path:line`, `path::name`, a file path, or a unique bare name.
+
+Flags: `-p GLOB` (paths, gitignore syntax, repeatable), `-l go,rust` (languages), `-k fn,method,struct` (kinds), `--no-tests`, `--exact` (drop inferred edges), `-d N` (show depth), `--all` (show without caps), `-b N` (token budget), `--json`, `--read-only` (never write; exit 5 when stale), `-C DIR` (root).
+
+## Reading the output
+
+- `<line> <signature>` lines are grouped under their file path.
+- Card markers: `m` member, `f` fields, `^` supertype, `v` implementation, `<` incoming (caller site), `>` outgoing (definition), `t` test, `t2` test through one caller, `e` env read, `!` notice.
+- A trailing `?` marks an inferred edge (name-based or dispatch); verify before relying on it.
+- `+N more` means the budget cut N items: narrow with `-p`, `-k`, `-l` or raise `-b`.
+
+## Exit codes
+
+0 answer, 2 usage error, 3 ambiguous NAME (candidates printed: repeat with a qualified name or `path::name`), 4 no match, 5 stale under `--read-only`.
+
+## Rules
+
+- Open the cited `path:line` before editing; the graph locates, the source decides.
+- In read-only tasks pass `--read-only`.
+- Prefer `show` on a found name over reading whole files to see callers and callees.

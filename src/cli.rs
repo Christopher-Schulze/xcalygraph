@@ -8,16 +8,16 @@ use std::process::ExitCode;
 use crate::domain::facts::SymKind;
 use crate::domain::filetype::FileType;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-
 /// Every command, in help order.
-const COMMANDS: [CommandName; 8] = [
+const COMMANDS: [CommandName; 10] = [
     CommandName::Map,
     CommandName::Find,
     CommandName::Ctx,
     CommandName::Show,
     CommandName::Path,
     CommandName::Index,
+    CommandName::Install,
+    CommandName::Update,
     CommandName::Version,
     CommandName::Help,
 ];
@@ -59,6 +59,8 @@ pub enum CommandName {
     Show,
     Path,
     Index,
+    Install,
+    Update,
     Version,
     Help,
 }
@@ -76,6 +78,8 @@ impl CommandName {
             Self::Show => "show",
             Self::Path => "path",
             Self::Index => "index",
+            Self::Install => "install",
+            Self::Update => "update",
             Self::Version => "version",
             Self::Help => "help",
         }
@@ -89,6 +93,8 @@ impl CommandName {
             Self::Show => "show NAME [--all]",
             Self::Path => "path FROM TO",
             Self::Index => "index [--drop]",
+            Self::Install => "install [--link claude]",
+            Self::Update => "update [--check]",
             Self::Version => "version",
             Self::Help => "help [COMMAND]",
         }
@@ -104,7 +110,11 @@ impl CommandName {
             Self::Show => "card of a symbol or file: members, types, callers, callees, tests, env",
             Self::Path => "shortest dependency path between two names",
             Self::Index => "build or refresh the index explicitly; --drop deletes it",
-            Self::Version => "binary version; also -V, --version",
+            Self::Install => "install the embedded agent skill to ~/.agents/skills/xcalygraph",
+            Self::Update => "self-update from GitHub Releases, then install the skill",
+            Self::Version => {
+                "binary, index format and installed skill versions; also -V, --version"
+            }
             Self::Help => "syntax reference; also -h, --help, <command> --help",
         }
     }
@@ -115,7 +125,7 @@ impl CommandName {
             Self::Find | Self::Ctx => (1, usize::MAX),
             Self::Show => (1, 1),
             Self::Path => (2, 2),
-            Self::Map | Self::Index | Self::Version => (0, 0),
+            Self::Map | Self::Index | Self::Install | Self::Update | Self::Version => (0, 0),
             Self::Help => (0, 1),
         }
     }
@@ -125,13 +135,15 @@ impl CommandName {
             Self::Map | Self::Find | Self::Ctx | Self::Path => &QUERY_FLAGS,
             Self::Show => &SHOW_FLAGS,
             Self::Index => &[Flag::Root, Flag::IndexDir, Flag::Drop],
+            Self::Install => &[Flag::Link],
+            Self::Update => &[Flag::Check],
             Self::Version | Self::Help => &[],
         }
     }
 }
 
 /// Every flag, in help order.
-const FLAGS: [Flag; 13] = [
+const FLAGS: [Flag; 15] = [
     Flag::Root,
     Flag::Budget,
     Flag::Json,
@@ -145,6 +157,8 @@ const FLAGS: [Flag; 13] = [
     Flag::NoTests,
     Flag::All,
     Flag::Drop,
+    Flag::Link,
+    Flag::Check,
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,6 +176,8 @@ pub enum Flag {
     NoTests,
     All,
     Drop,
+    Link,
+    Check,
 }
 
 impl Flag {
@@ -180,6 +196,8 @@ impl Flag {
             Self::NoTests => "--no-tests",
             Self::All => "--all",
             Self::Drop => "--drop",
+            Self::Link => "--link",
+            Self::Check => "--check",
         }
     }
 
@@ -201,6 +219,7 @@ impl Flag {
             Self::Budget | Self::Depth => Some("N"),
             Self::Path => Some("GLOB"),
             Self::Lang | Self::Kind => Some("LIST"),
+            Self::Link => Some("HOST"),
             _ => None,
         }
     }
@@ -220,6 +239,8 @@ impl Flag {
             Self::NoTests => "drop test, generated and fixture files",
             Self::All => "lift the per-section caps of show",
             Self::Drop => "delete the index of the root",
+            Self::Link => "also link the skill for HOST (claude: ~/.claude/skills/xcalygraph)",
+            Self::Check => "report an available update without installing it",
         }
     }
 
@@ -257,6 +278,8 @@ pub struct Options {
     pub no_tests: bool,
     pub all: bool,
     pub drop: bool,
+    pub link: Option<String>,
+    pub check: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -270,7 +293,6 @@ pub struct Invocation {
 pub enum Command {
     /// Overview without a topic, else the entry of one command.
     Help(Option<CommandName>),
-    Version,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -427,6 +449,13 @@ fn apply(options: &mut Options, flag: Flag, value: Option<String>) -> Result<(),
         Flag::NoTests => options.no_tests = true,
         Flag::Drop => options.drop = true,
         Flag::All => options.all = true,
+        Flag::Check => options.check = true,
+        Flag::Link => {
+            if value != "claude" {
+                return Err(invalid());
+            }
+            options.link = Some(value);
+        }
         Flag::Path => options.paths.push(value),
         Flag::Lang => {
             for id in value.split(',').filter(|id| !id.is_empty()) {
@@ -465,7 +494,6 @@ pub fn local_command(invocation: &Invocation) -> Option<Command> {
                 .first()
                 .and_then(|topic| CommandName::from_name(topic)),
         )),
-        CommandName::Version => Some(Command::Version),
         _ => None,
     }
 }
@@ -481,7 +509,6 @@ pub fn render(command: Command) -> String {
             }
             text
         }
-        Command::Version => format!("xcalygraph {VERSION}\n"),
     }
 }
 
@@ -691,35 +718,33 @@ mod tests {
         let lines: Vec<&str> = overview.lines().collect();
         assert_eq!(lines[0], "xcalygraph <command> [args] [flags]");
         assert_eq!(lines[1], "commands:");
-        assert_eq!(
-            lines[2],
-            "  map                orientation: languages, modules, entrypoints, hubs, cycles, layers, deps, env"
-        );
-        assert_eq!(
-            lines[9],
-            "  help [COMMAND]     syntax reference; also -h, --help, <command> --help"
-        );
-        assert_eq!(lines[10], "flags:");
-        assert_eq!(
-            lines[11],
-            "  -C, --root PATH   index root; default: nearest ancestor with .git, else cwd"
-        );
-        assert_eq!(
-            lines[23],
-            "  --drop            delete the index of the root"
-        );
-        assert_eq!(
-            lines[24],
-            "exit codes: 0 answer, 1 runtime error, 2 usage error, 3 ambiguous name, 4 no match, \
-             5 index missing or stale under --read-only"
-        );
-        assert_eq!(lines.len(), 25);
-        for command in COMMANDS {
-            assert!(overview.contains(command.synopsis()), "{}", command.name());
+        let flags_at = lines.iter().position(|line| *line == "flags:");
+        assert_eq!(flags_at, Some(2 + COMMANDS.len()));
+        for (offset, command) in COMMANDS.iter().enumerate() {
+            let line = lines[2 + offset];
+            assert!(
+                line.starts_with(&format!("  {}", command.synopsis())),
+                "{line}"
+            );
+            assert!(line.ends_with(command.summary()), "{line}");
         }
+        let used = FLAGS
+            .iter()
+            .filter(|flag| {
+                COMMANDS
+                    .iter()
+                    .any(|command| command.flags().contains(flag))
+            })
+            .count();
+        assert_eq!(lines.len(), 2 + COMMANDS.len() + 1 + used + 1);
         for flag in FLAGS {
             assert!(overview.contains(&flag.label()), "{}", flag.long());
         }
+        assert_eq!(
+            lines[lines.len() - 1],
+            "exit codes: 0 answer, 1 runtime error, 2 usage error, 3 ambiguous name, 4 no match, \
+             5 index missing or stale under --read-only"
+        );
     }
 
     #[test]

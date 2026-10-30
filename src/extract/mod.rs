@@ -11,7 +11,7 @@ use crate::domain::facts::Facts;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction output changes, so existing indexes rebuild.
-pub const EXTRACTION_VERSION: u32 = 2;
+pub const EXTRACTION_VERSION: u32 = 3;
 
 /// Extracts the facts of one file of an extracted role.
 pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {

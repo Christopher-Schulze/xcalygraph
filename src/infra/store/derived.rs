@@ -39,6 +39,7 @@ pub struct FileRecord {
     pub first_symbol: u32,
     pub symbol_count: u32,
     pub ambiguous: u32,
+    pub doc: u32,
     pub role: u8,
     pub file_type: u8,
     pub entry: u8,
@@ -213,6 +214,7 @@ pub fn build(graph: &Graph) -> Vec<u8> {
             first_symbol: file.first_symbol,
             symbol_count: file.symbol_count,
             ambiguous: file.ambiguous,
+            doc: strings.append(&file.doc),
             role: file.role as u8,
             file_type: file.file_type.map_or(0, |file_type| file_type as u8),
             entry: u8::from(file.entry),
@@ -380,6 +382,7 @@ fn search_index(graph: &Graph) -> SearchIndex {
             let mut fields = [""; FIELDS];
             fields[search::NAME] = file.path.rsplit('/').next().unwrap_or(&file.path);
             fields[search::PATH] = &file.path;
+            fields[search::DOC] = &file.doc;
             return fields;
         }
         let symbol = &graph.symbols[node];

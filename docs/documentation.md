@@ -2,6 +2,8 @@
 
 - [Overview](#overview)
 - [Command line](#command-line)
+- [Agent skill](#agent-skill)
+- [Installation and releases](#installation-and-releases)
 - [Output format](#output-format)
 - [Architecture](#architecture)
 - [Build and test](#build-and-test)
@@ -27,7 +29,9 @@ Implemented commands; the full target surface is `docs/spec.md` section 2. `xcal
 | `show NAME [--all]` | 1200 | card: header, signature, doc, members (`m`), field names (`f`), supertypes (`^`), implementations (`v`), incoming (`<`, call sites), outgoing (`>`), tests (`t`, `t2` through one caller), env reads (`e`), ambiguity notice (`!`) |
 | `path FROM TO` | 400 | one line per hop (`.` start, `>` forward, `<` against edge direction); without a directed path the undirected one, marked `?` |
 | `index [--drop]` | none | `files N changed C deleted D`; `--drop` deletes the index of the root |
-| `version` | none | `xcalygraph <version>`; aliases `-V`, `--version` |
+| `install [--link claude]` | none | writes the embedded skill to `~/.agents/skills/xcalygraph/SKILL.md` plus `.version` (unchanged files untouched); `--link claude` creates `~/.claude/skills/xcalygraph` pointing there when absent and never replaces a foreign entry |
+| `update [--check]` | none | latest GitHub release of the repository; when newer: downloads `xcalygraph-<version>-<os>-<arch>.tar.gz` and `SHA256SUMS`, verifies the checksum, replaces the running binary by rename and runs `install` with it; `--check` only reports; `XCALYGRAPH_UPDATE_URL` overrides the release metadata URL (also `file://`) |
+| `version` | none | `xcalygraph <version>`, `index format <n>`, `skill <version>` or `skill not installed`, and one `!` line when the installed skill differs; aliases `-V`, `--version` |
 | `help [COMMAND]` | none | syntax overview or one command with its flags; aliases `-h`, `--help`, `<command> --help` |
 
 - Query flags: `-C, --root PATH`, `-b, --budget N` (tokens, bytes / 3), `--json`, `--read-only`, `--index-dir PATH`, `-p, --path GLOB` (gitignore syntax, repeatable), `-l, --lang LIST`, `-k, --kind LIST`, `--exact`, `--no-tests`; `show` adds `-d, --depth N` and `--all`.
@@ -35,6 +39,16 @@ Implemented commands; the full target surface is `docs/spec.md` section 2. `xcal
 - Query commands refresh the index first; `--read-only` never writes and exits 5 when the index is missing or stale.
 - Exit codes: 0 answer, 1 runtime error, 2 usage error, 3 ambiguous NAME (candidates on stdout), 4 no match, 5 index missing or stale under `--read-only`.
 - Usage errors print one stderr line `xcalygraph: <error>; run 'xcalygraph help'` and nothing on stdout. A reader that closes stdout early (`| head`) is not an error.
+
+## Agent skill
+
+`skills/xcalygraph/SKILL.md` is embedded in the binary, so skill version equals binary version. It states when to use xcalygraph and when `rg` or direct reads are better, the command table, NAME forms, flags, output markers, exit codes and three rules (verify at the cited line before editing, `--read-only` in read-only tasks, `show` instead of whole-file reads). Size: 2.7 KB, about 700 to 900 tokens (limit 1500, enforced by a unit test).
+
+## Installation and releases
+
+- Install script: `scripts/utils/install.sh` downloads the latest release archive for the platform, verifies it against `SHA256SUMS`, places the binary in `~/.local/bin` and runs `xcalygraph install` (with `--link claude` when `~/.claude` exists).
+- Release archives: `scripts/build/build-release.sh [TARGET...]` builds `dist/xcalygraph-<version>-<os>-<arch>.tar.gz` (binary, `LICENSE-MIT`, `LICENSE-APACHE`, `THIRD-PARTY-LICENSES.txt` with the license files of every dependency from `cargo metadata`) and `dist/SHA256SUMS`.
+- `.github/workflows/release.yml` builds darwin-arm64, darwin-amd64, linux-amd64 and linux-arm64 (static musl) on a `v*` tag and publishes them with `SHA256SUMS` as the release of that tag.
 
 ## Output format
 
@@ -73,6 +87,8 @@ Grammars are cargo features (`lang-go`, `lang-rust`; all on by default). Adding 
 - Tests: unit tests next to the code in `#[cfg(test)]` modules; end-to-end tests of the binary (stdout, stderr, exit codes) in `tests/`.
 - Golden fixtures: `tests/fixtures/languages/<id>/` holds sources whose extracted facts are compared with `<file>.facts`; `tests/fixtures/resolve/<case>/` holds small roots whose resolved edges are compared with `<case>.edges`. `XCALYGRAPH_BLESS=1 cargo test` rewrites the golden files; every changed line is checked against the fixture source before commit. A determinism test compares `derived` images built with 1 and 8 threads.
 - Precision sampling: `XCALYGRAPH_SAMPLE_ROOT=<dir> cargo test --release sample_edges -- --ignored --nocapture` prints up to `XCALYGRAPH_SAMPLE_SIZE` (default 50) edges per kind and confidence, each with the reference line and the target signature, for checking against source (`docs/spec.md` section 12).
+- Evaluation: `scripts/benchmarks/run-evaluation.sh [--no-upstream] [CORPUS...]` answers every question of `scripts/benchmarks/questions/<corpus>.tsv` (private sets under `questions/private/`; columns question, expected `path::name`) and reports hit@5 of `find` (expected file among the first five results, `docs/spec.md` section 12), the same for the exact symbol, hit@5 of `ctx`, mean tokens per answer, the rg baseline (rg output for the two longest question words plus reading the expected file) and the upstream Graphify baseline (`graphify query` on a graph of a copy below `.cache/`). Misses are written to `.cache/evaluation/misses-<corpus>.txt`.
+- Agent benchmark: `scripts/benchmarks/run-agent-benchmark.sh [--run] [--runs N] CORPUS...` plans headless Claude Code runs per question in three arms (no tool, Graphify skill, xcalygraph skill), each with its own temporary `HOME`; without `--run` it only prints the invocations. With `--run` it records success (the answer names the expected file), tokens, turns and wall time.
 - Benchmarks: `scripts/benchmarks/run-benchmarks.sh [CORPUS...]` builds the release binary and reports per corpus: files, full build ms, peak RSS, warm freshness ms, single-file refresh ms, index KB and KB rewritten by a single-file change (on a copy below `.cache/`). Corpora: this repository, the upstream clone and private ones listed as `name<TAB>path` in the gitignored `scripts/benchmarks/questions/private/corpora.tsv`. Requires `hyperfine`, `jq`, `rsync`.
 - Publication check: `scripts/audits/check-publication.sh [RANGE]` runs before every push and fails on tracked local-only files, absolute home paths and private names (extended regexes in the gitignored `scripts/audits/private-patterns.txt`) in the tree or message of each commit; RANGE defaults to the commits not yet on `origin/main`.
 
