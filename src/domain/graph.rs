@@ -165,10 +165,6 @@ pub struct Graph {
 }
 
 impl Graph {
-    pub fn file_node(&self, file: u32) -> NodeId {
-        self.symbols.len() as u32 + file
-    }
-
     pub fn node_count(&self) -> usize {
         self.symbols.len() + self.files.len()
     }

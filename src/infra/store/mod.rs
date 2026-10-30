@@ -113,31 +113,38 @@ impl Store {
     /// Facts of every file in the shard, sorted by path.
     pub fn read_shard(&self, shard: usize) -> Result<Vec<(String, Facts)>, OpenError> {
         let container = Container::open(&self.shard_path(shard), Kind::Facts)?;
-        let mut decoder = Decoder::new(container.section(0));
-        let decode = |decoder: &mut Decoder| -> DecodeResult<Vec<(String, Facts)>> {
+        let decode = || -> DecodeResult<Vec<(String, Facts)>> {
+            let mut decoder = Decoder::with_table(container.section(1), container.section(0))?;
             let count = decoder.len()?;
             (0..count)
-                .map(|_| Ok((decoder.string()?, facts_codec::decode(decoder)?)))
+                .map(|_| Ok((decoder.string()?, facts_codec::decode(&mut decoder)?)))
                 .collect()
         };
-        decode(&mut decoder).map_err(|_| OpenError::Invalid("facts content"))
+        decode().map_err(|_| OpenError::Invalid("facts content"))
     }
 
     pub fn write_shard(&self, shard: usize, files: &[(&str, &Facts)]) -> io::Result<u64> {
-        let mut encoder = Encoder::default();
+        // Section 0: shard-local string table; section 1: per-file facts referencing it.
+        let mut encoder = Encoder::with_table();
         encoder.var_usize(files.len());
         for (path, facts) in files {
             encoder.str(path);
             facts_codec::encode(&mut encoder, facts);
         }
+        let table = encoder.table_bytes();
         container::write(
             &self.shard_path(shard),
-            &container::build(Kind::Facts, &[&encoder.bytes]),
+            &container::build(Kind::Facts, &[&table, &encoder.bytes]),
         )
     }
 
     pub fn read_container(&self, name: &str, kind: Kind) -> Result<Container, OpenError> {
         Container::open(&self.path(name), kind)
+    }
+
+    /// Header check without reading the payload: magic, format version, kind and length.
+    pub fn has_valid_header(&self, name: &str, kind: Kind) -> bool {
+        container::header_matches(&self.path(name), kind)
     }
 
     pub fn write_container(&self, name: &str, image: &[u8]) -> io::Result<u64> {

@@ -24,7 +24,15 @@ pub fn run(invocation: &Invocation) -> Result<String, AppError> {
                 Mode::Write
             };
             refresh::refresh(&workspace, mode)?;
-            let index = query::open(&workspace.store)?;
+            let index = match query::open(&workspace.store) {
+                Ok(index) => index,
+                // A corrupt derived file (checksum) is rebuilt from the facts once.
+                Err(_) if mode == Mode::Write => {
+                    refresh::rederive(&workspace)?;
+                    query::open(&workspace.store)?
+                }
+                Err(error) => return Err(error),
+            };
             let filter = query::Filter::new(options)?;
             let root_name = workspace.root.file_name().map_or_else(
                 || "root".to_owned(),

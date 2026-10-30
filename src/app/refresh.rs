@@ -14,7 +14,7 @@ use crate::extract::{self, EXTRACTION_VERSION};
 use crate::infra::lock::{self, WriterLock};
 use crate::infra::scan;
 use crate::infra::store::container::{Kind, OpenError};
-use crate::infra::store::derived::{self, Derived};
+use crate::infra::store::derived;
 use crate::infra::store::{self, Meta, SHARDS};
 use crate::resolve;
 
@@ -110,18 +110,26 @@ fn derive_version() -> String {
     )
 }
 
+/// Cheap validity for the refresh decision: written by this build and present with a valid
+/// header. The full checksum is verified when a query opens the file; a corrupt file is then
+/// re-derived by [`rederive`].
 fn derived_is_valid(workspace: &Workspace) -> bool {
-    let current = workspace
+    workspace
         .store
         .read_meta()
-        .is_ok_and(|meta| meta.binary_version == derive_version());
-    current
-        && workspace
-            .store
-            .read_container("derived", Kind::Derived)
-            .ok()
-            .and_then(Derived::open)
-            .is_some()
+        .is_ok_and(|meta| meta.binary_version == derive_version())
+        && workspace.store.has_valid_header("derived", Kind::Derived)
+}
+
+/// Rebuilds `derived` from the stored facts, under the writer lock.
+pub fn rederive(workspace: &Workspace) -> Result<(), AppError> {
+    let _lock = WriterLock::acquire(&workspace.store.dir, lock::WAIT)
+        .map_err(AppError::io("lock index"))?;
+    let records = workspace
+        .store
+        .read_files()
+        .map_err(|error| AppError::Invalid(format!("index unreadable ({error})")))?;
+    write_derived(workspace, &records).map(|_| ())
 }
 
 /// Resolves the facts of every file and writes the `derived` file.

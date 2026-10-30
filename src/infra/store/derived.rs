@@ -1,14 +1,14 @@
 //! `derived` file: fixed-size little-endian records read zero-copy from the memory map
 //! (`docs/spec.md` section 9). Strings are ids into one interned string table.
 
-use std::collections::HashMap;
-
 use bytemuck::{Pod, Zeroable};
+use rayon::prelude::*;
 
 use super::container::{self, Container, Kind};
 use crate::domain::facts::SymKind;
 use crate::domain::filetype::FileType;
 use crate::domain::graph::{Confidence, EdgeKind, Graph};
+use crate::domain::hash::FastMap;
 use crate::domain::role::Role;
 use crate::domain::search::{self, FIELDS};
 
@@ -108,13 +108,25 @@ pub struct TokenRecord {
     pub count: u32,
 }
 
-/// Term frequency of one token per field of one node; posting lists are sorted by node.
+/// Term frequency of one token per field of one node, 4 bits per field (capped at 15);
+/// posting lists are sorted by node.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct PostingRecord {
     pub node: u32,
-    pub tf: [u8; FIELDS],
-    pub pad: [u8; 3],
+    pub packed: u32,
+}
+
+impl PostingRecord {
+    pub fn tf(&self, field: usize) -> u8 {
+        ((self.packed >> (field * 4)) & 0xf) as u8
+    }
+
+    fn add(&mut self, field: usize) {
+        if self.tf(field) < 15 {
+            self.packed += 1 << (field * 4);
+        }
+    }
 }
 
 /// Token count per field of one node (BM25F length normalization).
@@ -151,7 +163,7 @@ mod section {
 struct Interner {
     blob: Vec<u8>,
     offsets: Vec<u32>,
-    ids: HashMap<String, u32>,
+    ids: FastMap<String, u32>,
 }
 
 impl Interner {
@@ -162,6 +174,18 @@ impl Interner {
         };
         interner.id("");
         interner
+    }
+
+    /// Appends without deduplication: for texts that are almost always unique (signatures,
+    /// docs, qualified names), hashing costs more than the duplicates.
+    fn append(&mut self, text: &str) -> u32 {
+        if text.is_empty() {
+            return 0;
+        }
+        let id = (self.offsets.len() - 1) as u32;
+        self.blob.extend_from_slice(text.as_bytes());
+        self.offsets.push(self.blob.len() as u32);
+        id
     }
 
     fn id(&mut self, text: &str) -> u32 {
@@ -200,9 +224,9 @@ pub fn build(graph: &Graph) -> Vec<u8> {
         .iter()
         .map(|symbol| SymbolRecord {
             name: strings.id(&symbol.name),
-            qualified: strings.id(&symbol.qualified),
-            signature: strings.id(&symbol.signature),
-            doc: strings.id(&symbol.doc),
+            qualified: strings.append(&symbol.qualified),
+            signature: strings.append(&symbol.signature),
+            doc: strings.append(&symbol.doc),
             file: symbol.file,
             parent: symbol.parent,
             line: symbol.line,
@@ -302,40 +326,36 @@ pub fn build(graph: &Graph) -> Vec<u8> {
     container::build(Kind::Derived, &views)
 }
 
+/// CSR adjacency by counting sort: `graph.edges` is sorted by source, and a stable placement
+/// by target keeps the reverse lists in source order.
 fn adjacency(nodes: usize, graph: &Graph, reverse: bool) -> (Vec<u32>, Vec<EdgeRecord>) {
-    let mut entries: Vec<(u32, EdgeRecord)> = graph
-        .edges
-        .iter()
-        .map(|edge| {
-            let (from, to) = if reverse {
-                (edge.target, edge.source)
-            } else {
-                (edge.source, edge.target)
-            };
-            (
-                from,
-                EdgeRecord {
-                    node: to,
-                    line: edge.line,
-                    kind: edge.kind as u8,
-                    confidence: edge.confidence as u8,
-                    pad: [0; 2],
-                },
-            )
-        })
-        .collect();
-    entries.sort_by_key(|(from, record)| (*from, record.kind, record.node, record.line));
     let mut offsets = vec![0u32; nodes + 1];
-    for (from, _) in &entries {
-        offsets[*from as usize + 1] += 1;
+    for edge in &graph.edges {
+        let from = if reverse { edge.target } else { edge.source };
+        offsets[from as usize + 1] += 1;
     }
     for index in 1..offsets.len() {
         offsets[index] += offsets[index - 1];
     }
-    (
-        offsets,
-        entries.into_iter().map(|(_, record)| record).collect(),
-    )
+    let mut cursor: Vec<u32> = offsets[..nodes].to_vec();
+    let mut records = vec![EdgeRecord::zeroed(); graph.edges.len()];
+    for edge in &graph.edges {
+        let (from, to) = if reverse {
+            (edge.target, edge.source)
+        } else {
+            (edge.source, edge.target)
+        };
+        let slot = &mut cursor[from as usize];
+        records[*slot as usize] = EdgeRecord {
+            node: to,
+            line: edge.line,
+            kind: edge.kind as u8,
+            confidence: edge.confidence as u8,
+            pad: [0; 2],
+        };
+        *slot += 1;
+    }
+    (offsets, records)
 }
 
 struct SearchIndex {
@@ -345,63 +365,91 @@ struct SearchIndex {
     averages: [f32; FIELDS],
 }
 
+/// Postings of one contiguous node range: token -> postings in node order.
+struct Chunk {
+    lists: FastMap<String, Vec<PostingRecord>>,
+}
+
 fn search_index(graph: &Graph) -> SearchIndex {
     let nodes = graph.node_count();
-    let mut lengths = vec![
-        LengthRecord {
-            lengths: [0; FIELDS],
-            pad: 0
-        };
-        nodes
-    ];
-    let mut postings: HashMap<String, Vec<PostingRecord>> = HashMap::new();
-    let mut add = |node: u32, field: usize, text: &str, lengths: &mut Vec<LengthRecord>| {
-        let tokens = search::tokenize(text);
-        let length = &mut lengths[node as usize].lengths[field];
-        *length = length.saturating_add(tokens.len() as u16);
-        for token in tokens {
-            let list = postings.entry(token).or_default();
-            match list.last_mut() {
-                Some(last) if last.node == node => {
-                    last.tf[field] = last.tf[field].saturating_add(1)
-                }
-                _ => {
-                    let mut tf = [0u8; FIELDS];
-                    tf[field] = 1;
-                    list.push(PostingRecord {
-                        node,
-                        tf,
-                        pad: [0; 3],
-                    });
-                }
-            }
+    let symbol_count = graph.symbols.len();
+    // Node texts per field; files first so symbols can take their file's path length.
+    let texts = |node: usize| -> [&str; FIELDS] {
+        if node >= symbol_count {
+            let file = &graph.files[node - symbol_count];
+            let mut fields = [""; FIELDS];
+            fields[search::NAME] = file.path.rsplit('/').next().unwrap_or(&file.path);
+            fields[search::PATH] = &file.path;
+            return fields;
         }
-    };
-    for (id, file) in graph.files.iter().enumerate() {
-        let node = graph.file_node(id as u32);
-        let name = file.path.rsplit('/').next().unwrap_or(&file.path);
-        add(node, search::NAME, name, &mut lengths);
-        add(node, search::PATH, &file.path, &mut lengths);
-    }
-    for (id, symbol) in graph.symbols.iter().enumerate() {
-        let node = id as u32;
-        let file = &graph.files[symbol.file as usize];
+        let symbol = &graph.symbols[node];
         // `mod name;` declarations repeat the module file's own path match.
         if symbol.kind == SymKind::Mod && symbol.line == symbol.end_line {
-            continue;
+            return [""; FIELDS];
         }
-        add(node, search::NAME, &symbol.name, &mut lengths);
         let parent = symbol
             .qualified
             .strip_suffix(symbol.name.as_str())
             .unwrap_or_default();
-        add(node, search::PARENT, parent, &mut lengths);
-        // The path field of a symbol is scored from its file's path postings at query time.
-        lengths[id].lengths[search::PATH] =
-            lengths[graph.symbols.len() + symbol.file as usize].lengths[search::PATH];
-        let _ = file;
-        add(node, search::SIGNATURE, &symbol.signature, &mut lengths);
-        add(node, search::DOC, &symbol.doc, &mut lengths);
+        let mut fields = [""; FIELDS];
+        fields[search::NAME] = &symbol.name;
+        fields[search::PARENT] = parent;
+        fields[search::SIGNATURE] = &symbol.signature;
+        fields[search::DOC] = &symbol.doc;
+        fields
+    };
+    const CHUNK: usize = 4096;
+    let chunk_results: Vec<(Chunk, Vec<LengthRecord>)> = (0..nodes.div_ceil(CHUNK))
+        .into_par_iter()
+        .map(|chunk| {
+            let range = chunk * CHUNK..((chunk + 1) * CHUNK).min(nodes);
+            let mut lists: FastMap<String, Vec<PostingRecord>> = FastMap::default();
+            let mut lengths = Vec::with_capacity(range.len());
+            let mut buffer = String::new();
+            for node in range {
+                let mut record = LengthRecord {
+                    lengths: [0; FIELDS],
+                    pad: 0,
+                };
+                for (field, text) in texts(node).iter().enumerate() {
+                    let mut count = 0u16;
+                    search::for_each_token(text, &mut buffer, |token| {
+                        count = count.saturating_add(1);
+                        let list = match lists.get_mut(token) {
+                            Some(list) => list,
+                            None => lists.entry(token.to_owned()).or_default(),
+                        };
+                        match list.last_mut() {
+                            Some(last) if last.node == node as u32 => last.add(field),
+                            _ => {
+                                let mut posting = PostingRecord {
+                                    node: node as u32,
+                                    packed: 0,
+                                };
+                                posting.add(field);
+                                list.push(posting);
+                            }
+                        }
+                    });
+                    record.lengths[field] = count;
+                }
+                lengths.push(record);
+            }
+            (Chunk { lists }, lengths)
+        })
+        .collect();
+    let mut lengths: Vec<LengthRecord> = Vec::with_capacity(nodes);
+    let mut merged: FastMap<String, Vec<PostingRecord>> = FastMap::default();
+    for (chunk, chunk_lengths) in chunk_results {
+        lengths.extend(chunk_lengths);
+        for (token, list) in chunk.lists {
+            // Chunks cover ascending node ranges, so appending keeps lists sorted by node.
+            merged.entry(token).or_default().extend(list);
+        }
+    }
+    for symbol in 0..symbol_count {
+        let file_node = symbol_count + graph.symbols[symbol].file as usize;
+        lengths[symbol].lengths[search::PATH] = lengths[file_node].lengths[search::PATH];
     }
     let mut averages = [0f32; FIELDS];
     for (field, average) in averages.iter_mut().enumerate() {
@@ -415,12 +463,11 @@ fn search_index(graph: &Graph) -> SearchIndex {
             (total as f32 / nodes as f32).max(0.01)
         };
     }
-    let mut sorted: Vec<(String, Vec<PostingRecord>)> = postings.into_iter().collect();
-    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut sorted: Vec<(String, Vec<PostingRecord>)> = merged.into_iter().collect();
+    sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     let mut tokens = Vec::with_capacity(sorted.len());
-    let mut flat = Vec::new();
-    for (token, mut list) in sorted {
-        list.sort_unstable_by_key(|posting| posting.node);
+    let mut flat = Vec::with_capacity(sorted.iter().map(|(_, list)| list.len()).sum());
+    for (token, list) in sorted {
         tokens.push((token, flat.len() as u32, list.len() as u32));
         flat.extend(list);
     }

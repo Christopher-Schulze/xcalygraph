@@ -4,7 +4,9 @@
 pub mod derive;
 pub mod modules;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
+
+use crate::domain::hash::FastMap as HashMap;
 
 use rayon::prelude::*;
 
@@ -163,7 +165,7 @@ impl<'a> Index<'a> {
                 });
             }
         }
-        let mut scope_names: HashMap<&str, u32> = HashMap::new();
+        let mut scope_names: HashMap<&str, u32> = HashMap::default();
         let scope_ids: Vec<u32> = modules
             .modules
             .iter()
@@ -204,14 +206,14 @@ impl<'a> Index<'a> {
             go_requires,
             implementation_pairs: Vec::new(),
             file_imports: Vec::new(),
-            by_module: HashMap::new(),
-            methods: HashMap::new(),
-            types: HashMap::new(),
-            by_name: HashMap::new(),
-            returns: HashMap::new(),
-            field_types: HashMap::new(),
-            implementations: HashMap::new(),
-            supertypes: HashMap::new(),
+            by_module: HashMap::default(),
+            methods: HashMap::default(),
+            types: HashMap::default(),
+            by_name: HashMap::default(),
+            returns: HashMap::default(),
+            field_types: HashMap::default(),
+            implementations: HashMap::default(),
+            supertypes: HashMap::default(),
         };
         index.build_tables();
         index
@@ -1010,7 +1012,15 @@ impl<'a> Index<'a> {
                             .cloned()
                             .unwrap_or_default();
                         let mut fan_out = Vec::new();
+                        let caller_is_test = self.input.files[file as usize].role == Role::Test
+                            || reference.scope.is_some_and(|scope| {
+                                self.is_test(self.base[file as usize] + scope)
+                            });
                         for implementation in implementations {
+                            // Test fakes are implementations only for test callers.
+                            if self.is_test(implementation) && !caller_is_test {
+                                continue;
+                            }
                             fan_out.extend(self.members_direct(implementation, name));
                         }
                         if fan_out.len() <= MAX_DISPATCH {
@@ -1208,12 +1218,15 @@ impl<'a> Index<'a> {
     /// Explicit `implements` (Rust `impl Trait for Type`), declared supertypes, and Go method
     /// sets satisfying interfaces (inferred).
     fn link_implementations(&mut self) {
-        let pairs = self.implementation_candidates();
-        self.store_implementations(pairs);
+        let (pairs, inherited) = self.implementation_candidates();
+        self.store_implementations(pairs, inherited);
     }
 
-    fn implementation_candidates(&self) -> Vec<(u32, u32, Confidence, u32)> {
+    /// Implementation pairs (emitted as `implements` edges) and declared supertypes (`inherits`
+    /// edges come from the references themselves); both feed member lookup and dispatch.
+    fn implementation_candidates(&self) -> (Vec<Pair>, Vec<Pair>) {
         let imports = &self.file_imports;
+        let mut inherited: Vec<(u32, u32, Confidence, u32)> = Vec::new();
         let mut pairs: Vec<(u32, u32, Confidence, u32)> = Vec::new();
         for (file, facts) in self.input.facts.iter().enumerate() {
             let Some(facts) = facts else { continue };
@@ -1252,7 +1265,7 @@ impl<'a> Index<'a> {
                     self.resolve_supertype(file, &imports[file as usize], reference)
                 {
                     for (target, _) in targets {
-                        pairs.push((
+                        inherited.push((
                             self.base[file as usize] + scope,
                             target,
                             confidence,
@@ -1263,11 +1276,15 @@ impl<'a> Index<'a> {
             }
         }
         pairs.extend(self.go_structural_implementations());
-        pairs
+        (pairs, inherited)
     }
 
-    fn store_implementations(&mut self, pairs: Vec<(u32, u32, Confidence, u32)>) {
-        for &(type_symbol, trait_symbol, _, _) in &pairs {
+    fn store_implementations(
+        &mut self,
+        pairs: Vec<(u32, u32, Confidence, u32)>,
+        inherited: Vec<(u32, u32, Confidence, u32)>,
+    ) {
+        for &(type_symbol, trait_symbol, _, _) in pairs.iter().chain(&inherited) {
             self.implementations
                 .entry(trait_symbol)
                 .or_default()
@@ -1303,17 +1320,60 @@ impl<'a> Index<'a> {
                 _ => {}
             }
         }
+        // Method names with parameter counts per (scope, owner), computed once.
+        let mut by_owner: HashMap<(u32, &str), HashMap<&str, usize>> = HashMap::default();
+        for (&(scope, owner, name), methods) in &self.methods {
+            for &method in methods {
+                let params = param_count_method(&self.symbols[method as usize].signature);
+                by_owner
+                    .entry((scope, owner))
+                    .or_default()
+                    .insert(name, params);
+            }
+        }
+        let empty = HashMap::default();
+        let method_sets: Vec<&HashMap<&str, usize>> = concrete
+            .iter()
+            .map(|&type_symbol| {
+                let symbol = &self.symbols[type_symbol as usize];
+                let scope = self.scope_ids[self.module_of(symbol.file) as usize];
+                by_owner
+                    .get(&(scope, symbol.name.as_str()))
+                    .unwrap_or(&empty)
+            })
+            .collect();
+        let mut module_imports: HashSet<(u32, u32)> = HashSet::new();
+        for (file, imports) in self.file_imports.iter().enumerate() {
+            let source = self.modules.file_module[file];
+            for &target in &imports.modules {
+                module_imports.insert((source, target));
+            }
+        }
         let mut pairs = Vec::new();
-        for &type_symbol in &concrete {
+        for (position, &type_symbol) in concrete.iter().enumerate() {
+            let set = method_sets[position];
+            if set.is_empty() {
+                continue;
+            }
+            let type_module = self.module_of(self.symbols[type_symbol as usize].file);
             for (interface, methods) in &interfaces {
-                let satisfied = methods.iter().all(|(name, params)| {
-                    self.members_direct(type_symbol, name)
-                        .iter()
-                        .any(|&method| {
-                            param_count_method(&self.symbols[method as usize].signature) == *params
-                        })
-                });
-                if satisfied {
+                let interface_symbol = &self.symbols[*interface as usize];
+                let interface_module = self.module_of(interface_symbol.file);
+                // A test type implements only test interfaces; an unexported interface of another
+                // package can only receive types its package imports.
+                if self.is_test(type_symbol) && !self.is_test(*interface) {
+                    continue;
+                }
+                if !interface_symbol.exported
+                    && interface_module != type_module
+                    && !module_imports.contains(&(interface_module, type_module))
+                {
+                    continue;
+                }
+                if methods
+                    .iter()
+                    .all(|(name, params)| set.get(name) == Some(params))
+                {
                     let line = self.symbols[type_symbol as usize].line;
                     pairs.push((type_symbol, *interface, Confidence::Inferred, line));
                 }
@@ -1430,7 +1490,7 @@ impl Index<'_> {
     /// Methods of each type: nested definitions plus methods declared with an owner (Go
     /// receivers, Rust `impl` blocks) in the type's method scope.
     fn member_pairs(&self) -> Vec<(u32, u32)> {
-        let mut types_by_scope: HashMap<(u32, &str), Vec<u32>> = HashMap::new();
+        let mut types_by_scope: HashMap<(u32, &str), Vec<u32>> = HashMap::default();
         for (id, symbol) in self.symbols.iter().enumerate() {
             if symbol.kind.is_type() {
                 let scope = self.scope_ids[self.module_of(symbol.file) as usize];
@@ -1473,6 +1533,9 @@ fn dedupe_edges(mut edges: Vec<Edge>) -> Vec<Edge> {
     });
     edges
 }
+
+/// (type, supertype, confidence, line).
+type Pair = (u32, u32, Confidence, u32);
 
 /// How far the unique-name fallback (step 7) may look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1759,6 +1822,29 @@ fn is_common_member(name: &str) -> bool {
             | "Value"
             | "Next"
             | "Scan"
+            // Iterator, slice, map and string adaptors of standard libraries.
+            | "skip" | "take" | "rev" | "chain" | "zip" | "enumerate" | "flat_map" | "filter_map"
+            | "flatten" | "peekable" | "step_by" | "last" | "first" | "count" | "sum" | "min"
+            | "max" | "any" | "all" | "position" | "fold" | "cloned" | "copied" | "nth"
+            | "windows" | "chunks" | "sort_by" | "sort_by_key" | "sort_unstable" | "dedup"
+            | "retain" | "truncate" | "drain" | "starts_with" | "ends_with" | "replace" | "lines"
+            | "chars" | "bytes" | "trim_start" | "trim_end" | "to_lowercase" | "to_uppercase"
+            | "split_once" | "rsplit" | "find_map" | "take_while" | "skip_while" | "inspect"
+            | "for_each" | "max_by_key" | "min_by_key" | "partition" | "unzip" | "as_slice"
+            | "as_bytes" | "as_mut" | "get_mut" | "push_str" | "extend_from_slice" | "is_ok"
+            | "is_err" | "unwrap_err" | "map_or" | "map_or_else" | "into_inner" | "with_capacity"
+            | "capacity" | "reserve" | "binary_search" | "contains_key" | "values_mut"
+            | "or_default" | "or_insert_with" | "and_modify" | "elapsed" | "duration_since"
+            | "as_secs" | "Sum" | "Equal" | "Contains" | "HasPrefix" | "HasSuffix" | "TrimSpace"
+            | "Split" | "Join" | "Fields" | "Index" | "Replace" | "ToLower" | "ToUpper" | "Bytes"
+            | "Unmarshal" | "Marshal" | "Encode" | "Decode" | "Seek" | "Stat" | "Name" | "Size"
+            | "Mode" | "IsDir" | "Before" | "After" | "Unix" | "Format" | "Parse" | "Sub"
+            | "Since" | "Until" | "Truncate" | "Reset" | "Cancel" | "Kind" | "Type" | "Elem"
+            | "Field" | "Method" | "Call" | "Match" | "FindString" | "FindStringSubmatch"
+            | "MatchString" | "ReplaceAllString" | "Header" | "Body" | "Status" | "Context"
+            // Flag sets.
+            | "Bool" | "Int" | "Int64" | "Uint" | "Float64" | "Duration" | "StringVar"
+            | "BoolVar" | "IntVar" | "DurationVar" | "Var" | "Args" | "Arg" | "NArg"
     )
 }
 

@@ -27,7 +27,8 @@ const PACKS: &[&Pack] = &[
     &rust::PACK,
 ];
 
-static QUERIES: OnceLock<Vec<Option<Query>>> = OnceLock::new();
+/// One lazily compiled query per pack: a refresh compiles only the languages it extracts.
+static QUERIES: [OnceLock<Option<Query>>; PACKS.len()] = [const { OnceLock::new() }; PACKS.len()];
 
 /// Pack and compiled query for a file type; `None` when the grammar is not compiled in or its
 /// query fails to compile (covered by tests).
@@ -36,14 +37,10 @@ pub fn lookup(
     path: &str,
 ) -> Option<(&'static Pack, Language, &'static Query)> {
     let index = PACKS.iter().position(|pack| pack.file_type == file_type)?;
-    let queries = QUERIES.get_or_init(|| {
-        PACKS
-            .iter()
-            .map(|pack| Query::new(&(pack.language)(""), pack.query).ok())
-            .collect()
-    });
-    let query = queries.get(index)?.as_ref()?;
     let pack = PACKS[index];
+    let query = QUERIES[index]
+        .get_or_init(|| Query::new(&(pack.language)(""), pack.query).ok())
+        .as_ref()?;
     Some((pack, (pack.language)(path), query))
 }
 

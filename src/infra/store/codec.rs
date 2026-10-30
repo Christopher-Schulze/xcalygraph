@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use crate::domain::hash::FastMap;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodeError(pub &'static str);
 
@@ -18,9 +20,37 @@ pub type DecodeResult<T> = Result<T, DecodeError>;
 #[derive(Debug, Default)]
 pub struct Encoder {
     pub bytes: Vec<u8>,
+    /// With a table, strings are written as ids into it (shard-local string table).
+    table: Option<StringTable>,
+}
+
+#[derive(Debug, Default)]
+struct StringTable {
+    ids: FastMap<String, u32>,
+    strings: Vec<String>,
 }
 
 impl Encoder {
+    /// An encoder that interns every string into a table, written by [`Encoder::table_bytes`].
+    pub fn with_table() -> Self {
+        Self {
+            bytes: Vec::new(),
+            table: Some(StringTable::default()),
+        }
+    }
+
+    /// The string table: count, then each string length-prefixed.
+    pub fn table_bytes(&self) -> Vec<u8> {
+        let mut out = Encoder::default();
+        if let Some(table) = &self.table {
+            out.var_usize(table.strings.len());
+            for text in &table.strings {
+                out.str(text);
+            }
+        }
+        out.bytes
+    }
+
     pub fn u8(&mut self, value: u8) {
         self.bytes.push(value);
     }
@@ -50,6 +80,19 @@ impl Encoder {
     }
 
     pub fn str(&mut self, value: &str) {
+        if let Some(table) = &mut self.table {
+            let id = match table.ids.get(value) {
+                Some(&id) => id,
+                None => {
+                    let id = table.strings.len() as u32;
+                    table.ids.insert(value.to_owned(), id);
+                    table.strings.push(value.to_owned());
+                    id
+                }
+            };
+            self.var_u32(id);
+            return;
+        }
         self.var_usize(value.len());
         self.bytes.extend_from_slice(value.as_bytes());
     }
@@ -75,11 +118,30 @@ impl Encoder {
 pub struct Decoder<'a> {
     bytes: &'a [u8],
     position: usize,
+    table: Option<Vec<&'a str>>,
 }
 
 impl<'a> Decoder<'a> {
     pub fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, position: 0 }
+        Self {
+            bytes,
+            position: 0,
+            table: None,
+        }
+    }
+
+    /// A decoder whose strings are ids into the table encoded in `table`.
+    pub fn with_table(bytes: &'a [u8], table: &'a [u8]) -> DecodeResult<Self> {
+        let mut reader = Decoder::new(table);
+        let count = reader.len()?;
+        let strings = (0..count)
+            .map(|_| reader.str())
+            .collect::<DecodeResult<Vec<&str>>>()?;
+        Ok(Self {
+            bytes,
+            position: 0,
+            table: Some(strings),
+        })
     }
 
     #[cfg(test)]
@@ -138,6 +200,11 @@ impl<'a> Decoder<'a> {
     }
 
     pub fn str(&mut self) -> DecodeResult<&'a str> {
+        if self.table.is_some() {
+            let id = self.var_usize()?;
+            let table = self.table.as_ref().ok_or(DecodeError("string table"))?;
+            return table.get(id).copied().ok_or(DecodeError("string id"));
+        }
         let len = self.var_usize()?;
         let end = self
             .position
@@ -210,6 +277,27 @@ mod tests {
         assert_eq!(decoder.opt_string()?, Some("x".to_owned()));
         assert_eq!(decoder.strings()?, ["a", ""]);
         assert!(decoder.is_done());
+        Ok(())
+    }
+
+    #[test]
+    fn table_strings_round_trip_and_reject_bad_ids() -> DecodeResult<()> {
+        let mut encoder = Encoder::with_table();
+        encoder.str("alpha");
+        encoder.str("beta");
+        encoder.str("alpha");
+        let table = encoder.table_bytes();
+        assert!(
+            encoder.bytes.len() == 3,
+            "ids, not strings: {:?}",
+            encoder.bytes
+        );
+        let mut decoder = Decoder::with_table(&encoder.bytes, &table)?;
+        assert_eq!(
+            (decoder.str()?, decoder.str()?, decoder.str()?),
+            ("alpha", "beta", "alpha")
+        );
+        assert!(Decoder::with_table(&[9], &table)?.str().is_err());
         Ok(())
     }
 

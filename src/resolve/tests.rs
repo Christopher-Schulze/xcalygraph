@@ -177,3 +177,86 @@ fn derived_bytes_are_identical_across_thread_counts() -> Result<(), Box<dyn std:
     }
     Ok(())
 }
+
+/// Precision sampling (`docs/spec.md` section 12): prints up to 50 edges per kind and
+/// confidence from the root in `XCALYGRAPH_SAMPLE_ROOT`, each with the reference line and the
+/// target signature, for verification against source. Development only:
+/// `XCALYGRAPH_SAMPLE_ROOT=<dir> cargo test --release sample_edges -- --ignored --nocapture`.
+#[test]
+#[ignore = "development tool; needs XCALYGRAPH_SAMPLE_ROOT"]
+fn sample_edges() -> Result<(), Box<dyn std::error::Error>> {
+    let Some(root) = std::env::var_os("XCALYGRAPH_SAMPLE_ROOT") else {
+        return Ok(());
+    };
+    let root = PathBuf::from(root).canonicalize()?;
+    let per_bucket: usize = std::env::var("XCALYGRAPH_SAMPLE_SIZE")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(50);
+    let changes = crate::infra::scan::scan(&root, &[], &[], i64::MAX);
+    let facts: Vec<Option<crate::domain::facts::Facts>> = changes
+        .records
+        .iter()
+        .map(|record| {
+            record.role.is_extracted().then(|| {
+                let content = fs::read(root.join(&record.path)).unwrap_or_default();
+                extract(record, &content)
+            })
+        })
+        .collect();
+    let graph = build(&Input {
+        files: &changes.records,
+        facts: &facts,
+    });
+    let symbols = graph.symbols.len() as u32;
+    let location = |node: u32| -> (String, u32, String) {
+        if node < symbols {
+            let symbol = &graph.symbols[node as usize];
+            let path = graph.files[symbol.file as usize].path.clone();
+            (path, symbol.line, symbol.qualified.clone())
+        } else {
+            let path = graph.files[(node - symbols) as usize].path.clone();
+            (path.clone(), 1, path)
+        }
+    };
+    let mut buckets: std::collections::BTreeMap<(u8, u8), Vec<&crate::domain::graph::Edge>> =
+        Default::default();
+    for edge in &graph.edges {
+        buckets
+            .entry((edge.kind as u8, edge.confidence as u8))
+            .or_default()
+            .push(edge);
+    }
+    for ((kind, confidence), edges) in buckets {
+        let total = edges.len();
+        let step = (total / per_bucket).max(1);
+        println!(
+            "== {} conf={} total={total}",
+            crate::domain::graph::EdgeKind::from_u8(kind).map_or("?", |k| k.id()),
+            confidence
+        );
+        for edge in edges.iter().step_by(step).take(per_bucket) {
+            let (source_path, _, source_name) = location(edge.source);
+            let (target_path, target_line, target_name) = location(edge.target);
+            let line_text = fs::read_to_string(root.join(&source_path))
+                .ok()
+                .and_then(|text| {
+                    text.lines()
+                        .nth(edge.line as usize - 1)
+                        .map(|line| line.trim().chars().take(110).collect::<String>())
+                })
+                .unwrap_or_default();
+            let signature = if edge.target < symbols {
+                graph.symbols[edge.target as usize].signature.clone()
+            } else {
+                String::new()
+            };
+            println!(
+                "{source_name} @ {source_path}:{}\n    | {line_text}\n    -> {target_name} @ {target_path}:{target_line} | {}",
+                edge.line,
+                signature.chars().take(100).collect::<String>()
+            );
+        }
+    }
+    Ok(())
+}

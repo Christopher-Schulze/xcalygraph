@@ -12,7 +12,7 @@ use xxhash_rust::xxh3::xxh3_64;
 
 pub const MAGIC: [u8; 8] = *b"XCALYGR\x00";
 /// Bumped on every incompatible change of any index file layout.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 const HEADER_LEN: usize = 64;
 const ALIGN: usize = 64;
 
@@ -101,6 +101,26 @@ fn same_header(path: &Path, image: &[u8]) -> bool {
     }
     header[..40] == image[..40]
         && file.metadata().map(|meta| meta.len()).ok() == Some(image.len() as u64)
+}
+
+/// True when the file starts with a header of this format version and kind whose recorded
+/// length matches the file size.
+pub fn header_matches(path: &Path, kind: Kind) -> bool {
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    let mut header = [0u8; HEADER_LEN];
+    if file.read_exact(&mut header).is_err() {
+        return false;
+    }
+    let mut length = [0u8; 8];
+    length.copy_from_slice(&header[24..32]);
+    header[0..8] == MAGIC
+        && header[8..12] == FORMAT_VERSION.to_le_bytes()
+        && header[12..16] == (kind as u32).to_le_bytes()
+        && file
+            .metadata()
+            .is_ok_and(|meta| meta.len() == u64::from_le_bytes(length) + HEADER_LEN as u64)
 }
 
 /// A validated, memory-mapped container.

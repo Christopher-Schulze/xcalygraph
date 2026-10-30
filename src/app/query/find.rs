@@ -50,12 +50,17 @@ pub fn search(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
         let df = list.len() as f32;
         let idf = (1.0 + (node_count - df + 0.5) / (df + 0.5)).ln();
         for &node in &candidates {
-            let mut tf = posting(list, node).map_or([0u8; FIELDS], |p| p.tf);
+            let mut tf = [0u8; FIELDS];
+            if let Some(found) = posting(list, node) {
+                for (field, slot) in tf.iter_mut().enumerate() {
+                    *slot = found.tf(field);
+                }
+            }
             if node < symbol_count {
                 // Path field of a symbol: the term frequency in its file's path.
                 let file_node = symbol_count + derived.symbols()[node as usize].file;
                 if let Some(file_posting) = posting(list, file_node) {
-                    tf[search::PATH] = file_posting.tf[search::PATH];
+                    tf[search::PATH] = file_posting.tf(search::PATH);
                 }
             }
             let length = lengths

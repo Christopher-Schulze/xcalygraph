@@ -15,32 +15,69 @@ pub const B: f32 = 0.75;
 /// boundaries; lowercases. `HTTPServer2` -> `http`, `server`, `2`.
 pub fn tokenize(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();
+    let mut buffer = String::new();
+    for_each_token(text, &mut buffer, |token| tokens.push(token.to_owned()));
+    tokens
+}
+
+/// Calls `emit` with every lowercase token of `text`, reusing `buffer`; ASCII words take a
+/// byte-level fast path without per-character allocation.
+pub fn for_each_token(text: &str, buffer: &mut String, mut emit: impl FnMut(&str)) {
     for word in text.split(|ch: char| !ch.is_alphanumeric()) {
         if word.is_empty() {
             continue;
         }
-        let chars: Vec<char> = word.chars().collect();
+        if word.is_ascii() {
+            let bytes = word.as_bytes();
+            let mut start = 0;
+            for index in 1..bytes.len() {
+                let (previous, current) = (bytes[index - 1], bytes[index]);
+                let next_lower = bytes.get(index + 1).is_some_and(u8::is_ascii_lowercase);
+                let boundary = (previous.is_ascii_lowercase() && current.is_ascii_uppercase())
+                    || (previous.is_ascii_uppercase()
+                        && current.is_ascii_uppercase()
+                        && next_lower)
+                    || (previous.is_ascii_alphabetic() && current.is_ascii_digit())
+                    || (previous.is_ascii_digit() && current.is_ascii_alphabetic());
+                if boundary {
+                    emit_lower(&word[start..index], buffer, &mut emit);
+                    start = index;
+                }
+            }
+            emit_lower(&word[start..], buffer, &mut emit);
+            continue;
+        }
+        let chars: Vec<(usize, char)> = word.char_indices().collect();
         let mut start = 0;
         for index in 1..chars.len() {
-            let (previous, current) = (chars[index - 1], chars[index]);
-            let next_lower = chars.get(index + 1).is_some_and(|ch| ch.is_lowercase());
+            let (previous, current) = (chars[index - 1].1, chars[index].1);
+            let next_lower = chars
+                .get(index + 1)
+                .is_some_and(|(_, ch)| ch.is_lowercase());
             let boundary = (previous.is_lowercase() && current.is_uppercase())
                 || (previous.is_uppercase() && current.is_uppercase() && next_lower)
                 || (previous.is_alphabetic() && current.is_ascii_digit())
                 || (previous.is_ascii_digit() && current.is_alphabetic());
             if boundary {
-                tokens.push(
-                    chars[start..index]
-                        .iter()
-                        .collect::<String>()
-                        .to_lowercase(),
-                );
+                buffer.clear();
+                buffer.push_str(&word[chars[start].0..chars[index].0].to_lowercase());
+                emit(buffer);
                 start = index;
             }
         }
-        tokens.push(chars[start..].iter().collect::<String>().to_lowercase());
+        buffer.clear();
+        buffer.push_str(&word[chars[start].0..].to_lowercase());
+        emit(buffer);
     }
-    tokens
+}
+
+fn emit_lower(part: &str, buffer: &mut String, emit: &mut impl FnMut(&str)) {
+    buffer.clear();
+    buffer.extend(
+        part.bytes()
+            .map(|byte| char::from(byte.to_ascii_lowercase())),
+    );
+    emit(buffer);
 }
 
 /// English stopwords dropped from query terms only.
