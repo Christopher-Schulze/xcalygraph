@@ -1,0 +1,11 @@
+name	expected
+app::refresh::write_derived	src/app/refresh.rs::refresh
+app::refresh::write_derived	src/app/refresh.rs::rederive
+resolve::Index::receiver_type	src/resolve/mod.rs::resolve_qualified
+domain::search::for_each_token	src/infra/store/derived.rs::search_index
+domain::search::for_each_token	src/domain/search.rs::tokenize
+domain::role::classify	src/infra/scan.rs::inspect
+infra::scan::scan	src/app/refresh.rs::refresh
+app::refresh::extract_file	src/app/refresh.rs::write_shards
+app::update::replace_binary	src/app/update.rs::update
+infra::store::Store::has_valid_header	src/app/refresh.rs::derived_is_valid

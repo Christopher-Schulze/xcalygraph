@@ -2,6 +2,7 @@
 
 pub mod ctx;
 pub mod find;
+pub mod impact;
 pub mod map;
 pub mod names;
 pub mod output;

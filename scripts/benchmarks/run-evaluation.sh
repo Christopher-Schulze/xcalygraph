@@ -158,6 +158,23 @@ for corpus in "${corpora[@]}"; do
       grep -q -F "${path}" <<<"${gfy_out}" && gfy_hits=$(( gfy_hits + 1 ))
     fi
   done < "${questions}"
+  # Impact recall: the expected dependent among the affected lines of `impact NAME`.
+  impact_set="${questions%.tsv}-impact.tsv"
+  impact_n=0 impact_hits=0 impact_tokens=0
+  if [[ -f "${impact_set}" ]]; then
+    while IFS=$'\t' read -r target dependent; do
+      [[ "${target}" == "name" || -z "${target}" ]] && continue
+      impact_n=$(( impact_n + 1 ))
+      dep_path="${dependent%%::*}"
+      dep_name="${dependent#*::}"
+      found="$(query impact "${target}" --json 2>/dev/null \
+        | jq -r 'select(.rel == "in") | [.path, .name] | @tsv' \
+        | awk -F'\t' -v path="${dep_path}" -v name="${dep_name}" '$1 == path && ($2 == name || $2 ~ ("(\\.|::)" name "$")) { hit = 1 } END { print hit + 0 }')"
+      impact_hits=$(( impact_hits + found ))
+      impact_tokens=$(( impact_tokens + $(query impact "${target}" 2>/dev/null | tokens) ))
+      (( found == 1 )) || printf 'impact miss: %s -> expected dependent %s\n' "${target}" "${dependent}" >> "${misses}"
+    done < "${impact_set}"
+  fi
   (( n > 0 )) || continue
   if [[ -n "${graph}" ]]; then
     gfy_rate="$(( 100 * gfy_hits / n ))%"
@@ -170,5 +187,9 @@ for corpus in "${corpora[@]}"; do
     "${corpus}" "${n}" $(( 100 * find_hits / n )) $(( 100 * symbol_hits / n )) $(( 100 * ctx_hits / n )) \
     $(( find_tokens / n )) $(( ctx_tokens / n )) $(( 100 * rg_hits / n )) $(( rg_tokens / n )) \
     "${gfy_rate}" "${gfy_mean}"
+  if (( impact_n > 0 )); then
+    printf '%-12s impact recall %d%% of %d, %d tokens per answer\n' \
+      "${corpus}" $(( 100 * impact_hits / impact_n )) "${impact_n}" $(( impact_tokens / impact_n ))
+  fi
 done
 echo "misses: ${WORK}/misses-<corpus>.txt"

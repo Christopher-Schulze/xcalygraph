@@ -248,3 +248,73 @@ fn update_check_compares_with_the_latest_release() -> TestResult {
     assert!(String::from_utf8(newer.stdout)?.contains("update available"));
     Ok(())
 }
+
+fn git(root: &Path, args: &[&str]) -> io::Result<()> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+        .args(args)
+        .output()?;
+    if status.status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            String::from_utf8_lossy(&status.stderr).into_owned(),
+        ))
+    }
+}
+
+#[test]
+fn impact_of_a_diff_lists_changes_dependents_tests_and_run_lines() -> TestResult {
+    let dir = TempDir::new("impact")?;
+    let root = dir.0.join("repo");
+    dir.write("repo/go.mod", "module example.com/app\n\ngo 1.23\n")?;
+    dir.write(
+        "repo/store/store.go",
+        "package store\n\nfunc Open(path string) int {\n\treturn len(path)\n}\n",
+    )?;
+    dir.write(
+        "repo/store/use.go",
+        "package store\n\nfunc Warm() int {\n\treturn Open(\"x\")\n}\n",
+    )?;
+    dir.write(
+        "repo/store/store_test.go",
+        "package store\n\nimport \"testing\"\n\nfunc TestWarm(t *testing.T) {\n\tWarm()\n}\n",
+    )?;
+    git(&root, &["init", "-q"])?;
+    git(&root, &["add", "."])?;
+    git(&root, &["commit", "-q", "-m", "init"])?;
+    dir.write(
+        "repo/store/store.go",
+        "package store\n\nfunc Open(path string, mode int) int {\n\treturn len(path) + mode\n}\n",
+    )?;
+    let output = run_in(&root, &dir.0.join("index"), &["impact", "--diff"])?;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout)?;
+    assert!(
+        text.contains("~ store.Open store/store.go:3 sig\n"),
+        "{text}"
+    );
+    assert!(text.contains("< 1 store.Warm store/use.go:3\n"), "{text}");
+    assert!(
+        text.contains("t store.TestWarm store/store_test.go:5\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("r go test ./store -run '^(TestWarm)$'\n"),
+        "{text}"
+    );
+    let named = run_in(&root, &dir.0.join("index"), &["impact", "store.Warm"])?;
+    let text = String::from_utf8(named.stdout)?;
+    assert!(text.starts_with("~ store.Warm store/use.go:3\n"), "{text}");
+    assert!(text.contains("t store.TestWarm"), "{text}");
+    let missing = run_in(&root, &dir.0.join("index"), &["impact"])?;
+    assert_eq!(missing.status.code(), Some(1));
+    Ok(())
+}

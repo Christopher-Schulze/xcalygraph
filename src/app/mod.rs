@@ -64,6 +64,7 @@ pub fn run(invocation: &Invocation) -> Result<String, AppError> {
                 &invocation.args,
                 options,
                 &root_name,
+                &workspace.root,
             )
         }
     }
@@ -76,6 +77,7 @@ fn run_query(
     args: &[String],
     options: &crate::cli::Options,
     root_name: &str,
+    root: &std::path::Path,
 ) -> Result<String, AppError> {
     let json = options.json;
     let budget = |default: usize| options.budget.unwrap_or(default);
@@ -109,6 +111,30 @@ fn run_query(
                 budget: budget(1200),
             };
             Ok(query::show::render(index, filter, node, &show))
+        }
+        CommandName::Impact => {
+            let impact = query::impact::ImpactOptions {
+                root,
+                depth: options.depth.unwrap_or(3),
+                json,
+                budget: budget(1500),
+            };
+            if options.diff {
+                if args.len() > 1 {
+                    return Err(AppError::Invalid(
+                        "impact --diff takes at most one REV".to_owned(),
+                    ));
+                }
+                let rev = args.first().map_or("HEAD", String::as_str);
+                return query::impact::render_diff(index, filter, rev, &impact);
+            }
+            if args.is_empty() {
+                return Err(AppError::Invalid(
+                    "impact needs NAME... or --diff [REV]".to_owned(),
+                ));
+            }
+            let targets = query::impact::named(index, filter, args, json)?;
+            Ok(query::impact::render_names(index, filter, targets, &impact))
         }
         CommandName::Path => {
             let from = query::names::resolve_one(index, filter, &args[0], json)?;

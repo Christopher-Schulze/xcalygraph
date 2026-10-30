@@ -95,6 +95,17 @@ impl Writer {
         written
     }
 
+    /// A line written regardless of the budget (run commands of `impact`).
+    pub fn force_line(&mut self, text: &str, record: &[(&str, Value)]) {
+        if self.json {
+            self.out.push_str(&json_object(record));
+        } else {
+            self.out.push_str(text);
+            self.out.push('\n');
+        }
+        self.current_file = None;
+    }
+
     /// A pre-rendered JSON Lines record.
     pub fn raw(&mut self, record: &str) {
         self.out.push_str(record);

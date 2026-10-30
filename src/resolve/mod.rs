@@ -20,7 +20,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 1;
+pub const RESOLVE_VERSION: u32 = 2;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -545,12 +545,17 @@ impl<'a> Index<'a> {
     fn rust_member(&self, file: u32, base: &Target, name: &str) -> Option<Target> {
         match base {
             Target::Module(module) => {
-                let found = self.module_symbol(*module, name, None);
-                if !found.is_empty() {
-                    return Some(Target::Symbols(found));
-                }
+                // A child module wins over its `mod name;` declaration symbol.
                 let key = &self.modules.modules[*module as usize].key;
-                self.rust_child(key, name).map(Target::Module)
+                if let Some(child) = self.rust_child(key, name) {
+                    return Some(Target::Module(child));
+                }
+                let found: Vec<u32> = self
+                    .module_symbol(*module, name, None)
+                    .into_iter()
+                    .filter(|&symbol| self.symbols[symbol as usize].kind != SymKind::Mod)
+                    .collect();
+                (!found.is_empty()).then_some(Target::Symbols(found))
             }
             Target::Symbols(symbols) => {
                 let found: Vec<u32> = symbols

@@ -9,11 +9,12 @@ use crate::domain::facts::SymKind;
 use crate::domain::filetype::FileType;
 
 /// Every command, in help order.
-const COMMANDS: [CommandName; 10] = [
+const COMMANDS: [CommandName; 11] = [
     CommandName::Map,
     CommandName::Find,
     CommandName::Ctx,
     CommandName::Show,
+    CommandName::Impact,
     CommandName::Path,
     CommandName::Index,
     CommandName::Install,
@@ -51,12 +52,28 @@ const SHOW_FLAGS: [Flag; 12] = [
     Flag::All,
 ];
 
+const IMPACT_FLAGS: [Flag; 12] = [
+    Flag::Root,
+    Flag::Budget,
+    Flag::Json,
+    Flag::ReadOnly,
+    Flag::IndexDir,
+    Flag::Path,
+    Flag::Lang,
+    Flag::Kind,
+    Flag::Depth,
+    Flag::Exact,
+    Flag::NoTests,
+    Flag::Diff,
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandName {
     Map,
     Find,
     Ctx,
     Show,
+    Impact,
     Path,
     Index,
     Install,
@@ -76,6 +93,7 @@ impl CommandName {
             Self::Find => "find",
             Self::Ctx => "ctx",
             Self::Show => "show",
+            Self::Impact => "impact",
             Self::Path => "path",
             Self::Index => "index",
             Self::Install => "install",
@@ -91,6 +109,7 @@ impl CommandName {
             Self::Find => "find TERMS...",
             Self::Ctx => "ctx TERMS...",
             Self::Show => "show NAME [--all]",
+            Self::Impact => "impact NAME... | --diff [REV]",
             Self::Path => "path FROM TO",
             Self::Index => "index [--drop]",
             Self::Install => "install [--link claude]",
@@ -108,6 +127,7 @@ impl CommandName {
             Self::Find => "ranked symbols and files, one line each",
             Self::Ctx => "context bundle: best matches plus related symbols with signatures",
             Self::Show => "card of a symbol or file: members, types, callers, callees, tests, env",
+            Self::Impact => "changed symbols, affected dependents by depth, tests and run commands",
             Self::Path => "shortest dependency path between two names",
             Self::Index => "build or refresh the index explicitly; --drop deletes it",
             Self::Install => "install the embedded agent skill to ~/.agents/skills/xcalygraph",
@@ -124,6 +144,7 @@ impl CommandName {
         match self {
             Self::Find | Self::Ctx => (1, usize::MAX),
             Self::Show => (1, 1),
+            Self::Impact => (0, usize::MAX),
             Self::Path => (2, 2),
             Self::Map | Self::Index | Self::Install | Self::Update | Self::Version => (0, 0),
             Self::Help => (0, 1),
@@ -134,6 +155,7 @@ impl CommandName {
         match self {
             Self::Map | Self::Find | Self::Ctx | Self::Path => &QUERY_FLAGS,
             Self::Show => &SHOW_FLAGS,
+            Self::Impact => &IMPACT_FLAGS,
             Self::Index => &[Flag::Root, Flag::IndexDir, Flag::Drop],
             Self::Install => &[Flag::Link],
             Self::Update => &[Flag::Check],
@@ -143,7 +165,7 @@ impl CommandName {
 }
 
 /// Every flag, in help order.
-const FLAGS: [Flag; 15] = [
+const FLAGS: [Flag; 16] = [
     Flag::Root,
     Flag::Budget,
     Flag::Json,
@@ -156,6 +178,7 @@ const FLAGS: [Flag; 15] = [
     Flag::Exact,
     Flag::NoTests,
     Flag::All,
+    Flag::Diff,
     Flag::Drop,
     Flag::Link,
     Flag::Check,
@@ -175,6 +198,7 @@ pub enum Flag {
     Exact,
     NoTests,
     All,
+    Diff,
     Drop,
     Link,
     Check,
@@ -195,6 +219,7 @@ impl Flag {
             Self::Exact => "--exact",
             Self::NoTests => "--no-tests",
             Self::All => "--all",
+            Self::Diff => "--diff",
             Self::Drop => "--drop",
             Self::Link => "--link",
             Self::Check => "--check",
@@ -234,10 +259,11 @@ impl Flag {
             Self::Path => "keep results under GLOB (gitignore syntax); repeatable",
             Self::Lang => "comma-separated language ids",
             Self::Kind => "comma-separated symbol kinds",
-            Self::Depth => "traversal depth of show (default 1)",
+            Self::Depth => "traversal depth (show 1, impact 3)",
             Self::Exact => "drop inferred facts",
             Self::NoTests => "drop test, generated and fixture files",
             Self::All => "lift the per-section caps of show",
+            Self::Diff => "impact of git changes against REV (default HEAD, work tree included)",
             Self::Drop => "delete the index of the root",
             Self::Link => "also link the skill for HOST (claude: ~/.claude/skills/xcalygraph)",
             Self::Check => "report an available update without installing it",
@@ -277,6 +303,7 @@ pub struct Options {
     pub exact: bool,
     pub no_tests: bool,
     pub all: bool,
+    pub diff: bool,
     pub drop: bool,
     pub link: Option<String>,
     pub check: bool,
@@ -449,6 +476,7 @@ fn apply(options: &mut Options, flag: Flag, value: Option<String>) -> Result<(),
         Flag::NoTests => options.no_tests = true,
         Flag::Drop => options.drop = true,
         Flag::All => options.all = true,
+        Flag::Diff => options.diff = true,
         Flag::Check => options.check = true,
         Flag::Link => {
             if value != "claude" {
