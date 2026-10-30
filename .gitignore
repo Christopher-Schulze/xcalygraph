@@ -1,0 +1,11 @@
+# macOS and editors
+.DS_Store
+.idea/
+.vscode/
+
+# Local environment and secrets
+.env*
+!.env.example
+
+# Upstream reference clone (scripts/utils/sync-upstream.sh)
+/research/upstream/
