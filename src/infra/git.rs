@@ -68,10 +68,13 @@ pub fn diff(root: &Path, rev: &str) -> Option<Vec<FileDiff>> {
 /// Parses `git diff --unified=0`; paths are made relative to the root via `prefix`.
 pub fn parse_diff(text: &str, prefix: &str) -> Vec<FileDiff> {
     let mut diffs: Vec<FileDiff> = Vec::new();
+    // Hunks of a deleted file (`+++ /dev/null`) belong to no current file.
+    let mut deleted = false;
     for line in text.lines() {
         if let Some(path) = line.strip_prefix("+++ ") {
             let path = path.strip_prefix("b/").unwrap_or(path);
-            if path == "/dev/null" {
+            deleted = path == "/dev/null";
+            if deleted {
                 continue;
             }
             let relative = path.strip_prefix(prefix).unwrap_or(path);
@@ -81,6 +84,9 @@ pub fn parse_diff(text: &str, prefix: &str) -> Vec<FileDiff> {
                 untracked: false,
             });
         } else if let Some(hunk) = line.strip_prefix("@@ ") {
+            if deleted {
+                continue;
+            }
             let Some(current) = diffs.last_mut() else {
                 continue;
             };
