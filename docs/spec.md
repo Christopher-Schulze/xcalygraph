@@ -17,16 +17,22 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | `--json` | off | JSON Lines instead of text (section 8) |
 | `--read-only` | off | never create or refresh the index; exit 5 if missing or stale |
 | `--index-dir PATH` | `$XCALYGRAPH_INDEX_DIR`, else `$XDG_CACHE_HOME/xcalygraph`, else `~/.cache/xcalygraph` | index base directory |
+| `-p, --path GLOB` | whole root | keep results whose root-relative path matches GLOB (gitignore glob syntax); repeatable |
+| `-l, --lang LIST` | all | comma-separated language ids (section 3) |
+| `-k, --kind LIST` | all | comma-separated symbol kinds (section 5) |
+| `-d, --depth N` | `show` 1, `impact` 3 | traversal depth of `show` callers and callees and of `impact` |
+| `--exact` | off | drop inferred facts |
+| `--no-tests` | off | drop `test`, `gen` and `fixture` roles |
 
 | command | arguments | budget | result |
 |---------|-----------|--------|--------|
-| `map` | `[PATH]` | 2500 | orientation (7.1); PATH narrows to a subtree |
+| `map` | none | 2500 | orientation (7.1) |
 | `find` | `TERMS...` | 600 | ranked symbols and files, one line each (7.2) |
 | `ctx` | `TERMS...` | 2000 | context bundle: seeds plus related symbols with signatures (7.3) |
 | `show` | `NAME [--all]` | 1200 | symbol card (7.4); `--all` lifts per-section caps |
 | `impact` | `NAME...` or `--diff [REV]` | 1500 | changed and affected symbols, tests, run commands (7.5) |
 | `path` | `FROM TO` | 400 | shortest dependency path (7.6) |
-| `audit` | `[PATH]` | 2000 | dead code, cycles, stale doc references, hidden coupling, hotspots (7.7) |
+| `audit` | none | 2000 | dead code, cycles, stale doc references, env drift, unreferenced assets, hidden coupling, hotspots (7.7) |
 | `index` | `[--drop]` | none | explicit build or refresh; `--drop` deletes the index of the root |
 | `install` | `[--link claude]` | none | install the embedded skill (section 10) |
 | `update` | `[--check]` | none | self-update the binary, then `install` |
@@ -34,6 +40,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | `help` | `[COMMAND]` | none | syntax reference |
 
 - Query commands (`map`, `find`, `ctx`, `show`, `impact`, `path`, `audit`) refresh the index first (section 4) unless `--read-only`.
+- Filters (`-p`, `-l`, `-k`, `--exact`, `--no-tests`) apply to every query command and restrict seeds, expansions and listed facts alike.
 - NAME forms: `qualified.name`; `path:line`; `path::name`; bare name (must be unique).
 - Aliases: `-h`, `--help` = `help`; `<command> -h|--help` = `help <command>`; `-V`, `--version` = `version`.
 - Usage errors: one stderr line `xcalygraph: <error>; run 'xcalygraph help'`, exit 2. A reader that closes stdout early is not an error.
@@ -51,27 +58,72 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 
 | role | detection | indexing |
 |------|-----------|----------|
-| `src` | supported language file without another role | full extraction |
-| `test` | language test convention (table below) | full extraction; rank weight 0.3 |
-| `gen` | first 1 KiB contains `Code generated` with `DO NOT EDIT`, or `@generated` | full extraction; rank weight 0.2; excluded from `map` and `audit` |
+| `src` | file of a language in the language table | extraction per language depth |
+| `test` | language test convention (language table) | as `src`; rank weight 0.3 |
+| `gen` | first 1 KiB contains `Code generated` with `DO NOT EDIT`, or `@generated` | as `src`; rank weight 0.2; excluded from `map` and `audit` |
 | `fixture` | path segment `testdata`, `fixtures`, `__fixtures__` or `__snapshots__` | path only |
-| `doc` | `.md`, `.mdx` | headings, links, code mentions |
-| `manifest` | `go.mod`, `Cargo.toml`, `package.json`, `pyproject.toml` | module metadata, dependencies, entrypoints |
+| `manifest` | `go.mod`, `go.work`, `Cargo.toml`, `package.json`, `pnpm-workspace.yaml`, `pyproject.toml`, `requirements*.txt`, `pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts`, `*.csproj`, `*.fsproj`, `*.vbproj`, `*.sln`, `*.slnx`, `Gemfile`, `*.gemspec`, `composer.json`, `Package.swift`, `pubspec.yaml`, `mix.exs`, `rebar.config`, `Project.toml`, `DESCRIPTION`, `dune-project`, `build.zig`, `build.zig.zon`, `foundry.toml`, `remappings.txt`, `CMakeLists.txt`, `compile_commands.json` | module metadata, dependencies, workspace members, source roots, include directories, entrypoints |
+| `config` | `.json`, `.jsonc`, `.yaml`, `.yml`, `.toml`, `.xml`, `.ini`, `.properties`, `.proto`, `.graphql`, `.gql`; `Dockerfile`, `*.dockerfile`, `Makefile`, `*.mk`; `.env.example` | key paths and schema facts (section 5) |
+| `doc` | `.md`, `.mdx`, `.qmd`, `.markdown`, `.skill`, `.txt`, `.rst`, `.org`, `.adoc`, `.tex`, `.html`, `.htm`, `.pdf`, `.docx`, `.xlsx` | headings, links, mentions, searchable text |
+| `asset` | `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.ico`, `.mp4`, `.mov`, `.webm`, `.mkv`, `.avi`, `.m4v`, `.mp3`, `.wav`, `.m4a`, `.ogg` | header metadata; SVG ids and text; incoming references |
 | `sensitive` | `.env*` except `.env.example`; `*.pem`, `*.key`, `*.p12`, `id_rsa*`, `id_ed25519*`; anything under `.ssh/`, `.aws/`, `.gnupg/` | path only; content never read |
-| `binary` | NUL byte in the first 8 KiB | path only |
-| `large` | size > 8 MiB | path only |
+| `large` | size > 8 MiB; `.pdf`, `.docx`, `.xlsx` > 64 MiB | path only |
+| `binary` | NUL byte in the first 8 KiB of a file without another role | path only |
 | `other` | everything else | path only |
 
-| language | detection | test convention |
-|----------|-----------|-----------------|
-| Go | `.go` | `_test.go` files; `Test*`, `Benchmark*`, `Fuzz*`, `Example*` functions |
-| Rust | `.rs` | `#[test]` functions, `#[cfg(test)]` modules, files under `tests/` |
-| TypeScript | `.ts`, `.tsx`, `.mts`, `.cts` | `*.test.*`, `*.spec.*`, files under `__tests__/` |
-| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | as TypeScript |
-| Python | `.py`, `.pyi` | `test_*.py`, `*_test.py`, files under `tests/`; `test_*` functions |
-| Bash | `.sh`, `.bash`; extensionless files with `sh`, `bash` or `zsh` shebang | none |
-| Markdown | `.md`, `.mdx` | none |
+- Role precedence, first match wins: `sensitive`, `fixture`, `large`, `manifest`, `gen`, `test`, `src`, `config`, `doc`, `asset`, `binary`, `other`.
+- Depth `deep`: grammar-based facts (section 5), module-aware import resolution and the full resolution order (section 6), test map, run lines where section 7.5 defines them. Depth `structural`: symbols, includes and calls from grammar or line patterns; imports by literal path; calls by unique name, inferred.
 
+| language | id | extensions | depth | test convention |
+|----------|----|------------|-------|-----------------|
+| Go | `go` | `.go` | deep | `_test.go` files; `Test*`, `Benchmark*`, `Fuzz*`, `Example*` functions |
+| Rust | `rust` | `.rs` | deep | `#[test]` functions, `#[cfg(test)]` modules, files under `tests/` |
+| TypeScript | `typescript` | `.ts`, `.tsx`, `.mts`, `.cts`, `.ets` | deep | `*.test.*`, `*.spec.*`, files under `__tests__/` |
+| JavaScript | `javascript` | `.js`, `.jsx`, `.mjs`, `.cjs` | deep | as TypeScript |
+| Vue, Svelte, Astro | `vue`, `svelte`, `astro` | `.vue`, `.svelte`, `.astro` | deep: script blocks as TypeScript or JavaScript, template component usage as calls | as TypeScript |
+| Python | `python` | `.py`, `.pyi` | deep | `test_*.py`, `*_test.py`, files under `tests/`; `test_*` functions, `Test*` classes |
+| Java | `java` | `.java` | deep | files under `src/test/`; classes `*Test`, `*Tests`, `*IT`; `@Test` methods |
+| Kotlin | `kotlin` | `.kt`, `.kts` | deep | as Java |
+| Scala | `scala` | `.scala` | deep | as Java; classes `*Spec`, `*Suite` |
+| Groovy | `groovy` | `.groovy`, `.gradle` | deep | as Java; Spock classes `*Spec` |
+| C# | `csharp` | `.cs` | deep | `[Fact]`, `[Theory]`, `[Test]`, `[TestCase]`, `[TestMethod]` methods |
+| Visual Basic .NET | `vbnet` | `.vb` | deep | as C# with `<...>` attributes |
+| C | `c` | `.c`, `.h` | deep | files `*_test.*`, `test_*.*`, `*_unittest.*`, files under `test/`, `tests/` |
+| C++ | `cpp` | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`, `.h`, `.cu`, `.cuh`, `.metal` | deep | as C; GoogleTest `TEST`, `TEST_F`, `TEST_P`; Catch2 `TEST_CASE` |
+| Objective-C | `objc` | `.m`, `.mm`, `.h` | deep | files `*Tests.m`, `*Tests.mm`; `XCTestCase` subclasses |
+| Swift | `swift` | `.swift` | deep | files under `Tests/`, `*Tests.swift`; `XCTestCase` subclasses, `@Test` functions |
+| Ruby | `ruby` | `.rb`, `.rake` | deep | `*_spec.rb`, `*_test.rb`, `test_*.rb`, files under `spec/`, `test/` |
+| PHP | `php` | `.php` | deep | `*Test.php`, files under `tests/`; PHPUnit `test*` methods, Pest `test()`, `it()` |
+| Lua | `lua` | `.lua`, `.luau`, `.toc` | deep | `*_spec.lua`, files under `spec/` |
+| Zig | `zig` | `.zig` | deep | `test` blocks |
+| Elixir | `elixir` | `.ex`, `.exs` | deep | `*_test.exs`, files under `test/` |
+| Erlang | `erlang` | `.erl`, `.hrl`, `.escript` | deep | `*_SUITE.erl`, `*_tests.erl`, files under `test/` |
+| Dart | `dart` | `.dart` | deep | `*_test.dart`, files under `test/` |
+| Julia | `julia` | `.jl` | deep | files under `test/`; `@testset` blocks |
+| R | `r` | `.r`, `.R` | deep | `tests/testthat/test-*.R` |
+| OCaml | `ocaml` | `.ml`, `.mli` | deep | files under `test/`, `tests/` |
+| Fortran | `fortran` | `.f`, `.F`, `.f90`, `.F90`, `.f95`, `.F95`, `.f03`, `.F03`, `.f08`, `.F08` | deep | files under `test/`, `tests/` |
+| Pascal, Delphi | `pascal` | `.pas`, `.pp`, `.dpr`, `.dpk`, `.lpr`, `.inc`, `.dfm`, `.lfm`, `.lpk` | deep | `TTestCase` subclasses |
+| Common Lisp | `lisp` | `.lisp`, `.cl`, `.lsp`, `.asd` | deep | files under `test/`, `tests/`, `t/` |
+| Solidity | `solidity` | `.sol` | deep | `*.t.sol`, files under `test/` |
+| Verilog, SystemVerilog | `verilog` | `.v`, `.sv`, `.svh`, `.vh` | deep | `*_tb.*`, `tb_*.*` |
+| PowerShell | `powershell` | `.ps1`, `.psm1`, `.psd1` | deep | `*.Tests.ps1` |
+| Bash | `bash` | `.sh`, `.bash`, `.bats`; extensionless files with `sh`, `bash` or `zsh` shebang | deep | `.bats` files |
+| SQL | `sql` | `.sql` | deep | none |
+| Terraform, HCL | `terraform` | `.tf`, `.tfvars`, `.hcl` | deep | `*.tftest.hcl` |
+| Robot Framework | `robot` | `.robot`, `.resource` | deep | test cases of `.robot` files |
+| DM | `dm` | `.dm`, `.dme` | deep | none |
+| Apex | `apex` | `.cls`, `.trigger` | structural | `@isTest` classes and methods |
+| Razor | `razor` | `.razor`, `.cshtml` | structural | none |
+| Blade | `blade` | `.blade.php` | structural | none |
+| EJS | `ejs` | `.ejs` | structural | none |
+| Jinja | `jinja` | `.j2`, `.jinja`, `.jinja2` | structural | none |
+| COBOL | `cobol` | `.cbl`, `.cob`, `.cobol`, `.cpy` | structural | none |
+| XAML | `xaml` | `.xaml` | structural | none |
+| DM resources | `dmres` | `.dmi`, `.dmm`, `.dmf` | structural | none |
+
+- Detection: longest suffix wins (`.blade.php` before `.php`). Ambiguous suffixes are decided by content markers in the first 8 KiB, else role `other`: `.h` (Objective-C on `@interface` or `#import`, C++ on `class`, `namespace`, `template` or a C++ sibling with the same stem, else C); `.m` (Objective-C on `#import`, `@interface` or `@implementation`); `.v` (Verilog on `module` with `endmodule`); `.inc`, `.pp` (Pascal on `unit`, `procedure`, `function` or `begin`); `.cl` (Common Lisp on a leading `(`); `.cls` (Apex on `class` or `interface` with an access modifier).
+- Embedded code: `<script>` blocks of HTML, Vue, Svelte and Astro are extracted in their language; Markdown fenced code contributes mentions only.
 - Ignore rules, lowest to highest precedence: global git excludes (`$XDG_CONFIG_HOME/git/ignore`), `.git/info/exclude`, nested `.gitignore`, nested `.xcalygraphignore` (gitignore syntax).
 - Always pruned: `.git`, `.hg`, `.svn`, `node_modules`, `__pycache__`, `graphify-out`, directories containing `CACHEDIR.TAG` or `pyvenv.cfg`, `vendor` next to `go.mod` when `vendor/modules.txt` exists.
 - Hidden files are indexed; symlinks are not followed.
@@ -93,7 +145,9 @@ Freshness:
 
 ## 5. Extraction
 
-Per language: tree-sitter grammar plus an embedded query file; query captures map to fact records.
+- Deep languages: tree-sitter grammar plus embedded query files (definitions, references, imports); query captures map to fact records; language code only for semantics a query cannot express (module rules, section 6).
+- Structural languages: grammar or line patterns for symbols, includes and calls.
+- `config`, `doc`, `asset` files: one format parser per file type; PDF text layer only, no OCR; DOCX and XLSX from their XML parts; audio and video from container headers, no transcription.
 
 | fact | fields |
 |------|--------|
@@ -104,26 +158,69 @@ Per language: tree-sitter grammar plus an embedded query file; query captures ma
 | fields | owning type, field names (card content only, no graph nodes) |
 | mention | doc heading, backticked identifier or relative path, line |
 | link | doc heading, target path, line |
-| manifest | module name; dependency name and version requirement; workspace members; entrypoints (package.json `bin` and `scripts`, pyproject `[project.scripts]`, Cargo `[[bin]]`, `src/main.rs`, `src/bin/*.rs`) |
+| manifest | module name; dependency name and version requirement; workspace members; source roots; include directories (`compile_commands.json`, `CMakeLists.txt` `include_directories`); entrypoints (package.json `bin` and `scripts`, pyproject `[project.scripts]`, Cargo `[[bin]]`, `src/main.rs`, `src/bin/*.rs`, Gradle `application.mainClass`, `.csproj` `OutputType` `Exe`, SwiftPM executable targets, Dart `bin/`) |
+| config | key path (dotted, max depth 6), value kind, line; values are not stored |
+| schema | GitHub Actions jobs and steps (`run`, `uses`); compose services (image, ports, `environment` names, `depends_on`); Kubernetes objects (kind, name, images, env names); OpenAPI operations (method, path, `operationId`); Dockerfile stages (base image, `ENV`, `ARG`, `EXPOSE`, `ENTRYPOINT`, `CMD`); Makefile targets and prerequisites; Protobuf messages, enums, services, rpcs; GraphQL types, interfaces, fields; SQL tables, views, columns, functions, procedures, triggers |
+| env def | variable name (never its value), source (`.env.example`, compose, Dockerfile, CI workflow, Kubernetes), line |
+| text | text segment with heading path and page, sheet or line, for the search index only |
+| asset | format; width and height, or duration |
+| asset ref | literal path from code, doc, template or config to an existing file of the root, line |
 
-- Symbol kinds: `mod`, `struct`, `class`, `enum`, `iface`, `trait`, `alias`, `fn`, `method`, `const`, `var`, `macro`, `heading`.
+- Symbol kinds: `mod`, `struct`, `class`, `enum`, `iface`, `trait`, `alias`, `fn`, `method`, `const`, `var`, `macro`, `heading`, `table`, `view`, `task` (Makefile target, package script, CI job), `svc` (compose service, Kubernetes workload), `op` (OpenAPI operation). Protobuf and GraphQL map to `struct`, `enum`, `iface` (service) and `method` (rpc, field resolver).
 - Never emitted: locals, parameters, generic type parameters, anonymous functions (their calls count for the enclosing symbol), fields as nodes, symbols without source location.
-- Env reads: Go `os.Getenv`, `os.LookupEnv`; Rust `std::env::var`, `std::env::var_os`, `env!`, `option_env!`; TypeScript/JavaScript `process.env.X`, `process.env["X"]`, `import.meta.env.X`; Python `os.environ[...]`, `os.environ.get`, `os.getenv`.
+- Env reads: Go `os.Getenv`, `os.LookupEnv`; Rust `std::env::var`, `std::env::var_os`, `env!`, `option_env!`; TypeScript/JavaScript `process.env.X`, `process.env["X"]`, `import.meta.env.X`; Python `os.environ[...]`, `os.environ.get`, `os.getenv`; Java, Kotlin, Scala, Groovy `System.getenv`; C#, VB.NET `Environment.GetEnvironmentVariable`; C, C++, Objective-C `getenv`; Swift `ProcessInfo.processInfo.environment[...]`; Ruby `ENV[...]`, `ENV.fetch`; PHP `getenv`, `$_ENV[...]`; Lua `os.getenv`; Zig `std.process.getEnvVarOwned`, `std.posix.getenv`; Elixir `System.get_env`, `System.fetch_env`; Erlang `os:getenv`; Dart `Platform.environment[...]`; Julia `ENV[...]`; R `Sys.getenv`; PowerShell `$env:X`; Bash `$X` and `${X}` of variables never assigned in the file.
 
 ## 6. Resolution and derived data
 
-| language | module unit | import resolution | call and type resolution |
-|----------|-------------|-------------------|--------------------------|
-| Go | package directory | module path from `go.mod` plus import path -> directory | `pkg.Name` through import alias: exact; same-package name: exact; `x.M()`: unique method name in own or imported packages: inferred |
-| Rust | module tree from `mod` declarations and file layout; crate from `Cargo.toml` | `use` paths with `crate::`, `super::`, `self::`, workspace crates | path-qualified name: exact; `x.m()`: unique method name in scope crates: inferred |
-| TypeScript, JavaScript | file | relative specifiers with extension and index probing, `tsconfig.json` `paths` and `baseUrl`, workspace packages | imported binding: exact; member of an imported namespace: exact; other member calls: unique name: inferred |
-| Python | module file or package; source roots: root, `src/` | absolute and relative imports | imported name: exact; module attribute: exact; method calls: unique name: inferred |
-| Bash | file | `source` and `.` with a literal relative path | function in the file or a sourced file: exact |
-| Markdown | file | relative links | backticked identifier with a unique symbol name: inferred; relative path mention: exact |
+| language | module unit | import resolution |
+|----------|-------------|-------------------|
+| Go | package directory | `go.mod` and `go.work` module paths plus import path -> directory |
+| Rust | module tree from `mod` declarations and file layout; crate per `Cargo.toml` target | `use` paths with `crate::`, `super::`, `self::`, workspace crates, `pub use` re-exports |
+| TypeScript, JavaScript, Vue, Svelte, Astro | file | relative specifiers with extension and index probing; `tsconfig.json` and `jsconfig.json` `paths` and `baseUrl`; `package.json` `exports` and workspaces; CommonJS `require` |
+| Python | module file or package; source roots: root, `src/`, pyproject package directories | absolute and relative imports, namespace packages, `__init__.py` re-exports |
+| Java, Kotlin, Scala, Groovy | package declaration; source roots `src/{main,test}/<language>/` or the path suffix matching the package | single-type, wildcard and static imports; same package without import |
+| C#, Visual Basic .NET | namespace; project from `.csproj`, `.vbproj` and `.sln` | `using` and `Imports`, global usings, enclosing and same namespace; partial types merged |
+| C, C++, Objective-C | file; header and implementation paired by stem | `#include` and `#import`: relative to the file, then manifest include directories, then `include/` and `src/` probing; C++ namespaces and `using` |
+| Swift | SwiftPM target directory from `Package.swift`, else top-level directory | `import` module; whole-module visibility; extensions merged into the extended type |
+| Ruby | file; constants by Zeitwerk path convention | `require`, `require_relative`, `load`; autoload paths <-> constant names; reopened classes merged |
+| PHP | namespace; PSR-4 roots from `composer.json` | `use` for classes, functions, constants; `require` and `include` with literal paths |
+| Lua | file | `require("a.b")` -> `a/b.lua`, `a/b/init.lua`; `.toc` file lists |
+| Zig | file; named modules from `build.zig` | `@import` of paths and named modules |
+| Elixir | `defmodule` name | `alias`, `import`, `use`, `require`; fully qualified calls |
+| Erlang | module = file name | `Module:fun` remote calls, `-import`, `-include` |
+| Dart | file; package root from `pubspec.yaml` | `package:` and relative imports, `part` and `part of` |
+| Julia | `module` block or file | `include`, `using`, `import` |
+| R | file; package from `DESCRIPTION` and `NAMESPACE` | `source` with literal paths, `library`, `pkg::name` |
+| OCaml | file module (capitalized file name); libraries from `dune` | `Module.name`, `open`, `include` |
+| Fortran | `module` units | `use`, `include` |
+| Pascal, Delphi | `unit` | `uses` clauses; forms linked to the unit of the same name |
+| Common Lisp | `defpackage` and `in-package`; systems from `.asd` | `package:symbol`, `:use` lists, `.asd` components |
+| Solidity | file | `import` paths with `remappings.txt` and `foundry.toml` remappings |
+| Verilog, SystemVerilog | `module`, `package` | instantiation by module name, `` `include ``, `import pkg::*` |
+| PowerShell | file; module manifests | dot-sourcing and `Import-Module` with literal paths |
+| Bash | file | `source` and `.` with literal relative paths |
+| SQL | schema object | object names in DDL and DML |
+| Terraform, HCL | module directory | `module` blocks with local `source`; `var.`, `local.`, `module.`, `data.` and resource address references |
+| Robot Framework | file | `Resource` and `Library` imports; keyword calls |
+| DM | type path tree | `#include` order from `.dme`; type paths |
+| Markdown and other docs | file | relative links; backticked identifiers |
 
-- Implementation edges: Rust `impl Trait for Type`, explicit `implements` and base classes: exact; Go: type method set contains every interface method name with equal parameter count: inferred.
-- Edge kinds: `calls`, `uses` (type reference), `inherits`, `implements`, `imports` (file -> file or module), `mentions` (doc -> symbol or file), `tests` (test symbol -> symbol it calls).
-- Confidence: `exact` or `inferred`. Several candidates: no edge, counted per file as ambiguous. Targets outside the root: external dependency per module (name, use count), no node.
+Resolution order for a reference, first hit wins:
+
+1. Lexical scope of the file: enclosing and nested definitions -> exact.
+2. Name bound by an import, use, include or require -> exported symbol of the resolved module -> exact.
+3. Qualified name (`pkg.Name`, `Type::name`, `Namespace.Type`, `Module:fun`) through the module map -> exact.
+4. Same module unit visible without import (Go package, Java package, C# namespace, Swift module, Ruby and PHP autoload roots) -> exact.
+5. Member call `x.m()`: receiver type from `self`, `this`, `super`; declared types of parameters, fields and variables; constructor and factory expressions (`new T`, `T(...)`, `T::new`, `T.init`, functions with a declared return type) -> method of the type or its supertypes; exact for declared types, inferred for factory return types.
+6. Method of an interface, trait, protocol or abstract type -> edges to every implementation, inferred, max 10 targets, else one ambiguity notice.
+7. Unique name among the modules the file imports, then unique name in the root (non-test preferred) -> inferred.
+8. Otherwise no edge; counted per file as ambiguous.
+
+- Implementation edges: `impl Trait for Type`, `implements`, `extends`, base and conformance lists, categories and extensions: exact; Go: type method set contains every interface method name with equal parameter count: inferred.
+- Contract edges: OpenAPI `operationId`, Protobuf rpc and GraphQL field -> handler whose name matches within the implementing type or module: `implements`, inferred.
+- Edge kinds: `calls`, `uses` (type reference), `inherits`, `implements`, `imports` (file -> file or module), `mentions` (doc -> symbol or file), `tests` (test symbol -> symbol it calls), `references` (code, doc, template or config -> file or asset), `runs` (task -> script, entrypoint or task), `queries` (symbol -> SQL object named in a string literal with an SQL keyword).
+- Docs: backticked identifier with a unique symbol name: inferred; relative path mention or link: exact.
+- Confidence: `exact` or `inferred`. Targets outside the root: external dependency per module (name, use count), no node.
 - Edges are unique per (source, target, kind); exact wins over inferred.
 
 | derived item | definition |
@@ -133,11 +230,17 @@ Per language: tree-sitter grammar plus an embedded query file; query captures ma
 | modules | language module units; module graph = aggregated cross-module edges with counts |
 | cycles | strongly connected components with more than one module in the module import graph |
 | layers | longest-path level per module on the condensed module DAG |
-| entrypoints | Go `main` in package `main`; Rust `main` of bin targets; manifest entrypoints; Python `if __name__ == "__main__"` blocks; executable files with shebang |
+| entrypoints | Go `main` in package `main`; Rust `main` of bin targets; `main` of Java, Kotlin, Scala, C#, C, C++, Dart and Zig; Swift `@main` and `main.swift`; Python `if __name__ == "__main__"` blocks; manifest entrypoints; executable files with shebang |
+| env surface | per variable: definition sites (env def facts) and read sites |
+| tasks | Makefile targets, package scripts, CI jobs and compose services with what they run (`runs`) |
+| contracts | API operations (OpenAPI, Protobuf, GraphQL) with their implementing handlers |
+| asset refs | referenced files and assets with their referrers |
 | test map | symbol -> tests reaching it within 2 `calls` hops |
 | dead candidates | private, non-entry, non-test symbols without incoming edges, excluding interface and trait implementations and init hooks; unused exported symbols listed separately |
 | stale doc references | doc mentions of identifiers matching no symbol and of relative paths matching no file |
-| search index | token -> symbol postings; tokens from name, parent chain, path, signature, doc |
+| env drift | variables read without a definition site; variables defined without a read site |
+| unreferenced assets | `asset` files without incoming `references` |
+| search index | token -> symbol postings from name, parent chain, path, signature, doc; token -> file postings from text segments and config key paths |
 
 - Tokenization: split on non-alphanumerics, camelCase and PascalCase boundaries and letter-digit boundaries; lowercase; an English stopword list applies to query terms only.
 
@@ -153,15 +256,17 @@ Git data requires `git` on PATH and a git work tree; otherwise git sections prin
 
 ## 7. Query semantics
 
+Detail ladder: `find` (one line per hit) -> `ctx` (bundle with signatures) -> `show` (full card) -> source read at the cited lines.
+
 ### 7.1 map
 
-Sections in priority order: root line (name, files per language, symbol count) -> modules (tree by path, depth max 3; files, symbols, top 3 symbols by rank; max 40 lines) -> entrypoints -> hubs (top 10 by rank) -> cycles -> layers -> external dependencies (top 15 by use count) -> env vars (name, read count, first location). Sections other than modules hold max 10 lines; the budget cuts from the lowest-priority section upward.
+Sections in priority order: root line (name, files per language, symbol count) -> modules (tree by path, depth max 3; files, symbols, top 3 symbols by rank; max 40 lines) -> entrypoints -> tasks -> hubs (top 10 by rank) -> api contracts -> cycles -> layers -> external dependencies (top 15 by use count) -> env vars (name, read count, definition sources, first read location). Sections other than modules hold max 10 lines; the budget cuts from the lowest-priority section upward.
 
 ### 7.2 find
 
 1. Tokenize the query; look up exact names for the raw query and each term.
 2. Candidates = union of the postings.
-3. Score = BM25F (k1 1.2, b 0.75; field weights name 3, parent 1.5, path 1, signature 0.5, doc 0.5) + exact-name bonus 5, multiplied by the role weight (src 1, test 0.3, gen 0.2, doc 0.5), + 0.5 x normalized log rank.
+3. Score = BM25F (k1 1.2, b 0.75; field weights name 3, parent 1.5, path 1, signature 0.5, doc 0.5) + exact-name bonus 5, multiplied by the role weight (src 1, test 0.3, gen 0.2, doc 0.5, config 0.5, manifest 0.5, asset 0.3), + 0.5 x normalized log rank.
 4. Order: score descending, then path, then line; files matched by path tokens appear as file lines.
 
 ### 7.3 ctx
@@ -173,14 +278,14 @@ Sections in priority order: root line (name, files per language, symbol count) -
 
 ### 7.4 show
 
-Card order: header (path:start-end, kind, qualified name) -> signature -> doc -> members (methods, field names) -> supertypes -> implementations -> callers by rank -> callees -> tests -> env reads -> ambiguity notices. Each section max 10 lines unless `--all`.
+Card order: header (path:start-end, kind, qualified name) -> signature -> doc -> members (methods, field names) -> supertypes -> implementations -> incoming edges by rank (callers, referrers, `runs`, `queries`) -> outgoing edges -> tests -> env reads -> ambiguity notices. Incoming and outgoing edges follow `--depth` hops, indented per hop. Each section max 10 lines unless `--all`.
 
 ### 7.5 impact
 
 1. Targets: NAME symbols, or symbols whose line ranges intersect the `--diff` ranges. Exported signature changes: extract the REV version of each changed file (`git show REV:path`) and compare signatures.
-2. Affected: reverse BFS over `calls`, `uses`, `inherits`, `implements` up to depth 3, ordered by depth, then rank.
+2. Affected: reverse BFS over `calls`, `uses`, `inherits`, `implements`, `references`, `queries` up to `--depth`, ordered by depth, then rank.
 3. Tests: tests reaching any target or affected symbol (test map).
-4. Run lines: Go `go test ./<pkg> -run '^(<names>)$'` per package; Rust `cargo test -p <crate> -- <names>` per crate; Python `pytest <path>::<name> ...`; TypeScript and JavaScript list test files only.
+4. Run lines: Go `go test ./<pkg> -run '^(<names>)$'` per package; Rust `cargo test -p <crate> -- <names>` per crate; Python `pytest <path>::<name> ...`; Java, Kotlin, Scala, Groovy with Gradle `./gradlew test --tests <class>`, with Maven `mvn test -Dtest=<class>`; C#, VB.NET `dotnet test --filter FullyQualifiedName~<name>`; Ruby `bundle exec rspec <path>` or `bundle exec ruby -Itest <path>`; PHP `vendor/bin/phpunit --filter <name>`; Swift `swift test --filter <name>`; Elixir `mix test <path>`; Dart `dart test <path>`; Zig `zig build test`; other languages list test files only.
 
 ### 7.6 path
 
@@ -188,7 +293,7 @@ Shortest path by BFS over forward `calls`, `uses`, `inherits`, `implements`, `im
 
 ### 7.7 audit
 
-Sections: dead candidates -> unused exports -> cycles -> stale doc references -> hidden coupling -> hotspots; each max 15 lines.
+Sections: dead candidates -> unused exports -> cycles -> stale doc references -> env drift -> unreferenced assets -> hidden coupling -> hotspots; each max 15 lines.
 
 ## 8. Output format
 
@@ -196,7 +301,7 @@ Text:
 
 - Paths are root-relative with `/`. Symbol lines are grouped under their file line and indented two spaces: `<line> <kind> <signature or name>`.
 - No headers, banners or empty fields. Truncation emits one final line `+<n> more`.
-- `map` and `audit` open each section with one keyword line: `modules`, `entry`, `hubs`, `cycles`, `layers`, `ext`, `env`, `dead`, `unused`, `stale`, `coupling`, `hotspots`.
+- `map` and `audit` open each section with one keyword line: `modules`, `entry`, `tasks`, `hubs`, `api`, `cycles`, `layers`, `ext`, `env`, `dead`, `unused`, `stale`, `drift`, `assets`, `coupling`, `hotspots`.
 
 | marker | meaning |
 |--------|---------|
@@ -275,11 +380,12 @@ Reference: Apple Silicon laptop, warm filesystem cache, corpus of 8,000 tracked 
 | index size | max 20 MB |
 | bytes written per single-file change | max 5 MB |
 | peak RSS, full build | max 400 MB |
+| binary size, release build with all grammars | max 64 MB |
 | skill size | max 1500 tokens |
 
 ## 12. Evaluation
 
-Reference corpora: xcalygraph itself, the upstream Graphify clone at the pinned commit (Python), private corpora evaluated locally.
+Reference corpora: xcalygraph itself, the upstream Graphify clone at the pinned commit (Python), one public repository per deep language pinned by commit under `research/corpora/`, private corpora evaluated locally. Edge precision targets per deep language: exact at least 95 %, inferred at least 85 %; structural languages: at least 85 %.
 
 | metric | definition |
 |--------|------------|
