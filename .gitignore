@@ -7,5 +7,16 @@
 .env*
 !.env.example
 
-# Upstream reference clone (scripts/utils/sync-upstream.sh)
-/research/upstream/
+# Research material, including the upstream clone (scripts/utils/sync-upstream.sh)
+/research/
+
+# Local-only agent rules, TASK control plane and decision evidence
+/AGENTS.md
+/CLAUDE.md
+/docs/decisions.md
+/docs/tasks.md
+/docs/tasks/
+
+# Development index, benchmark output and private evaluation corpora
+/.cache/
+/scripts/benchmarks/questions/private/
