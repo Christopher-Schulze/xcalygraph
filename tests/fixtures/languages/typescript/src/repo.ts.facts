@@ -1,0 +1,19 @@
+doc "Row storage contracts."
+sym 2-4 iface Repo parent=- owner= pub flags=0 sig="interface Repo" doc="Row storage contracts."
+sym 3-3 method get parent=Repo owner=Repo pub flags=0 sig="get(id: string): Row | undefined" doc=""
+sym 6-6 alias Row parent=- owner= pub flags=0 sig="type Row" doc=""
+sym 9-15 class MemoryRepo parent=- owner= pub flags=0 sig="class MemoryRepo implements Repo" doc="Keeps rows in memory."
+sym 12-14 method get parent=MemoryRepo owner=MemoryRepo pub flags=0 sig="get(id: string): Row | undefined" doc=""
+sym 17-19 fn openRepo parent=- owner= pub flags=0 sig="function openRepo(): Repo" doc=""
+ref 3 Type Row qualifier=- scope=get
+ref 9 Implement Repo qualifier=- scope=MemoryRepo
+ref 10 Type Row qualifier=- scope=MemoryRepo
+ref 12 Type Row qualifier=- scope=get
+ref 13 Call get qualifier=this.rows scope=get
+ref 17 Type Repo qualifier=- scope=openRepo
+ref 18 Call MemoryRepo qualifier=- scope=openRepo
+bind 3 "id": string declared scope=get
+bind 12 "": Row declared scope=get
+bind 12 "id": string declared scope=get
+bind 17 "": Repo declared scope=openRepo
+fields MemoryRepo rows:Map

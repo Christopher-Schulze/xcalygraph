@@ -1,0 +1,14 @@
+doc "Database access."
+sym 5-12 class Database parent=- owner= pub flags=0 sig="class Database:" doc="Talks to the database."
+sym 8-9 method __init__ parent=Database owner=Database priv flags=0 sig="def __init__(self, url: str):" doc=""
+sym 11-12 method query parent=Database owner=Database pub flags=0 sig="def query(self, sql: str) -> list:" doc=""
+sym 15-16 fn connect parent=- owner= pub flags=0 sig="def connect() -> Database:" doc=""
+import 2 "os" names= alias=- reexport=false
+ref 15 Type Database qualifier=- scope=connect
+ref 16 Call Database qualifier=- scope=connect
+ref 16 Call get qualifier=os.environ scope=connect
+bind 8 "url": str declared scope=__init__
+bind 11 "": list declared scope=query
+bind 11 "sql": str declared scope=query
+bind 15 "": Database declared scope=connect
+env 16 DB_URL scope=connect

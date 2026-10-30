@@ -1,3 +1,7 @@
+Demo app -mentions-> file:cmd/app/main.go @3
+Demo app.Store -mentions?-> internal/store.NewStore @7
+Demo app.Store -mentions?-> internal/store.Store.Get @7
+Demo app.Store -references-> file:internal/store/store.go @7
 cmd/app.main -calls-> internal/store.NewStore @6
 cmd/app.main -calls?-> internal/store.Store.Len @10
 internal/database.Connect -uses-> internal/database.Client @9
@@ -17,4 +21,5 @@ internal/store.count -uses-> internal/store.Reader @38
 internal/store.warm -calls-> internal/store.NewStore @4
 internal/store.warm -calls-> internal/store.count @6
 internal/store.warm -calls?-> internal/store.Store.Get @5
+ambiguous README.md 1
 ext internal/database github.com/lib/pq 1

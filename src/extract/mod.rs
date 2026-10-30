@@ -3,11 +3,15 @@
 pub mod engine;
 #[cfg(test)]
 mod golden;
+pub mod json;
 pub mod lang;
 pub mod manifest;
+pub mod markdown;
+pub mod sfc;
 
 use crate::domain::corpus::FileRecord;
 use crate::domain::facts::Facts;
+use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction output changes, so existing indexes rebuild.
@@ -15,6 +19,19 @@ pub const EXTRACTION_VERSION: u32 = 3;
 
 /// Extracts the facts of one file of an extracted role.
 pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
+    if matches!(
+        record.file_type,
+        Some(FileType::Vue | FileType::Svelte | FileType::Astro)
+    ) {
+        let mut facts = sfc::extract(record, content);
+        facts.lines = count_lines(content);
+        return facts;
+    }
+    if record.file_type == Some(FileType::Markdown) {
+        let mut facts = markdown::extract(&String::from_utf8_lossy(content));
+        facts.lines = count_lines(content);
+        return facts;
+    }
     let mut facts = record
         .file_type
         .and_then(|file_type| lang::lookup(file_type, &record.path))

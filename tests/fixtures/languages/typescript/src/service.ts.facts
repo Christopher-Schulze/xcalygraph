@@ -1,0 +1,29 @@
+sym 6-13 class Service parent=- owner= pub flags=0 sig="class Service" doc=""
+sym 7-7 method constructor parent=Service owner=Service pub flags=0 sig="constructor(private repo: Repo)" doc=""
+sym 9-12 method find parent=Service owner=Service pub flags=0 sig="find(id: string): string" doc=""
+sym 15-21 fn makeService parent=- owner= pub flags=0 sig="function makeService(): Service" doc=""
+import 1 "./store/repo" names=MemoryRepo alias=- reexport=false
+import 1 "./store/repo" names=Repo alias=- reexport=false
+import 1 "./store/repo" names=default alias=openRepo reexport=false
+import 2 "@/store" names=* alias=store reexport=false
+import 3 "../lib/format.js" names=format alias=- reexport=false
+import 4 "react" names=default alias=React reexport=false
+ref 7 Type Repo qualifier=- scope=constructor
+ref 10 Call get qualifier=this.repo scope=find
+ref 11 Call format qualifier=- scope=find
+ref 15 Type Service qualifier=- scope=makeService
+ref 16 Call openRepo qualifier=- scope=makeService
+ref 17 Call MemoryRepo qualifier=- scope=makeService
+ref 18 Call get qualifier=memory scope=makeService
+ref 19 Call MemoryRepo qualifier=store scope=makeService
+ref 20 Call Service qualifier=- scope=makeService
+bind 7 "repo": Repo declared scope=constructor
+bind 9 "": string declared scope=find
+bind 9 "id": string declared scope=find
+bind 10 "row": this.repo.get() inferred scope=find
+bind 15 "": Service declared scope=makeService
+bind 16 "repo": openRepo() inferred scope=makeService
+bind 17 "memory": MemoryRepo inferred scope=makeService
+bind 19 "other": store.MemoryRepo inferred scope=makeService
+fields Service repo:Repo
+env 11 DEFAULT_ID scope=find

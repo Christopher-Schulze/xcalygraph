@@ -6,6 +6,7 @@ use crate::domain::filetype::FileType;
 use crate::extract::engine::{self, Definition, FileContext, Hooks};
 
 pub static PACK: Pack = Pack {
+    suffixes: &[],
     file_type: FileType::Go,
     language: |_| tree_sitter_go::LANGUAGE.into(),
     query: include_str!("../queries/go.scm"),

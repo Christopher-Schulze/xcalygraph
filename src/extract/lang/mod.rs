@@ -1,9 +1,15 @@
 //! Language packs: grammar, query and hooks per deep language (`docs/decisions.md` D16).
 
+#[cfg(feature = "lang-bash")]
+pub mod bash;
 #[cfg(feature = "lang-go")]
 pub mod go;
+#[cfg(feature = "lang-python")]
+pub mod python;
 #[cfg(feature = "lang-rust")]
 pub mod rust;
+#[cfg(any(feature = "lang-typescript", feature = "lang-javascript"))]
+pub mod typescript;
 
 use std::sync::OnceLock;
 
@@ -14,6 +20,8 @@ use crate::domain::filetype::FileType;
 
 pub struct Pack {
     pub file_type: FileType,
+    /// Path suffixes this pack is restricted to (dialects such as `.tsx`); empty for all.
+    pub suffixes: &'static [&'static str],
     /// Grammar for a file path (some languages switch dialects by suffix).
     pub language: fn(&str) -> Language,
     pub query: &'static str,
@@ -25,6 +33,16 @@ const PACKS: &[&Pack] = &[
     &go::PACK,
     #[cfg(feature = "lang-rust")]
     &rust::PACK,
+    #[cfg(feature = "lang-python")]
+    &python::PACK,
+    #[cfg(feature = "lang-typescript")]
+    &typescript::TSX,
+    #[cfg(feature = "lang-typescript")]
+    &typescript::TYPESCRIPT,
+    #[cfg(feature = "lang-javascript")]
+    &typescript::JAVASCRIPT,
+    #[cfg(feature = "lang-bash")]
+    &bash::PACK,
 ];
 
 /// One lazily compiled query per pack: a refresh compiles only the languages it extracts.
@@ -36,7 +54,11 @@ pub fn lookup(
     file_type: FileType,
     path: &str,
 ) -> Option<(&'static Pack, Language, &'static Query)> {
-    let index = PACKS.iter().position(|pack| pack.file_type == file_type)?;
+    let index = PACKS.iter().position(|pack| {
+        pack.file_type == file_type
+            && (pack.suffixes.is_empty()
+                || pack.suffixes.iter().any(|suffix| path.ends_with(suffix)))
+    })?;
     let pack = PACKS[index];
     let query = QUERIES[index]
         .get_or_init(|| Query::new(&(pack.language)(""), pack.query).ok())

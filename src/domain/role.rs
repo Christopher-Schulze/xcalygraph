@@ -249,7 +249,11 @@ fn is_manifest(name: &str) -> bool {
     NAMES.contains(&name)
         || matches!(
             name,
-            "remappings.txt" | "CMakeLists.txt" | "compile_commands.json"
+            "remappings.txt"
+                | "CMakeLists.txt"
+                | "compile_commands.json"
+                | "tsconfig.json"
+                | "jsconfig.json"
         )
         || SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
         || (name.starts_with("requirements") && name.ends_with(".txt"))

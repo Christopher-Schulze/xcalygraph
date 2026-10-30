@@ -1,0 +1,46 @@
+; JavaScript facts for the extraction engine (src/extract/engine.rs capture convention).
+
+(program (lexical_declaration (variable_declarator name: (identifier) @name) @definition.constant))
+(program (export_statement (lexical_declaration (variable_declarator name: (identifier) @name) @definition.constant)))
+(function_declaration name: (identifier) @name) @definition.function
+(generator_function_declaration name: (identifier) @name) @definition.function
+(program (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function))
+(program (export_statement (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function)))
+(program (variable_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function))
+(class_declaration name: (identifier) @name) @definition.class
+(method_definition name: (property_identifier) @name) @definition.method
+
+(class_heritage (identifier) @name @reference.inherit)
+(class_heritage (member_expression object: (_) @qualifier property: (property_identifier) @name) @reference.inherit)
+
+(import_statement) @import.tree @import
+(export_statement source: (string)) @import.tree @import
+(variable_declarator
+  name: (identifier) @import.alias
+  value: (call_expression function: (identifier) @_require arguments: (arguments . (string) @import.path))
+  (#eq? @_require "require")) @import
+
+(call_expression function: (identifier) @name) @reference.call
+(call_expression function: (member_expression object: (_) @qualifier property: (property_identifier) @name)) @reference.call
+(new_expression constructor: (identifier) @name) @reference.call
+(new_expression constructor: (member_expression object: (_) @qualifier property: (property_identifier) @name)) @reference.call
+
+(variable_declarator name: (identifier) @binding.name value: (new_expression constructor: (_) @binding.ctor)) @binding
+(variable_declarator name: (identifier) @binding.name value: (call_expression function: (_) @binding.call)) @binding
+(variable_declarator name: (identifier) @binding.name value: (await_expression (call_expression function: (_) @binding.call))) @binding
+
+(assignment_expression
+  left: (member_expression object: (this) property: (property_identifier) @field.name)
+  right: (new_expression constructor: (_) @field.type)) @field
+(field_definition property: (property_identifier) @field.name value: (new_expression constructor: (_) @field.type)) @field
+
+(member_expression
+  object: (member_expression object: (identifier) @_process property: (property_identifier) @_env)
+  property: (property_identifier) @env.name
+  (#eq? @_process "process")
+  (#eq? @_env "env")) @env
+(subscript_expression
+  object: (member_expression object: (identifier) @_process property: (property_identifier) @_env)
+  index: (string) @env.name
+  (#eq? @_process "process")
+  (#eq? @_env "env")) @env

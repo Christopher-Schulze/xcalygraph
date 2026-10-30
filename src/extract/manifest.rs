@@ -1,6 +1,7 @@
 //! Manifest facts: module names, dependencies, workspace members and entrypoints
 //! (`docs/spec.md` section 5, manifest).
 
+use super::json::{self, Value};
 use crate::domain::facts::Manifest;
 
 /// Parses a manifest by file name; `None` for manifests without a parser.
@@ -9,8 +10,72 @@ pub fn parse(name: &str, text: &str) -> Option<Manifest> {
         "go.mod" => Some(go_mod(text)),
         "go.work" => Some(go_work(text)),
         "Cargo.toml" => Some(cargo_toml(text)),
+        "package.json" => Some(package_json(&json::parse(text)?)),
+        "tsconfig.json" | "jsconfig.json" => Some(tsconfig(&json::parse(text)?)),
         _ => None,
     }
+}
+
+/// `name`, dependency keys, `workspaces`, `bin` entrypoints and `main`/`module` as source root.
+fn package_json(value: &Value) -> Manifest {
+    let mut manifest = Manifest {
+        module: value.get("name").and_then(Value::as_str).map(str::to_owned),
+        ..Manifest::default()
+    };
+    for section in [
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ] {
+        for (name, _, requirement) in value.get(section).map(Value::entries).unwrap_or_default() {
+            if !manifest.deps.iter().any(|(existing, _)| existing == name) {
+                manifest.deps.push((
+                    name.clone(),
+                    requirement.as_str().unwrap_or_default().to_owned(),
+                ));
+            }
+        }
+    }
+    if let Some(workspaces) = value.get("workspaces") {
+        manifest.members = match workspaces.get("packages") {
+            Some(packages) => packages.strings(),
+            None => workspaces.strings(),
+        };
+    }
+    match value.get("bin") {
+        Some(Value::Str(path)) => manifest.entrypoints.push(path.clone()),
+        Some(bin) => manifest.entrypoints.extend(
+            bin.entries()
+                .iter()
+                .filter_map(|(_, _, path)| path.as_str().map(str::to_owned)),
+        ),
+        None => {}
+    }
+    for key in ["module", "main"] {
+        if let Some(main) = value.get(key).and_then(Value::as_str) {
+            manifest.source_roots.push(main.to_owned());
+            break;
+        }
+    }
+    manifest
+}
+
+/// `compilerOptions.baseUrl` as source root, `paths` as `alias=target` include entries.
+fn tsconfig(value: &Value) -> Manifest {
+    let mut manifest = Manifest::default();
+    let Some(options) = value.get("compilerOptions") else {
+        return manifest;
+    };
+    if let Some(base) = options.get("baseUrl").and_then(Value::as_str) {
+        manifest.source_roots.push(base.to_owned());
+    }
+    for (alias, _, targets) in options.get("paths").map(Value::entries).unwrap_or_default() {
+        if let Some(target) = targets.strings().first() {
+            manifest.include_dirs.push(format!("{alias}={target}"));
+        }
+    }
+    manifest
 }
 
 fn go_mod(text: &str) -> Manifest {
@@ -185,6 +250,27 @@ fn strip_toml_comment(line: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_json_and_tsconfig() {
+        let package = parse(
+            "package.json",
+            "{\"name\": \"@acme/web\", \"main\": \"dist/index.js\", \"bin\": {\"acme\": \"bin/acme.js\"}, \"workspaces\": {\"packages\": [\"packages/*\"]}, \"dependencies\": {\"react\": \"^19\"}}",
+        );
+        let package = package.unwrap_or_default();
+        assert_eq!(package.module.as_deref(), Some("@acme/web"));
+        assert_eq!(package.members, ["packages/*"]);
+        assert_eq!(package.entrypoints, ["bin/acme.js"]);
+        assert_eq!(package.deps, [("react".to_owned(), "^19".to_owned())]);
+        assert_eq!(package.source_roots, ["dist/index.js"]);
+        let config = parse(
+            "tsconfig.json",
+            "{ // jsonc\n \"compilerOptions\": { \"baseUrl\": \".\", \"paths\": { \"@/*\": [\"src/*\"] }, }, }",
+        )
+        .unwrap_or_default();
+        assert_eq!(config.source_roots, ["."]);
+        assert_eq!(config.include_dirs, ["@/*=src/*"]);
+    }
 
     #[test]
     fn go_mod_names_module_and_requirements() {

@@ -24,13 +24,21 @@ rayon = "1.12.0"
 sha2 = "0.11.1"
 tar = "0.4.46"
 tree-sitter = "0.27.1"
+tree-sitter-bash = { version = "0.25.1", optional = true }
 tree-sitter-go = { version = "0.25.0", optional = true }
+tree-sitter-javascript = { version = "0.25.0", optional = true }
 tree-sitter-language = "0.1.9"
+tree-sitter-python = { version = "0.25.0", optional = true }
 tree-sitter-rust = { version = "0.24.2", optional = true }
+tree-sitter-typescript = { version = "0.23.2", optional = true }
 ureq = "3.5.0"
 xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 
 [features]
-default = ["lang-go", "lang-rust"]
+default = ["lang-go", "lang-rust", "lang-python", "lang-typescript", "lang-javascript", "lang-bash"]
 lang-go = ["dep:tree-sitter-go"]
 lang-rust = ["dep:tree-sitter-rust"]
+lang-python = ["dep:tree-sitter-python"]
+lang-typescript = ["dep:tree-sitter-typescript"]
+lang-javascript = ["dep:tree-sitter-javascript"]
+lang-bash = ["dep:tree-sitter-bash"]

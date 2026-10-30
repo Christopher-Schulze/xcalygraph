@@ -6,6 +6,7 @@ use crate::domain::filetype::FileType;
 use crate::extract::engine::{Definition, FileContext, Hooks};
 
 pub static PACK: Pack = Pack {
+    suffixes: &[],
     file_type: FileType::Rust,
     language: |_| tree_sitter_rust::LANGUAGE.into(),
     query: include_str!("../queries/rust.scm"),

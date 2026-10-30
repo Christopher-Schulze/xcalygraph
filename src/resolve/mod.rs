@@ -2,7 +2,9 @@
 //! resolution order steps 1 to 8). Pure; recomputed from cached facts on every change (D6).
 
 pub mod derive;
+mod js;
 pub mod modules;
+mod python;
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -20,7 +22,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 2;
+pub const RESOLVE_VERSION: u32 = 5;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -51,6 +53,9 @@ struct Index<'a> {
     implementation_pairs: Vec<(u32, u32, Confidence, u32)>,
     /// Import environment per file, for resolving names written in other files.
     file_imports: Vec<Imports>,
+    js_tables: js::JsTables,
+    /// Root-relative path -> file index.
+    path_index: HashMap<&'a str, u32>,
     /// Types per (module, name).
     types: HashMap<(u32, &'a str), Vec<u32>>,
     /// Every symbol per name, for the unique-name fallback.
@@ -206,6 +211,13 @@ impl<'a> Index<'a> {
             go_requires,
             implementation_pairs: Vec::new(),
             file_imports: Vec::new(),
+            js_tables: js::tables(input),
+            path_index: input
+                .files
+                .iter()
+                .enumerate()
+                .map(|(file, record)| (record.path.as_str(), file as u32))
+                .collect(),
             by_module: HashMap::default(),
             methods: HashMap::default(),
             types: HashMap::default(),
@@ -306,6 +318,15 @@ impl<'a> Index<'a> {
         match self.file_type(file) {
             Some(FileType::Go) => self.go_imports(file, facts, &mut imports),
             Some(FileType::Rust) => self.rust_imports(file, facts, &mut imports),
+            Some(FileType::Python) => self.python_imports(file, facts, &mut imports),
+            Some(FileType::Bash) => self.path_imports(file, facts, &mut imports),
+            Some(
+                FileType::TypeScript
+                | FileType::JavaScript
+                | FileType::Vue
+                | FileType::Svelte
+                | FileType::Astro,
+            ) => self.js_imports(file, facts, &mut imports),
             _ => {}
         }
         imports
@@ -347,6 +368,36 @@ impl<'a> Index<'a> {
             }
         }
         let _ = file;
+    }
+
+    /// Literal relative imports (Bash `source`): relative to the file, then to the root. The
+    /// sourced file's names become visible like a glob import.
+    fn path_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        let dir = modules::parent_dir(&self.input.files[file as usize].path);
+        for import in &facts.imports {
+            let spec = import.spec.trim_start_matches("./");
+            let candidates = [
+                if dir.is_empty() {
+                    spec.to_owned()
+                } else {
+                    format!("{dir}/{spec}")
+                },
+                spec.to_owned(),
+            ];
+            let Some(target) = candidates
+                .iter()
+                .find_map(|path| self.modules.get(&format!("file:{path}")))
+            else {
+                continue;
+            };
+            imports.globs.push(target);
+            imports.modules.push(target);
+            for (other, &module) in self.modules.file_module.iter().enumerate() {
+                if module == target {
+                    imports.files.push((file, other as u32));
+                }
+            }
+        }
     }
 
     /// Package name of a Go module: the declared `package` of its non-test files.
@@ -734,6 +785,12 @@ impl<'a> Index<'a> {
         name: &str,
     ) -> Option<Vec<u32>> {
         let imports = imports.or_else(|| self.file_imports.get(file as usize));
+        if self.file_type(file) == Some(FileType::Python)
+            && let Some(found) =
+                imports.and_then(|imports| self.python_qualified(imports, qualifier, name))
+        {
+            return Some(found);
+        }
         let rust = self.file_type(file) == Some(FileType::Rust);
         if rust && qualifier.contains("::") {
             let segments: Vec<&str> = qualifier.split("::").collect();
@@ -755,7 +812,14 @@ impl<'a> Index<'a> {
         {
             return match target {
                 Target::Module(module) => {
-                    let found = self.module_symbol(*module, name, None);
+                    let mut found = self.module_symbol(*module, name, None);
+                    if found.is_empty()
+                        && self.modules.modules[*module as usize]
+                            .key
+                            .starts_with("js:")
+                    {
+                        found = self.js_exported(*module, name);
+                    }
                     (!found.is_empty()).then_some(found)
                 }
                 Target::Symbols(symbols) => {
@@ -793,6 +857,8 @@ impl<'a> Index<'a> {
             let outcome = match reference.kind {
                 RefKind::Call | RefKind::Type => self.resolve_ref(file, imports, reference),
                 RefKind::Inherit => self.resolve_supertype(file, imports, reference),
+                RefKind::Path => self.resolve_path(file, &reference.name),
+                RefKind::Mention => self.resolve_mention(file, &reference.name),
                 _ => Outcome::Unresolved,
             };
             match outcome {
@@ -802,6 +868,8 @@ impl<'a> Index<'a> {
                     let mut kind = match reference.kind {
                         RefKind::Call => EdgeKind::Calls,
                         RefKind::Inherit => EdgeKind::Inherits,
+                        RefKind::Path => EdgeKind::References,
+                        RefKind::Mention => EdgeKind::Mentions,
                         _ => EdgeKind::Uses,
                     };
                     if kind == EdgeKind::Calls && source_is_test {
@@ -835,6 +903,57 @@ impl<'a> Index<'a> {
             });
         }
         resolved
+    }
+
+    /// A literal relative path: relative to the referring file, then to the root.
+    fn resolve_path(&self, file: u32, target: &str) -> Outcome {
+        match self.file_by_path(file, target) {
+            Some(found) if found != file => exact(self.symbols.len() as u32 + found),
+            _ => Outcome::Unresolved,
+        }
+    }
+
+    fn file_by_path(&self, file: u32, target: &str) -> Option<u32> {
+        let dir = modules::parent_dir(&self.input.files[file as usize].path);
+        let joined = if dir.is_empty() {
+            target.to_owned()
+        } else {
+            format!("{dir}/{target}")
+        };
+        [normalize_path(&joined), normalize_path(target)]
+            .iter()
+            .find_map(|path| self.path_index.get(path.as_str()).copied())
+    }
+
+    /// A backticked mention: a path names a file (exact); an identifier or qualified suffix
+    /// names the unique symbol carrying it (inferred).
+    fn resolve_mention(&self, file: u32, mention: &str) -> Outcome {
+        if mention.contains('/') {
+            return self.resolve_path(file, mention);
+        }
+        let normalized = mention.replace("::", ".");
+        let name = normalized.rsplit('.').next().unwrap_or(&normalized);
+        let candidates: Vec<u32> = self
+            .by_name
+            .get(name)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&symbol| {
+                let qualified = self.symbols[symbol as usize].qualified.replace("::", ".");
+                normalized == name
+                    || qualified == normalized
+                    || qualified.ends_with(&format!(".{normalized}"))
+            })
+            .filter(|&symbol| self.symbols[symbol as usize].kind != SymKind::Heading)
+            .collect();
+        match unique(&candidates, |symbol| self.is_test(symbol)) {
+            Some(symbol) => {
+                Outcome::Targets(vec![(symbol, Confidence::Inferred)], Confidence::Inferred)
+            }
+            None if candidates.is_empty() => Outcome::Unresolved,
+            None => Outcome::Ambiguous,
+        }
     }
 
     /// Edges that carry no information: a file using its own symbols (impl headers) and a
@@ -997,6 +1116,27 @@ impl<'a> Index<'a> {
         {
             return Outcome::External;
         }
+        // 5a. Receiver that is itself a call (`Service().run()`, `open(x).read()`): the result
+        // type of the call, inferred.
+        if let Some(callee) = call_receiver(qualifier) {
+            let binding = Binding {
+                scope: reference.scope,
+                name: String::new(),
+                type_name: format!("{callee}()"),
+                line: reference.line,
+                declared: false,
+            };
+            if let Some((types, _)) = self.binding_type(file, imports, reference.scope, &binding) {
+                let targets: Vec<(u32, Confidence)> = types
+                    .iter()
+                    .flat_map(|&type_symbol| self.members(type_symbol, name))
+                    .map(|member| (member, Confidence::Inferred))
+                    .collect();
+                if !targets.is_empty() {
+                    return Outcome::Targets(targets, Confidence::Inferred);
+                }
+            }
+        }
         // 5. Member call: receiver type from self, bindings or fields.
         if chain.iter().all(|segment| is_identifier(segment)) {
             let receiver =
@@ -1141,6 +1281,10 @@ impl<'a> Index<'a> {
                 return None;
             };
             let (callee, _) = *callees.first()?;
+            // A call of a type is a constructor: the result is the type itself.
+            if self.symbols[callee as usize].kind.is_type() {
+                return Some((vec![callee], Confidence::Inferred));
+            }
             let result = *self.returns.get(&callee)?;
             let callee_file = self.symbols[callee as usize].file;
             let callee_scope = Some(callee - self.base[callee_file as usize]);
@@ -1240,7 +1384,22 @@ impl<'a> Index<'a> {
                 if reference.kind != RefKind::Implement {
                     continue;
                 }
+                // `class C implements I` names the implementing type by scope; Rust
+                // `impl I for T` by qualifier.
                 let Some(qualifier) = &reference.qualifier else {
+                    if let Some(scope) = reference.scope
+                        && let Outcome::Targets(targets, confidence) =
+                            self.resolve_supertype(file, &imports[file as usize], reference)
+                    {
+                        for (target, _) in targets {
+                            pairs.push((
+                                self.base[file as usize] + scope,
+                                target,
+                                confidence,
+                                reference.line,
+                            ));
+                        }
+                    }
                     continue;
                 };
                 let Some((types, _)) =
@@ -1680,8 +1839,97 @@ fn count_list(text: &str) -> usize {
     if any { count + 1 } else { 0 }
 }
 
+/// Resolves `.` and `..` segments of a root-relative path.
+fn normalize_path(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(part),
+        }
+    }
+    parts.join("/")
+}
+
+/// The callee of a receiver expression that is a single call: `Service()`, `pkg.open(x)`.
+fn call_receiver(qualifier: &str) -> Option<&str> {
+    let qualifier = qualifier.trim();
+    let open = qualifier.find('(')?;
+    let callee = &qualifier[..open];
+    let rest = &qualifier[open..];
+    let balanced_once = rest.ends_with(')')
+        && rest[1..rest.len() - 1].matches('(').count()
+            == rest[1..rest.len() - 1].matches(')').count();
+    (balanced_once
+        && !callee.is_empty()
+        && callee
+            .split(['.', ':'])
+            .filter(|part| !part.is_empty())
+            .all(is_identifier)
+        && !rest[1..rest.len() - 1].contains(")."))
+    .then_some(callee)
+}
+
+/// Standard libraries: external, but not worth listing as dependencies.
 fn is_std_external(name: &str) -> bool {
-    name.starts_with("std:") || matches!(name, "std" | "core" | "alloc")
+    name.starts_with("std:")
+        || matches!(
+            name,
+            "std"
+                | "core"
+                | "alloc"
+                | "os"
+                | "sys"
+                | "re"
+                | "json"
+                | "time"
+                | "datetime"
+                | "typing"
+                | "pathlib"
+                | "collections"
+                | "itertools"
+                | "functools"
+                | "subprocess"
+                | "logging"
+                | "argparse"
+                | "dataclasses"
+                | "enum"
+                | "abc"
+                | "io"
+                | "math"
+                | "random"
+                | "shutil"
+                | "tempfile"
+                | "unittest"
+                | "uuid"
+                | "hashlib"
+                | "base64"
+                | "copy"
+                | "contextlib"
+                | "asyncio"
+                | "threading"
+                | "socket"
+                | "struct"
+                | "string"
+                | "textwrap"
+                | "glob"
+                | "inspect"
+                | "traceback"
+                | "warnings"
+                | "pickle"
+                | "csv"
+                | "urllib"
+                | "http"
+                | "__future__"
+                | "types"
+                | "operator"
+                | "platform"
+                | "signal"
+                | "queue"
+        )
 }
 
 /// Strips generic arguments and pointer marks from an owner name.

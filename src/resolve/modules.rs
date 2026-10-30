@@ -88,6 +88,39 @@ fn module_of(map: &ModuleMap, record: &FileRecord) -> ModuleInfo {
     let dir = parent_dir(&record.path);
     let extracted_code = record.role.is_extracted() && record.role != Role::Manifest;
     match record.file_type {
+        Some(
+            FileType::TypeScript
+            | FileType::JavaScript
+            | FileType::Vue
+            | FileType::Svelte
+            | FileType::Astro,
+        ) if extracted_code => {
+            let key = super::js::module_key(&record.path);
+            ModuleInfo {
+                name: super::js::strip_extension(&record.path).to_owned(),
+                method_scope: key.clone(),
+                key,
+                separator: ".",
+                file_type: record.file_type,
+            }
+        }
+        Some(FileType::Bash) if extracted_code => ModuleInfo {
+            key: format!("file:{}", record.path),
+            name: record.path.clone(),
+            separator: ".",
+            method_scope: format!("file:{}", record.path),
+            file_type: Some(FileType::Bash),
+        },
+        Some(FileType::Python) if extracted_code => {
+            let dotted = python_module(&record.path);
+            ModuleInfo {
+                key: format!("py:{dotted}"),
+                method_scope: format!("py:{dotted}"),
+                name: dotted,
+                separator: ".",
+                file_type: Some(FileType::Python),
+            }
+        }
         Some(FileType::Go) if extracted_code => {
             let key = go_import_path(map, dir);
             ModuleInfo {
@@ -203,6 +236,17 @@ fn rust_target(relative: &str) -> String {
     }
 }
 
+/// Dotted Python module of a file: source root `src/` stripped, `__init__` names the package.
+pub fn python_module(path: &str) -> String {
+    let path = path.strip_prefix("src/").unwrap_or(path);
+    let path = path.trim_end_matches(".pyi").trim_end_matches(".py");
+    let path = path.strip_suffix("/__init__").unwrap_or(path);
+    if path == "__init__" {
+        return String::new();
+    }
+    path.replace('/', ".")
+}
+
 pub fn parent_dir(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(dir, _)| dir)
 }
@@ -210,6 +254,13 @@ pub fn parent_dir(path: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn python_modules_follow_packages_and_source_roots() {
+        assert_eq!(python_module("pkg/store/db.py"), "pkg.store.db");
+        assert_eq!(python_module("src/pkg/__init__.py"), "pkg");
+        assert_eq!(python_module("tools/run.pyi"), "tools.run");
+    }
 
     #[test]
     fn rust_module_paths_follow_file_layout() {

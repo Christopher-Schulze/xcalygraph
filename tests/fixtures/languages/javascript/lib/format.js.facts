@@ -1,0 +1,6 @@
+sym 2-2 const util parent=- owner= priv flags=0 sig="const util = require(\"./util\")" doc=""
+sym 4-6 fn format parent=- owner= priv flags=0 sig="function format(text)" doc=""
+import 2 "./util" names= alias=util reexport=false
+ref 5 Call join qualifier=- scope=format
+ref 5 Call trim qualifier=util scope=format
+bind 2 "util": require() inferred scope=util

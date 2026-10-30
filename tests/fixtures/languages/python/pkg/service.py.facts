@@ -1,0 +1,25 @@
+sym 6-8 class Base parent=- owner= pub flags=0 sig="class Base:" doc=""
+sym 7-8 method describe parent=Base owner=Base pub flags=0 sig="def describe(self):" doc=""
+sym 11-21 class Service parent=- owner= pub flags=0 sig="class Service(Base):" doc=""
+sym 12-13 method __init__ parent=Service owner=Service priv flags=0 sig="def __init__(self):" doc=""
+sym 15-21 method run parent=Service owner=Service pub flags=0 sig="def run(self, name: str):" doc=""
+sym 24-25 fn main parent=- owner= pub flags=0 sig="def main():" doc=""
+import 1 "app.store.db" names=Database alias=- reexport=false
+import 1 "app.store.db" names=connect alias=- reexport=false
+import 2 "." names=util alias=- reexport=false
+import 3 "app.store.db" names= alias=dbmod reexport=false
+ref 11 Inherit Base qualifier=- scope=Service
+ref 13 Call Database qualifier=- scope=__init__
+ref 16 Call query qualifier=self.db scope=run
+ref 17 Call log qualifier=util scope=run
+ref 18 Call connect qualifier=- scope=run
+ref 19 Call query qualifier=other scope=run
+ref 20 Call connect qualifier=dbmod scope=run
+ref 21 Call describe qualifier=self scope=run
+ref 25 Call Service qualifier=- scope=main
+ref 25 Call run qualifier=Service() scope=main
+ref 29 Call main qualifier=- scope=-
+bind 15 "name": str declared scope=run
+bind 16 "rows": self.db.query() inferred scope=run
+bind 18 "other": connect() inferred scope=run
+fields Service db:Database

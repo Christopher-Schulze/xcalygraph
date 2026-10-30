@@ -1,0 +1,12 @@
+doc "Deploy the service."
+sym 10-14 fn build parent=- owner= pub flags=0 sig="build()" doc=""
+sym 16-20 fn deploy parent=- owner= pub flags=0 sig="deploy()" doc=""
+import 5 "./lib/common.sh" names= alias=- reexport=false
+ref 12 Call cargo qualifier=- scope=build
+ref 17 Call build qualifier=- scope=deploy
+ref 18 Call rsync qualifier=- scope=deploy
+ref 19 Call notify qualifier=- scope=deploy
+ref 22 Call deploy qualifier=- scope=-
+env 6 HOME scope=-
+env 8 DEPLOY_TARGET scope=-
+env 18 REMOTE_HOST scope=deploy

@@ -53,6 +53,8 @@ pub struct Definition<'a> {
     pub parent: Option<(SymKind, bool)>,
     /// Inside an implementation of a trait or interface (`impl Trait for T`).
     pub in_trait_impl: bool,
+    /// Wrapped by an `export` statement (TypeScript, JavaScript).
+    pub export_wrapper: bool,
 }
 
 pub struct FileContext<'a> {
@@ -151,11 +153,20 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
     let mut fields: HashMap<usize, RawField> = HashMap::new();
     let mut envs: HashMap<usize, (String, usize, u32)> = HashMap::new();
     let mut package = None;
+    let mut entry = false;
+    // Variables assigned in the file (Bash): their reads are no environment reads.
+    let mut assigned: Vec<String> = Vec::new();
     let mut cursor = QueryCursor::new();
     cursor.set_match_limit(4096);
     let mut matches = cursor.matches(query, root, source);
     while let Some(found) = matches.next() {
         let captures = found.captures();
+        for capture in captures
+            .iter()
+            .filter(|capture| names[capture.index as usize] == "assigned")
+        {
+            assigned.push(text(capture.node).to_owned());
+        }
         let Some((primary, primary_node)) = captures.iter().find_map(|capture| {
             let name = names[capture.index as usize];
             is_primary(name).then_some((name, capture.node))
@@ -274,6 +285,7 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
                         envs.insert(key, (name, primary_node.start_byte(), line));
                     }
                 }
+                "entry" => entry = true,
                 "package" if package.is_none() => {
                     package = Some(unquote(text(primary_node)).to_owned());
                 }
@@ -281,6 +293,7 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
             }
         }
     }
+    envs.retain(|_, (name, _, _)| !assigned.contains(name));
     let doc = file_doc(root, source);
     let mut facts = assemble(Assembly {
         hooks,
@@ -297,6 +310,7 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
         envs,
     });
     facts.doc = doc;
+    facts.entry |= entry;
     facts
 }
 
@@ -395,6 +409,11 @@ fn assemble(assembly: Assembly) -> Facts {
             inherited,
             parent: parent.map(|p| (symbols[p].kind(), symbols[p].exported)),
             in_trait_impl: enclosing_impl.is_some_and(|(_, _, trait_name)| trait_name.is_some()),
+            export_wrapper: node
+                .parent()
+                .into_iter()
+                .chain(node.parent().and_then(|parent| parent.parent()))
+                .any(|ancestor| ancestor.kind() == "export_statement"),
         };
         let exported = (hooks.exported)(&definition);
         let flags = (hooks.flags)(&definition, &context) | inherited;
@@ -479,7 +498,7 @@ fn assemble(assembly: Assembly) -> Facts {
     let mut facts_bindings: Vec<Binding> = bindings
         .into_values()
         .filter_map(|raw| {
-            let type_name = raw.type_name?;
+            let type_name = raw.type_name.filter(|name| !name.is_empty())?;
             Some(Binding {
                 scope: scope_of(raw.position),
                 name: raw.name?,
@@ -518,9 +537,16 @@ fn assemble(assembly: Assembly) -> Facts {
     let mut raw_fields: Vec<RawField> = fields.into_values().collect();
     raw_fields.sort_by_key(|field| field.position);
     for field in raw_fields {
-        let (Some(name), Some(owner)) = (field.name, scope_of(field.position)) else {
+        let (Some(name), Some(mut owner)) = (field.name, scope_of(field.position)) else {
             continue;
         };
+        // `self.x = ...` inside a method belongs to the enclosing type.
+        while !symbols[owner as usize].kind().is_type() {
+            match symbols[owner as usize].parent {
+                Some(parent) => owner = parent,
+                None => break,
+            }
+        }
         if !symbols[owner as usize].kind().is_type() {
             continue;
         }
@@ -765,6 +791,9 @@ fn decorations(node: Node, source: &[u8]) -> String {
 
 /// Leading comments of the file before its first other node: module or package documentation.
 fn file_doc(root: Node, source: &[u8]) -> String {
+    if let Some(docstring) = docstring(root, source) {
+        return facts::clip(&facts::normalize_space(&docstring), 400);
+    }
     let mut lines: Vec<String> = Vec::new();
     for index in 0..root.named_child_count() {
         let Some(child) = root.named_child(index as u32) else {
@@ -774,6 +803,9 @@ fn file_doc(root: Node, source: &[u8]) -> String {
             break;
         }
         let text = child.utf8_text(source).unwrap_or_default();
+        if text.starts_with("#!") {
+            continue;
+        }
         lines.push(strip_comment(
             text.trim_start_matches("//!").trim_start_matches("/*!"),
         ));
@@ -805,7 +837,28 @@ fn doc_comment(node: Node, source: &[u8]) -> String {
         current = sibling.prev_named_sibling();
     }
     lines.reverse();
+    if lines.is_empty()
+        && let Some(docstring) = node
+            .child_by_field_name("body")
+            .and_then(|body| docstring(body, source))
+    {
+        return facts::first_sentence(&docstring);
+    }
     facts::first_sentence(&lines.join(" "))
+}
+
+/// A string literal as the first statement of a body or module (Python docstrings).
+fn docstring(body: Node, source: &[u8]) -> Option<String> {
+    let first = body.named_child(0)?;
+    if first.kind() != "expression_statement" {
+        return None;
+    }
+    let string = first.named_child(0)?;
+    if string.kind() != "string" {
+        return None;
+    }
+    let text = string.utf8_text(source).ok()?;
+    Some(text.trim_matches(|ch| ch == '"' || ch == '\'').to_owned())
 }
 
 fn strip_comment(text: &str) -> String {
