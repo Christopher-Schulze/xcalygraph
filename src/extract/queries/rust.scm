@@ -1,0 +1,70 @@
+; Rust facts for the extraction engine (src/extract/engine.rs capture convention).
+
+(function_item name: (identifier) @name) @definition.function
+(function_item return_type: (_) @return.type) @return
+(function_signature_item name: (identifier) @name) @definition.function
+(function_signature_item return_type: (_) @return.type) @return
+(struct_item name: (type_identifier) @name) @definition.struct
+(union_item name: (type_identifier) @name) @definition.struct
+(enum_item name: (type_identifier) @name) @definition.enum
+(trait_item name: (type_identifier) @name) @definition.trait
+(type_item name: (type_identifier) @name) @definition.type
+(const_item name: (identifier) @name) @definition.constant
+(static_item name: (identifier) @name) @definition.variable
+(macro_definition name: (identifier) @name) @definition.macro
+(mod_item name: (identifier) @name) @definition.module
+
+(impl_item type: (_) @impl.type) @impl
+(impl_item trait: (_) @impl.trait type: (_) @impl.type) @impl
+(trait_item bounds: (trait_bounds [(type_identifier) (scoped_type_identifier)] @name) @reference.inherit)
+
+(use_declaration (visibility_modifier) @import.reexport argument: (_) @import.tree) @import
+(use_declaration argument: (_) @import.tree) @import
+(extern_crate_declaration name: (identifier) @import.path) @import
+
+(call_expression function: (identifier) @name) @reference.call
+(call_expression
+  function: (scoped_identifier path: (_) @qualifier name: (identifier) @name)) @reference.call
+(call_expression
+  function: (field_expression value: (_) @qualifier field: (field_identifier) @name)) @reference.call
+(call_expression
+  function: (generic_function function: (identifier) @name)) @reference.call
+(call_expression
+  function: (generic_function
+    function: (scoped_identifier path: (_) @qualifier name: (identifier) @name))) @reference.call
+(call_expression
+  function: (generic_function
+    function: (field_expression value: (_) @qualifier field: (field_identifier) @name))) @reference.call
+(macro_invocation macro: (identifier) @name) @reference.call
+(macro_invocation
+  macro: (scoped_identifier path: (_) @qualifier name: (identifier) @name)) @reference.call
+(type_identifier) @name @reference.type
+(scoped_type_identifier path: (_) @qualifier name: (type_identifier) @name) @reference.type
+
+(parameter pattern: (identifier) @binding.name type: (_) @binding.type) @binding
+(let_declaration pattern: (identifier) @binding.name type: (_) @binding.type) @binding
+(let_declaration
+  pattern: (identifier) @binding.name
+  value: (struct_expression name: (_) @binding.ctor)) @binding
+(let_declaration
+  pattern: (identifier) @binding.name
+  value: [(call_expression function: (scoped_identifier path: (_) @binding.ctor name: (identifier) @_ctor))
+          (try_expression (call_expression function: (scoped_identifier path: (_) @binding.ctor name: (identifier) @_ctor)))]
+  (#match? @binding.ctor "(^|::)[A-Z][A-Za-z0-9_]*$")
+  (#match? @_ctor "^(new|default|from|with_.*|open|create|build|load|parse|connect)$")) @binding
+(let_declaration
+  pattern: (identifier) @binding.name
+  value: [(call_expression function: (identifier) @binding.call)
+          (try_expression (call_expression function: (identifier) @binding.call))]) @binding
+
+(field_declaration name: (field_identifier) @field.name type: (_) @field.type) @field
+
+(call_expression
+  function: (scoped_identifier path: (_) @_path name: (identifier) @_fn)
+  arguments: (arguments . (string_literal) @env.name)
+  (#match? @_path "(^|::)env$")
+  (#any-of? @_fn "var" "var_os")) @env
+(macro_invocation
+  macro: (identifier) @_macro
+  (token_tree . (string_literal) @env.name)
+  (#any-of? @_macro "env" "option_env")) @env

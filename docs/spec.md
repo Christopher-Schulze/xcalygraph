@@ -299,7 +299,7 @@ Sections: dead candidates -> unused exports -> cycles -> stale doc references ->
 
 Text:
 
-- Paths are root-relative with `/`. Symbol lines are grouped under their file line and indented two spaces: `<line> <kind> <signature or name>`.
+- Paths are root-relative with `/`. Symbol lines are grouped under their file line and indented two spaces: `<line> <signature>`, or `<line> <kind> <name>` when a symbol has no signature.
 - No headers, banners or empty fields. Truncation emits one final line `+<n> more`.
 - `map` and `audit` open each section with one keyword line: `modules`, `entry`, `tasks`, `hubs`, `api`, `cycles`, `layers`, `ext`, `env`, `dead`, `unused`, `stale`, `drift`, `assets`, `coupling`, `hotspots`.
 

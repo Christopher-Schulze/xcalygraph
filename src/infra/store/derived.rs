@@ -1,0 +1,620 @@
+//! `derived` file: fixed-size little-endian records read zero-copy from the memory map
+//! (`docs/spec.md` section 9). Strings are ids into one interned string table.
+
+use std::collections::HashMap;
+
+use bytemuck::{Pod, Zeroable};
+
+use super::container::{self, Container, Kind};
+use crate::domain::facts::SymKind;
+use crate::domain::filetype::FileType;
+use crate::domain::graph::{Confidence, EdgeKind, Graph};
+use crate::domain::role::Role;
+use crate::domain::search::{self, FIELDS};
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct SymbolRecord {
+    pub name: u32,
+    pub qualified: u32,
+    pub signature: u32,
+    pub doc: u32,
+    pub file: u32,
+    pub parent: u32,
+    pub line: u32,
+    pub end_line: u32,
+    pub rank: f32,
+    pub kind: u8,
+    pub flags: u8,
+    pub exported: u8,
+    pub pad: u8,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct FileRecord {
+    pub path: u32,
+    pub module: u32,
+    pub lines: u32,
+    pub first_symbol: u32,
+    pub symbol_count: u32,
+    pub ambiguous: u32,
+    pub role: u8,
+    pub file_type: u8,
+    pub entry: u8,
+    pub pad: u8,
+}
+
+/// One adjacency entry: `node` is the target in the forward list, the source in the reverse.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct EdgeRecord {
+    pub node: u32,
+    pub line: u32,
+    pub kind: u8,
+    pub confidence: u8,
+    pub pad: [u8; 2],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct ModuleRecord {
+    pub name: u32,
+    pub files: u32,
+    pub symbols: u32,
+    pub layer: u32,
+    pub cycle: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct ModuleEdgeRecord {
+    pub source: u32,
+    pub target: u32,
+    pub count: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct ExternalRecord {
+    pub module: u32,
+    pub name: u32,
+    pub uses: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct EnvRecord {
+    pub name: u32,
+    pub node: u32,
+    pub line: u32,
+    pub source: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct FieldsRecord {
+    pub symbol: u32,
+    /// Comma-joined field names.
+    pub names: u32,
+}
+
+/// Token of the search index with its posting range; sorted by token text.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct TokenRecord {
+    pub token: u32,
+    pub start: u32,
+    pub count: u32,
+}
+
+/// Term frequency of one token per field of one node; posting lists are sorted by node.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct PostingRecord {
+    pub node: u32,
+    pub tf: [u8; FIELDS],
+    pub pad: [u8; 3],
+}
+
+/// Token count per field of one node (BM25F length normalization).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct LengthRecord {
+    pub lengths: [u16; FIELDS],
+    pub pad: u16,
+}
+
+mod section {
+    pub const STRINGS: usize = 0;
+    pub const STRING_OFFSETS: usize = 1;
+    pub const FILES: usize = 2;
+    pub const SYMBOLS: usize = 3;
+    pub const FORWARD_OFFSETS: usize = 4;
+    pub const FORWARD: usize = 5;
+    pub const REVERSE_OFFSETS: usize = 6;
+    pub const REVERSE: usize = 7;
+    pub const MODULES: usize = 8;
+    pub const MODULE_EDGES: usize = 9;
+    pub const EXTERNALS: usize = 10;
+    pub const ENVS: usize = 11;
+    pub const FIELDS: usize = 12;
+    pub const TOKENS: usize = 13;
+    pub const POSTINGS: usize = 14;
+    pub const LENGTHS: usize = 15;
+    pub const AVERAGES: usize = 16;
+    pub const MEMBERS: usize = 17;
+    pub const COUNT: usize = 18;
+}
+
+#[derive(Default)]
+struct Interner {
+    blob: Vec<u8>,
+    offsets: Vec<u32>,
+    ids: HashMap<String, u32>,
+}
+
+impl Interner {
+    fn new() -> Self {
+        let mut interner = Self {
+            offsets: vec![0],
+            ..Self::default()
+        };
+        interner.id("");
+        interner
+    }
+
+    fn id(&mut self, text: &str) -> u32 {
+        if let Some(&id) = self.ids.get(text) {
+            return id;
+        }
+        let id = (self.offsets.len() - 1) as u32;
+        self.blob.extend_from_slice(text.as_bytes());
+        self.offsets.push(self.blob.len() as u32);
+        self.ids.insert(text.to_owned(), id);
+        id
+    }
+}
+
+/// Serializes the graph and its search index.
+pub fn build(graph: &Graph) -> Vec<u8> {
+    let mut strings = Interner::new();
+    let files: Vec<FileRecord> = graph
+        .files
+        .iter()
+        .map(|file| FileRecord {
+            path: strings.id(&file.path),
+            module: file.module,
+            lines: file.lines,
+            first_symbol: file.first_symbol,
+            symbol_count: file.symbol_count,
+            ambiguous: file.ambiguous,
+            role: file.role as u8,
+            file_type: file.file_type.map_or(0, |file_type| file_type as u8),
+            entry: u8::from(file.entry),
+            pad: 0,
+        })
+        .collect();
+    let symbols: Vec<SymbolRecord> = graph
+        .symbols
+        .iter()
+        .map(|symbol| SymbolRecord {
+            name: strings.id(&symbol.name),
+            qualified: strings.id(&symbol.qualified),
+            signature: strings.id(&symbol.signature),
+            doc: strings.id(&symbol.doc),
+            file: symbol.file,
+            parent: symbol.parent,
+            line: symbol.line,
+            end_line: symbol.end_line,
+            rank: symbol.rank,
+            kind: symbol.kind as u8,
+            flags: symbol.flags,
+            exported: u8::from(symbol.exported),
+            pad: 0,
+        })
+        .collect();
+    let nodes = graph.node_count();
+    let (forward_offsets, forward) = adjacency(nodes, graph, false);
+    let (reverse_offsets, reverse) = adjacency(nodes, graph, true);
+    let modules: Vec<ModuleRecord> = graph
+        .modules
+        .iter()
+        .map(|module| ModuleRecord {
+            name: strings.id(&module.name),
+            files: module.files,
+            symbols: module.symbols,
+            layer: module.layer,
+            cycle: module.cycle,
+        })
+        .collect();
+    let module_edges: Vec<ModuleEdgeRecord> = graph
+        .module_edges
+        .iter()
+        .map(|edge| ModuleEdgeRecord {
+            source: edge.source,
+            target: edge.target,
+            count: edge.count,
+        })
+        .collect();
+    let externals: Vec<ExternalRecord> = graph
+        .externals
+        .iter()
+        .map(|external| ExternalRecord {
+            module: external.module,
+            name: strings.id(&external.name),
+            uses: external.uses,
+        })
+        .collect();
+    let envs: Vec<EnvRecord> = graph
+        .envs
+        .iter()
+        .map(|env| EnvRecord {
+            name: strings.id(&env.name),
+            node: env.node,
+            line: env.line,
+            source: u32::from(env.source),
+        })
+        .collect();
+    let fields: Vec<FieldsRecord> = graph
+        .fields
+        .iter()
+        .map(|fields| FieldsRecord {
+            symbol: fields.symbol,
+            names: strings.id(&fields.names.join(",")),
+        })
+        .collect();
+    let index = search_index(graph);
+    let tokens: Vec<TokenRecord> = index
+        .tokens
+        .iter()
+        .map(|(token, start, count)| TokenRecord {
+            token: strings.id(token),
+            start: *start,
+            count: *count,
+        })
+        .collect();
+    let mut sections: Vec<Vec<u8>> = vec![Vec::new(); section::COUNT];
+    sections[section::FILES] = bytemuck::cast_slice(&files).to_vec();
+    sections[section::SYMBOLS] = bytemuck::cast_slice(&symbols).to_vec();
+    sections[section::FORWARD_OFFSETS] = bytemuck::cast_slice(&forward_offsets).to_vec();
+    sections[section::FORWARD] = bytemuck::cast_slice(&forward).to_vec();
+    sections[section::REVERSE_OFFSETS] = bytemuck::cast_slice(&reverse_offsets).to_vec();
+    sections[section::REVERSE] = bytemuck::cast_slice(&reverse).to_vec();
+    sections[section::MODULES] = bytemuck::cast_slice(&modules).to_vec();
+    sections[section::MODULE_EDGES] = bytemuck::cast_slice(&module_edges).to_vec();
+    sections[section::EXTERNALS] = bytemuck::cast_slice(&externals).to_vec();
+    sections[section::ENVS] = bytemuck::cast_slice(&envs).to_vec();
+    sections[section::FIELDS] = bytemuck::cast_slice(&fields).to_vec();
+    sections[section::TOKENS] = bytemuck::cast_slice(&tokens).to_vec();
+    sections[section::POSTINGS] = bytemuck::cast_slice(&index.postings).to_vec();
+    sections[section::LENGTHS] = bytemuck::cast_slice(&index.lengths).to_vec();
+    sections[section::AVERAGES] = bytemuck::cast_slice(&index.averages).to_vec();
+    let members: Vec<[u32; 2]> = graph
+        .members
+        .iter()
+        .map(|&(owner, member)| [owner, member])
+        .collect();
+    sections[section::MEMBERS] = bytemuck::cast_slice(&members).to_vec();
+    sections[section::STRINGS] = strings.blob;
+    sections[section::STRING_OFFSETS] = bytemuck::cast_slice(&strings.offsets).to_vec();
+    let views: Vec<&[u8]> = sections.iter().map(Vec::as_slice).collect();
+    container::build(Kind::Derived, &views)
+}
+
+fn adjacency(nodes: usize, graph: &Graph, reverse: bool) -> (Vec<u32>, Vec<EdgeRecord>) {
+    let mut entries: Vec<(u32, EdgeRecord)> = graph
+        .edges
+        .iter()
+        .map(|edge| {
+            let (from, to) = if reverse {
+                (edge.target, edge.source)
+            } else {
+                (edge.source, edge.target)
+            };
+            (
+                from,
+                EdgeRecord {
+                    node: to,
+                    line: edge.line,
+                    kind: edge.kind as u8,
+                    confidence: edge.confidence as u8,
+                    pad: [0; 2],
+                },
+            )
+        })
+        .collect();
+    entries.sort_by_key(|(from, record)| (*from, record.kind, record.node, record.line));
+    let mut offsets = vec![0u32; nodes + 1];
+    for (from, _) in &entries {
+        offsets[*from as usize + 1] += 1;
+    }
+    for index in 1..offsets.len() {
+        offsets[index] += offsets[index - 1];
+    }
+    (
+        offsets,
+        entries.into_iter().map(|(_, record)| record).collect(),
+    )
+}
+
+struct SearchIndex {
+    tokens: Vec<(String, u32, u32)>,
+    postings: Vec<PostingRecord>,
+    lengths: Vec<LengthRecord>,
+    averages: [f32; FIELDS],
+}
+
+fn search_index(graph: &Graph) -> SearchIndex {
+    let nodes = graph.node_count();
+    let mut lengths = vec![
+        LengthRecord {
+            lengths: [0; FIELDS],
+            pad: 0
+        };
+        nodes
+    ];
+    let mut postings: HashMap<String, Vec<PostingRecord>> = HashMap::new();
+    let mut add = |node: u32, field: usize, text: &str, lengths: &mut Vec<LengthRecord>| {
+        let tokens = search::tokenize(text);
+        let length = &mut lengths[node as usize].lengths[field];
+        *length = length.saturating_add(tokens.len() as u16);
+        for token in tokens {
+            let list = postings.entry(token).or_default();
+            match list.last_mut() {
+                Some(last) if last.node == node => {
+                    last.tf[field] = last.tf[field].saturating_add(1)
+                }
+                _ => {
+                    let mut tf = [0u8; FIELDS];
+                    tf[field] = 1;
+                    list.push(PostingRecord {
+                        node,
+                        tf,
+                        pad: [0; 3],
+                    });
+                }
+            }
+        }
+    };
+    for (id, file) in graph.files.iter().enumerate() {
+        let node = graph.file_node(id as u32);
+        let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+        add(node, search::NAME, name, &mut lengths);
+        add(node, search::PATH, &file.path, &mut lengths);
+    }
+    for (id, symbol) in graph.symbols.iter().enumerate() {
+        let node = id as u32;
+        let file = &graph.files[symbol.file as usize];
+        // `mod name;` declarations repeat the module file's own path match.
+        if symbol.kind == SymKind::Mod && symbol.line == symbol.end_line {
+            continue;
+        }
+        add(node, search::NAME, &symbol.name, &mut lengths);
+        let parent = symbol
+            .qualified
+            .strip_suffix(symbol.name.as_str())
+            .unwrap_or_default();
+        add(node, search::PARENT, parent, &mut lengths);
+        // The path field of a symbol is scored from its file's path postings at query time.
+        lengths[id].lengths[search::PATH] =
+            lengths[graph.symbols.len() + symbol.file as usize].lengths[search::PATH];
+        let _ = file;
+        add(node, search::SIGNATURE, &symbol.signature, &mut lengths);
+        add(node, search::DOC, &symbol.doc, &mut lengths);
+    }
+    let mut averages = [0f32; FIELDS];
+    for (field, average) in averages.iter_mut().enumerate() {
+        let total: u64 = lengths
+            .iter()
+            .map(|record| u64::from(record.lengths[field]))
+            .sum();
+        *average = if nodes == 0 {
+            1.0
+        } else {
+            (total as f32 / nodes as f32).max(0.01)
+        };
+    }
+    let mut sorted: Vec<(String, Vec<PostingRecord>)> = postings.into_iter().collect();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut tokens = Vec::with_capacity(sorted.len());
+    let mut flat = Vec::new();
+    for (token, mut list) in sorted {
+        list.sort_unstable_by_key(|posting| posting.node);
+        tokens.push((token, flat.len() as u32, list.len() as u32));
+        flat.extend(list);
+    }
+    SearchIndex {
+        tokens,
+        postings: flat,
+        lengths,
+        averages,
+    }
+}
+
+/// Read-only view of a mapped `derived` file.
+pub struct Derived {
+    container: Container,
+}
+
+impl Derived {
+    pub fn open(container: Container) -> Option<Self> {
+        let derived = Self { container };
+        // Validate every typed section once; accessors then cast without failure paths.
+        let valid = derived.cast::<u32>(section::STRING_OFFSETS).is_some()
+            && derived.cast::<FileRecord>(section::FILES).is_some()
+            && derived.cast::<SymbolRecord>(section::SYMBOLS).is_some()
+            && derived.cast::<u32>(section::FORWARD_OFFSETS).is_some()
+            && derived.cast::<EdgeRecord>(section::FORWARD).is_some()
+            && derived.cast::<u32>(section::REVERSE_OFFSETS).is_some()
+            && derived.cast::<EdgeRecord>(section::REVERSE).is_some()
+            && derived.cast::<ModuleRecord>(section::MODULES).is_some()
+            && derived
+                .cast::<ModuleEdgeRecord>(section::MODULE_EDGES)
+                .is_some()
+            && derived.cast::<ExternalRecord>(section::EXTERNALS).is_some()
+            && derived.cast::<EnvRecord>(section::ENVS).is_some()
+            && derived.cast::<FieldsRecord>(section::FIELDS).is_some()
+            && derived.cast::<TokenRecord>(section::TOKENS).is_some()
+            && derived.cast::<PostingRecord>(section::POSTINGS).is_some()
+            && derived.cast::<LengthRecord>(section::LENGTHS).is_some()
+            && derived
+                .cast::<f32>(section::AVERAGES)
+                .is_some_and(|averages| averages.len() == FIELDS)
+            && derived.cast::<[u32; 2]>(section::MEMBERS).is_some()
+            && derived.container.section_count() == section::COUNT
+            && derived.forward_offsets().len() == derived.node_count() + 1
+            && derived.reverse_offsets().len() == derived.node_count() + 1
+            && derived.lengths().len() == derived.node_count();
+        valid.then_some(derived)
+    }
+
+    fn cast<T: Pod>(&self, index: usize) -> Option<&[T]> {
+        bytemuck::try_cast_slice(self.container.section(index)).ok()
+    }
+
+    fn slice<T: Pod>(&self, index: usize) -> &[T] {
+        self.cast(index).unwrap_or_default()
+    }
+
+    pub fn string(&self, id: u32) -> &str {
+        let offsets = self.slice::<u32>(section::STRING_OFFSETS);
+        let (Some(&start), Some(&end)) = (offsets.get(id as usize), offsets.get(id as usize + 1))
+        else {
+            return "";
+        };
+        let blob = self.container.section(section::STRINGS);
+        blob.get(start as usize..end as usize)
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn files(&self) -> &[FileRecord] {
+        self.slice(section::FILES)
+    }
+
+    pub fn symbols(&self) -> &[SymbolRecord] {
+        self.slice(section::SYMBOLS)
+    }
+
+    pub fn node_count(&self) -> usize {
+        self.files().len() + self.symbols().len()
+    }
+
+    fn forward_offsets(&self) -> &[u32] {
+        self.slice(section::FORWARD_OFFSETS)
+    }
+
+    fn reverse_offsets(&self) -> &[u32] {
+        self.slice(section::REVERSE_OFFSETS)
+    }
+
+    /// Outgoing edges of a node (`node` field = target).
+    pub fn outgoing(&self, node: u32) -> &[EdgeRecord] {
+        self.adjacent(node, section::FORWARD, self.forward_offsets())
+    }
+
+    /// Incoming edges of a node (`node` field = source).
+    pub fn incoming(&self, node: u32) -> &[EdgeRecord] {
+        self.adjacent(node, section::REVERSE, self.reverse_offsets())
+    }
+
+    fn adjacent(&self, node: u32, list: usize, offsets: &[u32]) -> &[EdgeRecord] {
+        let (Some(&start), Some(&end)) =
+            (offsets.get(node as usize), offsets.get(node as usize + 1))
+        else {
+            return &[];
+        };
+        self.slice::<EdgeRecord>(list)
+            .get(start as usize..end as usize)
+            .unwrap_or_default()
+    }
+
+    pub fn modules(&self) -> &[ModuleRecord] {
+        self.slice(section::MODULES)
+    }
+
+    pub fn module_edges(&self) -> &[ModuleEdgeRecord] {
+        self.slice(section::MODULE_EDGES)
+    }
+
+    pub fn externals(&self) -> &[ExternalRecord] {
+        self.slice(section::EXTERNALS)
+    }
+
+    pub fn envs(&self) -> &[EnvRecord] {
+        self.slice(section::ENVS)
+    }
+
+    pub fn fields(&self) -> &[FieldsRecord] {
+        self.slice(section::FIELDS)
+    }
+
+    pub fn tokens(&self) -> &[TokenRecord] {
+        self.slice(section::TOKENS)
+    }
+
+    /// Postings of a token, by binary search over the sorted token table.
+    pub fn postings(&self, token: &str) -> &[PostingRecord] {
+        let tokens = self.tokens();
+        let Ok(found) = tokens.binary_search_by(|record| self.string(record.token).cmp(token))
+        else {
+            return &[];
+        };
+        let record = tokens[found];
+        self.slice::<PostingRecord>(section::POSTINGS)
+            .get(record.start as usize..(record.start + record.count) as usize)
+            .unwrap_or_default()
+    }
+
+    /// Members (methods, associated items) of a type symbol.
+    pub fn members(&self, owner: u32) -> impl Iterator<Item = u32> + '_ {
+        let pairs = self.slice::<[u32; 2]>(section::MEMBERS);
+        let start = pairs.partition_point(|pair| pair[0] < owner);
+        pairs[start..]
+            .iter()
+            .take_while(move |pair| pair[0] == owner)
+            .map(|pair| pair[1])
+    }
+
+    pub fn lengths(&self) -> &[LengthRecord] {
+        self.slice(section::LENGTHS)
+    }
+
+    pub fn averages(&self) -> [f32; FIELDS] {
+        let mut averages = [1.0; FIELDS];
+        for (slot, value) in averages
+            .iter_mut()
+            .zip(self.slice::<f32>(section::AVERAGES))
+        {
+            *slot = *value;
+        }
+        averages
+    }
+}
+
+impl SymbolRecord {
+    pub fn kind(&self) -> SymKind {
+        SymKind::from_u8(self.kind).unwrap_or(SymKind::Fn)
+    }
+}
+
+impl FileRecord {
+    pub fn role(&self) -> Role {
+        Role::from_u8(self.role).unwrap_or(Role::Other)
+    }
+
+    pub fn file_type(&self) -> Option<FileType> {
+        FileType::from_u8(self.file_type)
+    }
+}
+
+impl EdgeRecord {
+    pub fn kind(&self) -> EdgeKind {
+        EdgeKind::from_u8(self.kind).unwrap_or(EdgeKind::Uses)
+    }
+
+    pub fn is_exact(&self) -> bool {
+        self.confidence == Confidence::Exact as u8
+    }
+}

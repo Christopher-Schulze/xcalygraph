@@ -1,0 +1,52 @@
+package store
+sym 12-12 const MaxRows parent=- owner= pub flags=0 sig="const MaxRows = 100" doc="MaxRows limits the table size."
+sym 14-14 var defaultName parent=- owner= priv flags=0 sig="var defaultName = \"rows\"" doc=""
+sym 17-20 iface Reader parent=- owner= pub flags=0 sig="type Reader interface" doc="Reader reads rows."
+sym 18-18 method Get parent=Reader owner=Reader pub flags=0 sig="Get(id int) (*Row, error)" doc=""
+sym 19-19 method Len parent=Reader owner=Reader pub flags=0 sig="Len() int" doc=""
+sym 23-26 struct Row parent=- owner= pub flags=0 sig="type Row struct" doc="Row is one record."
+sym 29-33 struct Store parent=- owner= pub flags=0 sig="type Store struct" doc="Store holds rows."
+sym 35-35 alias ID parent=- owner= pub flags=0 sig="type ID = int" doc=""
+sym 38-44 fn NewStore parent=- owner= pub flags=0 sig="func NewStore(path string) (*Store, error)" doc="NewStore opens a store."
+sym 47-54 method Get parent=- owner=Store pub flags=0 sig="func (s *Store) Get(id int) (*Row, error)" doc="Get returns the row with the id."
+sym 56-56 method Len parent=- owner=Store pub flags=0 sig="func (s Store) Len() int" doc=""
+sym 58-65 fn load parent=- owner= priv flags=0 sig="func load()" doc=""
+import 5 "errors" names= alias=- reexport=false
+import 6 "os" names= alias=- reexport=false
+import 8 "example.com/app/internal/database" names= alias=db reexport=false
+ref 18 Type Row qualifier=- scope=Get
+ref 30 Type Row qualifier=- scope=Store
+ref 31 Type Client qualifier=db scope=Store
+ref 32 Inherit Reader qualifier=- scope=Store
+ref 38 Type Store qualifier=- scope=NewStore
+ref 40 Call New qualifier=errors scope=NewStore
+ref 42 Call Connect qualifier=db scope=NewStore
+ref 42 Call Getenv qualifier=os scope=NewStore
+ref 43 Type Store qualifier=- scope=NewStore
+ref 47 Type Row qualifier=- scope=Get
+ref 47 Type Store qualifier=- scope=Get
+ref 50 Call New qualifier=errors scope=Get
+ref 52 Call Log qualifier=s.client scope=Get
+ref 56 Type Store qualifier=- scope=Len
+ref 59 Call NewStore qualifier=- scope=load
+ref 60 Type Row qualifier=- scope=load
+ref 61 Type Reader qualifier=- scope=load
+ref 62 Call Len qualifier=reader scope=load
+ref 63 Call Get qualifier=st scope=load
+ref 64 Call LookupEnv qualifier=os scope=load
+bind 18 "id": int declared scope=Get
+bind 38 "": Store declared scope=NewStore
+bind 38 "path": string declared scope=NewStore
+bind 42 "client": db.Connect() inferred scope=NewStore
+bind 47 "": Row declared scope=Get
+bind 47 "id": int declared scope=Get
+bind 47 "s": Store declared scope=Get
+bind 56 "": int declared scope=Len
+bind 56 "s": Store declared scope=Len
+bind 59 "st": NewStore() inferred scope=load
+bind 60 "r": Row inferred scope=load
+bind 61 "reader": Reader declared scope=load
+fields Row ID:int Name:string
+fields Store rows:map client:db.Client
+env 42 DB_URL scope=NewStore
+env 64 STORE_MODE scope=load

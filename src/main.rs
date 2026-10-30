@@ -1,6 +1,11 @@
 //! xcalygraph: dense, agent-readable code graphs and analyses for AI agents.
 
+mod app;
 mod cli;
+mod domain;
+mod extract;
+mod infra;
+mod resolve;
 
 use std::io::{self, Write};
 use std::process::ExitCode;
@@ -8,12 +13,27 @@ use std::process::ExitCode;
 use cli::ExitStatus;
 
 fn main() -> ExitCode {
-    let status = match cli::parse(std::env::args_os().skip(1)) {
-        Ok(command) => write_stdout(cli::render(command).as_bytes()),
+    let invocation = match cli::parse(std::env::args_os().skip(1)) {
+        Ok(invocation) => invocation,
         Err(error) => {
             write_stderr(&format!("xcalygraph: {error}; run 'xcalygraph help'\n"));
-            ExitStatus::Usage
+            return ExitStatus::Usage.into();
         }
+    };
+    let status = match cli::local_command(&invocation) {
+        Some(command) => write_stdout(cli::render(command).as_bytes()),
+        None => match app::run(&invocation) {
+            Ok(output) => write_stdout(output.as_bytes()),
+            Err(app::error::AppError::Ambiguous(candidates)) => {
+                // Candidates are part of the answer: the agent picks one and repeats the call.
+                let _ = write_stdout(candidates.as_bytes());
+                ExitStatus::Ambiguous
+            }
+            Err(error) => {
+                write_stderr(&format!("xcalygraph: {error}\n"));
+                error.status()
+            }
+        },
     };
     status.into()
 }

@@ -1,0 +1,4 @@
+package main
+sym 5-7 fn main parent=- owner= priv flags=2 sig="func main()" doc=""
+import 3 "example.com/app/store" names= alias=- reexport=false
+ref 6 Call NewStore qualifier=store scope=main

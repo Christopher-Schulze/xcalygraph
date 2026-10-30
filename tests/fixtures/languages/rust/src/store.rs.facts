@@ -1,0 +1,72 @@
+sym 10-10 const MAX_ROWS parent=- owner= pub flags=0 sig="pub const MAX_ROWS: usize = 100" doc="Maximum number of rows."
+sym 12-12 var NAME parent=- owner= priv flags=0 sig="static NAME: &str = \"rows\"" doc=""
+sym 15-19 trait Reader parent=- owner= pub flags=0 sig="pub trait Reader: Send" doc="Reads rows."
+sym 17-17 method get parent=Reader owner=Reader pub flags=0 sig="fn get(&self, id: Id) -> Option<&Row>" doc="Returns one row."
+sym 18-18 method len parent=Reader owner=Reader pub flags=0 sig="fn len(&self) -> usize" doc=""
+sym 23-26 struct Store parent=- owner= pub flags=0 sig="pub struct Store" doc="Holds rows in memory."
+sym 28-31 enum Mode parent=- owner= pub flags=0 sig="pub enum Mode" doc=""
+sym 33-33 alias Rows parent=- owner= pub flags=0 sig="pub type Rows = Vec<Row>" doc=""
+sym 35-39 macro row parent=- owner= priv flags=0 sig="macro_rules! row" doc=""
+sym 43-48 method open parent=- owner=Store pub flags=0 sig="pub fn open(path: &str) -> Result<Self, Error>" doc="Opens a store."
+sym 50-53 method insert parent=- owner=Store priv flags=0 sig="fn insert(&mut self, row: Row)" doc=""
+sym 57-59 method get parent=- owner=Store pub flags=0 sig="fn get(&self, id: Id) -> Option<&Row>" doc=""
+sym 61-63 method len parent=- owner=Store pub flags=0 sig="fn len(&self) -> usize" doc=""
+sym 66-72 fn load parent=- owner= priv flags=0 sig="pub(crate) fn load(reader: &dyn Reader) -> usize" doc=""
+sym 75-83 mod tests parent=- owner= priv flags=1 sig="mod tests" doc=""
+sym 79-82 fn opens parent=tests owner= priv flags=1 sig="fn opens()" doc=""
+import 3 "std::collections" names=HashMap alias=- reexport=false
+import 4 "std" names=env alias=- reexport=false
+import 6 "crate::model" names=Row alias=- reexport=true
+import 6 "crate::model" names=RowId alias=Id reexport=true
+import 7 "super::db" names=* alias=- reexport=false
+import 76 "super" names=* alias=- reexport=false
+ref 17 Type Id qualifier=- scope=get
+ref 17 Type Row qualifier=- scope=get
+ref 24 Type HashMap qualifier=- scope=Store
+ref 24 Type Id qualifier=- scope=Store
+ref 24 Type Row qualifier=- scope=Store
+ref 25 Type Client qualifier=- scope=Store
+ref 33 Type Row qualifier=- scope=Rows
+ref 41 Type Store qualifier=- scope=-
+ref 43 Type Error qualifier=- scope=open
+ref 44 Call connect qualifier=Client scope=open
+ref 45 Call var qualifier=env scope=open
+ref 47 Call new qualifier=HashMap scope=open
+ref 50 Type Row qualifier=- scope=insert
+ref 51 Call log qualifier=self.client scope=insert
+ref 52 Call insert qualifier=self.rows scope=insert
+ref 56 Type Reader qualifier=- scope=-
+ref 56 Implement Reader qualifier=Store scope=-
+ref 56 Type Store qualifier=- scope=-
+ref 57 Type Id qualifier=- scope=get
+ref 57 Type Row qualifier=- scope=get
+ref 58 Call get qualifier=self.rows scope=get
+ref 62 Call len qualifier=self.rows scope=len
+ref 66 Type Reader qualifier=- scope=load
+ref 67 Call open qualifier=Store scope=load
+ref 67 Call unwrap_or_default qualifier=Store::open("x") scope=load
+ref 68 Type Store qualifier=- scope=load
+ref 68 Call default qualifier=Store scope=load
+ref 69 Call row qualifier=- scope=load
+ref 70 Call check qualifier=helpers scope=load
+ref 71 Call len qualifier=other scope=load
+ref 71 Call len qualifier=reader scope=load
+ref 71 Call len qualifier=store scope=load
+ref 80 Call open qualifier=Store scope=opens
+bind 17 "": Row declared scope=get
+bind 17 "id": Id declared scope=get
+bind 18 "": usize declared scope=len
+bind 43 "": Self declared scope=open
+bind 43 "path": str declared scope=open
+bind 44 "client": Client inferred scope=open
+bind 50 "row": Row declared scope=insert
+bind 57 "": Row declared scope=get
+bind 57 "id": Id declared scope=get
+bind 61 "": usize declared scope=len
+bind 66 "": usize declared scope=load
+bind 66 "reader": Reader declared scope=load
+bind 68 "other": Store declared scope=load
+bind 80 "store": Store inferred scope=opens
+fields Store rows:HashMap client:Client
+env 45 DB_URL scope=open
+env 46 BUILD_TAG scope=open
