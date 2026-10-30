@@ -394,6 +394,8 @@ Reference corpora: xcalygraph itself, the upstream Graphify clone at the pinned 
 | rg baseline | tokens of `rg` output plus the file reads an agent needs to reach the expected location |
 | upstream baseline | hit@5 and tokens of `graphify query` on the same corpus |
 | edge precision | share of emitted edges confirmed by source inspection, 50 samples per edge kind |
+| agent success | share of questions a headless Claude Code run (`claude -p`) answers with the expected location; arms: no tool (`rg` and reads), Graphify skill, xcalygraph skill; 3 runs per question and arm |
+| agent cost | total tokens, turns and wall time per agent run, from `--output-format json` |
 
 Question sets: `scripts/benchmarks/questions/<corpus>.tsv` with columns question, expected location (`path:line` or qualified name); sets for private corpora under `scripts/benchmarks/questions/private/` (gitignored).
 
