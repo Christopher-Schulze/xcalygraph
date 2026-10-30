@@ -6,6 +6,19 @@ use crate::domain::facts::{Facts, SymKind};
 
 impl Index<'_> {
     pub(super) fn python_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        self.python_module_imports(file, facts, imports);
+        // File edges to every imported module's files (module import graph at file level).
+        let mut targets: Vec<u32> = imports.modules.clone();
+        targets.sort_unstable();
+        targets.dedup();
+        for (other, &module) in self.modules.file_module.iter().enumerate() {
+            if targets.binary_search(&module).is_ok() && other as u32 != file {
+                imports.files.push((file, other as u32));
+            }
+        }
+    }
+
+    fn python_module_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
         let current = self.modules.modules[self.module_of(file) as usize]
             .name
             .clone();

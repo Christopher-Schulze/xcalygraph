@@ -8,5 +8,9 @@ app.service.main -calls-> app.service.Service @25
 app.service.main -calls?-> app.service.Service.run @25
 app.store.db.connect -calls-> app.store.db.Database @16
 app.store.db.connect -uses-> app.store.db.Database @15
+file:app/service.py -imports-> file:app/store/db.py @1
+file:app/service.py -imports-> file:app/util.py @1
+file:app/store/__init__.py -imports-> file:app/store/db.py @1
+file:tests/test_service.py -imports-> file:app/service.py @1
 tests.test_service.test_run -tests-> app.service.Service @5
 tests.test_service.test_run -tests?-> app.service.Service.run @5

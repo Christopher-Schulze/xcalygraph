@@ -2,6 +2,7 @@
 
 - [Overview](#overview)
 - [Command line](#command-line)
+- [Languages](#languages)
 - [Agent skill](#agent-skill)
 - [Installation and releases](#installation-and-releases)
 - [Output format](#output-format)
@@ -40,6 +41,20 @@ Implemented commands; the full target surface is `docs/spec.md` section 2. `xcal
 - Query commands refresh the index first; `--read-only` never writes and exits 5 when the index is missing or stale.
 - Exit codes: 0 answer, 1 runtime error, 2 usage error, 3 ambiguous NAME (candidates on stdout), 4 no match, 5 index missing or stale under `--read-only`.
 - Usage errors print one stderr line `xcalygraph: <error>; run 'xcalygraph help'` and nothing on stdout. A reader that closes stdout early (`| head`) is not an error.
+
+## Languages
+
+| language | extraction | module unit and imports |
+|----------|-----------|-------------------------|
+| Go | tree-sitter query (`src/extract/queries/go.scm`): functions, methods with receiver, structs, interfaces and their methods, type aliases, top-level const and var, calls, type uses, embedding, bindings, fields, `os.Getenv`/`LookupEnv` | package directory; import paths from `go.mod` (nested modules supported), aliases and dot imports; unqualified names never leave the package; interfaces satisfied by method sets (inferred) |
+| Rust | `rust.scm`: items, impl and trait methods, use trees, macros, `#[test]` and `#[cfg(test)]`, `env::var`, `env!` | module tree from file layout per crate (`Cargo.toml` name); `crate::`, `self::`, `super::`, workspace crates, `use` leaves, globs, child modules; `impl Trait for Type` |
+| Python | `python.scm`: functions, classes, methods, module variables, docstrings, imports per name, `os.getenv`/`os.environ`, `__main__` entry, `test_*` and `Test*` | dotted module per file (`src/` root stripped, `__init__` names the package); absolute and relative imports, aliases, globs, dotted qualifiers through packages |
+| TypeScript, JavaScript | `typescript.scm`, `javascript.scm` (+ `jsx.scm` for `.tsx`, `.jsx`): functions, arrow constants, classes, methods, interfaces, type aliases, enums, ES imports and re-exports, `require`, JSX components, `process.env` | file module; relative specifiers with extension and `index` probing (`.js` stands in for `.ts`), `tsconfig.json`/`jsconfig.json` `paths` and `baseUrl`, workspace packages from `package.json`, re-exports followed, external packages otherwise |
+| Vue, Svelte, Astro | script blocks and Astro frontmatter parsed as TypeScript or JavaScript in place; component tags (`<UserCard>`, `<app-footer>`) as calls; the file as a component symbol | as TypeScript |
+| Bash | `bash.scm`: functions, commands as calls, `source`/`.` with literal paths, reads of variables the file never assigns as env reads | file; sourced files are visible like a glob import |
+| Markdown | line scanner: headings (nested), relative links and image links (`references`, exact), backticked identifiers (`mentions`, inferred) and paths (`mentions`, exact); first paragraph as file doc | file |
+
+Resolution order for all of them is `docs/spec.md` section 6: lexical scope, imports, qualified names, same module, member calls through receiver types (self, declared bindings, constructor and call results, field chains), interface dispatch to non-test implementations (inferred, max 10), unique-name fallback within the own and imported modules (root-wide only for Rust methods), else an ambiguity count. Test symbols are targets only for test callers.
 
 ## Agent skill
 
@@ -90,6 +105,7 @@ Grammars are cargo features (`lang-go`, `lang-rust`; all on by default). Adding 
 - Precision sampling: `XCALYGRAPH_SAMPLE_ROOT=<dir> cargo test --release sample_edges -- --ignored --nocapture` prints up to `XCALYGRAPH_SAMPLE_SIZE` (default 50) edges per kind and confidence, each with the reference line and the target signature, for checking against source (`docs/spec.md` section 12).
 - Evaluation: `scripts/benchmarks/run-evaluation.sh [--no-upstream] [CORPUS...]` answers every question of `scripts/benchmarks/questions/<corpus>.tsv` (private sets under `questions/private/`; columns question, expected `path::name`) and reports hit@5 of `find` (expected file among the first five results, `docs/spec.md` section 12), the same for the exact symbol, hit@5 of `ctx`, mean tokens per answer, the rg baseline (rg output for the two longest question words plus reading the expected file) and the upstream Graphify baseline (`graphify query` on a graph of a copy below `.cache/`). Misses are written to `.cache/evaluation/misses-<corpus>.txt`.
 - Agent benchmark: `scripts/benchmarks/run-agent-benchmark.sh [--run] [--runs N] CORPUS...` plans headless Claude Code runs per question in three arms (no tool, Graphify skill, xcalygraph skill), each with its own temporary `HOME`; without `--run` it only prints the invocations. With `--run` it records success (the answer names the expected file), tokens, turns and wall time.
+- Public corpora: `scripts/utils/sync-corpora.sh [NAME...]` checks out the commits pinned in `scripts/benchmarks/corpora.tsv` (name, URL, commit, languages) with depth-1 fetches into `research/corpora/`; benchmarks and precision sampling pick them up.
 - Benchmarks: `scripts/benchmarks/run-benchmarks.sh [CORPUS...]` builds the release binary and reports per corpus: files, full build ms, peak RSS, warm freshness ms, single-file refresh ms, index KB and KB rewritten by a single-file change (on a copy below `.cache/`). Corpora: this repository, the upstream clone and private ones listed as `name<TAB>path` in the gitignored `scripts/benchmarks/questions/private/corpora.tsv`. Requires `hyperfine`, `jq`, `rsync`.
 - Publication check: `scripts/audits/check-publication.sh [RANGE]` runs before every push and fails on tracked local-only files, absolute home paths and private names (extended regexes in the gitignored `scripts/audits/private-patterns.txt`) in the tree or message of each commit; RANGE defaults to the commits not yet on `origin/main`.
 

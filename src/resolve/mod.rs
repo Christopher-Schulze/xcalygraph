@@ -22,7 +22,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 5;
+pub const RESOLVE_VERSION: u32 = 7;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -956,6 +956,11 @@ impl<'a> Index<'a> {
         }
     }
 
+    fn caller_is_test(&self, file: u32, scope: Option<u32>) -> bool {
+        self.input.files[file as usize].role == Role::Test
+            || scope.is_some_and(|scope| self.is_test(self.base[file as usize] + scope))
+    }
+
     /// Edges that carry no information: a file using its own symbols (impl headers) and a
     /// method using its own owner type.
     fn is_trivial(&self, source: u32, target: u32, kind: EdgeKind) -> bool {
@@ -1084,11 +1089,13 @@ impl<'a> Index<'a> {
         }
         // 7. Unique name among imported modules, then in the root. Go and Rust only see
         // unqualified names of their own module and imports, so the root is never searched.
-        let reach = match self.file_type(file) {
-            Some(FileType::Go | FileType::Rust) => Reach::Imported(module),
-            _ => Reach::Root,
+        let reach = if has_module_rules(self.file_type(file)) {
+            Reach::Imported(module)
+        } else {
+            Reach::Root
         };
-        self.unique_fallback(imports, name, reach, |s| {
+        let caller_is_test = self.caller_is_test(file, reference.scope);
+        self.unique_fallback(imports, name, reach, caller_is_test, |s| {
             kind_ok(s) && self.symbols[s as usize].kind != SymKind::Method
         })
     }
@@ -1191,11 +1198,17 @@ impl<'a> Index<'a> {
         }
         // Go method sets come from the types of imported packages; other languages may reach
         // methods of any type in the root.
-        let reach = match self.file_type(file) {
-            Some(FileType::Go) => Reach::Imported(self.module_of(file)),
-            _ => Reach::Root,
+        // Methods come from types of the own and imported modules; Rust trait methods may live
+        // anywhere in the crate, languages without module rules anywhere in the root.
+        let reach = if has_module_rules(self.file_type(file))
+            && self.file_type(file) != Some(FileType::Rust)
+        {
+            Reach::Imported(self.module_of(file))
+        } else {
+            Reach::Root
         };
-        self.unique_fallback(imports, name, reach, |s| {
+        let caller_is_test = self.caller_is_test(file, reference.scope);
+        self.unique_fallback(imports, name, reach, caller_is_test, |s| {
             self.symbols[s as usize].kind == SymKind::Method
         })
     }
@@ -1254,6 +1267,9 @@ impl<'a> Index<'a> {
         scope: Option<u32>,
         binding: &Binding,
     ) -> Option<(Vec<u32>, Confidence)> {
+        // `x = x.next()` and mutually dependent call results recurse through receiver typing;
+        // a depth guard ends the chain (the type stays unknown).
+        let _guard = DepthGuard::enter()?;
         let confidence = if binding.declared {
             Confidence::Exact
         } else {
@@ -1323,8 +1339,11 @@ impl<'a> Index<'a> {
         imports: &Imports,
         name: &str,
         reach: Reach,
+        caller_is_test: bool,
         accept: impl Fn(u32) -> bool,
     ) -> Outcome {
+        // Test symbols are targets only for test code; definitions nested in a function are
+        // invisible outside it.
         let candidates: Vec<u32> = self
             .by_name
             .get(name)
@@ -1332,6 +1351,11 @@ impl<'a> Index<'a> {
             .flatten()
             .copied()
             .filter(|&s| accept(s))
+            .filter(|&s| caller_is_test || !self.is_test(s))
+            .filter(|&s| {
+                let parent = self.symbols[s as usize].parent;
+                parent == NONE || self.symbols[parent as usize].kind.is_type()
+            })
             .collect();
         if candidates.is_empty() {
             return Outcome::Unresolved;
@@ -1697,6 +1721,52 @@ fn dedupe_edges(mut edges: Vec<Edge>) -> Vec<Edge> {
         next.source == kept.source && next.target == kept.target && next.kind == kept.kind
     });
     edges
+}
+
+/// Languages whose unqualified names come only from their module and its imports.
+fn has_module_rules(file_type: Option<FileType>) -> bool {
+    matches!(
+        file_type,
+        Some(
+            FileType::Go
+                | FileType::Rust
+                | FileType::Python
+                | FileType::TypeScript
+                | FileType::JavaScript
+                | FileType::Vue
+                | FileType::Svelte
+                | FileType::Astro
+                | FileType::Bash
+        )
+    )
+}
+
+/// Limits the nesting of binding and receiver typing per thread.
+struct DepthGuard;
+
+const MAX_TYPING_DEPTH: u32 = 8;
+
+thread_local! {
+    static TYPING_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+impl DepthGuard {
+    fn enter() -> Option<Self> {
+        TYPING_DEPTH.with(|depth| {
+            if depth.get() >= MAX_TYPING_DEPTH {
+                None
+            } else {
+                depth.set(depth.get() + 1);
+                Some(Self)
+            }
+        })
+    }
+}
+
+impl Drop for DepthGuard {
+    fn drop(&mut self) {
+        TYPING_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
 }
 
 /// (type, supertype, confidence, line).

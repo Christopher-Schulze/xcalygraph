@@ -1,0 +1,27 @@
+question	expected
+which file does a unit or slice belong to on disk	graphify/file_slice.py::unit_path
+extra cache key material for a remapped file	graphify/rcfile.py::cache_salt
+load a graph json file into networkx	graphify/paths.py::load_node_link_graph
+merge nodes that share the same id	graphify/build.py::dedupe_nodes
+list repositories of the global graph manifest	graphify/global_graph.py::global_list
+store hyperedges in graph metadata	graphify/export.py::attach_hyperedges
+start the mcp server over stdio	graphify/serve.py::serve
+read the generated graph report markdown	graphify/callflow_html.py::load_report
+stable unique html anchor for a section	graphify/callflow_html.py::html_anchor_id
+pick a small connected subset of nodes for a diagram	graphify/callflow_html.py::select_diagram_nodes
+reject invalid extraction output	graphify/validate.py::assert_valid
+canonical form of a node id	graphify/ids.py::normalize_id
+uninstall the copilot chat skill from vs code	graphify/install.py::vscode_uninstall
+files that steer typescript module resolution	graphify/detect.py::is_resolution_input
+recognize an mcp config filename	graphify/mcp_ingest.py::is_mcp_config_path
+extract dependency edges from a json config or manifest	graphify/extractors/json_config.py::extract_json
+extract svelte components script and template	graphify/extract.py::extract_svelte
+scala classes objects and functions extraction	graphify/extract.py::extract_scala
+rust structs traits and impl methods extraction	graphify/extractors/rust.py::extract_rust
+portable directory scoped ids for terraform	graphify/extractors/terraform.py::prepare_terraform
+tokenize text for graph search	graphify/serve.py::_search_tokens
+terms of a question for querying the graph	graphify/serve.py::_query_terms
+leiden community detection	graphify/cluster.py::_native_leiden
+cohesion score of a community	graphify/cluster.py::cohesion_score
+name communities after their hub node	graphify/cluster.py::label_communities_by_hub
+queue changed paths for the watcher	graphify/watch.py::_queue_pending
