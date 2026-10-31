@@ -7,7 +7,7 @@ use crate::domain::search::{self, B, FIELD_WEIGHTS, FIELDS, K1};
 use crate::infra::store::derived::PostingRecord;
 
 const EXACT_NAME_BONUS: f32 = 5.0;
-const RANK_WEIGHT: f32 = 0.5;
+const RANK_WEIGHT: f32 = 2.0;
 /// BM25 scales by the share of query terms a node matches (coordination): a node covering
 /// three of five terms in its body beats one matching a single term in its name.
 const COORD_EXPONENT: f32 = 1.0;
@@ -123,6 +123,13 @@ pub fn search(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
     if let Some(top) = hits.first().map(|hit| hit.score) {
         hits.retain(|hit| hit.score >= top * RELEVANCE_FLOOR);
     }
+    // A file hit below one of its own symbols repeats a path already shown.
+    let mut shown_files = std::collections::HashSet::new();
+    hits.retain(|hit| {
+        let file = index.file_index_of(hit.node);
+        let is_file = hit.node >= symbol_count;
+        shown_files.insert(file) || !is_file
+    });
     hits
 }
 
@@ -132,26 +139,48 @@ fn posting(list: &[PostingRecord], node: u32) -> Option<&PostingRecord> {
         .map(|found| &list[found])
 }
 
-/// Renders the best hits that fit the budget, grouped under their files in order of first
-/// appearance; grouping never lets a lower-scored hit displace a higher-scored one.
+/// Renders the best hits that fit the budget in score order; adjacent hits of one file share
+/// its path line, so a weak sibling never pushes a stronger hit of another file down.
 pub fn render(index: &Index, hits: &[Hit], json: bool, budget: usize) -> String {
     let nodes: Vec<(u32, Option<f32>, bool)> = hits
         .iter()
         .map(|hit| (hit.node, json.then_some(hit.score), false))
         .collect();
-    render_grouped(index, &nodes, json, budget)
+    render_nodes(index, &nodes, json, budget, false)
 }
 
-/// Writes the longest prefix of `nodes` (node, score, with doc) whose grouped form fits.
+/// Writes the longest prefix of `nodes` (node, score, with doc) whose form grouped under files
+/// in order of first appearance fits.
 pub fn render_grouped(
     index: &Index,
     nodes: &[(u32, Option<f32>, bool)],
     json: bool,
     budget: usize,
 ) -> String {
+    render_nodes(index, nodes, json, budget, true)
+}
+
+/// Writes the longest prefix of `nodes` that fits; `regroup` gathers each file's nodes under its
+/// first appearance, otherwise only adjacent nodes of one file share its path line.
+fn render_nodes(
+    index: &Index,
+    nodes: &[(u32, Option<f32>, bool)],
+    json: bool,
+    budget: usize,
+    regroup: bool,
+) -> String {
+    let write = |writer: &mut super::output::Writer, nodes: &[(u32, Option<f32>, bool)]| {
+        if regroup {
+            write_groups(index, writer, nodes);
+        } else {
+            for &(node, score, doc) in nodes {
+                index.write_symbol(writer, node, score, doc);
+            }
+        }
+    };
     let fits = |count: usize| {
         let mut writer = super::output::Writer::new(json, budget);
-        write_groups(index, &mut writer, &nodes[..count]);
+        write(&mut writer, &nodes[..count]);
         !writer.is_full()
     };
     let (mut low, mut high) = (0, nodes.len());
@@ -165,7 +194,7 @@ pub fn render_grouped(
     }
     let count = low.max(usize::from(!nodes.is_empty()));
     let mut writer = super::output::Writer::new(json, budget);
-    write_groups(index, &mut writer, &nodes[..count]);
+    write(&mut writer, &nodes[..count]);
     writer.skip(nodes.len() - count);
     writer.finish()
 }

@@ -3,7 +3,8 @@
 //! words of each symbol's lines outside nested symbols (identifiers, string contents, comments,
 //! markup text), so a question in behavior words ("store the session cookie") finds the handler
 //! whose body calls `cookies.set('jwt', ...)`. Each line counts for its innermost symbol only;
-//! lines outside every symbol (top-level statements) are the file's words. URLs are skipped:
+//! a symbol's lines start at the doc comment above it; lines outside every symbol (top-level
+//! statements) are the file's words. URLs are skipped:
 //! their host words (`api.realworld.show`) say nothing about behavior.
 
 use std::collections::HashSet;
@@ -11,8 +12,9 @@ use std::collections::HashSet;
 use crate::domain::facts::{BODY_TERMS, Facts, SymKind};
 use crate::domain::search;
 
-/// Keywords and literals common to most languages: in nearly every body, never distinguishing.
-const KEYWORDS: [&str; 48] = [
+/// Keywords and literals common to most languages, and markup filler (`className`, `div`,
+/// `span`): in nearly every body, never distinguishing.
+const KEYWORDS: [&str; 51] = [
     "and",
     "async",
     "await",
@@ -20,10 +22,12 @@ const KEYWORDS: [&str; 48] = [
     "case",
     "catch",
     "class",
+    "classname",
     "const",
     "continue",
     "def",
     "default",
+    "div",
     "elif",
     "else",
     "end",
@@ -48,6 +52,7 @@ const KEYWORDS: [&str; 48] = [
     "pub",
     "return",
     "self",
+    "span",
     "static",
     "struct",
     "super",
@@ -70,7 +75,10 @@ pub fn add(content: &[u8], facts: &mut Facts) {
     let ranges: Vec<(u32, u32)> = facts
         .symbols
         .iter()
-        .map(|symbol| (symbol.line, symbol.end_line.max(symbol.line)))
+        .map(|symbol| {
+            let first = leading_comment_start(content, &starts, symbol.line);
+            (first, symbol.end_line.max(symbol.line))
+        })
         .collect();
     let mut seen: HashSet<String> = HashSet::new();
     let lines = starts.len() as u32;
@@ -94,7 +102,7 @@ pub fn add(content: &[u8], facts: &mut Facts) {
             continue;
         }
         let range = ranges[index];
-        // A one-line symbol's words are its signature.
+        // A one-line symbol without doc comment: its words are its signature.
         if range.0 == range.1 {
             continue;
         }
@@ -138,6 +146,7 @@ fn collect(
         // token shared by several words (`delete` of `deleteUser`, `deleteComment`) repeats, so
         // its frequency still counts.
         line_words.clear();
+        let text = &without_class_lists(text);
         for word in words(text) {
             let lower = word.to_ascii_lowercase();
             if !KEYWORDS.contains(&lower.as_str()) && seen.insert(lower) {
@@ -157,6 +166,69 @@ fn collect(
         });
     }
     terms
+}
+
+/// The line with quoted CSS class lists blanked (`"flex items-center px-4"`): utility class
+/// names would fill a component's token budget with layout noise.
+fn without_class_lists(text: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    let mut out: Option<Vec<u8>> = None;
+    let mut index = 0;
+    while index < text.len() {
+        let quote = text[index];
+        if !matches!(quote, b'"' | b'\'' | b'`') {
+            index += 1;
+            continue;
+        }
+        let Some(length) = text[index + 1..].iter().position(|&byte| byte == quote) else {
+            break;
+        };
+        let inner = &text[index + 1..index + 1 + length];
+        if is_class_list(inner) {
+            out.get_or_insert_with(|| text.to_vec())[index + 1..index + 1 + length].fill(b' ');
+        }
+        index += length + 2;
+    }
+    out.map_or(std::borrow::Cow::Borrowed(text), std::borrow::Cow::Owned)
+}
+
+/// At least two space-separated class-like items (lowercase, digits, `-:/[].%!`), one with a
+/// dash or colon: `"flex items-center"`, `"md:px-4 text-sm"`.
+fn is_class_list(inner: &[u8]) -> bool {
+    let items: Vec<&[u8]> = inner
+        .split(|byte| *byte == b' ')
+        .filter(|item| !item.is_empty())
+        .collect();
+    items.len() >= 2
+        && items.iter().all(|item| {
+            item.iter().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'-' | b':' | b'/' | b'[' | b']' | b'.' | b'%' | b'!')
+            })
+        })
+        && items
+            .iter()
+            .any(|item| item.contains(&b'-') || item.contains(&b':'))
+}
+
+/// First line of the comment and annotation block directly above `line` (`///`, `/** */`,
+/// `#`, `--`, `@Decorator`), else `line`: the full doc comment counts for the symbol.
+fn leading_comment_start(content: &[u8], starts: &[usize], line: u32) -> u32 {
+    let mut first = line;
+    while first > 1 {
+        let Some(text) = line_text(content, starts, first - 1) else {
+            break;
+        };
+        let trimmed = text.trim_ascii_start();
+        let comment = [&b"//"[..], b"/*", b"*", b"#", b"--", b"@"]
+            .iter()
+            .any(|marker| trimmed.starts_with(marker));
+        if !comment {
+            break;
+        }
+        first -= 1;
+    }
+    first
 }
 
 /// Byte offset of every line start.
@@ -226,6 +298,35 @@ mod tests {
         assert_eq!(facts.symbols[0].terms, "session ttl");
         assert_eq!(facts.symbols[1].terms, "save cooky set jwt token");
         assert_eq!(facts.terms, "");
+    }
+
+    #[test]
+    fn css_class_lists_are_no_words() {
+        let line = b"<div className=\"flex items-center gap-2\">Sign out</div>";
+        let kept = without_class_lists(line);
+        let words: Vec<&str> = words(&kept).collect();
+        assert_eq!(words, ["div", "className", "Sign", "out", "div"]);
+        assert!(KEYWORDS.contains(&"classname"));
+        assert!(!is_class_list(b"sign-in"));
+        assert!(!is_class_list(b"Hello world"));
+    }
+
+    #[test]
+    fn doc_comments_above_a_symbol_are_its_words() {
+        let content = b"setup(app)\n/**\n * Compose middleware into one handler.\n */\nfunction compose(a) {\n  return a\n}\n";
+        let mut facts = Facts {
+            symbols: vec![Symbol {
+                kind: Some(SymKind::Fn),
+                name: "compose".to_owned(),
+                line: 5,
+                end_line: 7,
+                ..Symbol::default()
+            }],
+            ..Facts::default()
+        };
+        add(content, &mut facts);
+        assert_eq!(facts.symbols[0].terms, "compos middlewar into one handler");
+        assert_eq!(facts.terms, "setup app");
     }
 
     #[test]

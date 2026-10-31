@@ -10,7 +10,9 @@
 #   (graphify), pinned public corpora under research/corpora/ (hono; a subdirectory such as
 #   bulletproof-react/apps/react-vite names its question set with dashes) and private corpora
 #   from scripts/benchmarks/questions/private/corpora.tsv.
-#   Per corpus: hit@5 of find and ctx, mean tokens per answer (bytes / 3), the rg baseline
+#   Per corpus: hit@5 of find and ctx, find_any (the expected file anywhere in the find answer,
+#   the criterion gfy_any applies to Graphify's longer answer), mean tokens per answer (bytes / 3),
+#   the rg baseline
 #   (output of rg for the two longest question words plus a full read of the expected file
 #   when rg shows it) and the upstream baseline (graphify query on a graph of a copy below
 #   .cache/). Misses are listed with the first result.
@@ -97,16 +99,17 @@ tokens() {
   echo $(( (bytes + 2) / 3 ))
 }
 
-# Prints "<file hit> <symbol hit>" for the first five JSON Lines records: the expected file
-# (docs/spec.md section 12, hit@5), and the expected symbol name in that file.
+# Prints "<file hit> <symbol hit> <file anywhere>" for the JSON Lines records: the expected file
+# among the first five (docs/spec.md section 12, hit@5), the expected symbol name in that file,
+# and the expected file anywhere in the answer (Graphify's hit criterion).
 json_hit() {
   local path="$1" name="$2"
   jq -r 'select(.t == "sym" or .t == "file") | [.path, (.name // "")] | @tsv' \
-    | head -5 \
     | awk -F'\t' -v path="${path}" -v name="${name}" '
-        $1 == path { file = 1 }
-        $1 == path && name != "" && ($2 == name || $2 ~ ("(\\.|::)" name "$")) { symbol = 1 }
-        END { print file + 0, symbol + 0 }'
+        NR <= 5 && $1 == path { file = 1 }
+        NR <= 5 && $1 == path && name != "" && ($2 == name || $2 ~ ("(\\.|::)" name "$")) { symbol = 1 }
+        $1 == path { anywhere = 1 }
+        END { print file + 0, symbol + 0, anywhere + 0 }'
 }
 
 stopword() {
@@ -127,8 +130,8 @@ rg_terms() {
   done | sort -rn -k1,1 -s | awk 'NR <= 2 { print $2 }'
 }
 
-printf '%-12s %4s %7s %6s %7s %8s %8s %6s %8s %6s %8s\n' \
-  corpus n find@5 sym@5 ctx@5 find_tok ctx_tok rg_hit rg_tok gfy@5 gfy_tok
+printf '%-12s %4s %7s %6s %8s %7s %8s %8s %6s %8s %6s %8s\n' \
+  corpus n find@5 sym@5 find_any ctx@5 find_tok ctx_tok rg_hit rg_tok gfy_any gfy_tok
 corpora=("$@")
 if (( ${#corpora[@]} == 0 )); then
   corpora=(xcalygraph graphify hono)
@@ -159,22 +162,23 @@ for corpus in "${corpora[@]}"; do
     fi
     [[ -f "${copy}/graphify-out/graph.json" ]] && graph="${copy}/graphify-out/graph.json"
   fi
-  n=0 find_hits=0 symbol_hits=0 ctx_hits=0 find_tokens=0 ctx_tokens=0 rg_hits=0 rg_tokens=0 gfy_hits=0 gfy_tokens=0
+  n=0 find_hits=0 symbol_hits=0 any_hits=0 ctx_hits=0 find_tokens=0 ctx_tokens=0 rg_hits=0 rg_tokens=0 gfy_hits=0 gfy_tokens=0
   while IFS=$'\t' read -r question expected; do
     [[ "${question}" == "question" || -z "${question}" ]] && continue
     n=$(( n + 1 ))
     path="${expected%%::*}"
     name=""
     [[ "${expected}" == *::* ]] && name="${expected#*::}"
-    read -r hit symbol_hit < <(query find "${question}" --json -b 600 2>/dev/null | json_hit "${path}" "${name}" || echo "0 0")
+    read -r hit symbol_hit any_hit < <(query find "${question}" --json -b 600 2>/dev/null | json_hit "${path}" "${name}" || echo "0 0 0")
     find_hits=$(( find_hits + hit ))
     symbol_hits=$(( symbol_hits + symbol_hit ))
+    any_hits=$(( any_hits + any_hit ))
     find_tokens=$(( find_tokens + $(query find "${question}" -b 600 2>/dev/null | tokens) ))
     if (( hit == 0 )); then
       first="$(query find "${question}" -b 60 2>/dev/null | sed -n '1,2p' | tr '\n' ' ')"
       printf 'find miss: %s -> expected %s, got %s\n' "${question}" "${expected}" "${first}" >> "${misses}"
     fi
-    read -r ctx_hit _ < <(query ctx "${question}" --json -b 2000 2>/dev/null | json_hit "${path}" "${name}" || echo "0 0")
+    read -r ctx_hit _ _ < <(query ctx "${question}" --json -b 2000 2>/dev/null | json_hit "${path}" "${name}" || echo "0 0")
     ctx_hits=$(( ctx_hits + ctx_hit ))
     ctx_tokens=$(( ctx_tokens + $(query ctx "${question}" -b 2000 2>/dev/null | tokens) ))
     terms=()
@@ -220,8 +224,8 @@ for corpus in "${corpora[@]}"; do
     gfy_rate="-"
     gfy_mean="-"
   fi
-  printf '%-12s %4d %6d%% %5d%% %6d%% %8d %8d %5d%% %8d %6s %8s\n' \
-    "${corpus}" "${n}" $(( 100 * find_hits / n )) $(( 100 * symbol_hits / n )) $(( 100 * ctx_hits / n )) \
+  printf '%-12s %4d %6d%% %5d%% %7d%% %6d%% %8d %8d %5d%% %8d %6s %8s\n' \
+    "${corpus}" "${n}" $(( 100 * find_hits / n )) $(( 100 * symbol_hits / n )) $(( 100 * any_hits / n )) $(( 100 * ctx_hits / n )) \
     $(( find_tokens / n )) $(( ctx_tokens / n )) $(( 100 * rg_hits / n )) $(( rg_tokens / n )) \
     "${gfy_rate}" "${gfy_mean}"
   if (( impact_n > 0 )); then

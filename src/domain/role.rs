@@ -281,6 +281,7 @@ pub fn is_test_path(file_type: FileType, path: &str) -> bool {
         TypeScript | JavaScript | Vue | Svelte | Astro => {
             name.contains(".test.")
                 || name.contains(".spec.")
+                || name.contains(".stories.")
                 || has_dir(&["__tests__", "__mocks__", "test", "tests", "e2e", "mocks"])
         }
         Python => {
@@ -435,6 +436,10 @@ mod tests {
             (FileType::TypeScript, "src/app.spec.ts"),
             (FileType::JavaScript, "src/__tests__/app.js"),
             (FileType::TypeScript, "e2e/tests/auth.setup.ts"),
+            (
+                FileType::TypeScript,
+                "src/components/ui/table/table.stories.tsx",
+            ),
             (FileType::TypeScript, "src/testing/mocks/handlers/users.ts"),
             (FileType::Python, "pkg/test_core.py"),
             (FileType::Java, "src/test/java/a/B.java"),

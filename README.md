@@ -131,11 +131,11 @@ Each question describes code in plain words ("compare two secrets in constant ti
 
 | corpus | questions | xcalygraph `find` | Graphify `query` | `rg` + read |
 |---|---|---|---|---|
-| hono | 32 | 78 %, 590 tokens | 75 %, 2,200 tokens | 75 %, 33,693 tokens |
-| Graphify source | 26 | 100 %, 585 tokens | 88 %, 2,254 tokens | 100 %, 175,310 tokens |
-| xcalygraph source | 32 | 90 %, 593 tokens | 75 %, 2,796 tokens | 100 %, 18,507 tokens |
+| hono | 32 | 81 %, 589 tokens | 75 %, 2,200 tokens | 75 %, 33,693 tokens |
+| Graphify source | 26 | 100 %, 581 tokens | 88 %, 2,254 tokens | 100 %, 175,310 tokens |
+| xcalygraph source | 32 | 90 %, 589 tokens | 75 %, 2,796 tokens | 100 %, 18,507 tokens |
 
-At a similar or higher hit rate, xcalygraph answers with about a quarter of Graphify's tokens and 1/30 to 1/300 of what `rg` plus reading costs. Held-out questions written before the search was tuned (`run-evaluation.sh --heldout`) land at 100 %, 93 % and 73 % for the three corpora (Graphify 53 %, 73 %, 80 %). `impact` finds 100 % of the expected dependents and tests on the xcalygraph impact set, at 335 tokens per answer.
+At a similar or higher hit rate, xcalygraph answers with about a quarter of Graphify's tokens and 1/30 to 1/300 of what `rg` plus reading costs. A Graphify hit counts anywhere in its answer, an xcalygraph hit only in the first five results; counted anywhere in its 600-token answer, xcalygraph reaches 87 %, 100 % and 96 %. Held-out questions written before the latest tuning round (`run-evaluation.sh --set heldout2`) land at 90 %, 90 % and 90 % (Graphify 90 %, 70 %, 20 %). `impact` finds 100 % of the expected dependents and tests on the xcalygraph impact set, at 335 tokens per answer.
 
 ### Building and updating the index
 

@@ -10,7 +10,7 @@ pub const SIGNATURE: usize = 2;
 pub const PARENT: usize = 3;
 pub const DOC: usize = 4;
 pub const PATH: usize = 5;
-pub const FIELD_WEIGHTS: [f32; FIELDS] = [2.5, 3.0, 0.5, 1.5, 1.0, 1.0];
+pub const FIELD_WEIGHTS: [f32; FIELDS] = [1.8, 3.0, 0.5, 1.5, 1.0, 1.0];
 pub const K1: f32 = 1.2;
 pub const B: f32 = 0.75;
 
