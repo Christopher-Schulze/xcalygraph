@@ -6,16 +6,17 @@
 # Usage: scripts/benchmarks/compare-depth.sh CORPUS [SAMPLES]
 #   CORPUS: a directory under research/corpora/, or graphify for the upstream clone.
 #   SAMPLES: misses listed per relation (default 15).
-#   Works on a copy of the tracked files below .cache/depth/; Graphify's graph is reused while
-#   the copy exists. Edges are matched by source file, source line (+-1) and target file;
+#   Both tools use a verified content-addressed source snapshot below .cache/corpus-snapshots/;
+#   graph reuse checks source content, upstream code/config and graph checksums.
+#   Edges are matched by source file, source line (+-1) and target file;
 #   imports by the file pair; a C-family header and its implementation count as one target; an
 #   edge of the same family from the same source file to a target of the same name also counts.
-# Requires: graphify, python3, rsync; the release test build is made here.
+# Requires: graphify, python3; the release test build is made here.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
-readonly WORK="${REPO_ROOT}/.cache/depth"
+readonly WORK_BASE="${REPO_ROOT}/.cache/depth"
 
 if (( $# < 1 || $# > 2 )); then
   echo "usage: compare-depth.sh CORPUS [SAMPLES]" >&2
@@ -23,7 +24,7 @@ if (( $# < 1 || $# > 2 )); then
 fi
 readonly CORPUS="$1"
 readonly SAMPLES="${2:-15}"
-for tool in graphify python3 rsync; do
+for tool in graphify python3; do
   command -v "${tool}" >/dev/null || { echo "compare-depth.sh: ${tool} missing" >&2; exit 1; }
 done
 
@@ -34,23 +35,19 @@ else
 fi
 [[ -d "${source_dir}" ]] || { echo "compare-depth.sh: ${source_dir} missing" >&2; exit 1; }
 
-copy="${WORK}/${CORPUS}"
-if [[ ! -f "${copy}/graphify-out/graph.json" ]]; then
-  rm -rf "${copy}"
-  mkdir -p "${copy}"
-  # Symlinks (mode 120000) are skipped; exit 23/24 (partial transfer) still leaves a usable copy.
-  status=0
-  git -C "${source_dir}" ls-files -s | grep -v '^120000' | cut -f2- \
-    | rsync -a --files-from=- "${source_dir}/" "${copy}/" || status=$?
-  (( status == 0 || status == 23 || status == 24 )) || exit 1
-  (cd "${copy}" && graphify update . >/dev/null 2>&1) || true
-  [[ -f "${copy}/graphify-out/graph.json" ]] || { echo "compare-depth.sh: graphify built no graph" >&2; exit 1; }
-fi
+mkdir -p "${WORK_BASE}"
+WORK="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")"
+readonly WORK
+exec > >(tee "${WORK}/results.txt")
+readonly BENCHMARK_HOME="${WORK}/home"
+mkdir -p "${BENCHMARK_HOME}"
+copy="$(env HOME="${BENCHMARK_HOME}" bash "${REPO_ROOT}/scripts/utils/prepare-corpus.sh" "${source_dir}" "${REPO_ROOT}/.cache/corpus-snapshots" --graphify)"
 
-ours="${WORK}/${CORPUS}-edges.tsv"
+ours="${WORK}/edges.tsv"
 (
   cd "${REPO_ROOT}"
-  XCALYGRAPH_DUMP_ROOT="${source_dir}" XCALYGRAPH_DUMP_FILE="${ours}" \
+  env CARGO_HOME="${CARGO_HOME:-${HOME}/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-${HOME}/.rustup}" \
+    HOME="${BENCHMARK_HOME}" XCALYGRAPH_DUMP_ROOT="${copy}" XCALYGRAPH_DUMP_FILE="${ours}" \
     cargo test -q --release --locked dump_edges -- --ignored >/dev/null
 )
 
@@ -157,3 +154,4 @@ for relation, rows in sorted(misses.items()):
     for row in rows[::step][:samples]:
         print("  " + row)
 PYTHON
+echo "evidence: ${WORK}; snapshot: ${copy}"

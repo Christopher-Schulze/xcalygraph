@@ -7,12 +7,12 @@
 #   Corpora are read-only: the single-file refresh runs on a copy below .cache/.
 #   --upstream adds the Graphify baseline on the same copy: graphify update . for the full build,
 #   peak RSS and graphify-out size, then again after the same single-file change.
-# Requires: hyperfine, jq, rsync; graphify for --upstream; the release build is made here.
+# Requires: hyperfine, jq, rsync, python3; graphify for --upstream; the release build is made here.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
-readonly WORK="${REPO_ROOT}/.cache/benchmarks"
+readonly WORK_BASE="${REPO_ROOT}/.cache/benchmarks"
 readonly BINARY="${REPO_ROOT}/target/release/xcalygraph"
 readonly PRIVATE_LIST="${REPO_ROOT}/scripts/benchmarks/questions/private/corpora.tsv"
 readonly COPY_LIMIT=20000
@@ -22,7 +22,7 @@ if [[ "${1:-}" == "--upstream" ]]; then
   upstream=1
   shift
 fi
-tools=(hyperfine jq rsync)
+tools=(hyperfine jq rsync python3)
 (( upstream )) && tools+=(graphify)
 for tool in "${tools[@]}"; do
   command -v "${tool}" >/dev/null || { echo "run-benchmarks.sh: ${tool} missing" >&2; exit 1; }
@@ -30,7 +30,13 @@ done
 
 cd "${REPO_ROOT}"
 cargo build --release --locked -q
-mkdir -p "${WORK}"
+mkdir -p "${WORK_BASE}"
+WORK="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")"
+readonly WORK
+exec > >(tee "${WORK}/results.txt")
+readonly BENCHMARK_HOME="${WORK}/home"
+mkdir -p "${BENCHMARK_HOME}"
+printf 'binary_sha256\t%s\n' "$(python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${BINARY}")" > "${WORK}/identity.tsv"
 
 corpora=("xcalygraph	${REPO_ROOT}")
 [[ -d research/upstream/graphify ]] && corpora+=("graphify	${REPO_ROOT}/research/upstream/graphify")
@@ -46,28 +52,6 @@ if [[ -f "${PRIVATE_LIST}" ]]; then
   done < "${PRIVATE_LIST}"
 fi
 
-# Copies the tracked files of a corpus (git ls-files; everything for non-git trees, minus build
-# output), never ignored runtime data; aborts below 4 GiB free disk space.
-copy_corpus() {
-  local source="$1" target="$2" free_kib
-  free_kib="$(df -Pk "${REPO_ROOT}" | awk 'NR == 2 { print $4 }')"
-  if (( free_kib < 4 * 1024 * 1024 )); then
-    echo "$(basename "$0"): less than 4 GiB free, not copying ${source}" >&2
-    return 1
-  fi
-  mkdir -p "${target}"
-  if git -C "${source}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    # Symlinks (mode 120000) are skipped: broken ones abort openrsync. Exit 23/24 (partial
-    # transfer, vanished files) still leaves a usable copy.
-    local status=0
-    git -C "${source}" ls-files -s | grep -v '^120000' | cut -f2- \
-      | rsync -a --files-from=- "${source}/" "${target}/" || status=$?
-    (( status == 0 || status == 23 || status == 24 )) || return 1
-  else
-    rsync -a --exclude .git --exclude target --exclude node_modules --exclude .cache "${source}/" "${target}/"
-  fi
-}
-
 wanted=("$@")
 selected() {
   (( ${#wanted[@]} == 0 )) && return 0
@@ -78,9 +62,10 @@ selected() {
 
 # Mean wall time in milliseconds of a command, from hyperfine's JSON export.
 mean_ms() {
-  local json="${WORK}/hyperfine.json"
-  hyperfine -N --warmup 3 --runs 15 --export-json "${json}" "$@" >/dev/null 2>&1
-  jq -r '.results[0].summary.time_wall_clock.mean * 10000 | round / 10' "${json}"
+  local json
+  json="$(mktemp "${WORK}/timing-${name//\//-}.json.XXXXXXXX")" || return 1
+  hyperfine -N --warmup 3 --runs 15 --export-json "${json}" "$@" >"${json}.log" 2>&1 || return 1
+  jq -er '.results[0].summary.time_wall_clock.mean * 10000 | round / 10' "${json}"
 }
 
 # Sum of sizes of index files whose inode changed since the snapshot (atomic rename = rewrite).
@@ -94,13 +79,23 @@ bytes_rewritten() {
 # "up_build_ms up_rss_mb up_out_kb up_change_ms"; runs before the copy gets xcalygraph changes.
 upstream_columns() {
   local copy="$1" target="$2" edit="$3" build change
-  build="$( { cd "${copy}" && /usr/bin/time -l graphify update . >/dev/null ; } 2>&1 )"
+  if ! build="$( { cd "${copy}" && /usr/bin/time -l env HOME="${BENCHMARK_HOME}" PYTHONHASHSEED=0 PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 graphify update . >/dev/null ; } 2>&1 )"; then
+    printf '%s\n' "${build}" > "${copy}.upstream-full.time"
+    echo "run-benchmarks.sh: upstream extraction failed; inspect ${copy}.upstream-full.time" >&2
+    return 1
+  fi
+  printf '%s\n' "${build}" > "${copy}.upstream-full.time"
   printf ' %12s %9s %9s' \
     "$(awk '/ real / { printf "%.0f", $1 * 1000 }' <<<"${build}")" \
     "$(awk '/maximum resident set size/ { printf "%.0f", $1 / 1048576 }' <<<"${build}")" \
     "$(du -sk "${copy}/graphify-out" | awk '{ print $1 }')"
   printf '%s' "${edit}" >> "${target}"
-  change="$( { cd "${copy}" && /usr/bin/time -l graphify update . >/dev/null ; } 2>&1 )"
+  if ! change="$( { cd "${copy}" && /usr/bin/time -l env HOME="${BENCHMARK_HOME}" PYTHONHASHSEED=0 PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 graphify update . >/dev/null ; } 2>&1 )"; then
+    printf '%s\n' "${change}" > "${copy}.upstream-change.time"
+    echo "run-benchmarks.sh: upstream refresh failed; inspect ${copy}.upstream-change.time" >&2
+    return 1
+  fi
+  printf '%s\n' "${change}" > "${copy}.upstream-change.time"
   printf ' %12s' "$(awk '/ real / { printf "%.0f", $1 * 1000 }' <<<"${change}")"
   rm -rf "${copy}/graphify-out"
 }
@@ -113,9 +108,12 @@ for entry in "${corpora[@]}"; do
   path="${entry#*	}"
   selected "${name}" || continue
   [[ -d "${path}" ]] || { echo "run-benchmarks.sh: ${name}: ${path} missing" >&2; continue; }
+  path="$(bash "${REPO_ROOT}/scripts/utils/prepare-corpus.sh" "${path}" "${REPO_ROOT}/.cache/corpus-snapshots")"
+  printf '%s\t%s\n' "${name}" "${path}" >> "${WORK}/identity.tsv"
   index="${WORK}/index-${name}"
   rm -rf "${index}"
-  build="$( { /usr/bin/time -l "${BINARY}" index -C "${path}" --index-dir "${index}" >"${WORK}/out" ; } 2>&1 )"
+  build="$( { /usr/bin/time -l env HOME="${BENCHMARK_HOME}" "${BINARY}" index -C "${path}" --index-dir "${index}" >"${WORK}/out" ; } 2>&1 )"
+  printf '%s\n' "${build}" > "${WORK}/${name//\//-}.full.time"
   files="$(awk '{ print $2 }' "${WORK}/out")"
   build_ms="$(awk '/ real / { printf "%.0f", $1 * 1000 }' <<<"${build}")"
   rss_mb="$(awk '/maximum resident set size/ { printf "%.0f", $1 / 1048576 }' <<<"${build}")"
@@ -128,7 +126,8 @@ for entry in "${corpora[@]}"; do
     copy="${WORK}/copy-${name}"
     copy_index="${WORK}/index-copy-${name}"
     rm -rf "${copy}" "${copy_index}"
-    copy_corpus "${path}" "${copy}" || continue
+    mkdir -p "${copy}"
+    rsync -a "${path}/" "${copy}/"
     "${BINARY}" index -C "${copy}" --index-dir "${copy_index}" >/dev/null
     # A tracked source file, so ignore rules cannot hide the change.
     tracked="$(git -C "${path}" ls-files -- '*.go' '*.rs' '*.py' '*.ts' '*.java' '*.kt' '*.cs' '*.c' '*.cc' '*.cpp' '*.m' '*.swift' 2>/dev/null | awk 'NR == 1')"
@@ -156,3 +155,4 @@ for entry in "${corpora[@]}"; do
   printf '%-14s %8s %9s %9s %10s %10s %9s %9s%s\n' \
     "${name}" "${files}" "${build_ms}" "${rss_mb}" "${fresh_ms}" "${change_ms}" "${index_kb}" "${write_kb}" "${upstream_line}"
 done
+echo "evidence: ${WORK} (identity.tsv and measurement artifacts)"

@@ -33,6 +33,16 @@ pub fn recover_functions(source: &str, facts: &mut crate::domain::facts::Facts) 
             index += 1;
             continue;
         };
+        let has_body = line.contains('{')
+            || lines[index + 1..]
+                .iter()
+                .map(|line| line.trim())
+                .find(|line| !line.is_empty() && !line.starts_with('#'))
+                .is_some_and(|line| line.starts_with('{'));
+        if !has_body {
+            index += 1;
+            continue;
+        }
         let number = index as u32 + 1;
         let end = lines[index + 1..]
             .iter()
@@ -61,7 +71,12 @@ pub fn recover_functions(source: &str, facts: &mut crate::domain::facts::Facts) 
                 exported: true,
                 flags: 0,
             });
-            for (offset, body) in lines[index + 1..end].iter().enumerate() {
+            for (offset, body) in lines
+                .get(index + 1..end)
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+            {
                 let body_line = number + 1 + offset as u32;
                 for command in command_words(body) {
                     let known = facts
@@ -254,5 +269,21 @@ mod tests {
             .map(|reference| (reference.name.as_str(), reference.line))
             .collect();
         assert_eq!(calls, [("b", 2), ("c", 5)]);
+    }
+
+    #[test]
+    fn incomplete_and_embedded_headers_do_not_panic_or_invent_functions() {
+        let cases: [(&str, &[&str]); 4] = [
+            ("root.mkdir()\n", &[]),
+            ("function missing\n", &[]),
+            ("unfinished() {\n", &["unfinished"]),
+            ("multiline()\n{\n  actual\n}\n", &["multiline"]),
+        ];
+        for (source, expected) in cases {
+            let mut facts = crate::domain::facts::Facts::default();
+            recover_functions(source, &mut facts);
+            let names: Vec<&str> = facts.symbols.iter().map(|s| s.name.as_str()).collect();
+            assert_eq!(names, expected, "{source}");
+        }
     }
 }

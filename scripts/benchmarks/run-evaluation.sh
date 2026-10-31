@@ -16,12 +16,13 @@
 #   (output of rg for the two longest question words plus a full read of the expected file
 #   when rg shows it) and the upstream baseline (graphify query on a graph of a copy below
 #   .cache/). Misses are listed with the first result.
-# Requires: jq, rg; graphify for the upstream baseline.
+# Requires: jq, rg, python3; graphify for the upstream baseline.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
-readonly WORK="${REPO_ROOT}/.cache/evaluation"
+readonly WORK_BASE="${REPO_ROOT}/.cache/evaluation"
+readonly SNAPSHOTS="${REPO_ROOT}/.cache/corpus-snapshots"
 readonly BINARY="${REPO_ROOT}/target/release/xcalygraph"
 QUESTIONS="${REPO_ROOT}/scripts/benchmarks/questions"
 readonly PRIVATE_LIST="${QUESTIONS}/private/corpora.tsv"
@@ -36,39 +37,27 @@ while [[ "${1:-}" == --* ]]; do
   shift
 done
 readonly QUESTIONS
-for tool in jq rg; do
+for tool in jq rg python3; do
   command -v "${tool}" >/dev/null || { echo "run-evaluation.sh: ${tool} missing" >&2; exit 1; }
 done
 if (( upstream )) && ! command -v graphify >/dev/null; then
-  echo "run-evaluation.sh: graphify missing; running without the upstream baseline" >&2
-  upstream=0
+  echo "run-evaluation.sh: graphify missing; use --no-upstream for an explicitly one-tool evaluation" >&2
+  exit 1
 fi
 
 cd "${REPO_ROOT}"
 cargo build --release --locked -q
-mkdir -p "${WORK}"
-
-# Copies the tracked files of a corpus (git ls-files; everything for non-git trees, minus build
-# output), never ignored runtime data; aborts below 4 GiB free disk space.
-copy_corpus() {
-  local source="$1" target="$2" free_kib
-  free_kib="$(df -Pk "${REPO_ROOT}" | awk 'NR == 2 { print $4 }')"
-  if (( free_kib < 4 * 1024 * 1024 )); then
-    echo "$(basename "$0"): less than 4 GiB free, not copying ${source}" >&2
-    return 1
-  fi
-  mkdir -p "${target}"
-  if git -C "${source}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    # Symlinks (mode 120000) are skipped: broken ones abort openrsync. Exit 23/24 (partial
-    # transfer, vanished files) still leaves a usable copy.
-    local status=0
-    git -C "${source}" ls-files -s | grep -v '^120000' | cut -f2- \
-      | rsync -a --files-from=- "${source}/" "${target}/" || status=$?
-    (( status == 0 || status == 23 || status == 24 )) || return 1
-  else
-    rsync -a --exclude .git --exclude target --exclude node_modules --exclude .cache "${source}/" "${target}/"
-  fi
+mkdir -p "${WORK_BASE}"
+WORK="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")"
+readonly WORK
+exec > >(tee "${WORK}/results.txt")
+readonly BENCHMARK_HOME="${WORK}/home"
+mkdir -p "${BENCHMARK_HOME}"
+sha256_file() {
+  python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$1"
 }
+sha256_binary="$(sha256_file "${BINARY}")"
+printf 'binary_sha256\t%s\n' "${sha256_binary}" > "${WORK}/identity.tsv"
 
 corpus_root() {
   case "$1" in
@@ -145,22 +134,20 @@ fi
 for corpus in "${corpora[@]}"; do
   root="$(corpus_root "${corpus}")"
   questions="$(question_file "${corpus}")"
-  [[ -n "${root}" && -d "${root}" && -n "${questions}" ]] || continue
+  [[ -n "${root}" && -d "${root}" && -n "${questions}" ]] || { echo "run-evaluation.sh: ${corpus}: missing corpus or questions" >&2; exit 1; }
+  snapshot_args=()
+  (( upstream )) && snapshot_args+=(--graphify)
+  root="$(env HOME="${BENCHMARK_HOME}" bash "${REPO_ROOT}/scripts/utils/prepare-corpus.sh" "${root}" "${SNAPSHOTS}" "${snapshot_args[@]}")"
+  printf '%s\t%s\t%s\n' "${corpus}" "${root}" "$(sha256_file "${questions}")" >> "${WORK}/identity.tsv"
   index="${WORK}/index-${corpus//\//-}"
   misses="${WORK}/misses-${corpus//\//-}.txt"
   : > "${misses}"
   # A question without any match (exit 4) scores zero instead of aborting the run.
-  query() { "${BINARY}" "$@" -C "${root}" --index-dir "${index}" || (( $? == 4 )); }
+  query() { env HOME="${BENCHMARK_HOME}" "${BINARY}" "$@" -C "${root}" --index-dir "${index}" || (( $? == 4 )); }
   query index >/dev/null
   graph=""
   if (( upstream )); then
-    copy="${WORK}/upstream-${corpus//\//-}"
-    if [[ ! -f "${copy}/graphify-out/graph.json" ]]; then
-      rm -rf "${copy}"
-      copy_corpus "${root}" "${copy}" || continue
-      (cd "${copy}" && graphify update . >/dev/null 2>&1) || true
-    fi
-    [[ -f "${copy}/graphify-out/graph.json" ]] && graph="${copy}/graphify-out/graph.json"
+    graph="${root}/graphify-out/graph.json"
   fi
   n=0 find_hits=0 symbol_hits=0 any_hits=0 ctx_hits=0 find_tokens=0 ctx_tokens=0 rg_hits=0 rg_tokens=0 gfy_hits=0 gfy_tokens=0
   while IFS=$'\t' read -r question expected; do
@@ -169,18 +156,29 @@ for corpus in "${corpora[@]}"; do
     path="${expected%%::*}"
     name=""
     [[ "${expected}" == *::* ]] && name="${expected#*::}"
-    read -r hit symbol_hit any_hit < <(query find "${question}" --json -b 600 2>/dev/null | json_hit "${path}" "${name}" || echo "0 0 0")
+    answer_dir="${WORK}/${corpus//\//-}/q-${n}"
+    mkdir -p "${answer_dir}"
+    printf '%s\t%s\n' "${question}" "${expected}" > "${answer_dir}/question.tsv"
+    find_json="$(query find "${question}" --json -b 600 2>"${answer_dir}/find-json.stderr")"
+    printf '%s\n' "${find_json}" > "${answer_dir}/find.jsonl"
+    read -r hit symbol_hit any_hit < <(json_hit "${path}" "${name}" <<<"${find_json}")
     find_hits=$(( find_hits + hit ))
     symbol_hits=$(( symbol_hits + symbol_hit ))
     any_hits=$(( any_hits + any_hit ))
-    find_tokens=$(( find_tokens + $(query find "${question}" -b 600 2>/dev/null | tokens) ))
+    find_text="$(query find "${question}" -b 600 2>"${answer_dir}/find-text.stderr")"
+    printf '%s\n' "${find_text}" > "${answer_dir}/find.txt"
+    find_tokens=$(( find_tokens + $(printf '%s\n' "${find_text}" | tokens) ))
     if (( hit == 0 )); then
       first="$(query find "${question}" -b 60 2>/dev/null | sed -n '1,2p' | tr '\n' ' ')"
       printf 'find miss: %s -> expected %s, got %s\n' "${question}" "${expected}" "${first}" >> "${misses}"
     fi
-    read -r ctx_hit _ _ < <(query ctx "${question}" --json -b 2000 2>/dev/null | json_hit "${path}" "${name}" || echo "0 0")
+    ctx_json="$(query ctx "${question}" --json -b 2000 2>"${answer_dir}/ctx-json.stderr")"
+    printf '%s\n' "${ctx_json}" > "${answer_dir}/ctx.jsonl"
+    read -r ctx_hit _ _ < <(json_hit "${path}" "${name}" <<<"${ctx_json}")
     ctx_hits=$(( ctx_hits + ctx_hit ))
-    ctx_tokens=$(( ctx_tokens + $(query ctx "${question}" -b 2000 2>/dev/null | tokens) ))
+    ctx_text="$(query ctx "${question}" -b 2000 2>"${answer_dir}/ctx-text.stderr")"
+    printf '%s\n' "${ctx_text}" > "${answer_dir}/ctx.txt"
+    ctx_tokens=$(( ctx_tokens + $(printf '%s\n' "${ctx_text}" | tokens) ))
     terms=()
     while IFS= read -r term; do terms+=(-e "${term}"); done < <(rg_terms "${question}")
     rg_out=""
@@ -194,9 +192,16 @@ for corpus in "${corpora[@]}"; do
     fi
     rg_tokens=$(( rg_tokens + spent ))
     if [[ -n "${graph}" ]]; then
-      gfy_out="$(cd "$(dirname "$(dirname "${graph}")")" && graphify query "${question}" --graph "${graph}" 2>/dev/null || true)"
+      gfy_status=0
+      gfy_out="$(cd "${root}" && env HOME="${BENCHMARK_HOME}" PYTHONHASHSEED=0 PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 graphify query "${question}" --graph "${graph}" 2>>"${WORK}/upstream-errors.log")" || gfy_status=$?
+      printf '%s\n' "${gfy_out}" > "${answer_dir}/graphify.txt"
+      printf '%s\n' "${gfy_status}" > "${answer_dir}/graphify.exit"
+      # Graphify documents 3 as ambiguous and 4 as no matching node: valid misses, not runtime failures.
+      (( gfy_status == 0 || gfy_status == 3 || gfy_status == 4 )) || exit "${gfy_status}"
       gfy_tokens=$(( gfy_tokens + $(printf '%s' "${gfy_out}" | tokens) ))
-      grep -q -F "${path}" <<<"${gfy_out}" && gfy_hits=$(( gfy_hits + 1 ))
+      if (( gfy_status == 0 )) && grep -q -F "${path}" <<<"${gfy_out}"; then
+        gfy_hits=$(( gfy_hits + 1 ))
+      fi
     fi
   done < "${questions}"
   # Impact recall: the expected dependent among the affected lines of `impact NAME`.
@@ -233,4 +238,4 @@ for corpus in "${corpora[@]}"; do
       "${corpus}" $(( 100 * impact_hits / impact_n )) "${impact_n}" $(( impact_tokens / impact_n ))
   fi
 done
-echo "misses: ${WORK}/misses-<corpus>.txt"
+echo "evidence: ${WORK} (identity.tsv, misses-<corpus>.txt, upstream-errors.log)"

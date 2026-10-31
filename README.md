@@ -13,11 +13,11 @@ Coding agents spend most of their tokens finding things: grepping, opening whole
 
 | | xcalygraph | Graphify | `rg` + reading files |
 |---|---|---|---|
-| tokens per answer | **~590** | ~2,200 to 2,800 | 16,000 to 175,000 |
-| full index build | **0.4 to 1.2 s** | 3 to 29 s | n/a |
-| update after editing one file | **50 to 110 ms** | 2 to 13 s | n/a |
+| tokens per answer | **~590** | ~2,200 to 2,600 | 20,000 to 175,000 |
+| full index build | **0.3 to 0.9 s** | 2.5 to 19 s | n/a |
+| update after a comment edit | **34 to 145 ms** | 2 to 13 s | n/a |
 
-<sub>Measured on three public corpora; details and method in [Benchmarks](#benchmarks).</sub>
+<sub>Observed on three public corpora. The rg arm is a limited scripted baseline; details and limitations in [Benchmarks](#benchmarks).</sub>
 
 ## Install
 
@@ -121,36 +121,36 @@ All measurements use the same three public corpora:
 |---|---|---|---|
 | [hono](https://github.com/honojs/hono) @17ad0e2 | TypeScript | 577 | home ground for neither tool |
 | [Graphify](https://github.com/Graphify-Labs/graphify) source | Python | 1,111 | Graphify's home ground |
-| xcalygraph source | Rust | 481 | xcalygraph's home ground |
+| xcalygraph source | Rust | 575 | xcalygraph's home ground |
 
-Apple Silicon laptop, warm cache, Graphify 0.9.97. Reproduce with `scripts/benchmarks/run-evaluation.sh` and `scripts/benchmarks/run-benchmarks.sh --upstream`.
+Graphify 0.9.97, warm filesystem cache. Reproduce with `scripts/benchmarks/run-evaluation.sh` and `scripts/benchmarks/run-benchmarks.sh --upstream`. Both tools read byte-identical source snapshots verified by content hashes and executable bits. Graph reuse also verifies the installed Graphify code, extraction settings and graph checksum. Raw answers, source/question/binary identities and timing artifacts remain in separate `.cache/` run directories.
 
 ### Finding code from a question
 
-Each question describes code in plain words ("compare two secrets in constant time"), never by its name. A hit means the file with the expected definition is among the first five results. Tokens are what the agent reads per answer. The `rg` baseline greps the two longest question words; its hit means the expected file shows up, and its tokens include reading that file.
+Each question describes code in plain words ("compare two secrets in constant time"). An xcalygraph hit means the expected file is among the first five results; a Graphify hit counts anywhere in its answer. Tokens are estimated as output bytes divided by three. The scripted `rg` arm greps the two longest question words and reads the entire expected file if matched. This uses the expected answer and is not a competent agent's bounded search strategy; its token count is not a general rg efficiency claim.
 
 | corpus | questions | xcalygraph `find` | Graphify `query` | `rg` + read |
 |---|---|---|---|---|
-| hono | 32 | 81 %, 589 tokens | 75 %, 2,200 tokens | 75 %, 33,693 tokens |
-| Graphify source | 26 | 100 %, 581 tokens | 88 %, 2,254 tokens | 100 %, 175,310 tokens |
-| xcalygraph source | 32 | 90 %, 589 tokens | 75 %, 2,796 tokens | 100 %, 18,507 tokens |
+| hono | 32 | 84 %, 588 tokens | 75 %, 2,178 tokens | 75 %, 34,696 tokens |
+| Graphify source | 26 | 100 %, 585 tokens | 88 %, 2,230 tokens | 100 %, 175,310 tokens |
+| xcalygraph source | 32 | 96 %, 590 tokens | 75 %, 2,573 tokens | 100 %, 20,283 tokens |
 
-At a similar or higher hit rate, xcalygraph answers with about a quarter of Graphify's tokens and 1/30 to 1/300 of what `rg` plus reading costs. A Graphify hit counts anywhere in its answer, an xcalygraph hit only in the first five results; counted anywhere in its 600-token answer, xcalygraph reaches 87 %, 100 % and 96 %. Held-out questions written before the latest tuning round (`run-evaluation.sh --set heldout2`) land at 90 %, 90 % and 90 % (Graphify 90 %, 70 %, 20 %). `impact` finds 100 % of the expected dependents and tests on the xcalygraph impact set, at 335 tokens per answer.
+On these development questions, xcalygraph uses 23 to 27 % of Graphify's output tokens. Counted anywhere in its 600-token answer, xcalygraph reaches 87 %, 100 % and 96 %. These questions have been used for tuning and do not establish generalization or real-agent token savings. Earlier comparisons using a stale xcalygraph source copy are superseded by these same-snapshot results; their held-out superiority claims are withdrawn. `impact` finds all 10 expected dependents and tests on the xcalygraph impact set, at 343 tokens per answer.
 
 ### Building and updating the index
 
-Same files for both tools; Graphify runs `graphify update .`, and its numbers are the faster of two runs.
+Same files for both tools; Graphify runs `graphify update .`. Full builds are single observations, refresh times are 15-run means for xcalygraph and single observations for Graphify. The edit repeatedly appends the same valid comment, so derived facts can remain unchanged after warmup; it does not measure a behavior-changing edit. These observations do not prove the reference latency targets.
 
 | corpus | tool | full build | peak memory | index on disk | update after editing one file |
 |---|---|---|---|---|---|
-| hono | xcalygraph | **0.48 s** | **44 MB** | **1.4 MB** | **73 ms** |
-| | Graphify | 5.6 s | 192 MB | 7.5 MB | 4.5 s |
-| Graphify source | xcalygraph | **1.2 s** | **90 MB** | **7.4 MB** | **110 ms** |
-| | Graphify | 29 s | 718 MB | 60 MB | 13 s |
-| xcalygraph source | xcalygraph | **0.36 s** | **29 MB** | **1.0 MB** | **49 ms** |
-| | Graphify | 2.9 s | 99 MB | 8.4 MB | 1.9 s |
+| hono | xcalygraph | **0.32 s** | **51 MB** | **1.44 MiB** | **94 ms** |
+| | Graphify | 4.55 s | 202 MB | 7.46 MiB | 3.85 s |
+| Graphify source | xcalygraph | **0.56 s** | **102 MB** | **7.20 MiB** | **145 ms** |
+| | Graphify | 18.70 s | 918 MB | 59.66 MiB | 12.65 s |
+| xcalygraph source | xcalygraph | **0.90 s** | **34 MB** | **1.31 MiB** | **34 ms** |
+| | Graphify | 2.49 s | 111 MB | 9.73 MiB | 1.96 s |
 
-Compared with Graphify, xcalygraph builds 8 to 24 times faster, needs 3 to 8 times less memory and disk, and updates after an edit 40 to 120 times faster.
+The retained timing artifacts and exact source identities are required when comparing another run; these small corpora do not replace the larger reference-corpus resource gate.
 
 ### Language depth
 

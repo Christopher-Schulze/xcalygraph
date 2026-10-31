@@ -390,6 +390,9 @@ Reference: Apple Silicon laptop, warm filesystem cache, corpus of 8,000 tracked 
 
 Reference corpora: xcalygraph itself, the upstream Graphify clone at the pinned commit (Python), one public repository per deep language pinned by commit under `research/corpora/`, private corpora evaluated locally. Edge precision targets per deep language: exact at least 95 %, inferred at least 85 %; structural languages: at least 85 %.
 
+- Tool comparisons share one verified source snapshot identified by paths, content hashes and executable bits. Upstream graph reuse additionally validates package source/version, extraction mode and graph checksum.
+- Every evaluation retains source, question and binary identities plus raw observations in an isolated run directory. Failed extraction or queries invalidate the run; existing evidence is preserved.
+
 | metric | definition |
 |--------|------------|
 | hit@5 | share of questions whose expected symbol or file appears in the first 5 results of `find` or `ctx` |
