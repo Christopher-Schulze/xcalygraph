@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 49;
+pub const RESOLVE_VERSION: u32 = 50;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -3892,6 +3892,23 @@ impl<'a> Index<'a> {
             members,
             ..Graph::default()
         };
+        // Entrypoints that manifests declare (`[[bin]] path`, package.json `bin`,
+        // `[project.scripts]`, executable targets), relative to the manifest's directory.
+        let mut manifest_entries: HashSet<String> = HashSet::default();
+        for (record, facts) in self.input.files.iter().zip(self.input.facts) {
+            let Some(manifest) = facts.as_ref().and_then(|facts| facts.manifest.as_ref()) else {
+                continue;
+            };
+            let dir = modules::parent_dir(&record.path);
+            for entry in &manifest.entrypoints {
+                let joined = if dir.is_empty() {
+                    entry.trim_start_matches("./").to_owned()
+                } else {
+                    format!("{dir}/{}", entry.trim_start_matches("./"))
+                };
+                manifest_entries.insert(normalize_path(&joined));
+            }
+        }
         for (file, record) in self.input.files.iter().enumerate() {
             let facts = self.input.facts[file].as_ref();
             graph.files.push(GraphFile {
@@ -3903,7 +3920,8 @@ impl<'a> Index<'a> {
                 first_symbol: self.base[file],
                 symbol_count: facts.map_or(0, |facts| facts.symbols.len() as u32),
                 ambiguous: 0,
-                entry: facts.is_some_and(|facts| facts.entry),
+                entry: facts.is_some_and(|facts| facts.entry)
+                    || manifest_entries.contains(record.path.as_str()),
                 doc: facts.map(|facts| facts.doc.clone()).unwrap_or_default(),
                 keys: facts
                     .map(|facts| {

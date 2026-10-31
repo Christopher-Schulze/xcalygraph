@@ -19,3 +19,4 @@ StoreTests.MemoryRepositoryTests.testFindsStoredRow -tests-> Store.MemoryReposit
 StoreTests.MemoryRepositoryTests.testFindsStoredRow -tests-> Store.MemoryRepository.put @7
 StoreTests.MemoryRepositoryTests.testFindsStoredRow -tests-> Store.Row @7
 file:Sources/Store/MemoryRepository+Write.swift -uses-> Store.MemoryRepository @1
+entry Sources/App/main.swift

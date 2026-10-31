@@ -12,3 +12,4 @@ golang -runs-> file:cmd/server/main.go @3
 lint -runs-> file:scripts/check.sh @4
 run -runs-> build @7
 run -runs-> file:cmd/server/main.go @8
+entry scripts/check.sh

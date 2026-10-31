@@ -1,6 +1,7 @@
 //! Manifest facts: module names, dependencies, workspace members and entrypoints
 //! (`docs/spec.md` section 5, manifest).
 
+use super::build_manifests;
 use super::json::{self, Value};
 use crate::domain::facts::Manifest;
 
@@ -17,6 +18,25 @@ pub fn parse(name: &str, text: &str) -> Option<Manifest> {
         "DESCRIPTION" => Some(r_description(text)),
         "pubspec.yaml" => Some(pubspec(text)),
         "remappings.txt" | "foundry.toml" => Some(solidity_remappings(text)),
+        "pyproject.toml" => Some(build_manifests::pyproject(text)),
+        "pom.xml" => Some(build_manifests::pom(text)),
+        "build.gradle" | "build.gradle.kts" | "settings.gradle" | "settings.gradle.kts" => {
+            Some(build_manifests::gradle(name, text))
+        }
+        "Package.swift" => Some(build_manifests::swift_package(text)),
+        "composer.json" => Some(build_manifests::composer(&json::parse(text)?)),
+        "Gemfile" => Some(build_manifests::ruby(text)),
+        "mix.exs" => Some(build_manifests::mix(text)),
+        _ if name.ends_with(".gemspec") => Some(build_manifests::ruby(text)),
+        _ if [".csproj", ".vbproj", ".fsproj"]
+            .iter()
+            .any(|suffix| name.ends_with(suffix)) =>
+        {
+            Some(build_manifests::dotnet_project(name, text))
+        }
+        _ if name.ends_with(".sln") || name.ends_with(".slnx") => {
+            Some(build_manifests::solution(text))
+        }
         _ => None,
     }
 }
@@ -159,7 +179,7 @@ fn pubspec(text: &str) -> Manifest {
             continue;
         };
         if !indented {
-            section = if matches!(key, "dependencies" | "dev_dependencies") {
+            section = if matches!(key, "dependencies" | "dev_dependencies" | "executables") {
                 key
             } else {
                 ""
@@ -167,6 +187,12 @@ fn pubspec(text: &str) -> Manifest {
             if key == "name" {
                 manifest.module = Some(value.trim().to_owned()).filter(|name| !name.is_empty());
             }
+        } else if section == "executables" && line.starts_with("  ") {
+            // `name:` runs `bin/name.dart`, `name: script` runs `bin/script.dart`.
+            let script = Some(value.trim())
+                .filter(|script| !script.is_empty())
+                .unwrap_or(key);
+            manifest.entrypoints.push(format!("bin/{script}.dart"));
         } else if !section.is_empty() && line.starts_with("  ") && !line.starts_with("   ") {
             manifest
                 .deps

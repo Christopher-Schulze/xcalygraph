@@ -19,3 +19,4 @@ file:app/store/__init__.py -imports-> file:app/store/db.py @1
 file:tests/test_service.py -imports-> file:app/service.py @1
 tests.test_service.test_run -tests-> app.service.Service @5
 tests.test_service.test_run -tests?-> app.service.Service.run @5
+entry app/report.py

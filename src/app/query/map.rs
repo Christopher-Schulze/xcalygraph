@@ -257,8 +257,14 @@ fn entrypoints(index: &Index, filter: &Filter) -> Vec<(String, String)> {
             lines.push(symbol_line(index, id as u32, "entry"));
         }
     }
+    let symbols = index.derived.symbols();
     for (id, file) in index.derived.files().iter().enumerate() {
-        if file.entry != 0 && file.symbol_count == 0 && filter.file(index, file) {
+        // A file is the entry when none of its symbols is (a manifest `bin` with helpers).
+        let first = file.first_symbol as usize;
+        let entry_symbol = symbols
+            .get(first..first + file.symbol_count as usize)
+            .is_some_and(|own| own.iter().any(|symbol| symbol.flags & FLAG_ENTRY != 0));
+        if file.entry != 0 && !entry_symbol && filter.file(index, file) {
             lines.push(symbol_line(
                 index,
                 index.symbol_count() + id as u32,

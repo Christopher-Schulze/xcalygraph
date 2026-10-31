@@ -98,6 +98,9 @@ pub fn render(graph: &Graph) -> String {
         if file.ambiguous > 0 {
             let _ = writeln!(out, "ambiguous {} {}", file.path, file.ambiguous);
         }
+        if file.entry {
+            let _ = writeln!(out, "entry {}", file.path);
+        }
     }
     for external in &graph.externals {
         let _ = writeln!(

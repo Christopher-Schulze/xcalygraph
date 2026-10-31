@@ -1,6 +1,7 @@
 //! Fact extraction: content bytes to per-file facts (`docs/spec.md` section 5). Pure; no IO.
 
 mod assets;
+mod build_manifests;
 mod config;
 mod contracts;
 mod documents;
@@ -24,7 +25,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 34;
+const EXTRACTION_VERSION: u32 = 35;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
