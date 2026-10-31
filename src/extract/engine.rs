@@ -10,14 +10,15 @@
 //! - `@import` with `@import.path` or `@import.tree`, optional `@import.alias`, `@import.name`,
 //!   `@import.reexport`.
 //! - `@binding` with `@binding.name` and one of `@binding.type` (declared), `@binding.ctor`
-//!   (constructed type), `@binding.call` (result of a call).
+//!   (constructed type), `@binding.call` (result of a call), `@binding.range` (element of the
+//!   named collection).
 //! - `@return` with `@return.type` inside a definition: its declared result type.
 //! - `@field` with `@field.name` and `@field.type` inside a type definition.
 //! - `@env` with `@env.name`; `@package` for the declared package or namespace.
 //! - Captures starting with `_` serve predicates only.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator};
 
@@ -258,6 +259,8 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
                         entry.declared = true;
                     } else if let Some(node) = get("binding.ctor") {
                         entry.type_name = Some(type_name(text(node)));
+                    } else if let Some(node) = get("binding.range") {
+                        entry.type_name = Some(format!("range:{}", text(node)));
                     } else if let Some(node) = get("binding.call") {
                         entry.type_name = Some(facts::normalize_space(text(node)));
                         entry.call = true;
@@ -478,6 +481,17 @@ fn assemble(assembly: Assembly) -> Facts {
             b.scope,
         ))
     });
+    // A value reference repeated in its scope adds no edge: binding shadowing only grows with
+    // the line and edges keep their first line, so the first occurrence decides.
+    let mut seen_values = HashSet::new();
+    facts_refs.retain(|reference| {
+        reference.kind != RefKind::Value
+            || seen_values.insert((
+                reference.name.clone(),
+                reference.qualifier.clone(),
+                reference.scope,
+            ))
+    });
     let mut facts_imports: Vec<Import> = imports
         .into_values()
         .flat_map(|raw| match (raw.tree, raw.path) {
@@ -617,6 +631,7 @@ fn ref_kind(kind: &str) -> Option<RefKind> {
         "type" => RefKind::Type,
         "inherit" | "class" => RefKind::Inherit,
         "implementation" | "implement" => RefKind::Implement,
+        "value" => RefKind::Value,
         _ => return None,
     })
 }
@@ -626,6 +641,7 @@ fn priority(kind: Option<RefKind>) -> u8 {
     match kind {
         Some(RefKind::Inherit | RefKind::Implement) => 3,
         Some(RefKind::Call) => 2,
+        Some(RefKind::Value) => 0,
         Some(_) => 1,
         None => 0,
     }
@@ -655,6 +671,17 @@ pub fn type_name(text: &str) -> String {
             .to_owned();
     }
     let mut rest = text.as_str().trim();
+    // `map[K]V` and `chan T` hold values of their element type.
+    if let Some(map) = rest.strip_prefix("map[")
+        && let Some(close) = map.find(']')
+    {
+        return type_name(&map[close + 1..]);
+    }
+    for prefix in ["chan ", "<-chan ", "chan<- "] {
+        if let Some(element) = rest.strip_prefix(prefix) {
+            return type_name(element);
+        }
+    }
     loop {
         let before = rest;
         for prefix in [
@@ -898,6 +925,8 @@ mod tests {
             ("impl Iterator<Item = u8>", "Iterator"),
             ("Arc<Mutex<Store>>", "Store"),
             ("Box<dyn Reader + Send>", "Reader"),
+            ("map[string]*atsCorpus", "atsCorpus"),
+            ("chan Event", "Event"),
         ];
         for (input, want) in cases {
             assert_eq!(type_name(input), want, "{input}");

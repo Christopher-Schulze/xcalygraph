@@ -9,13 +9,14 @@ use crate::domain::facts::SymKind;
 use crate::domain::filetype::FileType;
 
 /// Every command, in help order.
-const COMMANDS: [CommandName; 11] = [
+const COMMANDS: [CommandName; 12] = [
     CommandName::Map,
     CommandName::Find,
     CommandName::Ctx,
     CommandName::Show,
     CommandName::Impact,
     CommandName::Path,
+    CommandName::Audit,
     CommandName::Index,
     CommandName::Install,
     CommandName::Update,
@@ -75,6 +76,7 @@ pub enum CommandName {
     Show,
     Impact,
     Path,
+    Audit,
     Index,
     Install,
     Update,
@@ -95,6 +97,7 @@ impl CommandName {
             Self::Show => "show",
             Self::Impact => "impact",
             Self::Path => "path",
+            Self::Audit => "audit",
             Self::Index => "index",
             Self::Install => "install",
             Self::Update => "update",
@@ -111,6 +114,7 @@ impl CommandName {
             Self::Show => "show NAME [--all]",
             Self::Impact => "impact NAME... | --diff [REV]",
             Self::Path => "path FROM TO",
+            Self::Audit => "audit",
             Self::Index => "index [--drop]",
             Self::Install => "install [--link claude]",
             Self::Update => "update [--check]",
@@ -129,6 +133,9 @@ impl CommandName {
             Self::Show => "card of a symbol or file: members, types, callers, callees, tests, env",
             Self::Impact => "changed symbols, affected dependents by depth, tests and run commands",
             Self::Path => "shortest dependency path between two names",
+            Self::Audit => {
+                "dead code, unused exports, cycles, stale doc references, env drift, hidden coupling, hotspots"
+            }
             Self::Index => "build or refresh the index explicitly; --drop deletes it",
             Self::Install => "install the embedded agent skill to ~/.agents/skills/xcalygraph",
             Self::Update => "self-update from GitHub Releases, then install the skill",
@@ -146,14 +153,19 @@ impl CommandName {
             Self::Show => (1, 1),
             Self::Impact => (0, usize::MAX),
             Self::Path => (2, 2),
-            Self::Map | Self::Index | Self::Install | Self::Update | Self::Version => (0, 0),
+            Self::Map
+            | Self::Audit
+            | Self::Index
+            | Self::Install
+            | Self::Update
+            | Self::Version => (0, 0),
             Self::Help => (0, 1),
         }
     }
 
     fn flags(self) -> &'static [Flag] {
         match self {
-            Self::Map | Self::Find | Self::Ctx | Self::Path => &QUERY_FLAGS,
+            Self::Map | Self::Find | Self::Ctx | Self::Path | Self::Audit => &QUERY_FLAGS,
             Self::Show => &SHOW_FLAGS,
             Self::Impact => &IMPACT_FLAGS,
             Self::Index => &[Flag::Root, Flag::IndexDir, Flag::Drop],

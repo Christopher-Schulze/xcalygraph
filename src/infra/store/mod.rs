@@ -6,7 +6,7 @@ pub mod derived;
 pub mod facts_codec;
 
 use std::fs;
-use std::io;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use xxhash_rust::xxh3::xxh3_64;
@@ -17,6 +17,7 @@ use container::{Container, Kind, OpenError};
 use crate::domain::corpus::FileRecord;
 use crate::domain::facts::Facts;
 use crate::domain::filetype::FileType;
+use crate::domain::history::History;
 use crate::domain::role::Role;
 
 pub const SHARDS: usize = 64;
@@ -113,8 +114,13 @@ impl Store {
     /// Facts of every file in the shard, sorted by path.
     pub fn read_shard(&self, shard: usize) -> Result<Vec<(String, Facts)>, OpenError> {
         let container = Container::open(&self.shard_path(shard), Kind::Facts)?;
+        let (Some(table), Some(bytes)) =
+            (inflate(container.section(0)), inflate(container.section(1)))
+        else {
+            return Err(OpenError::Invalid("facts compression"));
+        };
         let decode = || -> DecodeResult<Vec<(String, Facts)>> {
-            let mut decoder = Decoder::with_table(container.section(1), container.section(0))?;
+            let mut decoder = Decoder::with_table(&bytes, &table)?;
             let count = decoder.len()?;
             (0..count)
                 .map(|_| Ok((decoder.string()?, facts_codec::decode(&mut decoder)?)))
@@ -124,17 +130,63 @@ impl Store {
     }
 
     pub fn write_shard(&self, shard: usize, files: &[(&str, &Facts)]) -> io::Result<u64> {
-        // Section 0: shard-local string table; section 1: per-file facts referencing it.
+        // Section 0: shard-local string table; section 1: per-file facts referencing it. Both are
+        // deflated: shards are read whole and in parallel, so inflating costs little.
         let mut encoder = Encoder::with_table();
         encoder.var_usize(files.len());
         for (path, facts) in files {
             encoder.str(path);
             facts_codec::encode(&mut encoder, facts);
         }
-        let table = encoder.table_bytes();
+        let table = deflate(&encoder.table_bytes())?;
+        let bytes = deflate(&encoder.bytes)?;
         container::write(
             &self.shard_path(shard),
-            &container::build(Kind::Facts, &[&table, &encoder.bytes]),
+            &container::build(Kind::Facts, &[&table, &bytes]),
+        )
+    }
+
+    /// Cached git history analyses if they were computed at `head`.
+    pub fn read_history(&self, head: &str) -> Option<History> {
+        let container = Container::open(&self.path("git"), Kind::Git).ok()?;
+        let decode = || -> DecodeResult<Option<History>> {
+            let mut decoder = Decoder::with_table(container.section(1), container.section(0))?;
+            if decoder.str()? != head {
+                return Ok(None);
+            }
+            let mut history = History::default();
+            for _ in 0..decoder.len()? {
+                let path = decoder.string()?;
+                history.churn.insert(path, decoder.var_u32()?);
+            }
+            for _ in 0..decoder.len()? {
+                history
+                    .co_change
+                    .push((decoder.string()?, decoder.string()?, decoder.var_u32()?));
+            }
+            Ok(Some(history))
+        };
+        decode().ok().flatten()
+    }
+
+    pub fn write_history(&self, head: &str, history: &History) -> io::Result<u64> {
+        let mut encoder = Encoder::with_table();
+        encoder.str(head);
+        encoder.var_usize(history.churn.len());
+        for (path, count) in &history.churn {
+            encoder.str(path);
+            encoder.var_u32(*count);
+        }
+        encoder.var_usize(history.co_change.len());
+        for (left, right, count) in &history.co_change {
+            encoder.str(left);
+            encoder.str(right);
+            encoder.var_u32(*count);
+        }
+        let table = encoder.table_bytes();
+        container::write(
+            &self.path("git"),
+            &container::build(Kind::Git, &[&table, &encoder.bytes]),
         )
     }
 
@@ -159,6 +211,23 @@ impl Store {
             Err(error) => Err(error),
         }
     }
+}
+
+fn deflate(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    let mut encoder = flate2::write::DeflateEncoder::new(
+        Vec::with_capacity(bytes.len() / 2),
+        flate2::Compression::fast(),
+    );
+    encoder.write_all(bytes)?;
+    encoder.finish()
+}
+
+fn inflate(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(bytes.len() * 3);
+    flate2::read::DeflateDecoder::new(bytes)
+        .read_to_end(&mut out)
+        .ok()?;
+    Some(out)
 }
 
 fn common_prefix(left: &str, right: &str) -> usize {

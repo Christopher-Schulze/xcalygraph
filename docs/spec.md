@@ -346,7 +346,7 @@ Location: `<index-dir>/<root basename>-<XXH3-64 hex of the canonical root path>/
 | `git` | churn, co-change, hotspots keyed by HEAD | HEAD changes and git data is requested |
 | `lock` | writer lock | never |
 
-- Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum.
+- Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum; fact shard sections deflated; search postings as delta-varint (node, term frequencies) pairs.
 - Writes: temp file in the same directory -> rename; no fsync; unchanged files untouched. A checksum mismatch or truncation on open rebuilds that file.
 - Reads: memory-mapped, zero-copy.
 

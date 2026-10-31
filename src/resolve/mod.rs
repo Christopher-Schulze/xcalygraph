@@ -6,9 +6,10 @@ mod js;
 pub mod modules;
 mod python;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use crate::domain::hash::FastMap as HashMap;
+use crate::domain::hash::FastSet as HashSet;
 
 use rayon::prelude::*;
 
@@ -16,13 +17,14 @@ use crate::domain::corpus::FileRecord;
 use crate::domain::facts::{self, Binding, Facts, Ref, RefKind, SymKind};
 use crate::domain::filetype::FileType;
 use crate::domain::graph::{
-    Confidence, Edge, EdgeKind, EnvSite, External, FieldList, Graph, GraphFile, GraphSymbol, NONE,
+    self, Confidence, Edge, EdgeKind, EnvSite, External, FieldList, Graph, GraphFile, GraphSymbol,
+    NONE,
 };
 use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 7;
+pub const RESOLVE_VERSION: u32 = 15;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -56,6 +58,8 @@ struct Index<'a> {
     js_tables: js::JsTables,
     /// Root-relative path -> file index.
     path_index: HashMap<&'a str, u32>,
+    /// File name -> files carrying it.
+    name_index: HashMap<&'a str, Vec<u32>>,
     /// Types per (module, name).
     types: HashMap<(u32, &'a str), Vec<u32>>,
     /// Every symbol per name, for the unique-name fallback.
@@ -64,6 +68,8 @@ struct Index<'a> {
     returns: HashMap<u32, &'a str>,
     /// Field types per (type symbol, field name).
     field_types: HashMap<(u32, &'a str), &'a str>,
+    /// Every (type symbol, field name), typed or not.
+    field_names: HashSet<(u32, String)>,
     /// Implementations of abstract types and supertypes of concrete ones.
     implementations: HashMap<u32, Vec<u32>>,
     supertypes: HashMap<u32, Vec<u32>>,
@@ -93,6 +99,8 @@ struct Imports {
 
 struct Resolved {
     edges: Vec<Edge>,
+    ambiguous_names: Vec<String>,
+    stale: Vec<(u32, u32, String)>,
     /// Modules this file imports (module import graph).
     imported_modules: Vec<u32>,
     ambiguous: u32,
@@ -137,6 +145,29 @@ impl<'a> Index<'a> {
                     path.push(symbol.owner.as_str());
                 }
                 path.reverse();
+                // Headings are found by title; their file path locates them.
+                if symbol.kind() == SymKind::Heading {
+                    let role = input.files[file].role;
+                    symbols.push(GraphSymbol {
+                        file: file as u32,
+                        kind: SymKind::Heading,
+                        name: symbol.name.clone(),
+                        qualified: symbol.name.clone(),
+                        parent,
+                        line: symbol.line,
+                        end_line: symbol.end_line,
+                        signature: String::new(),
+                        doc: String::new(),
+                        exported: true,
+                        flags: if role == Role::Test {
+                            facts::FLAG_TEST
+                        } else {
+                            0
+                        },
+                        rank: 0.0,
+                    });
+                    continue;
+                }
                 let mut qualified = module.name.clone();
                 for part in path.iter().chain(std::iter::once(&symbol.name.as_str())) {
                     if !qualified.is_empty() && qualified != "." {
@@ -218,12 +249,23 @@ impl<'a> Index<'a> {
                 .enumerate()
                 .map(|(file, record)| (record.path.as_str(), file as u32))
                 .collect(),
+            name_index: {
+                let mut names: HashMap<&str, Vec<u32>> = HashMap::default();
+                for (file, record) in input.files.iter().enumerate() {
+                    names
+                        .entry(role_file_name(&record.path))
+                        .or_default()
+                        .push(file as u32);
+                }
+                names
+            },
             by_module: HashMap::default(),
             methods: HashMap::default(),
             types: HashMap::default(),
             by_name: HashMap::default(),
             returns: HashMap::default(),
             field_types: HashMap::default(),
+            field_names: HashSet::default(),
             implementations: HashMap::default(),
             supertypes: HashMap::default(),
         };
@@ -282,6 +324,9 @@ impl<'a> Index<'a> {
                 }
             }
             for fields in &facts.fields {
+                for name in &fields.names {
+                    self.field_names.insert((base + fields.owner, name.clone()));
+                }
                 for (name, kind) in fields.names.iter().zip(&fields.types) {
                     if !kind.is_empty() {
                         self.field_types
@@ -842,6 +887,8 @@ impl<'a> Index<'a> {
     fn resolve_file(&self, file: u32, imports: &Imports) -> Resolved {
         let mut resolved = Resolved {
             edges: Vec::new(),
+            ambiguous_names: Vec::new(),
+            stale: Vec::new(),
             imported_modules: imports.modules.clone(),
             ambiguous: 0,
             externals: imports.externals.clone(),
@@ -856,6 +903,15 @@ impl<'a> Index<'a> {
             let source = reference.scope.map_or(file_node, |scope| base + scope);
             let outcome = match reference.kind {
                 RefKind::Call | RefKind::Type => self.resolve_ref(file, imports, reference),
+                // A value reference only counts when it certainly names a symbol: no fallback,
+                // no ambiguity count (most identifiers are locals).
+                RefKind::Value => match self.resolve_value(file, imports, reference) {
+                    Outcome::Targets(targets, confidence) => Outcome::Targets(targets, confidence),
+                    Outcome::External => Outcome::External,
+                    // Never counted as ambiguity (most value identifiers are locals), but the
+                    // name stays uncertain for dead-code checks.
+                    Outcome::Ambiguous | Outcome::Unresolved => Outcome::Unresolved,
+                },
                 RefKind::Inherit => self.resolve_supertype(file, imports, reference),
                 RefKind::Path => self.resolve_path(file, &reference.name),
                 RefKind::Mention => self.resolve_mention(file, &reference.name),
@@ -867,6 +923,7 @@ impl<'a> Index<'a> {
                         file_is_test || (source < file_node && self.is_test(source));
                     let mut kind = match reference.kind {
                         RefKind::Call => EdgeKind::Calls,
+                        RefKind::Value => EdgeKind::Uses,
                         RefKind::Inherit => EdgeKind::Inherits,
                         RefKind::Path => EdgeKind::References,
                         RefKind::Mention => EdgeKind::Mentions,
@@ -889,8 +946,23 @@ impl<'a> Index<'a> {
                     }
                 }
                 Outcome::External => {}
-                Outcome::Ambiguous => resolved.ambiguous += 1,
-                Outcome::Unresolved => {}
+                Outcome::Ambiguous => {
+                    resolved.ambiguous += 1;
+                    resolved.ambiguous_names.push(reference.name.clone());
+                }
+                Outcome::Unresolved => {
+                    if self.is_stale(reference) {
+                        resolved
+                            .stale
+                            .push((source, reference.line, reference.name.clone()));
+                    }
+                    // An unresolved reference to a name some symbol carries may target it.
+                    if matches!(reference.kind, RefKind::Call | RefKind::Value)
+                        && self.by_name.contains_key(reference.name.as_str())
+                    {
+                        resolved.ambiguous_names.push(reference.name.clone());
+                    }
+                }
             }
         }
         for &(from, to) in &imports.files {
@@ -907,6 +979,7 @@ impl<'a> Index<'a> {
 
     /// A literal relative path: relative to the referring file, then to the root.
     fn resolve_path(&self, file: u32, target: &str) -> Outcome {
+        let target = strip_line_suffix(target);
         match self.file_by_path(file, target) {
             Some(found) if found != file => exact(self.symbols.len() as u32 + found),
             _ => Outcome::Unresolved,
@@ -928,8 +1001,66 @@ impl<'a> Index<'a> {
     /// A backticked mention: a path names a file (exact); an identifier or qualified suffix
     /// names the unique symbol carrying it (inferred).
     fn resolve_mention(&self, file: u32, mention: &str) -> Outcome {
+        let mention = strip_line_suffix(mention);
+        // A qualified name of the index (`internal/platform.Worker`, `store::Store::open`).
+        let normalized = mention.replace("::", ".");
+        if normalized.contains('.')
+            && let Some(name) = normalized.rsplit('.').next()
+        {
+            let exact: Vec<u32> = self
+                .by_name
+                .get(name)
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|&symbol| {
+                    self.symbols[symbol as usize].qualified.replace("::", ".") == normalized
+                })
+                .collect();
+            if let [only] = exact.as_slice() {
+                return Outcome::Targets(vec![(*only, Confidence::Exact)], Confidence::Exact);
+            }
+        }
+        // `path:name` and `path::name`: a symbol of that file.
+        for separator in ["::", ":"] {
+            if let Some((path, name)) = mention.rsplit_once(separator)
+                && path.contains('.')
+                && let Some(target_file) = self.file_by_path(file, path)
+            {
+                let record = &self.input.facts[target_file as usize];
+                let base = self.base[target_file as usize];
+                let found = record.as_ref().and_then(|facts| {
+                    facts
+                        .symbols
+                        .iter()
+                        .position(|symbol| symbol.name == name)
+                        .map(|local| base + local as u32)
+                });
+                return match found {
+                    Some(symbol) => {
+                        Outcome::Targets(vec![(symbol, Confidence::Exact)], Confidence::Exact)
+                    }
+                    None => Outcome::Targets(
+                        vec![(self.symbols.len() as u32 + target_file, Confidence::Exact)],
+                        Confidence::Exact,
+                    ),
+                };
+            }
+        }
         if mention.contains('/') {
             return self.resolve_path(file, mention);
+        }
+        // A file name (`go.mod`, `cli.rs`): the unique file carrying it.
+        let named_files: Vec<u32> = self.name_index.get(mention).cloned().unwrap_or_default();
+        if mention.contains('.') && !named_files.is_empty() {
+            return match named_files.as_slice() {
+                [only] if *only != file => Outcome::Targets(
+                    vec![(self.symbols.len() as u32 + *only, Confidence::Inferred)],
+                    Confidence::Inferred,
+                ),
+                [_] => Outcome::External,
+                _ => Outcome::External,
+            };
         }
         let normalized = mention.replace("::", ".");
         let name = normalized.rsplit('.').next().unwrap_or(&normalized);
@@ -943,7 +1074,7 @@ impl<'a> Index<'a> {
                 let qualified = self.symbols[symbol as usize].qualified.replace("::", ".");
                 normalized == name
                     || qualified == normalized
-                    || qualified.ends_with(&format!(".{normalized}"))
+                    || graph::has_qualified_suffix(&qualified, &normalized)
             })
             .filter(|&symbol| self.symbols[symbol as usize].kind != SymKind::Heading)
             .collect();
@@ -954,6 +1085,106 @@ impl<'a> Index<'a> {
             None if candidates.is_empty() => Outcome::Unresolved,
             None => Outcome::Ambiguous,
         }
+    }
+
+    /// A doc reference that certainly points at nothing: a link or path mention with an
+    /// extension or directory that matches no file, or a qualified mention whose head names a
+    /// symbol or module of the root while the whole name matches nothing.
+    fn is_stale(&self, reference: &Ref) -> bool {
+        let name = strip_line_suffix(&reference.name);
+        // URLs, absolute or home paths, globs and ranges are no repository references.
+        if name.contains("://")
+            || name.starts_with(['/', '~', '$'])
+            || name.contains("..")
+            || name.contains(['*', '<', '>', '{', ' '])
+        {
+            return false;
+        }
+        match reference.kind {
+            RefKind::Path => true,
+            RefKind::Mention if name.contains('/') => name
+                .rsplit('/')
+                .next()
+                .is_some_and(|last| last.contains('.')),
+            RefKind::Mention => {
+                let normalized = name.replace("::", ".");
+                let Some((head, last)) = normalized.split_once('.') else {
+                    return false;
+                };
+                // `go.mod`, `build.gradle`: a file name, not a member.
+                if last.len() <= 6
+                    && last
+                        .chars()
+                        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+                {
+                    return false;
+                }
+                // Stale only when the head names a type of the root that has neither a member
+                // nor a field of that name.
+                let member = last.split('.').next().unwrap_or(last);
+                let types: Vec<u32> = self
+                    .by_name
+                    .get(head)
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|&symbol| self.symbols[symbol as usize].kind.is_type())
+                    .collect();
+                !types.is_empty()
+                    && types.iter().all(|&type_symbol| {
+                        self.members(type_symbol, member).is_empty()
+                            && !self.field_types.contains_key(&(type_symbol, member))
+                            && !self.field_names.contains(&(type_symbol, member.to_owned()))
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    /// Same-kind symbols in different files whose names carry a build constraint suffix
+    /// (`_darwin`, `_linux`, `_windows`, `_unix`, `_other`, `_js`, `_wasm`, architectures).
+    fn build_variants(&self, symbols: &[u32]) -> bool {
+        let constrained = |symbol: u32| {
+            let path = &self.input.files[self.symbols[symbol as usize].file as usize].path;
+            let stem = path
+                .rsplit('/')
+                .next()
+                .unwrap_or(path)
+                .trim_end_matches(".go");
+            stem.rsplit('_').next().is_some_and(|suffix| {
+                matches!(
+                    suffix,
+                    "darwin"
+                        | "linux"
+                        | "windows"
+                        | "unix"
+                        | "other"
+                        | "freebsd"
+                        | "openbsd"
+                        | "netbsd"
+                        | "js"
+                        | "wasm"
+                        | "amd64"
+                        | "arm64"
+                        | "386"
+                        | "arm"
+                        | "ios"
+                        | "android"
+                        | "plan9"
+                        | "solaris"
+                        | "illumos"
+                        | "nounix"
+                        | "nonunix"
+                        | "stub"
+                        | "nocgo"
+                        | "cgo"
+                )
+            })
+        };
+        let kind = self.symbols[symbols[0] as usize].kind;
+        symbols
+            .iter()
+            .all(|&symbol| constrained(symbol) && self.symbols[symbol as usize].kind == kind)
     }
 
     fn caller_is_test(&self, file: u32, scope: Option<u32>) -> bool {
@@ -1024,7 +1255,10 @@ impl<'a> Index<'a> {
             if wants_type {
                 kind.is_type()
             } else {
-                kind.is_callable() || kind.is_type()
+                kind.is_callable()
+                    || kind.is_type()
+                    || (reference.kind == RefKind::Value
+                        && matches!(kind, SymKind::Const | SymKind::Var))
             }
         };
         // 1. Lexical scope: definitions of the file visible from the reference.
@@ -1033,6 +1267,7 @@ impl<'a> Index<'a> {
             let chain = scope_chain(facts, reference.scope);
             let mut best: Option<(usize, u32)> = None;
             let mut count = 0;
+            let mut found: Vec<(usize, u32)> = Vec::new();
             for (local, symbol) in facts.symbols.iter().enumerate() {
                 let id = base + local as u32;
                 if symbol.name != name || !kind_ok(id) || symbol.kind() == SymKind::Method {
@@ -1046,14 +1281,24 @@ impl<'a> Index<'a> {
                     },
                 };
                 count += 1;
+                found.push((depth, id));
                 if best.is_none_or(|(best_depth, _)| depth > best_depth) {
                     best = Some((depth, id));
                 }
             }
-            if let Some((_, id)) = best
-                && (count == 1 || self.file_type(file) == Some(FileType::Rust))
-            {
-                return exact(id);
+            if let Some((best_depth, id)) = best {
+                if count == 1 {
+                    return exact(id);
+                }
+                // Rust: same-named items at the same depth are `cfg` variants; each is a target.
+                if self.file_type(file) == Some(FileType::Rust) {
+                    let variants: Vec<(u32, Confidence)> = found
+                        .iter()
+                        .filter(|(depth, _)| *depth == best_depth)
+                        .map(|&(_, id)| (id, Confidence::Exact))
+                        .collect();
+                    return Outcome::Targets(variants, Confidence::Exact);
+                }
             }
         }
         // 2. Names bound by imports.
@@ -1067,7 +1312,8 @@ impl<'a> Index<'a> {
                 Target::Module(_) | Target::External(_) => Outcome::External,
             };
         }
-        // 4. Same module unit.
+        // 4. Same module unit; Go build-tag variants (`x_darwin.go`, `x_other.go`) define the
+        // same name in several files and are all targets.
         let module = self.module_of(file);
         let same: Vec<u32> = self
             .module_symbol(module, name, None)
@@ -1075,6 +1321,15 @@ impl<'a> Index<'a> {
             .filter(|&s| kind_ok(s))
             .collect();
         if !same.is_empty() {
+            if same.len() > 1
+                && self.file_type(file) == Some(FileType::Go)
+                && self.build_variants(&same)
+            {
+                return Outcome::Targets(
+                    same.iter().map(|&s| (s, Confidence::Exact)).collect(),
+                    Confidence::Exact,
+                );
+            }
             return pick(&same, Confidence::Exact);
         }
         for &glob in &imports.globs {
@@ -1100,6 +1355,33 @@ impl<'a> Index<'a> {
         })
     }
 
+    /// A value reference: a local definition, an imported or same-module symbol, or a qualified
+    /// name; never a local variable (those shadow nothing in the symbol table).
+    fn resolve_value(&self, file: u32, imports: &Imports, reference: &Ref) -> Outcome {
+        let local_binding = reference.qualifier.is_none()
+            && self
+                .binding(file, reference.scope, &reference.name, reference.line)
+                .is_some();
+        if local_binding {
+            return Outcome::External;
+        }
+        let outcome = match reference.qualifier.as_deref() {
+            Some(qualifier) => {
+                match self.qualified_symbols(file, Some(imports), qualifier, &reference.name) {
+                    Some(found) => pick_members(self, found, Confidence::Exact),
+                    None => Outcome::Unresolved,
+                }
+            }
+            None => self.resolve_plain(file, imports, reference, false),
+        };
+        match outcome {
+            Outcome::Targets(targets, Confidence::Exact) => {
+                Outcome::Targets(targets, Confidence::Exact)
+            }
+            _ => Outcome::Unresolved,
+        }
+    }
+
     /// Steps 3, 5 and 6 for a qualified reference or member call.
     fn resolve_qualified(
         &self,
@@ -1112,8 +1394,14 @@ impl<'a> Index<'a> {
         let rust = self.file_type(file) == Some(FileType::Rust);
         let chain: Vec<&str> = qualifier.split('.').map(str::trim).collect();
         let head = chain[0];
-        // 3. Qualified name through imports and the module map.
-        let plain_head = chain.len() == 1 && is_identifier(head);
+        // 3. Qualified name through imports and the module map; a local binding of the head
+        // shadows an import of the same name.
+        // Rust qualifiers here are paths (`store::load`), which locals cannot shadow.
+        let shadowed = !rust
+            && self
+                .binding(file, reference.scope, head, reference.line)
+                .is_some();
+        let plain_head = chain.len() == 1 && is_identifier(head) && !shadowed;
         if (plain_head || (rust && qualifier.contains("::")))
             && let Some(found) = self.qualified_symbols(file, Some(imports), qualifier, name)
         {
@@ -1275,6 +1563,16 @@ impl<'a> Index<'a> {
         } else {
             Confidence::Inferred
         };
+        if let Some(collection) = binding.type_name.strip_prefix("range:") {
+            // The element of a ranged collection: the collection binding's (element) type.
+            let source = self.binding(file, scope, collection, binding.line)?;
+            if std::ptr::eq(source, binding) {
+                return None;
+            }
+            return self
+                .binding_type(file, imports, scope, source)
+                .map(|(types, _)| (types, Confidence::Inferred));
+        }
         if let Some(call) = binding.type_name.strip_suffix("()") {
             // Result of a call: resolve the callee, then its declared result type.
             let reference = match split_qualified(call) {
@@ -1530,7 +1828,7 @@ impl<'a> Index<'a> {
                     .unwrap_or(&empty)
             })
             .collect();
-        let mut module_imports: HashSet<(u32, u32)> = HashSet::new();
+        let mut module_imports: HashSet<(u32, u32)> = HashSet::default();
         for (file, imports) in self.file_imports.iter().enumerate() {
             let source = self.modules.file_module[file];
             for &target in &imports.modules {
@@ -1601,6 +1899,8 @@ impl<'a> Index<'a> {
         let mut module_imports: BTreeMap<(u32, u32), u32> = BTreeMap::new();
         for (file, outcome) in resolved.into_iter().enumerate() {
             graph.files[file].ambiguous = outcome.ambiguous;
+            graph.stale.extend(outcome.stale);
+            graph.ambiguous_names.extend(outcome.ambiguous_names);
             let source = self.modules.file_module[file];
             let file_is_test = self.input.files[file].role == Role::Test;
             for &target in &outcome.imported_modules {
@@ -1610,7 +1910,7 @@ impl<'a> Index<'a> {
             }
             edges.extend(outcome.edges);
             let module = self.modules.file_module[file];
-            let mut seen = HashSet::new();
+            let mut seen = HashSet::default();
             for external in outcome.externals {
                 if seen.insert(external.clone()) && !is_std_external(&external) {
                     *externals.entry((module, external)).or_default() += 1;
@@ -1670,6 +1970,8 @@ impl<'a> Index<'a> {
             }
         }
         graph.envs.sort();
+        graph.ambiguous_names.sort_unstable();
+        graph.ambiguous_names.dedup();
         derive::finish(&mut graph, &self.modules);
         graph
     }
@@ -1708,7 +2010,7 @@ impl Index<'_> {
 
 /// Edges unique per (source, target, kind); exact wins over inferred, first line kept.
 fn dedupe_edges(mut edges: Vec<Edge>) -> Vec<Edge> {
-    edges.sort_unstable_by_key(|edge| {
+    edges.par_sort_unstable_by_key(|edge| {
         (
             edge.source,
             edge.target,
@@ -1907,6 +2209,24 @@ fn count_list(text: &str) -> usize {
         }
     }
     if any { count + 1 } else { 0 }
+}
+
+fn role_file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// `path:12` and `path:12-30` cite lines of a file; the file is the reference.
+fn strip_line_suffix(text: &str) -> &str {
+    match text.rsplit_once(':') {
+        Some((path, lines))
+            if !path.is_empty()
+                && !lines.is_empty()
+                && lines.chars().all(|ch| ch.is_ascii_digit() || ch == '-') =>
+        {
+            path
+        }
+        _ => text,
+    }
 }
 
 /// Resolves `.` and `..` segments of a root-relative path.

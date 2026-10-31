@@ -4,6 +4,7 @@
 use bytemuck::{Pod, Zeroable};
 use rayon::prelude::*;
 
+use super::codec::{Decoder, Encoder};
 use super::container::{self, Container, Kind};
 use crate::domain::facts::SymKind;
 use crate::domain::filetype::FileType;
@@ -100,7 +101,7 @@ pub struct FieldsRecord {
     pub names: u32,
 }
 
-/// Token of the search index with its posting range; sorted by token text.
+/// Token of the search index: byte offset of its postings and their count; sorted by token text.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct TokenRecord {
@@ -110,9 +111,8 @@ pub struct TokenRecord {
 }
 
 /// Term frequency of one token per field of one node, 4 bits per field (capped at 15);
-/// posting lists are sorted by node.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+/// posting lists are sorted by node and stored as varint pairs (node delta, packed).
+#[derive(Debug, Clone, Copy)]
 pub struct PostingRecord {
     pub node: u32,
     pub packed: u32,
@@ -157,7 +157,9 @@ mod section {
     pub const LENGTHS: usize = 15;
     pub const AVERAGES: usize = 16;
     pub const MEMBERS: usize = 17;
-    pub const COUNT: usize = 18;
+    pub const STALE: usize = 18;
+    pub const AMBIGUOUS: usize = 19;
+    pub const COUNT: usize = 20;
 }
 
 #[derive(Default)]
@@ -168,9 +170,11 @@ struct Interner {
 }
 
 impl Interner {
-    fn new() -> Self {
+    /// `capacity`: expected number of interned texts.
+    fn new(capacity: usize) -> Self {
         let mut interner = Self {
             offsets: vec![0],
+            ids: FastMap::with_capacity_and_hasher(capacity, Default::default()),
             ..Self::default()
         };
         interner.id("");
@@ -178,7 +182,7 @@ impl Interner {
     }
 
     /// Appends without deduplication: for texts that are almost always unique (signatures,
-    /// docs, qualified names), hashing costs more than the duplicates.
+    /// docs), hashing costs more than the duplicates.
     fn append(&mut self, text: &str) -> u32 {
         if text.is_empty() {
             return 0;
@@ -203,7 +207,7 @@ impl Interner {
 
 /// Serializes the graph and its search index.
 pub fn build(graph: &Graph) -> Vec<u8> {
-    let mut strings = Interner::new();
+    let mut strings = Interner::new(graph.files.len() + graph.symbols.len() * 2);
     let files: Vec<FileRecord> = graph
         .files
         .iter()
@@ -226,7 +230,7 @@ pub fn build(graph: &Graph) -> Vec<u8> {
         .iter()
         .map(|symbol| SymbolRecord {
             name: strings.id(&symbol.name),
-            qualified: strings.append(&symbol.qualified),
+            qualified: strings.id(&symbol.qualified),
             signature: strings.append(&symbol.signature),
             doc: strings.append(&symbol.doc),
             file: symbol.file,
@@ -313,7 +317,7 @@ pub fn build(graph: &Graph) -> Vec<u8> {
     sections[section::ENVS] = bytemuck::cast_slice(&envs).to_vec();
     sections[section::FIELDS] = bytemuck::cast_slice(&fields).to_vec();
     sections[section::TOKENS] = bytemuck::cast_slice(&tokens).to_vec();
-    sections[section::POSTINGS] = bytemuck::cast_slice(&index.postings).to_vec();
+    sections[section::POSTINGS] = index.postings;
     sections[section::LENGTHS] = bytemuck::cast_slice(&index.lengths).to_vec();
     sections[section::AVERAGES] = bytemuck::cast_slice(&index.averages).to_vec();
     let members: Vec<[u32; 2]> = graph
@@ -322,6 +326,18 @@ pub fn build(graph: &Graph) -> Vec<u8> {
         .map(|&(owner, member)| [owner, member])
         .collect();
     sections[section::MEMBERS] = bytemuck::cast_slice(&members).to_vec();
+    let stale: Vec<[u32; 3]> = graph
+        .stale
+        .iter()
+        .map(|(node, line, text)| [*node, *line, strings.id(text)])
+        .collect();
+    sections[section::STALE] = bytemuck::cast_slice(&stale).to_vec();
+    let ambiguous: Vec<u32> = graph
+        .ambiguous_names
+        .iter()
+        .map(|name| strings.id(name))
+        .collect();
+    sections[section::AMBIGUOUS] = bytemuck::cast_slice(&ambiguous).to_vec();
     sections[section::STRINGS] = strings.blob;
     sections[section::STRING_OFFSETS] = bytemuck::cast_slice(&strings.offsets).to_vec();
     let views: Vec<&[u8]> = sections.iter().map(Vec::as_slice).collect();
@@ -362,7 +378,7 @@ fn adjacency(nodes: usize, graph: &Graph, reverse: bool) -> (Vec<u32>, Vec<EdgeR
 
 struct SearchIndex {
     tokens: Vec<(String, u32, u32)>,
-    postings: Vec<PostingRecord>,
+    postings: Vec<u8>,
     lengths: Vec<LengthRecord>,
     averages: [f32; FIELDS],
 }
@@ -469,14 +485,19 @@ fn search_index(graph: &Graph) -> SearchIndex {
     let mut sorted: Vec<(String, Vec<PostingRecord>)> = merged.into_iter().collect();
     sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     let mut tokens = Vec::with_capacity(sorted.len());
-    let mut flat = Vec::with_capacity(sorted.iter().map(|(_, list)| list.len()).sum());
+    let mut encoder = Encoder::default();
     for (token, list) in sorted {
-        tokens.push((token, flat.len() as u32, list.len() as u32));
-        flat.extend(list);
+        tokens.push((token, encoder.bytes.len() as u32, list.len() as u32));
+        let mut previous = 0;
+        for posting in list {
+            encoder.var_u32(posting.node - previous);
+            encoder.var_u32(posting.packed);
+            previous = posting.node;
+        }
     }
     SearchIndex {
         tokens,
-        postings: flat,
+        postings: encoder.bytes,
         lengths,
         averages,
     }
@@ -506,12 +527,13 @@ impl Derived {
             && derived.cast::<EnvRecord>(section::ENVS).is_some()
             && derived.cast::<FieldsRecord>(section::FIELDS).is_some()
             && derived.cast::<TokenRecord>(section::TOKENS).is_some()
-            && derived.cast::<PostingRecord>(section::POSTINGS).is_some()
             && derived.cast::<LengthRecord>(section::LENGTHS).is_some()
             && derived
                 .cast::<f32>(section::AVERAGES)
                 .is_some_and(|averages| averages.len() == FIELDS)
             && derived.cast::<[u32; 2]>(section::MEMBERS).is_some()
+            && derived.cast::<[u32; 3]>(section::STALE).is_some()
+            && derived.cast::<u32>(section::AMBIGUOUS).is_some()
             && derived.container.section_count() == section::COUNT
             && derived.forward_offsets().len() == derived.node_count() + 1
             && derived.reverse_offsets().len() == derived.node_count() + 1
@@ -605,16 +627,29 @@ impl Derived {
     }
 
     /// Postings of a token, by binary search over the sorted token table.
-    pub fn postings(&self, token: &str) -> &[PostingRecord] {
+    pub fn postings(&self, token: &str) -> Vec<PostingRecord> {
         let tokens = self.tokens();
         let Ok(found) = tokens.binary_search_by(|record| self.string(record.token).cmp(token))
         else {
-            return &[];
+            return Vec::new();
         };
         let record = tokens[found];
-        self.slice::<PostingRecord>(section::POSTINGS)
-            .get(record.start as usize..(record.start + record.count) as usize)
-            .unwrap_or_default()
+        let bytes = self
+            .container
+            .section(section::POSTINGS)
+            .get(record.start as usize..)
+            .unwrap_or_default();
+        let mut decoder = Decoder::new(bytes);
+        let mut list = Vec::with_capacity(record.count as usize);
+        let mut node = 0u32;
+        for _ in 0..record.count {
+            let (Ok(delta), Ok(packed)) = (decoder.var_u32(), decoder.var_u32()) else {
+                break;
+            };
+            node = node.wrapping_add(delta);
+            list.push(PostingRecord { node, packed });
+        }
+        list
     }
 
     /// Members (methods, associated items) of a type symbol.
@@ -625,6 +660,18 @@ impl Derived {
             .iter()
             .take_while(move |pair| pair[0] == owner)
             .map(|pair| pair[1])
+    }
+
+    /// Stale doc references: (referring node, line, text string id).
+    pub fn stale(&self) -> &[[u32; 3]] {
+        self.slice(section::STALE)
+    }
+
+    /// Whether some reference to `name` stayed ambiguous.
+    pub fn is_ambiguous_name(&self, name: &str) -> bool {
+        self.slice::<u32>(section::AMBIGUOUS)
+            .iter()
+            .any(|&id| self.string(id) == name)
     }
 
     pub fn lengths(&self) -> &[LengthRecord] {

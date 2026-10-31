@@ -108,6 +108,14 @@ pub struct GraphSymbol {
     pub rank: f32,
 }
 
+/// Whether a qualified name (`::` normalized to `.`) ends with the dotted `suffix` at a name
+/// boundary: `internal/store.Store.Get` ends with `Store.Get` and `store.Store.Get`.
+pub fn has_qualified_suffix(qualified: &str, suffix: &str) -> bool {
+    qualified
+        .strip_suffix(suffix)
+        .is_some_and(|head| head.is_empty() || head.ends_with(['.', '/']))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Module {
     /// Display name: package directory, crate module path or file.
@@ -164,6 +172,11 @@ pub struct Graph {
     pub fields: Vec<FieldList>,
     /// (type, member) pairs: methods and associated items of each type, sorted.
     pub members: Vec<(u32, u32)>,
+    /// Doc references to missing files or members: (referring node, line, reference text).
+    pub stale: Vec<(NodeId, u32, String)>,
+    /// Names of references that stayed ambiguous or unresolved although symbols carry them,
+    /// sorted: such symbols are never reported dead.
+    pub ambiguous_names: Vec<String>,
 }
 
 impl Graph {

@@ -152,9 +152,11 @@ pub enum RefKind {
     Mention,
     /// API operation id matched to its handler (contract `implements`).
     Contract,
+    /// Identifier used as a value (callback argument, returned or assigned function, constant).
+    Value,
 }
 
-pub const REF_KINDS: [RefKind; 9] = [
+pub const REF_KINDS: [RefKind; 10] = [
     RefKind::Call,
     RefKind::Type,
     RefKind::Inherit,
@@ -164,6 +166,7 @@ pub const REF_KINDS: [RefKind; 9] = [
     RefKind::Path,
     RefKind::Mention,
     RefKind::Contract,
+    RefKind::Value,
 ];
 
 impl RefKind {

@@ -53,18 +53,13 @@ pub fn run(invocation: &Invocation) -> Result<String, AppError> {
                 Err(error) => return Err(error),
             };
             let filter = query::Filter::new(options)?;
-            let root_name = workspace.root.file_name().map_or_else(
-                || "root".to_owned(),
-                |name| name.to_string_lossy().into_owned(),
-            );
             run_query(
                 &index,
                 &filter,
                 command,
                 &invocation.args,
                 options,
-                &root_name,
-                &workspace.root,
+                &workspace,
             )
         }
     }
@@ -76,16 +71,19 @@ fn run_query(
     command: CommandName,
     args: &[String],
     options: &crate::cli::Options,
-    root_name: &str,
-    root: &std::path::Path,
+    workspace: &Workspace,
 ) -> Result<String, AppError> {
+    let root = workspace.root.as_path();
     let json = options.json;
     let budget = |default: usize| options.budget.unwrap_or(default);
     match command {
         CommandName::Map => Ok(query::map::render(
             index,
             filter,
-            root_name,
+            &workspace.root.file_name().map_or_else(
+                || "root".to_owned(),
+                |name| name.to_string_lossy().into_owned(),
+            ),
             json,
             budget(2500),
         )),
@@ -136,6 +134,17 @@ fn run_query(
             let targets = query::impact::named(index, filter, args, json)?;
             Ok(query::impact::render_names(index, filter, targets, &impact))
         }
+        CommandName::Audit => {
+            let history = audit_history(root, &workspace.store, options.read_only);
+            Ok(query::audit::render(
+                index,
+                filter,
+                root,
+                history.as_ref(),
+                json,
+                budget(2000),
+            ))
+        }
         CommandName::Path => {
             let from = query::names::resolve_one(index, filter, &args[0], json)?;
             let to = query::names::resolve_one(index, filter, &args[1], json)?;
@@ -149,6 +158,28 @@ fn run_query(
         | CommandName::Install
         | CommandName::Update => Ok(String::new()),
     }
+}
+
+/// Git history analyses cached by HEAD in the `git` store file; computed from the last 1000
+/// non-merge commits on a miss and stored unless read-only. `None` without git.
+fn audit_history(
+    root: &std::path::Path,
+    store: &crate::infra::store::Store,
+    read_only: bool,
+) -> Option<crate::domain::history::History> {
+    let head = crate::infra::git::head(root)?;
+    if let Some(history) = store.read_history(&head) {
+        return Some(history);
+    }
+    let commits = crate::infra::git::history(root, 1000)?;
+    let history = crate::domain::history::analyze(&commits);
+    if !read_only
+        && let Ok(_lock) =
+            crate::infra::lock::WriterLock::acquire(&store.dir, crate::infra::lock::WAIT)
+    {
+        let _ = store.write_history(&head, &history);
+    }
+    Some(history)
 }
 
 /// Binary version, index format and installed skill version; a mismatch adds one notice line.

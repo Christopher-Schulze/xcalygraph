@@ -318,3 +318,54 @@ fn impact_of_a_diff_lists_changes_dependents_tests_and_run_lines() -> TestResult
     assert_eq!(missing.status.code(), Some(1));
     Ok(())
 }
+
+#[test]
+fn audit_reports_dead_code_stale_references_coupling_and_hotspots() -> TestResult {
+    let dir = TempDir::new("audit")?;
+    let root = dir.0.join("repo");
+    dir.write("repo/go.mod", "module example.com/app\n\ngo 1.23\n")?;
+    dir.write("repo/app/app.go", "package app\n\nfunc Run() int {\n\treturn helper()\n}\n\nfunc helper() int { return 1 }\n\nfunc unusedHelper() int { return 2 }\n")?;
+    dir.write(
+        "repo/app/config.go",
+        "package app\n\nconst Name = \"app\"\n",
+    )?;
+    dir.write(
+        "repo/README.md",
+        "# App\n\nSee [the guide](docs/guide.md) and [app](app/app.go).\n",
+    )?;
+    dir.write("repo/docs/keep.md", "# Keep\n")?;
+    git(&root, &["init", "-q"])?;
+    git(&root, &["add", "."])?;
+    git(&root, &["commit", "-q", "-m", "init"])?;
+    for round in 0..3 {
+        dir.write("repo/app/app.go", &format!("package app\n\nfunc Run() int {{\n\treturn helper() + {round}\n}}\n\nfunc helper() int {{ return 1 }}\n\nfunc unusedHelper() int {{ return 2 }}\n"))?;
+        dir.write(
+            "repo/app/config.go",
+            &format!("package app\n\nconst Name = \"app{round}\"\n"),
+        )?;
+        git(&root, &["commit", "-q", "-am", "change"])?;
+    }
+    let output = run_in(&root, &dir.0.join("index"), &["audit"])?;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout)?;
+    assert!(
+        text.contains("dead\napp.unusedHelper app/app.go:9\n"),
+        "{text}"
+    );
+    assert!(!text.contains("app.helper "), "{text}");
+    assert!(
+        text.contains("stale\ndocs/guide.md README.md:3\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("coupling\napp/app.go app/config.go 4\n"),
+        "{text}"
+    );
+    assert!(text.contains("hotspots\napp/app.go 4 commits\n"), "{text}");
+    Ok(())
+}

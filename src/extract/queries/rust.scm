@@ -68,3 +68,19 @@
   macro: (identifier) @_macro
   (token_tree . (string_literal) @env.name)
   (#any-of? @_macro "env" "option_env")) @env
+
+; Identifiers used as values in callback positions: arguments, literals, returns, assignments.
+(arguments (identifier) @name @reference.value)
+(arguments (scoped_identifier path: (_) @qualifier name: (identifier) @name) @reference.value)
+(field_initializer value: (identifier) @name @reference.value)
+(let_declaration value: (identifier) @name @reference.value)
+(return_expression (identifier) @name @reference.value)
+
+; Calls and values inside macro arguments (`vec![f(x)]`, `format!("{}", g())`): the token tree
+; is unparsed, so an identifier directly followed by a parenthesized group is a call.
+(token_tree (identifier) @name . (token_tree) @_args) @reference.call
+(token_tree (identifier) @qualifier . "." . (identifier) @name . (token_tree)) @reference.call
+(shorthand_field_initializer (identifier) @name @reference.value)
+; `Enum::Variant` in expressions and patterns names the enum.
+(scoped_identifier path: (identifier) @name) @reference.type
+(tuple_struct_pattern type: (scoped_identifier path: (identifier) @name)) @reference.type

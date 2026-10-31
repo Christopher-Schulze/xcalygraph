@@ -10,7 +10,8 @@ use super::error::AppError;
 use super::workspace::Workspace;
 use crate::domain::corpus::{ChangeSet, FileRecord};
 use crate::domain::facts::Facts;
-use crate::extract::{self, EXTRACTION_VERSION};
+use crate::domain::hash::FastMap;
+use crate::extract;
 use crate::infra::lock::{self, WriterLock};
 use crate::infra::scan;
 use crate::infra::store::container::{Kind, OpenError};
@@ -90,7 +91,7 @@ pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError> {
         report.bytes_written += write_derived(workspace, &changes.records)?;
     }
     let meta = Meta {
-        extraction_version: EXTRACTION_VERSION,
+        extraction_version: extract::extraction_version(),
         binary_version: derive_version(),
         root: workspace.root.to_string_lossy().into_owned(),
         write_time_ns: scan_start,
@@ -138,7 +139,7 @@ fn write_derived(workspace: &Workspace, records: &[FileRecord]) -> Result<u64, A
         .into_par_iter()
         .map(|shard| workspace.store.read_shard(shard).unwrap_or_default())
         .collect();
-    let mut by_path: HashMap<String, Facts> = shards.into_iter().flatten().collect();
+    let mut by_path: FastMap<String, Facts> = shards.into_iter().flatten().collect();
     let facts: Vec<Option<Facts>> = records
         .iter()
         .map(|record| {
@@ -152,16 +153,22 @@ fn write_derived(workspace: &Workspace, records: &[FileRecord]) -> Result<u64, A
         files: records,
         facts: &facts,
     });
-    workspace
-        .store
-        .write_container("derived", &derived::build(&graph))
-        .map_err(AppError::io("write derived data"))
+    // Freeing the facts of every file costs as much as building `derived`: overlap the two.
+    let ((), image) = rayon::join(
+        move || facts.into_par_iter().for_each(drop),
+        || derived::build(&graph),
+    );
+    let ((), written) = rayon::join(
+        move || drop(graph),
+        || workspace.store.write_container("derived", &image),
+    );
+    written.map_err(AppError::io("write derived data"))
 }
 
 /// Stored file table and meta when both are valid and current; `None` forces a full rebuild.
 fn stored_state(workspace: &Workspace) -> Option<(Vec<FileRecord>, Meta)> {
     let meta = workspace.store.read_meta().ok()?;
-    if meta.extraction_version != EXTRACTION_VERSION {
+    if meta.extraction_version != extract::extraction_version() {
         return None;
     }
     let files = workspace.store.read_files().ok()?;

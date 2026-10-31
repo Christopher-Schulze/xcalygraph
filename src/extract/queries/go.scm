@@ -54,3 +54,28 @@
   arguments: (argument_list . [(interpreted_string_literal) (raw_string_literal)] @env.name)
   (#eq? @_pkg "os")
   (#any-of? @_fn "Getenv" "LookupEnv")) @env
+
+; Identifiers used as values in callback positions: arguments, literals, returns, assignments.
+(argument_list (identifier) @name @reference.value)
+(argument_list (selector_expression operand: (identifier) @qualifier field: (field_identifier) @name) @reference.value)
+(return_statement (expression_list (identifier) @name @reference.value))
+(assignment_statement right: (expression_list (identifier) @name @reference.value))
+(short_var_declaration right: (expression_list (identifier) @name @reference.value))
+(var_spec value: (expression_list (identifier) @name @reference.value))
+(const_spec value: (expression_list (identifier) @name @reference.value))
+(var_spec value: (expression_list (selector_expression operand: (identifier) @qualifier field: (field_identifier) @name) @reference.value))
+(const_spec value: (expression_list (selector_expression operand: (identifier) @qualifier field: (field_identifier) @name) @reference.value))
+
+; Struct literal keys are field names; map literal keys are values.
+(keyed_element value: (literal_element (identifier) @name @reference.value))
+(literal_value (literal_element (identifier) @name @reference.value))
+(composite_literal
+  type: (map_type)
+  body: (literal_value (keyed_element key: (literal_element (identifier) @name @reference.value))))
+(literal_element (selector_expression operand: (identifier) @qualifier field: (field_identifier) @name) @reference.value)
+
+; `for _, v := range xs`: v has the element type of xs.
+(for_statement
+  (range_clause
+    left: (expression_list (_) (identifier) @binding.name)
+    right: (identifier) @binding.range)) @binding

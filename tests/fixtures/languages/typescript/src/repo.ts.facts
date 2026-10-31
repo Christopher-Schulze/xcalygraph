@@ -10,6 +10,7 @@ ref 9 Implement Repo qualifier=- scope=MemoryRepo
 ref 10 Type Row qualifier=- scope=MemoryRepo
 ref 12 Type Row qualifier=- scope=get
 ref 13 Call get qualifier=this.rows scope=get
+ref 13 Value id qualifier=- scope=get
 ref 17 Type Repo qualifier=- scope=openRepo
 ref 18 Call MemoryRepo qualifier=- scope=openRepo
 bind 3 "id": string declared scope=get

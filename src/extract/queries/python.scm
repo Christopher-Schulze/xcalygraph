@@ -60,3 +60,11 @@
   condition: (comparison_operator (identifier) @_name (string) @_main)
   (#eq? @_name "__name__")
   (#match? @_main "__main__")) @entry
+
+; Identifiers used as values in callback positions: arguments, literals, returns, assignments.
+(argument_list (identifier) @name @reference.value)
+(keyword_argument value: (identifier) @name @reference.value)
+(argument_list (attribute object: (_) @qualifier attribute: (identifier) @name) @reference.value)
+(return_statement (identifier) @name @reference.value)
+(assignment right: (identifier) @name @reference.value)
+(pair value: (identifier) @name @reference.value)

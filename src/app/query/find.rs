@@ -28,7 +28,8 @@ pub fn search(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
     let node_count = derived.node_count() as f32;
     let averages = derived.averages();
     let lengths = derived.lengths();
-    let postings: Vec<&[PostingRecord]> = terms.iter().map(|term| derived.postings(term)).collect();
+    let postings: Vec<Vec<PostingRecord>> =
+        terms.iter().map(|term| derived.postings(term)).collect();
     let mut candidates: Vec<u32> = postings
         .iter()
         .flat_map(|list| list.iter().map(|p| p.node))

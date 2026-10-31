@@ -2,3 +2,5 @@ sym 1-1 mod store parent=- owner= priv flags=0 sig="mod store" doc=""
 sym 3-6 fn main parent=- owner= priv flags=2 sig="fn main()" doc=""
 ref 4 Call default qualifier=store::Store scope=main
 ref 4 Call load qualifier=store scope=main
+ref 4 Type store qualifier=- scope=main
+ref 4 Type store qualifier=- scope=main

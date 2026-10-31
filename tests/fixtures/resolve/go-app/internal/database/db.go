@@ -13,3 +13,6 @@ func Connect(url string) *Client {
 
 // Log writes a line.
 func (c *Client) Log(line string) {}
+
+// Mode names the connection mode.
+const Mode = "rw"

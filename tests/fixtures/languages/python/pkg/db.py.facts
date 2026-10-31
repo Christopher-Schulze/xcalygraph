@@ -4,6 +4,7 @@ sym 8-9 method __init__ parent=Database owner=Database priv flags=0 sig="def __i
 sym 11-12 method query parent=Database owner=Database pub flags=0 sig="def query(self, sql: str) -> list:" doc=""
 sym 15-16 fn connect parent=- owner= pub flags=0 sig="def connect() -> Database:" doc=""
 import 2 "os" names= alias=- reexport=false
+ref 9 Value url qualifier=- scope=__init__
 ref 15 Type Database qualifier=- scope=connect
 ref 16 Call Database qualifier=- scope=connect
 ref 16 Call get qualifier=os.environ scope=connect

@@ -5,5 +5,6 @@ pub mod facts;
 pub mod filetype;
 pub mod graph;
 pub mod hash;
+pub mod history;
 pub mod role;
 pub mod search;

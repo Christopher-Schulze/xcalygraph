@@ -66,6 +66,10 @@ pub fn lookup(
     Some((pack, (pack.language)(path), query))
 }
 
+pub fn all_packs() -> &'static [&'static Pack] {
+    PACKS
+}
+
 #[cfg(test)]
 pub fn packs() -> &'static [&'static Pack] {
     PACKS

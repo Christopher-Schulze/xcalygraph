@@ -14,8 +14,19 @@ use crate::domain::facts::Facts;
 use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
-/// Bumped whenever extraction output changes, so existing indexes rebuild.
-pub const EXTRACTION_VERSION: u32 = 3;
+/// Bumped whenever extraction code changes output, so existing indexes rebuild.
+const EXTRACTION_VERSION: u32 = 5;
+
+/// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
+/// compiled-in query, so a changed query re-extracts without a manual bump.
+pub fn extraction_version() -> u32 {
+    let mut hash = xxhash_rust::xxh3::xxh3_64(&EXTRACTION_VERSION.to_le_bytes());
+    for pack in lang::all_packs() {
+        hash ^= xxhash_rust::xxh3::xxh3_64(pack.query.as_bytes())
+            .rotate_left(u32::from(pack.file_type as u8));
+    }
+    (hash ^ (hash >> 32)) as u32
+}
 
 /// Extracts the facts of one file of an extracted role.
 pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {

@@ -108,6 +108,47 @@ pub fn parse_diff(text: &str, prefix: &str) -> Vec<FileDiff> {
     diffs
 }
 
+/// HEAD commit id.
+pub fn head(root: &Path) -> Option<String> {
+    git(root, &["rev-parse", "HEAD"]).map(|text| text.trim().to_owned())
+}
+
+/// Root-relative files of each of the last `limit` non-merge commits, newest first.
+pub fn history(root: &Path, limit: usize) -> Option<Vec<Vec<String>>> {
+    let prefix = prefix(root)?;
+    let limit = format!("-n{limit}");
+    let text = git(
+        root,
+        &[
+            "log",
+            "--no-merges",
+            &limit,
+            "--name-only",
+            "--no-renames",
+            "--format=%x00",
+            "--",
+            ".",
+        ],
+    )?;
+    Some(
+        text.split('\0')
+            .map(|commit| {
+                commit
+                    .lines()
+                    .filter(|line| !line.is_empty())
+                    .filter_map(|line| {
+                        line.strip_prefix(prefix.as_str())
+                            .or(Some(line))
+                            .filter(|_| prefix.is_empty() || line.starts_with(prefix.as_str()))
+                    })
+                    .map(str::to_owned)
+                    .collect::<Vec<String>>()
+            })
+            .filter(|files| !files.is_empty())
+            .collect(),
+    )
+}
+
 /// Content of a root-relative file at `rev`; `None` when it did not exist there.
 pub fn show(root: &Path, rev: &str, path: &str) -> Option<Vec<u8>> {
     let prefix = prefix(root)?;

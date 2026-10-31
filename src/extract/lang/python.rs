@@ -21,14 +21,34 @@ pub static PACK: Pack = Pack {
 };
 
 fn flags(definition: &Definition, context: &FileContext) -> u8 {
+    // A registering decorator (`@app.route`, `@pytest.fixture`, `@click.command`) means the
+    // framework calls the function: an entrypoint, never dead.
+    let registered = definition
+        .decorations
+        .split('@')
+        .map(str::trim)
+        .filter(|decorator| !decorator.is_empty())
+        .any(|decorator| {
+            let name = decorator.split(['(', ' ']).next().unwrap_or_default();
+            !matches!(
+                name,
+                "property" | "staticmethod" | "classmethod" | "abstractmethod" | "override"
+            ) && !name.ends_with(".setter")
+                && !name.ends_with(".getter")
+        });
+    let entry = if registered {
+        crate::domain::facts::FLAG_ENTRY
+    } else {
+        0
+    };
     let test_file = crate::domain::role::is_test_path(FileType::Python, context.path);
     let test_name = (matches!(definition.kind, SymKind::Fn | SymKind::Method)
         && definition.name.starts_with("test"))
         || (definition.kind == SymKind::Class && definition.name.starts_with("Test"));
     if test_name && (test_file || matches!(definition.parent, Some((SymKind::Class, _)))) {
-        FLAG_TEST
+        FLAG_TEST | entry
     } else {
-        0
+        entry
     }
 }
 

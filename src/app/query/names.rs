@@ -3,6 +3,7 @@
 
 use super::{Filter, Index, Node};
 use crate::app::error::AppError;
+use crate::domain::graph::has_qualified_suffix;
 
 /// Resolves NAME to nodes: one when unique, several for an ambiguous name, none otherwise.
 pub fn lookup(index: &Index, filter: &Filter, name: &str) -> Vec<u32> {
@@ -39,8 +40,7 @@ pub fn lookup(index: &Index, filter: &Filter, name: &str) -> Vec<u32> {
         return prefer_definitions(index, exact);
     }
     let found = if qualified {
-        let suffix = format!(".{normalized}");
-        matches(&|_, qualified_name| qualified_name.ends_with(&suffix))
+        matches(&|_, qualified_name| has_qualified_suffix(qualified_name, &normalized))
     } else {
         matches(&|symbol_name, _| symbol_name == normalized)
     };
@@ -100,7 +100,7 @@ fn in_file(index: &Index, filter: &Filter, path: &str, name: &str) -> Vec<u32> {
             let symbol = &index.derived.symbols()[node as usize];
             let qualified = index.string(symbol.qualified).replace("::", ".");
             (index.string(symbol.name) == normalized
-                || qualified.ends_with(&format!(".{normalized}")))
+                || has_qualified_suffix(&qualified, &normalized))
                 && filter.symbol(index, symbol)
         })
         .collect()

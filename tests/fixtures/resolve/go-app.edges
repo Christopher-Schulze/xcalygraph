@@ -1,7 +1,7 @@
 Demo app -mentions-> file:cmd/app/main.go @3
-Demo app.Store -mentions?-> internal/store.NewStore @7
-Demo app.Store -mentions?-> internal/store.Store.Get @7
-Demo app.Store -references-> file:internal/store/store.go @7
+Store -mentions?-> internal/store.NewStore @7
+Store -mentions?-> internal/store.Store.Get @7
+Store -references-> file:internal/store/store.go @7
 cmd/app.main -calls-> internal/store.NewStore @6
 cmd/app.main -calls?-> internal/store.Store.Len @10
 internal/database.Connect -uses-> internal/database.Client @9
@@ -18,6 +18,12 @@ internal/store.TestGet -tests?-> internal/store.Store.Get @7
 internal/store.count -calls-> internal/store.Reader.Len @39
 internal/store.count -calls?-> internal/store.Store.Len @39
 internal/store.count -uses-> internal/store.Reader @38
+internal/store.defaultMode -uses-> internal/database.Mode @21
+internal/store.defaults -uses-> internal/database.Mode @13
+internal/store.defaults -uses-> internal/store.options @13
+internal/store.labels -uses-> internal/database.Mode @15
+internal/store.limits -uses-> internal/store.Timeout @17
+internal/store.modes -uses-> internal/database.Mode @19
 internal/store.warm -calls-> internal/store.NewStore @4
 internal/store.warm -calls-> internal/store.count @6
 internal/store.warm -calls?-> internal/store.Store.Get @5

@@ -3,6 +3,7 @@ file:src/service.ts -imports-> file:lib/format.js @1
 file:src/service.ts -imports-> file:src/store/index.ts @1
 file:src/service.ts -imports-> file:src/store/repo.ts @1
 file:src/store/index.ts -imports-> file:src/store/repo.ts @1
+file:src/store/index.ts -uses-> src/store/repo.MemoryRepo @1
 file:src/ui/View.tsx -imports-> file:src/service.ts @1
 src/service.Service.constructor -uses-> src/store/repo.Repo @7
 src/service.Service.find -calls-> lib/format.format @11

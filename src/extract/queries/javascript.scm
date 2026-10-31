@@ -44,3 +44,14 @@
   index: (string) @env.name
   (#eq? @_process "process")
   (#eq? @_env "env")) @env
+
+; Identifiers used as values in callback positions: arguments, literals, returns, assignments.
+(arguments (identifier) @name @reference.value)
+(arguments (member_expression object: (_) @qualifier property: (property_identifier) @name) @reference.value)
+(pair value: (identifier) @name @reference.value)
+(shorthand_property_identifier) @name @reference.value
+(return_statement (identifier) @name @reference.value)
+(variable_declarator value: (identifier) @name @reference.value)
+(assignment_expression right: (identifier) @name @reference.value)
+(export_statement (export_clause (export_specifier name: (identifier) @name @reference.value)))
+(export_statement value: (identifier) @name @reference.value)

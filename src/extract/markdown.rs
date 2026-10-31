@@ -45,7 +45,6 @@ pub fn extract(text: &str) -> Facts {
                 parent,
                 line: number,
                 end_line: line_count,
-                signature: format!("{} {title}", "#".repeat(level)),
                 exported: true,
                 ..Symbol::default()
             });

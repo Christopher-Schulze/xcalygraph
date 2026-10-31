@@ -37,6 +37,23 @@ if [[ -f "${PRIVATE_LIST}" ]]; then
   done < "${PRIVATE_LIST}"
 fi
 
+# Copies the tracked files of a corpus (git ls-files; everything for non-git trees, minus build
+# output), never ignored runtime data; aborts below 4 GiB free disk space.
+copy_corpus() {
+  local source="$1" target="$2" free_kib
+  free_kib="$(df -Pk "${REPO_ROOT}" | awk 'NR == 2 { print $4 }')"
+  if (( free_kib < 4 * 1024 * 1024 )); then
+    echo "$(basename "$0"): less than 4 GiB free, not copying ${source}" >&2
+    return 1
+  fi
+  mkdir -p "${target}"
+  if git -C "${source}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "${source}" ls-files -z | rsync -a --from0 --files-from=- "${source}/" "${target}/"
+  else
+    rsync -a --exclude .git --exclude target --exclude node_modules --exclude .cache "${source}/" "${target}/"
+  fi
+}
+
 wanted=("$@")
 selected() {
   (( ${#wanted[@]} == 0 )) && return 0
@@ -79,7 +96,7 @@ for entry in "${corpora[@]}"; do
     copy="${WORK}/copy-${name}"
     copy_index="${WORK}/index-copy-${name}"
     rm -rf "${copy}" "${copy_index}"
-    rsync -a --exclude .git --exclude target --exclude node_modules --exclude .cache "${path}/" "${copy}/"
+    copy_corpus "${path}" "${copy}" || continue
     "${BINARY}" index -C "${copy}" --index-dir "${copy_index}" >/dev/null
     # A tracked source file, so ignore rules cannot hide the change.
     tracked="$(git -C "${path}" ls-files -- '*.go' '*.rs' '*.py' '*.ts' 2>/dev/null | awk 'NR == 1')"

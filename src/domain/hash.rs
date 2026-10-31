@@ -1,7 +1,7 @@
 //! Fast non-cryptographic hashing for in-memory maps of the hot path (FxHash scheme: rotate,
 //! xor, multiply per word). Keys are trusted index data, so flooding resistance is not needed.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
 
 const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
@@ -59,6 +59,7 @@ impl Hasher for FxHasher {
 }
 
 pub type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
+pub type FastSet<K> = HashSet<K, BuildHasherDefault<FxHasher>>;
 
 #[cfg(test)]
 mod tests {

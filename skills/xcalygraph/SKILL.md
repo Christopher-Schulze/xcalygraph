@@ -11,6 +11,7 @@ Local, deterministic index of the repository (symbols, calls, type uses, imports
 
 - Unknown code: `map`, then `find` or `ctx`.
 - "Where is X handled", "who calls X", "what implements X", "path from A to B": `find`, `show`, `path`.
+- Before or after editing: `impact NAME` or `impact --diff`; cleanup and review: `audit`.
 - Exact strings, config values, logs, prose: `rg` and direct reads are better.
 
 ## Commands
@@ -22,6 +23,8 @@ Local, deterministic index of the repository (symbols, calls, type uses, imports
 | `xcalygraph ctx TERMS...` | best matches with doc sentence plus related symbols, grouped by file |
 | `xcalygraph show NAME` | card: signature, doc, members, supertypes, implementations, callers, callees, tests, env reads |
 | `xcalygraph path FROM TO` | shortest dependency path |
+| `xcalygraph impact NAME... \| --diff [REV]` | dependents of a change, tests reaching them, test commands to run |
+| `xcalygraph audit` | dead code, unused exports, cycles, stale doc references, env drift, files co-changed without static link, hotspots |
 | `xcalygraph help [COMMAND]` | full syntax |
 
 NAME: `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get`), `path:line`, `path::name`, a file path, or a unique bare name.
