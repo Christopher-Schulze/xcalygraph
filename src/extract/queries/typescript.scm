@@ -45,7 +45,8 @@
 (optional_parameter pattern: (identifier) @binding.name type: (type_annotation (_) @binding.type)) @binding
 (variable_declarator name: (identifier) @binding.name type: (type_annotation (_) @binding.type)) @binding
 (variable_declarator name: (identifier) @binding.name value: (new_expression constructor: (_) @binding.ctor)) @binding
-(variable_declarator name: (identifier) @binding.name value: (call_expression function: (_) @binding.call)) @binding
+; `require(...)` binds an import, not a local of unknown type.
+(variable_declarator name: (identifier) @binding.name value: (call_expression function: (_) @binding.call) (#not-eq? @binding.call "require")) @binding
 (variable_declarator name: (identifier) @binding.name value: (await_expression (call_expression function: (_) @binding.call))) @binding
 
 (public_field_definition name: (property_identifier) @field.name type: (type_annotation (_) @field.type)) @field

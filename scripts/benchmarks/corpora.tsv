@@ -36,3 +36,11 @@ ansible-role-nginx	https://github.com/geerlingguy/ansible-role-nginx	5ff0b235006
 cobol-programming-course	https://github.com/openmainframeproject/cobol-programming-course	780b1c9624e066b9d784a738896e493282c5fbf4	cobol
 eshoponweb	https://github.com/dotnet-architecture/eShopOnWeb	4da8212117e87d808d4bbc7da6286fd2147ce606	csharp,razor
 windows-appsample-customers-orders-database	https://github.com/microsoft/Windows-appsample-customers-orders-database	247226c93728c5a2a0601575ed732206ca6949e7	csharp,xaml
+httpx	https://github.com/encode/httpx	b5addb64f0161ff6bfe94c124ef76f6a1fba5254	python
+ky	https://github.com/sindresorhus/ky	3541888878c4d303a8bc2ad61815f4e048f55a5d	typescript
+express	https://github.com/expressjs/express	1c6f1b0fe4000977b9a7b4f34097e4d527dd9824	javascript
+axios	https://github.com/axios/axios	9d11464a75ee5c644c0308d742f58755c0482594	javascript,typescript
+ripgrep	https://github.com/BurntSushi/ripgrep	91f5d22ef48bde459d90a8c7dbeab416e97d0f2b	rust
+cobra	https://github.com/spf13/cobra	adbc8813901bba65827259daa8e22ff94ec1f30e	go
+nvm	https://github.com/nvm-sh/nvm	5e38bc0caed342356ffd26eb21e0e9b995ac228b	bash
+bats-core	https://github.com/bats-core/bats-core	5b61d8f22b46abf001e218cdd63f2938c356fa93	bash

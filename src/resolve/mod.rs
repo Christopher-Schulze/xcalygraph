@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 50;
+pub const RESOLVE_VERSION: u32 = 51;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1985,20 +1985,27 @@ impl<'a> Index<'a> {
             .collect()
     }
 
-    /// Lua module tables: `array2d.reshape(...)` and `self:read()` name functions this file
-    /// defines as `function array2d.reshape` and `function SR:read` (for `self`, the table of
-    /// the enclosing `function SR:method`).
+    /// Module tables: Lua `array2d.reshape(...)` and `self:read()` name functions this file
+    /// defines as `function array2d.reshape` and `function SR:read`; JavaScript `app.render()`
+    /// and `this.enabled()` name `app.render = function` and `app.enabled = function` (for
+    /// `self`/`this`, the table of the enclosing member function).
     fn lua_table_member(&self, file: u32, reference: &Ref, qualifier: &str) -> Option<Outcome> {
-        if self.file_type(file) != Some(FileType::Lua) || !is_identifier(qualifier) {
+        let owner_of: for<'s> fn(&'s str, &str) -> Option<(&'s str, char)> =
+            match self.file_type(file) {
+                Some(FileType::Lua) => lua_owner,
+                Some(FileType::JavaScript) => js_owner,
+                _ => return None,
+            };
+        if !is_identifier(qualifier) {
             return None;
         }
         let facts = self.facts(file)?;
-        let table = if qualifier == "self" {
+        let table = if matches!(qualifier, "self" | "this") {
             let mut scope = reference.scope;
             let mut owner = None;
             while let Some(local) = scope {
                 let symbol = &facts.symbols[local as usize];
-                if let Some((table, _)) = lua_owner(&symbol.signature, &symbol.name) {
+                if let Some((table, _)) = owner_of(&symbol.signature, &symbol.name) {
                     owner = Some(table);
                     break;
                 }
@@ -2015,7 +2022,7 @@ impl<'a> Index<'a> {
             .enumerate()
             .filter(|(_, symbol)| {
                 symbol.name == reference.name
-                    && lua_owner(&symbol.signature, &symbol.name)
+                    && owner_of(&symbol.signature, &symbol.name)
                         .is_some_and(|(owner, _)| owner == table)
             })
             .map(|(local, _)| base + local as u32)
@@ -4246,6 +4253,17 @@ fn lua_owner<'s>(signature: &'s str, name: &str) -> Option<(&'s str, char)> {
     // `a.b.c` nested tables: the last table names the owner.
     let table = table.rsplit('.').next().unwrap_or(table);
     is_identifier(table).then_some((table, separator))
+}
+
+/// Object of a JavaScript member function: `app.enabled = function enabled(x)` gives
+/// `("app", '.')`; `Type.prototype.m = function` gives `("Type", '.')`.
+fn js_owner<'s>(signature: &'s str, name: &str) -> Option<(&'s str, char)> {
+    let left = signature.split(" = ").next()?.trim();
+    let left = left.strip_prefix("const ").unwrap_or(left);
+    let table = left.strip_suffix(name)?.strip_suffix('.')?;
+    let table = table.strip_suffix(".prototype").unwrap_or(table);
+    let table = table.rsplit('.').next().unwrap_or(table);
+    (is_identifier(table) && table != left).then_some((table, '.'))
 }
 
 /// Type parameters declared right after `name` in a signature: `interface IRequest<out T>` has

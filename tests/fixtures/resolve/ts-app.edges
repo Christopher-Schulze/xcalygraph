@@ -1,3 +1,4 @@
+file:lib/app.js -imports-> file:lib/util.js @1
 file:lib/format.js -imports-> file:lib/util.js @1
 file:src/service.ts -imports-> file:lib/format.js @1
 file:src/service.ts -imports-> file:src/store/index.ts @1
@@ -6,6 +7,11 @@ file:src/store/index.ts -imports-> file:src/store/repo.ts @1
 file:src/store/index.ts -uses-> src/store/repo.MemoryRepo @1
 file:src/ui/View.tsx -imports-> file:src/service.ts @1
 file:tools/warm.ts -imports-> file:src/cache/lru.ts @1
+lib/app.View.lookup -calls-> lib/app.compile @26
+lib/app.compile -calls-> lib/app.render @18
+lib/app.render -calls-> lib/app.enabled @11
+lib/app.render -calls-> lib/util.trim @12
+lib/format.format -calls-> lib/util.trim @5
 src/cache/lru.Lru.set -calls-> src/cache/lru.Lru.#evict @6
 src/service.Service.constructor -uses-> src/store/repo.Repo @7
 src/service.Service.find -calls-> lib/format.format @11

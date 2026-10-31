@@ -8,6 +8,24 @@
 (program (export_statement (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function)))
 (program (variable_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function))
 (class_declaration name: (identifier) @name) @definition.class
+; CommonJS and object-member functions: `exports.f = function`, `module.exports.f = ...`,
+; `app.handle = function handle()`; `Type.prototype.m = function` is a method of `Type`.
+(program (expression_statement (assignment_expression
+  left: (member_expression object: (identifier) property: (property_identifier) @name)
+  right: [(function_expression) (arrow_function)]) @definition.function))
+(program (expression_statement (assignment_expression
+  left: (member_expression
+    object: (member_expression object: (identifier) @_module property: (property_identifier) @_exports)
+    property: (property_identifier) @name)
+  right: [(function_expression) (arrow_function)]) @definition.function)
+  (#eq? @_module "module")
+  (#eq? @_exports "exports"))
+(program (expression_statement (assignment_expression
+  left: (member_expression
+    object: (member_expression object: (identifier) @owner property: (property_identifier) @_prototype)
+    property: (property_identifier) @name)
+  right: [(function_expression) (arrow_function)]) @definition.method)
+  (#eq? @_prototype "prototype"))
 (method_definition name: (property_identifier) @name) @definition.method
 ; ECMAScript private methods `#clone()` and their calls `this.#clone()`.
 (method_definition name: (private_property_identifier) @name) @definition.method
@@ -21,6 +39,13 @@
   name: (identifier) @import.alias
   value: (call_expression function: (identifier) @_require arguments: (arguments . (string) @import.path))
   (#eq? @_require "require")) @import
+; `var compileETag = require('./utils').compileETag`: one member of a required module.
+(variable_declarator
+  name: (identifier) @import.alias
+  value: (member_expression
+    object: (call_expression function: (identifier) @_require arguments: (arguments . (string) @import.path))
+    property: (property_identifier) @import.name)
+  (#eq? @_require "require")) @import
 
 (call_expression function: (identifier) @name) @reference.call
 (call_expression function: (member_expression object: (_) @qualifier property: (property_identifier) @name)) @reference.call
@@ -29,7 +54,8 @@
 (new_expression constructor: (member_expression object: (_) @qualifier property: (property_identifier) @name)) @reference.call
 
 (variable_declarator name: (identifier) @binding.name value: (new_expression constructor: (_) @binding.ctor)) @binding
-(variable_declarator name: (identifier) @binding.name value: (call_expression function: (_) @binding.call)) @binding
+; `require(...)` binds an import, not a local of unknown type.
+(variable_declarator name: (identifier) @binding.name value: (call_expression function: (_) @binding.call) (#not-eq? @binding.call "require")) @binding
 (variable_declarator name: (identifier) @binding.name value: (await_expression (call_expression function: (_) @binding.call))) @binding
 
 (assignment_expression

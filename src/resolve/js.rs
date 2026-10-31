@@ -108,6 +108,12 @@ impl Index<'_> {
                     imports.files.push((file, other as u32));
                 }
             }
+            // `const util = require("./util")`: the alias names the whole module.
+            if import.names.is_empty()
+                && let Some(alias) = &import.alias
+            {
+                imports.names.insert(alias.clone(), Target::Module(target));
+            }
             for name in &import.names {
                 let local = import.alias.clone().unwrap_or_else(|| name.clone());
                 match name.as_str() {

@@ -50,7 +50,8 @@ pub static JAVASCRIPT: Pack = Pack {
 /// `export`ed declarations, plus members of exported classes and interfaces that are not
 /// `private`, `protected` or `#private`.
 fn exported(definition: &Definition) -> bool {
-    if definition.export_wrapper {
+    // `exports.f = function`, `app.f = function`: reachable through the object.
+    if definition.export_wrapper || definition.node_kind == "assignment_expression" {
         return true;
     }
     let member_of_exported = matches!(
@@ -65,8 +66,14 @@ fn exported(definition: &Definition) -> bool {
 
 fn signature_prefix(kind: SymKind, text: &str) -> &'static str {
     match kind {
+        // `exports.f = function` reads as written.
         SymKind::Const | SymKind::Fn
-            if !text.starts_with("function") && !text.starts_with("async") =>
+            if !text.starts_with("function")
+                && !text.starts_with("async")
+                && !text
+                    .split(" = ")
+                    .next()
+                    .is_some_and(|left| left.contains('.')) =>
         {
             "const "
         }
