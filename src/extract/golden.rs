@@ -55,12 +55,17 @@ pub fn render(facts: &Facts) -> String {
     for reference in &facts.refs {
         let _ = writeln!(
             out,
-            "ref {} {:?} {} qualifier={} scope={}",
+            "ref {} {:?} {} qualifier={} scope={}{}",
             reference.line,
             reference.kind,
             reference.name,
             reference.qualifier.as_deref().unwrap_or("-"),
             scope(reference.scope),
+            if reference.arity == crate::domain::facts::NO_ARITY {
+                String::new()
+            } else {
+                format!(" args={}", reference.arity)
+            },
         );
     }
     for binding in &facts.bindings {

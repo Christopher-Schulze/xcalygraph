@@ -401,11 +401,13 @@ fn is_test(index: &Index, node: u32) -> bool {
     }
 }
 
-/// Commands that run exactly the selected tests: Go per package, Rust per crate, test files
-/// otherwise (section 7.5).
+/// Commands that run exactly the selected tests: Go per package, Rust per crate, JVM test classes
+/// per Gradle or Maven project, test files otherwise (section 7.5).
 fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
     let mut go: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     let mut rust: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    // (build tool, project directory) -> test classes.
+    let mut jvm: BTreeMap<(JvmBuild, String), BTreeSet<String>> = BTreeMap::new();
     let mut files: BTreeSet<String> = BTreeSet::new();
     let paths: Vec<&str> = index
         .derived
@@ -446,6 +448,27 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
                     })
                     .unwrap_or_default();
                 rust.entry(crate_name).or_default().insert(name);
+            }
+            Some(FileType::Java | FileType::Kotlin | FileType::Scala | FileType::Groovy)
+                if symbol.parent != u32::MAX =>
+            {
+                let class = index.string(index.derived.symbols()[symbol.parent as usize].qualified);
+                let dir = parent(path);
+                let build = ["build.gradle", "build.gradle.kts"]
+                    .iter()
+                    .find_map(|manifest| nearest(&paths, dir, manifest))
+                    .map(|project| (JvmBuild::Gradle, project))
+                    .or_else(|| {
+                        nearest(&paths, dir, "pom.xml").map(|project| (JvmBuild::Maven, project))
+                    });
+                match build {
+                    Some(key) => {
+                        jvm.entry(key).or_default().insert(class.to_owned());
+                    }
+                    None => {
+                        files.insert(path.to_owned());
+                    }
+                }
             }
             _ => {
                 files.insert(path.to_owned());
@@ -488,8 +511,39 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
             lines.push(format!("cargo test{package} -- {}", names.join(" ")));
         }
     }
+    for ((build, project), classes) in jvm {
+        let classes: Vec<String> = classes.into_iter().collect();
+        lines.push(match build {
+            JvmBuild::Gradle => {
+                let project = if project.is_empty() {
+                    String::new()
+                } else {
+                    format!(" -p {project}")
+                };
+                let filters: Vec<String> = classes
+                    .iter()
+                    .map(|class| format!("--tests {class}"))
+                    .collect();
+                format!("./gradlew{project} test {}", filters.join(" "))
+            }
+            JvmBuild::Maven => {
+                let project = if project.is_empty() {
+                    String::new()
+                } else {
+                    format!(" -f {project}/pom.xml")
+                };
+                format!("mvn{project} test -Dtest={}", classes.join(","))
+            }
+        });
+    }
     lines.extend(files);
     lines
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum JvmBuild {
+    Gradle,
+    Maven,
 }
 
 fn parent(path: &str) -> &str {

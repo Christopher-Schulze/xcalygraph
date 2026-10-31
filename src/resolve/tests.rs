@@ -260,3 +260,35 @@ fn sample_edges() -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
+
+#[test]
+fn parameter_counts_come_from_the_declaration_list() {
+    let count = super::parameter_count;
+    assert_eq!(
+        count("@GetMapping(PREFIX) public List<User> list()", "list"),
+        Some((0, false))
+    );
+    assert_eq!(
+        count(
+            "public JsonWriter value(Map<String, Long> v, int x)",
+            "value"
+        ),
+        Some((2, false))
+    );
+    assert_eq!(
+        count(
+            "public static <T> T fromJson(String json, Class<T> classOfT)",
+            "fromJson"
+        ),
+        Some((2, false))
+    );
+    assert_eq!(
+        count("void log(String format, Object... args)", "log"),
+        Some((2, true))
+    );
+    assert_eq!(
+        count("fun <T> run(block: () -> T): T", "run"),
+        Some((1, false))
+    );
+    assert_eq!(count("const value = 1", "value"), None);
+}

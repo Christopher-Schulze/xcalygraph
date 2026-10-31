@@ -53,6 +53,7 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
             qualifier: None,
             scope: Some(component),
             line,
+            arity: crate::domain::facts::NO_ARITY,
         });
     }
     facts

@@ -67,6 +67,7 @@ pub fn extract(text: &str) -> Facts {
                 qualifier: None,
                 scope,
                 line: number,
+                arity: facts::NO_ARITY,
             });
         }
         for mention in mentions(line) {
@@ -76,6 +77,7 @@ pub fn extract(text: &str) -> Facts {
                 qualifier: None,
                 scope,
                 line: number,
+                arity: facts::NO_ARITY,
             });
         }
     }

@@ -47,6 +47,7 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
         encoder.opt_str(reference.qualifier.as_deref());
         opt_index(encoder, reference.scope);
         encoder.var_u32(reference.line);
+        encoder.u8(reference.arity);
     }
     encoder.var_usize(facts.bindings.len());
     for binding in &facts.bindings {
@@ -160,6 +161,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             qualifier: decoder.opt_string()?,
             scope: read_opt_index(decoder)?,
             line: decoder.var_u32()?,
+            arity: decoder.u8()?,
         });
     }
     for _ in 0..decoder.len()? {
@@ -281,6 +283,7 @@ mod tests {
                 qualifier: Some("s.db".to_owned()),
                 scope: Some(1),
                 line: 12,
+                arity: 2,
             }],
             bindings: vec![Binding {
                 scope: Some(1),

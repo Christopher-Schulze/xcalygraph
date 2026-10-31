@@ -3,7 +3,7 @@ sym 5-8 fn TestGet parent=- owner= pub flags=1 sig="func TestGet(t *testing.T)" 
 sym 10-10 fn helper parent=- owner= priv flags=0 sig="func helper()" doc=""
 import 3 "testing" names= alias=- reexport=false
 ref 5 Type T qualifier=testing scope=TestGet
-ref 6 Call NewStore qualifier=- scope=TestGet
-ref 7 Call Get qualifier=s scope=TestGet
+ref 6 Call NewStore qualifier=- scope=TestGet args=1
+ref 7 Call Get qualifier=s scope=TestGet args=1
 bind 5 "t": testing.T declared scope=TestGet
 bind 6 "s": NewStore() inferred scope=TestGet

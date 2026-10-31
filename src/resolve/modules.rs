@@ -68,8 +68,8 @@ pub fn assign(files: &[FileRecord], facts: &[Option<Facts>]) -> ModuleMap {
         go_modules,
         crates,
     };
-    for record in files {
-        let info = module_of(&map, record);
+    for (record, facts) in files.iter().zip(facts) {
+        let info = module_of(&map, record, facts.as_ref());
         let id = match map.by_key.get(&info.key) {
             Some(&id) => id,
             None => {
@@ -84,7 +84,7 @@ pub fn assign(files: &[FileRecord], facts: &[Option<Facts>]) -> ModuleMap {
     map
 }
 
-fn module_of(map: &ModuleMap, record: &FileRecord) -> ModuleInfo {
+fn module_of(map: &ModuleMap, record: &FileRecord, facts: Option<&Facts>) -> ModuleInfo {
     let dir = parent_dir(&record.path);
     let extracted_code = record.role.is_extracted() && record.role != Role::Manifest;
     match record.file_type {
@@ -119,6 +119,26 @@ fn module_of(map: &ModuleMap, record: &FileRecord) -> ModuleInfo {
                 name: dotted,
                 separator: ".",
                 file_type: Some(FileType::Python),
+            }
+        }
+        Some(FileType::Java | FileType::Kotlin | FileType::Scala | FileType::Groovy)
+            if extracted_code =>
+        {
+            // The package declaration, shared across files, directories and JVM languages.
+            let package = facts
+                .and_then(|facts| facts.package.clone())
+                .unwrap_or_default();
+            let key = super::jvm::package_key(&package);
+            ModuleInfo {
+                name: if package.is_empty() {
+                    ".".to_owned()
+                } else {
+                    package
+                },
+                method_scope: key.clone(),
+                key,
+                separator: ".",
+                file_type: record.file_type,
             }
         }
         Some(FileType::Go) if extracted_code => {

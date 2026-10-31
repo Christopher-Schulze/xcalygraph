@@ -98,10 +98,11 @@ NAME accepts `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get
 | Python | dotted modules and packages, `src/` layout, absolute and relative imports, aliases, docstrings, env reads |
 | TypeScript, JavaScript, JSX, TSX | `tsconfig` paths, `package.json` exports and workspaces, CommonJS, re-exports |
 | Vue, Svelte, Astro | script blocks and template component usage |
+| Java | packages, single-type, wildcard and static imports, implicit `this`, overloads by argument count, JUnit tests, Gradle and Maven test commands, framework entrypoints |
 | Bash | functions, commands as calls, sourced files, env reads |
 | Markdown | headings, links and backticked mentions resolved to files and symbols (the basis of stale doc detection) |
 
-Next on the roadmap: JVM and .NET languages, the C family and Swift, config and infrastructure files (env definitions, task runners, SQL), Ruby, PHP, Lua, Zig, Elixir, Erlang and Dart, then documents and assets.
+Next on the roadmap: Kotlin, Scala, Groovy, C# and Visual Basic .NET, the C family and Swift, config and infrastructure files (env definitions, task runners, SQL), Ruby, PHP, Lua, Zig, Elixir, Erlang and Dart, then documents and assets.
 
 ## Install
 

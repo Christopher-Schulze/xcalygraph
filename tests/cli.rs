@@ -369,3 +369,43 @@ fn audit_reports_dead_code_stale_references_coupling_and_hotspots() -> TestResul
     assert!(text.contains("hotspots\napp/app.go 4 commits\n"), "{text}");
     Ok(())
 }
+
+#[test]
+fn impact_on_jvm_tests_prints_gradle_and_maven_run_lines() -> TestResult {
+    let dir = TempDir::new("jvm-impact")?;
+    let source = "package com.example;\n\npublic class Store {\n    public int open() {\n        return 1;\n    }\n}\n";
+    let test = "package com.example;\n\nimport org.junit.jupiter.api.Test;\n\nclass StoreTest {\n    @Test\n    void opens() {\n        new Store().open();\n        Store store = new Store();\n        store.open();\n    }\n}\n";
+    for (project, manifest) in [("maven", "pom.xml"), ("gradle", "build.gradle.kts")] {
+        dir.write(&format!("{project}/{manifest}"), "\n")?;
+        dir.write(
+            &format!("{project}/src/main/java/com/example/Store.java"),
+            source,
+        )?;
+        dir.write(
+            &format!("{project}/src/test/java/com/example/StoreTest.java"),
+            test,
+        )?;
+    }
+    let maven = run_in(
+        &dir.0.join("maven"),
+        &dir.0.join("index"),
+        &["impact", "Store.open"],
+    )?;
+    let text = String::from_utf8(maven.stdout)?;
+    assert!(text.contains("t com.example.StoreTest.opens "), "{text}");
+    assert!(
+        text.contains("r mvn test -Dtest=com.example.StoreTest\n"),
+        "{text}"
+    );
+    let gradle = run_in(
+        &dir.0.join("gradle"),
+        &dir.0.join("index"),
+        &["impact", "Store.open"],
+    )?;
+    let text = String::from_utf8(gradle.stdout)?;
+    assert!(
+        text.contains("r ./gradlew test --tests com.example.StoreTest\n"),
+        "{text}"
+    );
+    Ok(())
+}

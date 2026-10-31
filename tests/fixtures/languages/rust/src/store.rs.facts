@@ -34,38 +34,38 @@ ref 37 Call new qualifier=- scope=row
 ref 41 Type Store qualifier=- scope=-
 ref 43 Type Error qualifier=- scope=open
 ref 44 Type Client qualifier=- scope=open
-ref 44 Call connect qualifier=Client scope=open
+ref 44 Call connect qualifier=Client scope=open args=1
 ref 44 Value path qualifier=- scope=open
-ref 45 Call var qualifier=env scope=open
+ref 45 Call var qualifier=env scope=open args=1
 ref 47 Type HashMap qualifier=- scope=open
 ref 47 Value client qualifier=- scope=open
-ref 47 Call new qualifier=HashMap scope=open
+ref 47 Call new qualifier=HashMap scope=open args=0
 ref 50 Type Row qualifier=- scope=insert
-ref 51 Call log qualifier=self.client scope=insert
-ref 52 Call insert qualifier=self.rows scope=insert
+ref 51 Call log qualifier=self.client scope=insert args=1
+ref 52 Call insert qualifier=self.rows scope=insert args=2
 ref 52 Value row qualifier=- scope=insert
 ref 56 Type Reader qualifier=- scope=-
 ref 56 Implement Reader qualifier=Store scope=-
 ref 56 Type Store qualifier=- scope=-
 ref 57 Type Id qualifier=- scope=get
 ref 57 Type Row qualifier=- scope=get
-ref 58 Call get qualifier=self.rows scope=get
-ref 62 Call len qualifier=self.rows scope=len
+ref 58 Call get qualifier=self.rows scope=get args=1
+ref 62 Call len qualifier=self.rows scope=len args=0
 ref 66 Type Reader qualifier=- scope=load
 ref 67 Type Store qualifier=- scope=load
-ref 67 Call open qualifier=Store scope=load
-ref 67 Call unwrap_or_default qualifier=Store::open("x") scope=load
+ref 67 Call open qualifier=Store scope=load args=1
+ref 67 Call unwrap_or_default qualifier=Store::open("x") scope=load args=0
 ref 68 Type Store qualifier=- scope=load
 ref 68 Type Store qualifier=- scope=load
-ref 68 Call default qualifier=Store scope=load
+ref 68 Call default qualifier=Store scope=load args=0
 ref 69 Call row qualifier=- scope=load
-ref 70 Call check qualifier=helpers scope=load
+ref 70 Call check qualifier=helpers scope=load args=1
 ref 70 Type helpers qualifier=- scope=load
-ref 71 Call len qualifier=other scope=load
-ref 71 Call len qualifier=reader scope=load
-ref 71 Call len qualifier=store scope=load
+ref 71 Call len qualifier=other scope=load args=0
+ref 71 Call len qualifier=reader scope=load args=0
+ref 71 Call len qualifier=store scope=load args=0
 ref 80 Type Store qualifier=- scope=opens
-ref 80 Call open qualifier=Store scope=opens
+ref 80 Call open qualifier=Store scope=opens args=1
 ref 81 Call is_ok qualifier=store scope=opens
 bind 17 "": Row declared scope=get
 bind 17 "id": Id declared scope=get

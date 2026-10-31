@@ -185,7 +185,12 @@ pub struct Ref {
     /// Enclosing symbol index in the same file.
     pub scope: Option<u32>,
     pub line: u32,
+    /// Argument count of a call (overload selection); [`NO_ARITY`] otherwise.
+    pub arity: u8,
 }
+
+/// Arity of references that are no calls or whose arguments were not counted.
+pub const NO_ARITY: u8 = u8::MAX;
 
 /// Declared or constructed type of a name in a scope, for receiver typing (resolution step 5).
 #[derive(Debug, Clone, PartialEq, Eq)]

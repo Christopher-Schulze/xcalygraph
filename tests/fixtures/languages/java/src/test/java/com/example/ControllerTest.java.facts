@@ -1,0 +1,9 @@
+package com.example
+sym 5-12 class ControllerTest parent=- owner= priv flags=1 sig="class ControllerTest" doc=""
+sym 6-9 method listsUsers parent=ControllerTest owner=ControllerTest priv flags=1 sig="@Test void listsUsers()" doc=""
+sym 11-11 method helper parent=ControllerTest owner=ControllerTest priv flags=1 sig="private void helper()" doc=""
+import 3 "org.junit.jupiter.api" names=Test alias=- reexport=false
+ref 6 Type Test qualifier=- scope=listsUsers
+ref 8 Call helper qualifier=- scope=listsUsers args=0
+bind 6 "": void declared scope=listsUsers
+bind 11 "": void declared scope=helper

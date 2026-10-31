@@ -1,7 +1,7 @@
 sym 3-5 fn Badge parent=- owner= pub flags=0 sig="function Badge(props: { label: string })" doc=""
 sym 7-10 fn View parent=- owner= pub flags=0 sig="function View()" doc=""
 import 1 "../service" names=makeService alias=- reexport=false
-ref 8 Call makeService qualifier=- scope=View
+ref 8 Call makeService qualifier=- scope=View args=0
 ref 9 Call Badge qualifier=- scope=View
-ref 9 Call find qualifier=service scope=View
+ref 9 Call find qualifier=service scope=View args=1
 bind 8 "service": makeService() inferred scope=View

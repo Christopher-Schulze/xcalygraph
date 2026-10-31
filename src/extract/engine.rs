@@ -93,6 +93,7 @@ struct RawRef {
     qualifier: Option<String>,
     position: usize,
     line: u32,
+    arity: u8,
 }
 
 #[derive(Default)]
@@ -200,6 +201,17 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
                 continue;
             }
             reference.kind = kind;
+            reference.arity = match (kind, primary_node.child_by_field_name("arguments")) {
+                (Some(RefKind::Call), Some(arguments)) => {
+                    let mut walker = arguments.walk();
+                    let count = arguments
+                        .named_children(&mut walker)
+                        .filter(|argument| !argument.kind().contains("comment"))
+                        .count();
+                    u8::try_from(count).unwrap_or(facts::NO_ARITY - 1)
+                }
+                _ => facts::NO_ARITY,
+            };
             reference.name = text(name).to_owned();
             reference.position = name.start_byte();
             reference.line = row(name);
@@ -458,6 +470,7 @@ fn assemble(assembly: Assembly) -> Facts {
                 qualifier: raw.qualifier,
                 scope: scope_of(raw.position),
                 line: raw.line,
+                arity: raw.arity,
             })
         })
         .collect();
@@ -469,6 +482,7 @@ fn assemble(assembly: Assembly) -> Facts {
                 qualifier: Some(target.clone()),
                 scope: None,
                 line: row(*impl_node),
+                arity: facts::NO_ARITY,
             });
         }
     }

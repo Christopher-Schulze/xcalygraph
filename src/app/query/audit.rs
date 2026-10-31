@@ -13,12 +13,45 @@ use crate::domain::role::Role;
 const SECTION_LINES: usize = 15;
 const HOTSPOTS: usize = 10;
 
-/// Names that frameworks, runtimes or the language call implicitly.
+/// Names that frameworks, runtimes or the language call implicitly (Java serialization hooks).
 fn implicit(name: &str) -> bool {
     matches!(
         name,
-        "main" | "init" | "new" | "default" | "constructor" | "setup" | "teardown"
+        "main"
+            | "init"
+            | "new"
+            | "default"
+            | "constructor"
+            | "setup"
+            | "teardown"
+            | "readObject"
+            | "writeObject"
+            | "readResolve"
+            | "writeReplace"
+            | "readObjectNoData"
     ) || (name.starts_with("__") && name.ends_with("__"))
+}
+
+/// Methods called through a supertype outside the root, by construction or by a body without
+/// a named type: overrides (`@Override`, `override`), constructors, and methods of enum constant
+/// or anonymous class bodies.
+fn called_implicitly(index: &Index, node: u32) -> bool {
+    let symbols = index.derived.symbols();
+    let symbol = &symbols[node as usize];
+    if symbol.kind() != SymKind::Method {
+        return false;
+    }
+    let signature = index.string(symbol.signature);
+    if signature.contains("@Override")
+        || signature.split_whitespace().any(|word| word == "override")
+    {
+        return true;
+    }
+    if symbol.parent == u32::MAX {
+        return false;
+    }
+    let parent = &symbols[symbol.parent as usize];
+    !parent.kind().is_type() || parent.name == symbol.name
 }
 
 pub fn render(
@@ -149,14 +182,19 @@ fn unreferenced(
             || implicit(index.string(symbol.name))
             || !filter.symbol(index, symbol)
             || implements_supertype(index, node, owners)
+            || called_implicitly(index, node)
             || declared_by_abstract_type(index, node)
         {
             continue;
         }
         let incoming = index.derived.incoming(node);
         if symbol.exported == 0 {
-            // A name with ambiguous references may be one of their targets.
-            if incoming.is_empty() && !index.derived.is_ambiguous_name(index.string(symbol.name)) {
+            // A name with ambiguous references may be one of their targets; a type whose members
+            // are used from outside (`Type.CONSTANT`, static imports) is alive.
+            if incoming.is_empty()
+                && !index.derived.is_ambiguous_name(index.string(symbol.name))
+                && !(kind.is_type() && members_used_outside(index, node))
+            {
                 dead.push(node);
             }
         } else if kind != SymKind::Method
@@ -179,6 +217,18 @@ fn unreferenced(
     by_path(&mut dead);
     by_path(&mut unused);
     (dead, unused)
+}
+
+/// Whether a member of the type `owner` has an incoming edge from outside the type.
+fn members_used_outside(index: &Index, owner: u32) -> bool {
+    let members: Vec<u32> = index.derived.members(owner).collect();
+    members.iter().any(|&member| {
+        index
+            .derived
+            .incoming(member)
+            .iter()
+            .any(|edge| edge.node != owner && !members.contains(&edge.node))
+    })
 }
 
 /// Methods declared by an interface or trait are contracts, not code that can be dead.

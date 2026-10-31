@@ -1,0 +1,41 @@
+package com.example
+sym 9-41 class Controller parent=- owner= pub flags=2 sig="@RestController public class Controller" doc="HTTP endpoints for users."
+sym 11-11 const PREFIX parent=Controller owner= pub flags=0 sig="public static final String PREFIX = \"/users\"" doc=""
+sym 12-12 const LIMIT parent=Controller owner= priv flags=0 sig="private static final int LIMIT = 10" doc=""
+sym 15-17 method Controller parent=Controller owner=Controller priv flags=0 sig="Controller(UserService users)" doc=""
+sym 20-23 method list parent=Controller owner=Controller pub flags=2 sig="@GetMapping(PREFIX) public List<User> list()" doc="Lists all users."
+sym 25-28 method toString parent=Controller owner=Controller pub flags=0 sig="@Override public String toString()" doc=""
+sym 30-30 method unusedHelper parent=Controller owner=Controller priv flags=0 sig="private void unusedHelper()" doc=""
+sym 32-32 enum Mode parent=Controller owner= pub flags=0 sig="public enum Mode" doc=""
+sym 32-32 const READ parent=Mode owner= pub flags=0 sig="READ" doc=""
+sym 32-32 const WRITE parent=Mode owner= pub flags=0 sig="WRITE" doc=""
+sym 34-36 iface Listener parent=Controller owner= priv flags=0 sig="interface Listener" doc=""
+sym 35-35 method changed parent=Listener owner=Listener pub flags=0 sig="void changed(User user)" doc=""
+sym 38-40 method main parent=Controller owner=Controller pub flags=2 sig="public static void main(String[] args)" doc=""
+import 3 "java.util" names=List alias=- reexport=false
+import 4 "static:java.util.Objects" names=requireNonNull alias=- reexport=false
+ref 9 Type RestController qualifier=- scope=Controller
+ref 13 Type UserService qualifier=- scope=Controller
+ref 15 Type UserService qualifier=- scope=Controller
+ref 16 Call requireNonNull qualifier=- scope=Controller args=1
+ref 16 Value users qualifier=- scope=Controller
+ref 20 Type GetMapping qualifier=- scope=list
+ref 21 Type List qualifier=- scope=list
+ref 21 Type User qualifier=- scope=list
+ref 22 Value LIMIT qualifier=- scope=list
+ref 22 Call all qualifier=users scope=list args=1
+ref 27 Call getenv qualifier=System scope=toString args=1
+ref 35 Type User qualifier=- scope=changed
+ref 39 Call Controller qualifier=- scope=main args=1
+ref 39 Call UserService qualifier=- scope=main args=0
+ref 39 Call list qualifier=new Controller(new UserService()) scope=main args=0
+bind 15 "users": UserService declared scope=Controller
+bind 20 "": List declared scope=list
+bind 25 "": String declared scope=toString
+bind 30 "": void declared scope=unusedHelper
+bind 35 "": void declared scope=changed
+bind 35 "user": User declared scope=changed
+bind 38 "": void declared scope=main
+bind 38 "args": String declared scope=main
+fields Controller PREFIX:String LIMIT:int users:UserService
+env 27 APP_NAME scope=toString

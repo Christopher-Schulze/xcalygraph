@@ -3,6 +3,7 @@
 
 pub mod derive;
 mod js;
+mod jvm;
 pub mod modules;
 mod python;
 
@@ -365,6 +366,7 @@ impl<'a> Index<'a> {
             Some(FileType::Rust) => self.rust_imports(file, facts, &mut imports),
             Some(FileType::Python) => self.python_imports(file, facts, &mut imports),
             Some(FileType::Bash) => self.path_imports(file, facts, &mut imports),
+            file_type if jvm::is_jvm(file_type) => self.jvm_imports(file, facts, &mut imports),
             Some(
                 FileType::TypeScript
                 | FileType::JavaScript
@@ -750,11 +752,17 @@ impl<'a> Index<'a> {
         }
         let module = self.module_of(file);
         if let Some((qualifier, last)) = split_qualified(name) {
-            let found = self.qualified_symbols(file, imports, qualifier, last)?;
-            let types: Vec<u32> = found
+            let found = self
+                .qualified_symbols(file, imports, qualifier, last)
+                .unwrap_or_default();
+            let mut types: Vec<u32> = found
                 .into_iter()
                 .filter(|&s| self.symbols[s as usize].kind.is_type())
                 .collect();
+            if types.is_empty() {
+                // Nested type `Outer.Inner`.
+                types = self.nested_types(file, imports, scope, qualifier, last);
+            }
             return (!types.is_empty()).then_some((types, Confidence::Exact));
         }
         if let Some(facts) = self.facts(file) {
@@ -791,6 +799,10 @@ impl<'a> Index<'a> {
                 }
             }
         }
+        // JVM types come only from the package, imports and `java.lang`: no root-wide guess.
+        if jvm::is_jvm(self.file_type(file)) {
+            return None;
+        }
         let candidates: Vec<u32> = self
             .by_name
             .get(name)
@@ -800,6 +812,30 @@ impl<'a> Index<'a> {
             .filter(|&s| self.symbols[s as usize].kind.is_type())
             .collect();
         unique(&candidates, |s| self.is_test(s)).map(|symbol| (vec![symbol], Confidence::Inferred))
+    }
+
+    /// Types `name` declared inside the type `outer`.
+    fn nested_types(
+        &self,
+        file: u32,
+        imports: Option<&Imports>,
+        scope: Option<u32>,
+        outer: &str,
+        name: &str,
+    ) -> Vec<u32> {
+        let Some((outers, _)) = self.resolve_type(file, imports, scope, outer) else {
+            return Vec::new();
+        };
+        self.by_name
+            .get(name)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&s| {
+                let symbol = &self.symbols[s as usize];
+                symbol.kind.is_type() && outers.contains(&symbol.parent)
+            })
+            .collect()
     }
 
     /// Owner type of the method enclosing `scope`.
@@ -835,6 +871,22 @@ impl<'a> Index<'a> {
                 imports.and_then(|imports| self.python_qualified(imports, qualifier, name))
         {
             return Some(found);
+        }
+        if jvm::is_jvm(self.file_type(file)) && qualifier.contains('.') {
+            // Fully qualified `com.example.Type`: a package of the root, else outside it.
+            if let Some(module) = self.modules.get(&jvm::package_key(qualifier)) {
+                let found = self.module_symbol(module, name, None);
+                return (!found.is_empty()).then_some(found);
+            }
+            let head = qualifier.split('.').next().unwrap_or_default();
+            if head.starts_with(|ch: char| ch.is_ascii_lowercase())
+                && imports.is_none_or(|imports| !imports.names.contains_key(head))
+                && self
+                    .facts(file)
+                    .is_some_and(|facts| !facts.bindings.iter().any(|binding| binding.name == head))
+            {
+                return None;
+            }
         }
         let rust = self.file_type(file) == Some(FileType::Rust);
         if rust && qualifier.contains("::") {
@@ -1261,6 +1313,31 @@ impl<'a> Index<'a> {
                         && matches!(kind, SymKind::Const | SymKind::Var))
             }
         };
+        // 0. JVM and .NET class bodies: methods and constants of the enclosing class and its
+        // supertypes need no `this`.
+        if !wants_type && jvm::is_jvm(self.file_type(file)) {
+            let members: Vec<u32> = self
+                .enclosing_members(file, reference.scope, name)
+                .into_iter()
+                .filter(|&member| {
+                    let symbol = &self.symbols[member as usize];
+                    let kind = symbol.kind;
+                    // `new T()` names the class, not its constructor.
+                    let constructor = symbol.parent != NONE
+                        && self.symbols[symbol.parent as usize].name == symbol.name;
+                    if constructor {
+                        false
+                    } else if reference.kind == RefKind::Value {
+                        kind == SymKind::Const
+                    } else {
+                        kind.is_callable()
+                    }
+                })
+                .collect();
+            if !members.is_empty() {
+                return pick_members(self, members, Confidence::Exact, reference.arity);
+            }
+        }
         // 1. Lexical scope: definitions of the file visible from the reference.
         if let Some(facts) = self.facts(file) {
             let base = self.base[file as usize];
@@ -1342,6 +1419,11 @@ impl<'a> Index<'a> {
                 return pick(&found, Confidence::Exact);
             }
         }
+        // JVM names come from the file, the enclosing class, the package and imports only;
+        // nested types of other classes are not visible unqualified.
+        if jvm::is_jvm(self.file_type(file)) {
+            return Outcome::Unresolved;
+        }
         // 7. Unique name among imported modules, then in the root. Go and Rust only see
         // unqualified names of their own module and imports, so the root is never searched.
         let reach = if has_module_rules(self.file_type(file)) {
@@ -1368,7 +1450,7 @@ impl<'a> Index<'a> {
         let outcome = match reference.qualifier.as_deref() {
             Some(qualifier) => {
                 match self.qualified_symbols(file, Some(imports), qualifier, &reference.name) {
-                    Some(found) => pick_members(self, found, Confidence::Exact),
+                    Some(found) => pick_members(self, found, Confidence::Exact, reference.arity),
                     None => Outcome::Unresolved,
                 }
             }
@@ -1392,6 +1474,18 @@ impl<'a> Index<'a> {
     ) -> Outcome {
         let name = reference.name.as_str();
         let rust = self.file_type(file) == Some(FileType::Rust);
+        if reference.kind == RefKind::Type && jvm::is_jvm(self.file_type(file)) {
+            // `Outer.Inner`, `pkg.Type`, `Map.Entry`: a type or nothing, never a member.
+            return match self.resolve_type(
+                file,
+                Some(imports),
+                reference.scope,
+                &format!("{qualifier}.{name}"),
+            ) {
+                Some((types, confidence)) => pick_members(self, types, confidence, facts::NO_ARITY),
+                None => Outcome::Unresolved,
+            };
+        }
         let chain: Vec<&str> = qualifier.split('.').map(str::trim).collect();
         let head = chain[0];
         // 3. Qualified name through imports and the module map; a local binding of the head
@@ -1405,7 +1499,7 @@ impl<'a> Index<'a> {
         if (plain_head || (rust && qualifier.contains("::")))
             && let Some(found) = self.qualified_symbols(file, Some(imports), qualifier, name)
         {
-            return pick_members(self, found, Confidence::Exact);
+            return pick_members(self, found, Confidence::Exact, reference.arity);
         }
         if plain_head && let Some(Target::External(_) | Target::Module(_)) = imports.names.get(head)
         {
@@ -1414,6 +1508,9 @@ impl<'a> Index<'a> {
         // 5a. Receiver that is itself a call (`Service().run()`, `open(x).read()`): the result
         // type of the call, inferred.
         if let Some(callee) = call_receiver(qualifier) {
+            if self.call_result_is_external(file, imports, reference, callee) {
+                return Outcome::External;
+            }
             let binding = Binding {
                 scope: reference.scope,
                 name: String::new(),
@@ -1442,8 +1539,9 @@ impl<'a> Index<'a> {
             if let Receiver::Known(types, confidence) = receiver {
                 let mut targets = Vec::new();
                 for &type_symbol in &types {
-                    let direct = self.members(type_symbol, name);
-                    targets.extend(direct.iter().map(|&member| (member, Confidence::Exact)));
+                    let (direct, overload) =
+                        self.overloads(&self.members(type_symbol, name), reference.arity);
+                    targets.extend(direct.iter().map(|&member| (member, overload)));
                     // 6. Abstract receiver: every implementation, inferred.
                     if self.symbols[type_symbol as usize].kind.is_abstract() {
                         let implementations = self
@@ -1501,6 +1599,82 @@ impl<'a> Index<'a> {
         })
     }
 
+    /// Overload selection by argument count: the single candidate accepting `arity` is exact;
+    /// otherwise the accepting candidates (all when none accepts) are inferred, since argument
+    /// types decide, which names alone cannot.
+    fn overloads(&self, candidates: &[u32], arity: u8) -> (Vec<u32>, Confidence) {
+        if candidates.len() <= 1 {
+            return (candidates.to_vec(), Confidence::Exact);
+        }
+        let accepting: Vec<u32> = candidates
+            .iter()
+            .copied()
+            .filter(|&candidate| {
+                let symbol = &self.symbols[candidate as usize];
+                arity != facts::NO_ARITY
+                    && parameter_count(&symbol.signature, &symbol.name).is_none_or(
+                        |(count, variadic)| {
+                            usize::from(arity) == count
+                                || (variadic && usize::from(arity) + 1 >= count)
+                        },
+                    )
+            })
+            .collect();
+        match accepting.as_slice() {
+            [only] => (vec![*only], Confidence::Exact),
+            [] => (candidates.to_vec(), Confidence::Inferred),
+            _ => (accepting, Confidence::Inferred),
+        }
+    }
+
+    /// Whether the receiver call `callee(...)` leads outside the root: the callee itself is
+    /// external, or it resolves to a function whose declared result type is not in the root.
+    fn call_result_is_external(
+        &self,
+        file: u32,
+        imports: &Imports,
+        reference: &Ref,
+        callee: &str,
+    ) -> bool {
+        let callee_ref = match split_qualified(callee) {
+            Some((qualifier, name)) => Ref {
+                kind: RefKind::Call,
+                name: name.to_owned(),
+                qualifier: Some(qualifier.to_owned()),
+                scope: reference.scope,
+                line: reference.line,
+                arity: facts::NO_ARITY,
+            },
+            None => Ref {
+                kind: RefKind::Call,
+                name: callee.to_owned(),
+                qualifier: None,
+                scope: reference.scope,
+                line: reference.line,
+                arity: facts::NO_ARITY,
+            },
+        };
+        let Some(_guard) = DepthGuard::enter() else {
+            return false;
+        };
+        match self.resolve_ref(file, imports, &callee_ref) {
+            Outcome::External => true,
+            Outcome::Targets(callees, _) => callees.iter().all(|&(callee, _)| {
+                if self.symbols[callee as usize].kind.is_type() {
+                    return false;
+                }
+                let Some(&result) = self.returns.get(&callee) else {
+                    return false;
+                };
+                let callee_file = self.symbols[callee as usize].file;
+                let callee_scope = Some(callee - self.base[callee_file as usize]);
+                self.resolve_type(callee_file, None, callee_scope, result)
+                    .is_none()
+            }),
+            _ => false,
+        }
+    }
+
     /// Type of the receiver chain `x`, `self`, `x.field`, `self.field.other`. A receiver whose
     /// binding or field exists but whose type is not in the root is external: no fallback.
     fn receiver_type(
@@ -1521,6 +1695,14 @@ impl<'a> Index<'a> {
             match self.binding_type(file, imports, scope, binding) {
                 Some(found) => Some(found),
                 None if binding.type_name.ends_with("()") => return Receiver::Unknown,
+                None => return Receiver::External,
+            }
+        } else if let Some(field) = jvm::is_jvm(self.file_type(file))
+            .then(|| self.enclosing_field_type(file, scope, head))
+            .flatten()
+        {
+            match field {
+                Some(found) => Some(found),
                 None => return Receiver::External,
             }
         } else {
@@ -1582,6 +1764,7 @@ impl<'a> Index<'a> {
                     qualifier: Some(qualifier.to_owned()),
                     scope,
                     line: binding.line,
+                    arity: facts::NO_ARITY,
                 },
                 None => Ref {
                     kind: RefKind::Call,
@@ -1589,6 +1772,7 @@ impl<'a> Index<'a> {
                     qualifier: None,
                     scope,
                     line: binding.line,
+                    arity: facts::NO_ARITY,
                 },
             };
             let Outcome::Targets(callees, _) = self.resolve_ref(file, imports, &reference) else {
@@ -2039,6 +2223,10 @@ fn has_module_rules(file_type: Option<FileType>) -> bool {
                 | FileType::Svelte
                 | FileType::Astro
                 | FileType::Bash
+                | FileType::Java
+                | FileType::Kotlin
+                | FileType::Scala
+                | FileType::Groovy
         )
     )
 }
@@ -2107,7 +2295,7 @@ fn pick(candidates: &[u32], confidence: Confidence) -> Outcome {
     }
 }
 
-fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence) -> Outcome {
+fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence, arity: u8) -> Outcome {
     let mut found = found;
     found.sort_unstable();
     found.dedup();
@@ -2120,8 +2308,85 @@ fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence) -> Outco
         if non_test.len() == 1 {
             return Outcome::Targets(vec![(non_test[0], confidence)], confidence);
         }
+        // Overloads of one owner: the one taking the argument count, else every candidate
+        // inferred.
+        let first = &index.symbols[found[0] as usize];
+        if first.parent != NONE
+            && found.iter().all(|&s| {
+                let symbol = &index.symbols[s as usize];
+                symbol.parent == first.parent && symbol.name == first.name
+            })
+        {
+            let (targets, overload) = index.overloads(&found, arity);
+            return Outcome::Targets(
+                targets
+                    .iter()
+                    .map(|&s| (s, overload.max(confidence)))
+                    .collect(),
+                overload.max(confidence),
+            );
+        }
     }
     pick(&found, confidence)
+}
+
+/// Parameter count of the declaration `name(...)` in a signature and whether it is variadic;
+/// `None` when the list cannot be found (clipped or no parentheses).
+fn parameter_count(signature: &str, name: &str) -> Option<(usize, bool)> {
+    let bytes = signature.as_bytes();
+    let word = |index: usize| {
+        bytes
+            .get(index)
+            .is_some_and(|&b| b.is_ascii_alphanumeric() || b == b'_')
+    };
+    let start = signature
+        .match_indices(name)
+        .map(|(position, _)| position)
+        .find(|&position| position == 0 || !word(position - 1))?;
+    let mut rest = signature[start + name.len()..].trim_start();
+    if rest.starts_with('<') {
+        let mut depth = 0;
+        let close = rest.char_indices().find_map(|(index, ch)| {
+            match ch {
+                '<' => depth += 1,
+                '>' => depth -= 1,
+                _ => {}
+            }
+            (depth == 0).then_some(index)
+        })?;
+        rest = rest[close + 1..].trim_start();
+    }
+    let inner = rest.strip_prefix('(')?;
+    let (mut depth, mut commas, mut end) = (0i32, 0, None);
+    let mut previous = ' ';
+    for (index, ch) in inner.char_indices() {
+        // `->` and `=>` in function types are no closing brackets.
+        let arrow = ch == '>' && matches!(previous, '-' | '=');
+        previous = ch;
+        if arrow {
+            continue;
+        }
+        match ch {
+            '(' | '<' | '[' | '{' => depth += 1,
+            ')' if depth == 0 => {
+                end = Some(index);
+                break;
+            }
+            ')' | '>' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => commas += 1,
+            _ => {}
+        }
+    }
+    let list = &inner[..end?];
+    let count = if list.trim().is_empty() {
+        0
+    } else {
+        commas + 1
+    };
+    Some((
+        count,
+        list.contains("...") || list.contains("vararg ") || list.contains("params "),
+    ))
 }
 
 /// The single candidate, preferring non-test symbols when several exist.
