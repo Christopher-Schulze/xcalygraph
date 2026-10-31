@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Answer quality and tokens per question against the rg and upstream Graphify baselines
 # (docs/spec.md section 12).
-# Usage: scripts/benchmarks/run-evaluation.sh [--no-upstream] [CORPUS...]
+# Usage: scripts/benchmarks/run-evaluation.sh [--no-upstream] [--heldout] [CORPUS...]
+#   --heldout: the held-out sets of scripts/benchmarks/questions/heldout/, never used for tuning.
 #   Question sets: scripts/benchmarks/questions/<corpus>.tsv and, for private corpora,
 #   scripts/benchmarks/questions/private/<corpus>.tsv; columns question, expected location as
 #   path::name (or path). Corpus roots: this repository (xcalygraph), the upstream clone
@@ -19,14 +20,19 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
 readonly WORK="${REPO_ROOT}/.cache/evaluation"
 readonly BINARY="${REPO_ROOT}/target/release/xcalygraph"
-readonly QUESTIONS="${REPO_ROOT}/scripts/benchmarks/questions"
+QUESTIONS="${REPO_ROOT}/scripts/benchmarks/questions"
 readonly PRIVATE_LIST="${QUESTIONS}/private/corpora.tsv"
 
 upstream=1
-if [[ "${1:-}" == "--no-upstream" ]]; then
-  upstream=0
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --no-upstream) upstream=0 ;;
+    --heldout) QUESTIONS="${QUESTIONS}/heldout" ;;
+    *) echo "run-evaluation.sh: unknown flag $1" >&2; exit 2 ;;
+  esac
   shift
-fi
+done
+readonly QUESTIONS
 for tool in jq rg; do
   command -v "${tool}" >/dev/null || { echo "run-evaluation.sh: ${tool} missing" >&2; exit 1; }
 done

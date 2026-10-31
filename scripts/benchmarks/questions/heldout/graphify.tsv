@@ -1,0 +1,16 @@
+question	expected
+hash a file's contents for the extraction cache	graphify/cache.py::file_hash
+delete semantic cache entries of files that no longer exist	graphify/cache.py::prune_semantic_cache
+resolve calls through c# interfaces to the implementing classes	graphify/csharp_dispatch.py::resolve_csharp_interface_dispatch
+turn arbitrary text into a filesystem safe file name	graphify/callflow_html.py::safe_filename
+make a node label readable for humans	graphify/callflow_html.py::humanize_label
+check whether the watched folder needs a graph rebuild	graphify/watch.py::check_update
+render the graph as an svg image	graphify/export.py::to_svg
+reject graph paths outside the allowed base directory	graphify/security.py::validate_graph_path
+propose questions a user could ask about the graph	graphify/analyze.py::suggest_questions
+download audio from a url for transcription	graphify/transcribe.py::download_audio
+install the skill for the gemini cli	graphify/install.py::gemini_install
+read the target of a google drive shortcut file	graphify/google_workspace.py::read_google_shortcut
+import a scip index exported as json	graphify/scip_ingest.py::ingest_scip_json
+merge nodes that carry the same label	graphify/build.py::deduplicate_by_label
+extract the sheet structure of an excel workbook	graphify/detect.py::xlsx_extract_structure

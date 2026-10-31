@@ -1,0 +1,16 @@
+question	expected
+abort the request when the handler takes too long	src/middleware/timeout/index.ts::timeout
+sign a cookie value with a secret before setting it	src/helper/cookie/index.ts::setSignedCookie
+build the set-cookie header string from name, value and options	src/utils/cookie.ts::serialize
+compress the response body with gzip or deflate	src/middleware/compress/index.ts::compress
+respond with 405 when the path exists but not for this http method	src/middleware/method-not-allowed/index.ts::methodNotAllowed
+redirect to the same url with a trailing slash added	src/middleware/trailing-slash/index.ts::appendTrailingSlash
+decode base64url text into bytes	src/utils/encode.ts::decodeBase64Url
+access the current request context from anywhere through async local storage	src/middleware/context-storage/index.ts::getContext
+continue only if every one of several middleware conditions passes	src/middleware/combine/index.ts::every
+forward a request to another server and return its response	src/helper/proxy/index.ts::proxy
+cache responses with the web cache api	src/middleware/cache/index.ts::cache
+decide from the content type whether a lambda response body must be base64 encoded	src/adapter/aws-lambda/handler.ts::defaultIsContentTypeBinary
+stream plain text to the client chunk by chunk	src/helper/streaming/text.ts::streamText
+pick the user's preferred language from the accept-language header	src/middleware/language/language.ts::detectFromHeader
+serve files from a directory as static assets	src/middleware/serve-static/index.ts::serveStatic

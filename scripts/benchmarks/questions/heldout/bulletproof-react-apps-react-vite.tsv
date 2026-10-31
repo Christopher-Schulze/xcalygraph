@@ -1,0 +1,13 @@
+question	expected
+render markdown safely as html	src/components/ui/md-preview/md-preview.tsx::MDPreview
+drawer that contains a form with submit and cancel buttons	src/components/ui/form/form-drawer.tsx::FormDrawer
+read and validate environment variables at startup	src/config/env.ts::env
+set the document title and meta description	src/components/seo/head.tsx::Head
+render a component with all providers in tests	src/testing/test-utils.tsx::renderApp
+sign in a test user before a test	src/testing/test-utils.tsx::loginAsUser
+list of discussions with pagination	src/features/discussions/components/discussions-list.tsx::DiscussionsList
+sign up form that can join or create a team	src/features/auth/components/register-form.tsx::RegisterForm
+default retry and stale time options for queries	src/lib/react-query.ts::queryConfig
+edit the title and body of a discussion	src/features/discussions/components/update-discussion.tsx::UpdateDiscussion
+url builders for every page of the app	src/config/paths.ts::paths
+table of all users for admins	src/features/users/components/users-list.tsx::UsersList

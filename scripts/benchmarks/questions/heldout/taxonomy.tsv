@@ -1,0 +1,13 @@
+question	expected
+sign in with an email magic link or github	components/user-auth-form.tsx::UserAuthForm
+get the signed in user on the server	lib/session.ts::getCurrentUser
+button that creates a new draft post and opens the editor	components/post-create-button.tsx::PostCreateButton
+send the magic link email through postmark	lib/auth.ts::authOptions
+save the edited post content from the block editor	components/editor.tsx::Editor
+turn a relative path into a full url of the site	lib/utils.ts::absoluteUrl
+stop the page from scrolling while the mobile menu is open	hooks/use-lock-body.ts::useLockBody
+switch between light and dark theme	components/mode-toggle.tsx::ModeToggle
+highlight the heading currently visible in the table of contents	components/toc.tsx::useActiveItem
+price and limits of the paid plan	config/subscriptions.ts::proPlan
+find the documentation page for the requested slug	app/(docs)/docs/[[...slug]]/page.tsx::getDocFromParams
+delete a post from the dropdown menu of the dashboard	components/post-operations.tsx::deletePost

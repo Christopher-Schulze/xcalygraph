@@ -1,0 +1,16 @@
+question	expected
+delete every index or only the indexes of the given roots	src/app/indexes.rs::clean
+find the repository root from the current directory	src/app/workspace.rs::detect_root
+compare two version strings to see whether a release is newer	src/app/update.rs::newer
+run the downloaded binary once before replacing the installed one	src/app/update.rs::smoke_test
+unpack the binary from the release tarball	src/app/update.rs::extract_binary
+write a file only when its content changed	src/app/install.rs::write_if_changed
+tell the user when the install directory is missing from PATH	src/app/install.rs::path_notice
+format a byte count as KB, MB or GB	src/app/progress.rs::byte_count
+turn a nextjs or sveltekit file path into its url route	src/extract/routes.rs::route_path
+find the closing brace of a svelte markup expression	src/extract/sfc.rs::matching_brace
+names of component tags used in a vue or svelte template	src/extract/sfc.rs::component_tags
+external npm package name of a bare import specifier	src/resolve/js.rs::package_name
+parse unified git diff output into changed line ranges per file	src/infra/git.rs::parse_diff
+markdown heading depth from the number of hash signs	src/extract/markdown.rs::heading_level
+create the index base directory readable only by the owner	src/app/workspace.rs::create_private

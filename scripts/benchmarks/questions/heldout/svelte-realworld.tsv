@@ -1,0 +1,11 @@
+question	expected
+update an existing article after editing it	src/routes/editor/[slug]/+page.server.js::actions
+load the profile shown in the profile header	src/routes/profile/@[user]/+layout.server.js::load
+form with title, description, body and tags for writing an article	src/routes/editor/Editor.svelte
+textarea where the signed in user writes a comment	src/routes/article/[slug]/CommentInput.svelte
+progress bar shown while the next page is loading	src/routes/PreloadingIndicator.svelte
+pass the signed in user to every page	src/routes/+layout.server.js::load
+author, date and favorite button above an article	src/routes/article/[slug]/ArticleMeta.svelte
+top navigation with links depending on whether the user is logged in	src/routes/Nav.svelte
+preview card of one article in a list	src/lib/ArticleList/ArticlePreview.svelte
+default avatar image url	src/lib/constants.js::placeholder
