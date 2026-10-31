@@ -5,8 +5,12 @@ Store -references-> file:internal/store/store.go @7
 cmd/app.main -calls-> internal/store.NewStore @6
 cmd/app.main -calls?-> internal/store.Store.Len @10
 internal/database.Connect -uses-> internal/database.Client @9
+internal/store.Drain -uses-> internal/store.ReadCloser @11
+internal/store.Drain -uses-> internal/store.Reader.Len @12
 internal/store.NewStore -calls-> internal/database.Connect @26
 internal/store.NewStore -uses-> internal/store.Store @22
+internal/store.ReadCloser -inherits-> internal/store.Closer @8
+internal/store.ReadCloser -inherits-> internal/store.Reader @7
 internal/store.Reader.Get -uses-> internal/store.Row @11
 internal/store.Store -implements?-> internal/store.Reader @17
 internal/store.Store -uses-> internal/database.Client @19

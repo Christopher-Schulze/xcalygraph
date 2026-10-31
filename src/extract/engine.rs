@@ -555,11 +555,16 @@ fn assemble(assembly: Assembly) -> Facts {
             .iter()
             .map(|(position, name)| (scope_of(*position), name.as_str()))
             .collect();
-        // Bare names only: a parenthesized call or one with arguments names a method.
+        // A local shadows every unqualified use of its name (`count := rc.Len; count()`); in
+        // Ruby only bare names, since `foo(1)` calls the method even when a local `foo` exists.
+        let ruby = path.ends_with(".rb");
         facts_refs.retain(|reference| {
-            let bare = reference.kind == RefKind::Value
-                || (reference.kind == RefKind::Call && reference.arity == facts::NO_ARITY);
-            !bare
+            let shadowable = match reference.kind {
+                RefKind::Value => true,
+                RefKind::Call => !ruby || reference.arity == facts::NO_ARITY,
+                _ => false,
+            };
+            !shadowable
                 || reference.qualifier.is_some()
                 || !local_names.contains(&(reference.scope, reference.name.as_str()))
         });

@@ -64,6 +64,9 @@
 (var_spec value: (expression_list (identifier) @name @reference.value))
 (const_spec value: (expression_list (identifier) @name @reference.value))
 (var_spec value: (expression_list (selector_expression operand: (identifier) @qualifier field: (field_identifier) @name) @reference.value))
+; Method values and function values bound to a name: `read := rw.Read`, `h = srv.Handle`.
+(short_var_declaration right: (expression_list (selector_expression operand: (identifier) @qualifier field: (field_identifier) @name) @reference.value))
+(assignment_statement right: (expression_list (selector_expression operand: (identifier) @qualifier field: (field_identifier) @name) @reference.value))
 (const_spec value: (expression_list (selector_expression operand: (identifier) @qualifier field: (field_identifier) @name) @reference.value))
 
 ; Struct literal keys are field names; map literal keys are values.
@@ -79,3 +82,9 @@
   (range_clause
     left: (expression_list (_) (identifier) @binding.name)
     right: (identifier) @binding.range)) @binding
+
+; Locals and parameters shadow package names in their function.
+(short_var_declaration left: (expression_list (identifier) @local))
+(parameter_declaration name: (identifier) @local)
+(range_clause left: (expression_list (identifier) @local))
+(block (statement_list (var_declaration (var_spec name: (identifier) @local))))

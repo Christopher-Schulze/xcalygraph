@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 56;
+pub const RESOLVE_VERSION: u32 = 57;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -3205,10 +3205,9 @@ impl<'a> Index<'a> {
             Some(qualifier) => {
                 match self.qualified_symbols(file, Some(imports), qualifier, &reference.name) {
                     Some(found) => pick_members(self, found, Confidence::Exact, reference.arity),
-                    // `user.display` with `user: User` known: the member of that type.
-                    None if self.file_type(file) == Some(FileType::Python)
-                        && qualifier.split('.').all(is_identifier) =>
-                    {
+                    // `user.display`, `rw.Read` with the receiver's type declared: the member
+                    // of that type (properties, method values).
+                    None if qualifier.split('.').all(is_identifier) => {
                         let chain: Vec<&str> = qualifier.split('.').collect();
                         match self.receiver_type(
                             file,

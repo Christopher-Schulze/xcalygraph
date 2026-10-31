@@ -24,20 +24,17 @@ ref 40 Call New qualifier=errors scope=NewStore args=1
 ref 42 Call Connect qualifier=db scope=NewStore args=1
 ref 42 Call Getenv qualifier=os scope=NewStore args=1
 ref 43 Type Store qualifier=- scope=NewStore
-ref 43 Value client qualifier=- scope=NewStore
 ref 47 Type Row qualifier=- scope=Get
 ref 47 Type Store qualifier=- scope=Get
 ref 50 Call New qualifier=errors scope=Get args=1
 ref 52 Call Log qualifier=s.client scope=Get args=1
 ref 52 Value Name qualifier=row scope=Get
-ref 53 Value row qualifier=- scope=Get
 ref 56 Type Store qualifier=- scope=Len
 ref 56 Value rows qualifier=s scope=Len
 ref 59 Call NewStore qualifier=- scope=load args=1
 ref 59 Value defaultName qualifier=- scope=load
 ref 60 Type Row qualifier=- scope=load
 ref 61 Type Reader qualifier=- scope=load
-ref 61 Value st qualifier=- scope=load
 ref 62 Call Len qualifier=reader scope=load args=0
 ref 63 Call Get qualifier=st scope=load args=1
 ref 63 Value ID qualifier=r scope=load
