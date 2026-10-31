@@ -242,8 +242,9 @@ fn is_c_keyword(word: &str) -> bool {
     )
 }
 
-/// Apple platform macros the grammars cannot parse, rewritten in place with the same byte length
-/// so every line and column stays valid: region markers (`NS_ASSUME_NONNULL_BEGIN`,
+/// Macros the grammars cannot parse, rewritten in place with the same byte length so every line
+/// and column stays valid: symbol export macros before a declaration (`class LEVELDB_EXPORT DB`,
+/// `MYLIB_API int f();`) and Apple region markers (`NS_ASSUME_NONNULL_BEGIN`,
 /// `CF_EXTERN_C_BEGIN`) become blanks, and `typedef NS_ENUM(Base, Name) {...}` becomes
 /// `enum Name {...}` so its enumerators are definitions. `None` when nothing matched.
 pub fn mask_platform_macros(source: &[u8]) -> Option<Vec<u8>> {
@@ -266,14 +267,19 @@ pub fn mask_platform_macros(source: &[u8]) -> Option<Vec<u8>> {
         b"CF_OPTIONS",
         b"CF_CLOSED_ENUM",
     ];
-    if !REGIONS
-        .iter()
-        .chain(ENUMS.iter())
-        .any(|word| memchr_word(source, word, 0).is_some())
+    let exports = export_macros(source);
+    if exports.is_empty()
+        && !REGIONS
+            .iter()
+            .chain(ENUMS.iter())
+            .any(|word| memchr_word(source, word, 0).is_some())
     {
         return None;
     }
     let mut out = source.to_vec();
+    for (start, end) in exports {
+        out[start..end].fill(b' ');
+    }
     for word in REGIONS {
         let mut from = 0;
         while let Some(start) = memchr_word(&out, word, from) {
@@ -323,6 +329,65 @@ pub fn mask_platform_macros(source: &[u8]) -> Option<Vec<u8>> {
         }
     }
     Some(out)
+}
+
+/// Spans of symbol export macros (`FOO_EXPORT`, `FOO_API`, `FOO_DLL`, `FOO_PUBLIC`, ...): an
+/// upper-case word with such a suffix followed on the same line by another word, outside
+/// preprocessor lines.
+fn export_macros(source: &[u8]) -> Vec<(usize, usize)> {
+    const SUFFIXES: [&[u8]; 7] = [
+        b"EXPORT",
+        b"_API",
+        b"_DLL",
+        b"_DECL",
+        b"_PUBLIC",
+        b"_VISIBLE",
+        b"_IMPORT",
+    ];
+    let mut spans = Vec::new();
+    let mut position = 0;
+    let mut line_start = true;
+    let mut preprocessor = false;
+    while position < source.len() {
+        let byte = source[position];
+        if byte == b'\n' {
+            line_start = true;
+            preprocessor = false;
+            position += 1;
+            continue;
+        }
+        if line_start && !byte.is_ascii_whitespace() {
+            preprocessor = byte == b'#';
+            line_start = false;
+        }
+        if !is_word_byte(byte) || (position > 0 && is_word_byte(source[position - 1])) {
+            position += 1;
+            continue;
+        }
+        let end = position
+            + source[position..]
+                .iter()
+                .take_while(|&&b| is_word_byte(b))
+                .count();
+        let word = &source[position..end];
+        let macro_like = word.len() > 4
+            && word[0].is_ascii_uppercase()
+            && word
+                .iter()
+                .all(|&b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+            && SUFFIXES.iter().any(|suffix| word.ends_with(suffix));
+        if macro_like && !preprocessor {
+            let next = source[end..]
+                .iter()
+                .position(|&b| b != b' ' && b != b'\t')
+                .map(|offset| end + offset);
+            if next.is_some_and(|next| next > end && is_word_byte(source[next])) {
+                spans.push((position, end));
+            }
+        }
+        position = end;
+    }
+    spans
 }
 
 fn is_word_byte(byte: u8) -> bool {
@@ -386,5 +451,26 @@ mod tests {
         assert!(mask_platform_macros(b"@interface Foo : NSObject\n@end\n").is_none());
         // Whole words only: a longer identifier stays untouched.
         assert!(mask_platform_macros(b"int MY_NS_ENUM_COUNT = 1;\n").is_none());
+    }
+
+    #[test]
+    fn export_macros_before_declarations_are_blanked() {
+        let source = b"#define LEVELDB_EXPORT __declspec(dllexport)\nclass LEVELDB_EXPORT DB {\n};\nMYLIB_API int count();\n#ifdef MYLIB_API\nint x = MAX_EXPORT;\n";
+        let masked =
+            String::from_utf8(mask_platform_macros(source).unwrap_or_default()).unwrap_or_default();
+        let lines: Vec<&str> = masked.lines().collect();
+        // Preprocessor lines and macros used as values stay.
+        assert_eq!(lines[0], "#define LEVELDB_EXPORT __declspec(dllexport)");
+        assert_eq!(
+            lines[1].split_whitespace().collect::<Vec<_>>(),
+            ["class", "DB", "{"]
+        );
+        assert_eq!(
+            lines[3].split_whitespace().collect::<Vec<_>>(),
+            ["int", "count();"]
+        );
+        assert_eq!(lines[4], "#ifdef MYLIB_API");
+        assert_eq!(lines[5], "int x = MAX_EXPORT;");
+        assert_eq!(masked.len(), source.len());
     }
 }

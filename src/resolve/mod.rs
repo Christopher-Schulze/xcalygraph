@@ -355,7 +355,22 @@ impl<'a> Index<'a> {
                                 && parent.parent.is_none()
                                 && matches!(record_type, Some(FileType::Julia | FileType::Fortran))
                         });
-                        if symbol.parent.is_none() || in_file_module {
+                        // C++ namespaces span files: a function inside `namespace a { ... }`
+                        // is a module-level name of its file like one outside any namespace.
+                        let in_namespaces = record_type == Some(FileType::Cpp) && {
+                            let mut parent = symbol.parent;
+                            let mut only_namespaces = parent.is_some();
+                            while let Some(index) = parent {
+                                let enclosing = &facts.symbols[index as usize];
+                                if enclosing.kind() != SymKind::Mod {
+                                    only_namespaces = false;
+                                    break;
+                                }
+                                parent = enclosing.parent;
+                            }
+                            only_namespaces
+                        };
+                        if symbol.parent.is_none() || in_file_module || in_namespaces {
                             self.by_module.entry((module, name)).or_default().push(id);
                         }
                         if kind.is_type() {

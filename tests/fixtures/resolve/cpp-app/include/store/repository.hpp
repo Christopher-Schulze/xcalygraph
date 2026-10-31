@@ -27,4 +27,6 @@ private:
     Row rows_[16];
 };
 
+inline int clamp_id(int id) { return id < 0 ? 0 : id; }
+
 }  // namespace store
