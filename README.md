@@ -101,7 +101,7 @@ src/domain/corpus.rs
 | command | answers |
 |---|---|
 | `map` | How is this repository laid out and run? Languages, largest modules with their top symbols, entrypoints, tasks (Makefile, scripts, CI jobs, services) with what they run, hubs, API operations and framework routes with their handlers, cycles, layers, external dependencies, env vars. |
-| `find TERMS...` | Where is X? Ranked symbols and files (BM25F over names, parents, paths, signatures and docs, combined with graph rank). |
+| `find TERMS...` | Where is X? Ranked symbols and files (BM25F over names, parents, paths, signatures, docs and the words of each body, combined with graph rank). |
 | `ctx TERMS...` | What do I need to read for X? The best seeds with their doc sentence plus related symbols by personalized PageRank. |
 | `show NAME` | What is X? Signature, doc, members, fields, supertypes, implementations, callers, callees, tests, env reads. |
 | `impact NAME... \| --diff [REV]` | What does this change affect? Dependents, tests reaching them, test commands to run. |
@@ -131,11 +131,11 @@ Each question describes code in plain words ("compare two secrets in constant ti
 
 | corpus | questions | xcalygraph `find` | Graphify `query` | `rg` + read |
 |---|---|---|---|---|
-| hono | 32 | 71 %, 589 tokens | 75 %, 2,200 tokens | 75 %, 33,693 tokens |
-| Graphify source | 26 | 96 %, 588 tokens | 88 %, 2,254 tokens | 100 %, 175,310 tokens |
-| xcalygraph source | 32 | 84 %, 590 tokens | 75 %, 2,796 tokens | 100 %, 18,211 tokens |
+| hono | 32 | 78 %, 590 tokens | 75 %, 2,200 tokens | 75 %, 33,693 tokens |
+| Graphify source | 26 | 100 %, 585 tokens | 88 %, 2,254 tokens | 100 %, 175,310 tokens |
+| xcalygraph source | 32 | 90 %, 593 tokens | 75 %, 2,796 tokens | 100 %, 18,507 tokens |
 
-At a similar hit rate, xcalygraph answers with about a quarter of Graphify's tokens and 1/30 to 1/300 of what `rg` plus reading costs. `impact` finds 100 % of the expected dependents and tests on the xcalygraph impact set, at 305 tokens per answer.
+At a similar or higher hit rate, xcalygraph answers with about a quarter of Graphify's tokens and 1/30 to 1/300 of what `rg` plus reading costs. Held-out questions written before the search was tuned (`run-evaluation.sh --heldout`) land at 100 %, 93 % and 73 % for the three corpora (Graphify 53 %, 73 %, 80 %). `impact` finds 100 % of the expected dependents and tests on the xcalygraph impact set, at 335 tokens per answer.
 
 ### Building and updating the index
 

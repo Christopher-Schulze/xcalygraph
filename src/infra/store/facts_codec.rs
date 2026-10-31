@@ -6,6 +6,26 @@ use crate::domain::facts::{
     Ref, RefKind, SymKind, Symbol, TextSegment, ValueKind,
 };
 
+/// Search terms as a token list, so each token is interned once in the shard's string table.
+fn terms(encoder: &mut Encoder, value: &str) {
+    let tokens: Vec<&str> = value.split(' ').filter(|token| !token.is_empty()).collect();
+    encoder.var_usize(tokens.len());
+    for token in tokens {
+        encoder.str(token);
+    }
+}
+
+fn read_terms(decoder: &mut Decoder) -> DecodeResult<String> {
+    let mut value = String::new();
+    for index in 0..decoder.len()? {
+        if index > 0 {
+            value.push(' ');
+        }
+        value.push_str(decoder.str()?);
+    }
+    Ok(value)
+}
+
 fn opt_index(encoder: &mut Encoder, value: Option<u32>) {
     encoder.var(value.map_or(0, |index| u64::from(index) + 1));
 }
@@ -19,6 +39,7 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
     encoder.opt_str(facts.package.as_deref());
     encoder.var_u32(facts.lines);
     encoder.str(&facts.doc);
+    terms(encoder, &facts.terms);
     encoder.u8(u8::from(facts.entry));
     encoder.var_usize(facts.symbols.len());
     for symbol in &facts.symbols {
@@ -30,6 +51,7 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
         encoder.var_u32(symbol.end_line.saturating_sub(symbol.line));
         encoder.str(&symbol.signature);
         encoder.str(&symbol.doc);
+        terms(encoder, &symbol.terms);
         encoder.u8(u8::from(symbol.exported) | symbol.flags << 1);
     }
     encoder.var_usize(facts.imports.len());
@@ -120,6 +142,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
         package: decoder.opt_string()?,
         lines: decoder.var_u32()?,
         doc: decoder.string()?,
+        terms: read_terms(decoder)?,
         entry: decoder.u8()? != 0,
         ..Facts::default()
     };
@@ -132,6 +155,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
         let end_line = line.saturating_add(decoder.var_u32()?);
         let signature = decoder.string()?;
         let doc = decoder.string()?;
+        let terms = read_terms(decoder)?;
         let bits = decoder.u8()?;
         facts.symbols.push(Symbol {
             kind: Some(kind),
@@ -142,6 +166,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             end_line,
             signature,
             doc,
+            terms,
             exported: bits & 1 != 0,
             flags: bits >> 1,
         });
@@ -245,6 +270,7 @@ mod tests {
             package: Some("store".to_owned()),
             lines: 40,
             doc: "Package store keeps rows.".to_owned(),
+            terms: "main serve".to_owned(),
             entry: true,
             symbols: vec![
                 Symbol {
@@ -256,6 +282,7 @@ mod tests {
                     end_line: 9,
                     signature: "type Store struct".to_owned(),
                     doc: "Store keeps rows.".to_owned(),
+                    terms: "rows mutex insert".to_owned(),
                     exported: true,
                     flags: 0,
                 },
@@ -268,6 +295,7 @@ mod tests {
                     end_line: 15,
                     signature: "func (s *Store) Get(id int) Row".to_owned(),
                     doc: String::new(),
+                    terms: String::new(),
                     exported: true,
                     flags: FLAG_TEST,
                 },

@@ -1,13 +1,16 @@
 //! Tokenization and BM25F fields of the search index (`docs/spec.md` sections 6 and 7.2).
 
 /// Indexed fields of a node, in posting order.
-pub const FIELDS: usize = 5;
-pub const NAME: usize = 0;
-pub const PARENT: usize = 1;
-pub const PATH: usize = 2;
-pub const SIGNATURE: usize = 3;
+/// Ordered by posting frequency: term frequencies are packed 4 bits per field into a varint, so
+/// the most common fields take the low bits and most postings encode in one byte.
+pub const FIELDS: usize = 6;
+pub const BODY: usize = 0;
+pub const NAME: usize = 1;
+pub const SIGNATURE: usize = 2;
+pub const PARENT: usize = 3;
 pub const DOC: usize = 4;
-pub const FIELD_WEIGHTS: [f32; FIELDS] = [3.0, 1.5, 1.0, 0.5, 1.0];
+pub const PATH: usize = 5;
+pub const FIELD_WEIGHTS: [f32; FIELDS] = [2.5, 3.0, 0.5, 1.5, 1.0, 1.0];
 pub const K1: f32 = 1.2;
 pub const B: f32 = 0.75;
 
@@ -21,8 +24,31 @@ pub fn tokenize(text: &str) -> Vec<String> {
 }
 
 /// Calls `emit` with every lowercase token of `text`, reusing `buffer`; ASCII words take a
-/// byte-level fast path without per-character allocation.
+/// byte-level fast path without per-character allocation. Two-word phrases with a one-word
+/// equivalent (`sign in`, `signIn`) also emit that word (`login`).
 pub fn for_each_token(text: &str, buffer: &mut String, mut emit: impl FnMut(&str)) {
+    let mut previous = String::new();
+    each_token(text, buffer, |token| {
+        emit(token);
+        if let Some(word) = phrase(&previous, token) {
+            emit(word);
+        }
+        previous.clear();
+        previous.push_str(token);
+    });
+}
+
+/// One-word form of an auth phrase: `sign in`, `log in` -> `login`.
+fn phrase(previous: &str, token: &str) -> Option<&'static str> {
+    match (previous, token) {
+        ("sign" | "log", "in") => Some("login"),
+        ("sign" | "log", "out") => Some("logout"),
+        ("sign", "up") => Some("register"),
+        _ => None,
+    }
+}
+
+fn each_token(text: &str, buffer: &mut String, mut emit: impl FnMut(&str)) {
     for word in text.split(|ch: char| !ch.is_alphanumeric()) {
         if word.is_empty() {
             continue;
@@ -86,8 +112,9 @@ fn emit_lower(part: &str, buffer: &mut String, emit: &mut impl FnMut(&str)) {
     emit(buffer);
 }
 
-/// Maps common code abbreviations and their spelled-out words to one form, so `dir` matches
-/// "directory" and "config" matches `cfg`; applied to indexed text and queries alike.
+/// Maps common code abbreviations, spelled-out words and synonyms to one form, so `dir` matches
+/// "directory", "config" matches `cfg` and "remove" matches `delete`; applied to indexed text
+/// and queries alike, after [`stem`], so keys are stemmed forms (`delet`, `databas`).
 pub fn canonicalize(word: &mut String) {
     let canonical = match word.as_str() {
         "directory" | "directory's" => "dir",
@@ -106,17 +133,25 @@ pub fn canonicalize(word: &mut String) {
         "impl" | "implementation" => "implement",
         "param" | "parameter" => "param",
         "arg" | "argument" => "arg",
-        "attr" | "attribute" => "attr",
-        "init" | "initialize" | "initialization" => "init",
+        "attr" | "attribut" => "attr",
+        "init" | "initializ" | "initialization" => "init",
         "auth" | "authentication" | "authorization" => "auth",
-        "db" | "database" => "db",
-        "msg" | "message" => "message",
+        "db" | "databas" => "db",
+        "msg" | "messag" => "message",
         "tmp" | "temporary" => "temp",
         "doc" | "document" | "documentation" => "doc",
         "info" | "information" => "info",
         "spec" | "specification" => "spec",
-        "var" | "variable" => "var",
+        "var" | "variabl" => "var",
         "fs" | "filesystem" => "fs",
+        "remov" | "delet" | "destroy" => "delete",
+        "signin" | "logon" => "login",
+        "signout" | "logoff" => "logout",
+        "signup" => "register",
+        "reload" | "refetch" | "invalidat" => "refresh",
+        "navigat" => "redirect",
+        // `paging` stems to `pag`.
+        "pagination" | "paginat" | "pager" | "pag" => "page",
         _ => return,
     };
     word.clear();
@@ -124,12 +159,20 @@ pub fn canonicalize(word: &mut String) {
 }
 
 /// Light English suffix stripping, applied identically to indexed text and queries:
-/// `trees` -> `tree`, `expanded` -> `expand`, `imports` -> `import`, `entries` -> `entry`.
-/// Stems keep at least 3 letters; `ss`, `us` and `is` endings stay.
+/// `trees` -> `tree`, `expanded` -> `expand`, `imports` -> `import`, `entries` -> `entry`;
+/// a final `e` of words with at least 5 letters goes too, so `delete`, `deleted`, `deletes` and
+/// `deleting` share `delet`. Stems keep at least 3 letters; `ss`, `us` and `is` endings stay.
 pub fn stem(word: &mut String) {
     if word.len() <= 4 || !word.is_ascii() {
         return;
     }
+    strip_suffix(word);
+    if word.len() >= 5 && word.ends_with('e') && !word.ends_with("ee") {
+        word.pop();
+    }
+}
+
+fn strip_suffix(word: &mut String) {
     let strip = |word: &mut String, suffix: &str, replacement: &str| -> bool {
         if word.ends_with(suffix) && word.len() - suffix.len() >= 3 {
             word.truncate(word.len() - suffix.len());
@@ -156,7 +199,7 @@ pub fn stem(word: &mut String) {
     strip(word, "s", "");
 }
 
-/// English stopwords dropped from query terms only.
+/// English stopwords dropped from query terms only; stemmed forms (`where` -> `wher`).
 pub fn is_stopword(token: &str) -> bool {
     matches!(
         token,
@@ -183,7 +226,7 @@ pub fn is_stopword(token: &str) -> bool {
             | "this"
             | "to"
             | "what"
-            | "where"
+            | "wher"
             | "which"
             | "who"
             | "why"
@@ -218,10 +261,10 @@ mod tests {
 
     #[test]
     fn tokens_split_case_digits_and_separators() {
-        let cases: [(&str, &[&str]); 10] = [
-            ("NewStore", &["new", "store"]),
+        let cases: [(&str, &[&str]); 13] = [
+            ("NewStore", &["new", "stor"]),
             ("HTTPServer2", &["http", "server", "2"]),
-            ("parse_json_files", &["parse", "json", "file"]),
+            ("parse_json_files", &["pars", "json", "file"]),
             ("expanded use trees", &["expand", "use", "tree"]),
             ("entries process status", &["entry", "process", "status"]),
             ("classes matches boxes", &["class", "match", "box"]),
@@ -232,6 +275,15 @@ mod tests {
             ("src/infra/scan.rs", &["src", "infra", "scan", "rs"]),
             ("getV2Config", &["get", "v", "2", "config"]),
             ("ÜberCase", &["über", "case"]),
+            ("Pagination paginated pager", &["page", "page", "page"]),
+            (
+                "signIn removeUser",
+                &["sign", "in", "login", "delete", "user"],
+            ),
+            (
+                "created creates create file files",
+                &["creat", "creat", "creat", "file", "file"],
+            ),
         ];
         for (input, want) in cases {
             assert_eq!(tokenize(input), want, "{input}");
@@ -245,6 +297,6 @@ mod tests {
             ["config", "load"]
         );
         assert_eq!(query_terms("the"), ["the"]);
-        assert_eq!(query_terms("store Store"), ["store"]);
+        assert_eq!(query_terms("store Store"), ["stor"]);
     }
 }

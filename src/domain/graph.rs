@@ -91,6 +91,8 @@ pub struct GraphFile {
     pub doc: String,
     /// Config key paths and env definition names, for the search index only.
     pub keys: String,
+    /// Words of top-level code outside symbols, for the search index only.
+    pub terms: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -105,6 +107,8 @@ pub struct GraphSymbol {
     pub end_line: u32,
     pub signature: String,
     pub doc: String,
+    /// Body words for search ([`crate::domain::facts::Symbol::terms`]).
+    pub terms: String,
     pub exported: bool,
     pub flags: u8,
     pub rank: f32,

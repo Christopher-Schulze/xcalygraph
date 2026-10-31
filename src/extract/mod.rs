@@ -19,6 +19,7 @@ pub mod sfc;
 mod sql;
 mod structural;
 mod tasks;
+mod terms;
 
 use crate::domain::corpus::FileRecord;
 use crate::domain::facts::Facts;
@@ -26,7 +27,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 49;
+const EXTRACTION_VERSION: u32 = 50;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -46,6 +47,9 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
         Some(FileType::Vue | FileType::Svelte | FileType::Astro)
     ) {
         let mut facts = sfc::extract(record, content);
+        if record.role == Role::Src {
+            terms::add(content, &mut facts);
+        }
         facts.lines = count_lines(content);
         return facts;
     }
@@ -242,6 +246,15 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
         Role::Src | Role::Test | Role::Gen | Role::Config
     ) {
         assets::literal_paths(&String::from_utf8_lossy(content), &mut facts);
+    }
+    // Test and generated bodies are left out: they rank below sources and would double the
+    // index share.
+    if record.role == Role::Src
+        && record
+            .file_type
+            .is_some_and(|file_type| file_type.is_code())
+    {
+        terms::add(content, &mut facts);
     }
     facts.lines = count_lines(content);
     if record.role == Role::Manifest {

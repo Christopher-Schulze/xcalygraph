@@ -57,6 +57,7 @@ pub fn recover_functions(source: &str, facts: &mut crate::domain::facts::Facts) 
                 end_line: end as u32 + 1,
                 signature: line.trim().trim_end_matches('{').trim_end().to_owned(),
                 doc: String::new(),
+                terms: String::new(),
                 exported: true,
                 flags: 0,
             });

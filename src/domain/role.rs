@@ -279,7 +279,9 @@ pub fn is_test_path(file_type: FileType, path: &str) -> bool {
         Go => name.ends_with("_test.go"),
         Rust => has_dir(&["tests"]),
         TypeScript | JavaScript | Vue | Svelte | Astro => {
-            name.contains(".test.") || name.contains(".spec.") || has_dir(&["__tests__"])
+            name.contains(".test.")
+                || name.contains(".spec.")
+                || has_dir(&["__tests__", "__mocks__", "test", "tests", "e2e", "mocks"])
         }
         Python => {
             (name.starts_with("test_") && name.ends_with(".py"))
@@ -432,6 +434,8 @@ mod tests {
             (FileType::Rust, "crates/core/tests/api.rs"),
             (FileType::TypeScript, "src/app.spec.ts"),
             (FileType::JavaScript, "src/__tests__/app.js"),
+            (FileType::TypeScript, "e2e/tests/auth.setup.ts"),
+            (FileType::TypeScript, "src/testing/mocks/handlers/users.ts"),
             (FileType::Python, "pkg/test_core.py"),
             (FileType::Java, "src/test/java/a/B.java"),
             (FileType::Java, "src/main/java/a/ParserTest.java"),
@@ -453,6 +457,7 @@ mod tests {
             (FileType::Java, "src/main/java/a/Test.java"),
             (FileType::Python, "pkg/testing.py"),
             (FileType::Go, "pkg/test.go"),
+            (FileType::TypeScript, "src/helper/testing/index.ts"),
         ];
         for (file_type, path) in sources {
             assert!(!is_test_path(file_type, path), "{path}");

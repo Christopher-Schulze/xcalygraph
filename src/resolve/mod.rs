@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 62;
+pub const RESOLVE_VERSION: u32 = 63;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -172,6 +172,7 @@ impl<'a> Index<'a> {
                         end_line: symbol.end_line,
                         signature: String::new(),
                         doc: String::new(),
+                        terms: symbol.terms.clone(),
                         exported: true,
                         flags: if role == Role::Test {
                             facts::FLAG_TEST
@@ -209,6 +210,7 @@ impl<'a> Index<'a> {
                     end_line: symbol.end_line,
                     signature: symbol.signature.clone(),
                     doc: symbol.doc.clone(),
+                    terms: symbol.terms.clone(),
                     exported: symbol.exported,
                     flags,
                     rank: 0.0,
@@ -4103,6 +4105,7 @@ impl<'a> Index<'a> {
                 entry: facts.is_some_and(|facts| facts.entry)
                     || manifest_entries.contains(record.path.as_str()),
                 doc: facts.map(|facts| facts.doc.clone()).unwrap_or_default(),
+                terms: facts.map(|facts| facts.terms.clone()).unwrap_or_default(),
                 keys: facts
                     .map(|facts| {
                         let keys = facts.config_keys.iter().map(|key| key.path.as_str());

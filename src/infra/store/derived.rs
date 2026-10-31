@@ -130,12 +130,11 @@ impl PostingRecord {
     }
 }
 
-/// Token count per field of one node (BM25F length normalization).
+/// Token count per field of one node (BM25F length normalization), capped at 255.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct LengthRecord {
-    pub lengths: [u16; FIELDS],
-    pub pad: u16,
+    pub lengths: [u8; FIELDS],
 }
 
 mod section {
@@ -401,6 +400,7 @@ fn search_index(graph: &Graph) -> SearchIndex {
             fields[search::DOC] = &file.doc;
             // Config key paths and env names weigh like a signature.
             fields[search::SIGNATURE] = &file.keys;
+            fields[search::BODY] = &file.terms;
             return fields;
         }
         let symbol = &graph.symbols[node];
@@ -417,6 +417,7 @@ fn search_index(graph: &Graph) -> SearchIndex {
         fields[search::PARENT] = parent;
         fields[search::SIGNATURE] = &symbol.signature;
         fields[search::DOC] = &symbol.doc;
+        fields[search::BODY] = &symbol.terms;
         fields
     };
     const CHUNK: usize = 4096;
@@ -430,11 +431,10 @@ fn search_index(graph: &Graph) -> SearchIndex {
             for node in range {
                 let mut record = LengthRecord {
                     lengths: [0; FIELDS],
-                    pad: 0,
                 };
                 for (field, text) in texts(node).iter().enumerate() {
-                    let mut count = 0u16;
-                    search::for_each_token(text, &mut buffer, |token| {
+                    let mut count = 0u8;
+                    let mut add = |token: &str| {
                         count = count.saturating_add(1);
                         let list = match lists.get_mut(token) {
                             Some(list) => list,
@@ -451,7 +451,15 @@ fn search_index(graph: &Graph) -> SearchIndex {
                                 list.push(posting);
                             }
                         }
-                    });
+                    };
+                    // Body terms are stored as normalized tokens (src/extract/terms.rs).
+                    if field == search::BODY {
+                        text.split(' ')
+                            .filter(|token| !token.is_empty())
+                            .for_each(&mut add);
+                    } else {
+                        search::for_each_token(text, &mut buffer, add);
+                    }
                     record.lengths[field] = count;
                 }
                 lengths.push(record);

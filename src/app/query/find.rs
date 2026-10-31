@@ -8,6 +8,9 @@ use crate::infra::store::derived::PostingRecord;
 
 const EXACT_NAME_BONUS: f32 = 5.0;
 const RANK_WEIGHT: f32 = 0.5;
+/// BM25 scales by the share of query terms a node matches (coordination): a node covering
+/// three of five terms in its body beats one matching a single term in its name.
+const COORD_EXPONENT: f32 = 1.0;
 /// Hits below this share of the top score are noise.
 const RELEVANCE_FLOOR: f32 = 0.05;
 
@@ -46,7 +49,7 @@ pub fn search(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
         .map(|symbol| (1.0 + symbol.rank * node_count).ln())
         .fold(0.0f32, f32::max)
         .max(f32::EPSILON);
-    let mut scores: HashMap<u32, f32> = HashMap::with_capacity(candidates.len());
+    let mut scores: HashMap<u32, (f32, u32)> = HashMap::with_capacity(candidates.len());
     for list in &postings {
         let df = list.len() as f32;
         let idf = (1.0 + (node_count - df + 0.5) / (df + 0.5)).ln();
@@ -76,14 +79,17 @@ pub fn search(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
                 weighted += FIELD_WEIGHTS[field] * f32::from(tf[field]) / normalization.max(0.01);
             }
             if weighted > 0.0 {
-                *scores.entry(node).or_default() += idf * weighted / (K1 + weighted);
+                let entry = scores.entry(node).or_default();
+                entry.0 += idf * weighted / (K1 + weighted);
+                entry.1 += 1;
             }
         }
     }
     let mut hits: Vec<Hit> = scores
         .into_iter()
-        .map(|(node, bm25)| {
-            let mut score = bm25;
+        .map(|(node, (bm25, matched))| {
+            let coverage = matched as f32 / terms.len() as f32;
+            let mut score = bm25 * coverage.powf(COORD_EXPONENT);
             let mut rank = 0.0;
             if let Node::Symbol(symbol) = index.node(node) {
                 let name = index.string(symbol.name).to_lowercase().replace('_', "");

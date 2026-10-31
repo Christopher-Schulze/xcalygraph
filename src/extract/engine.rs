@@ -498,6 +498,7 @@ fn assemble(assembly: Assembly) -> Facts {
             end_line: def.last_clause.unwrap_or(node).end_position().row as u32 + 1,
             signature,
             doc: doc_comment(node, source),
+            terms: String::new(),
             exported,
             flags,
         });

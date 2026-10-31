@@ -116,9 +116,15 @@ pub struct Symbol {
     pub signature: String,
     /// First sentence of the attached doc comment, max 120 chars.
     pub doc: String,
+    /// Distinct search tokens of the body outside nested symbols (identifiers, strings,
+    /// comments, markup text), normalized, space-separated, max [`BODY_TERMS`]; search only.
+    pub terms: String,
     pub exported: bool,
     pub flags: u8,
 }
+
+/// Words kept per symbol body for search.
+pub const BODY_TERMS: usize = 64;
 
 impl Symbol {
     pub fn kind(&self) -> SymKind {
@@ -358,6 +364,8 @@ pub struct Facts {
     /// Leading comment of the file (module or package documentation), whitespace-normalized,
     /// max 400 chars.
     pub doc: String,
+    /// Distinct words of top-level code outside every symbol, as [`Symbol::terms`].
+    pub terms: String,
     /// The file is an executable entrypoint (shebang, `__main__` block).
     pub entry: bool,
 }
