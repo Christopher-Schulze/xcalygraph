@@ -166,6 +166,9 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
     let mut entry = false;
     // Variables assigned in the file (Bash): their reads are no environment reads.
     let mut assigned: Vec<String> = Vec::new();
+    // Local variables and parameters (`@local`): a bare value reference of that name in the same
+    // scope reads the local, not a method (Ruby `x = 1; x`).
+    let mut locals: Vec<(usize, String)> = Vec::new();
     let mut cursor = QueryCursor::new();
     cursor.set_match_limit(4096);
     let mut matches = cursor.matches(query, root, source);
@@ -176,6 +179,12 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
             .filter(|capture| names[capture.index as usize] == "assigned")
         {
             assigned.push(text(capture.node).to_owned());
+        }
+        for capture in captures
+            .iter()
+            .filter(|capture| names[capture.index as usize] == "local")
+        {
+            locals.push((capture.node.start_byte(), text(capture.node).to_owned()));
         }
         let Some((primary, primary_node)) = captures.iter().find_map(|capture| {
             let name = names[capture.index as usize];
@@ -338,6 +347,7 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
         returns,
         fields,
         envs,
+        locals,
     });
     facts.doc = doc;
     facts.entry |= entry;
@@ -357,6 +367,7 @@ struct Assembly<'a, 'tree> {
     returns: Vec<(usize, String)>,
     fields: HashMap<usize, RawField>,
     envs: HashMap<usize, (String, usize, u32)>,
+    locals: Vec<(usize, String)>,
 }
 
 fn assemble(assembly: Assembly) -> Facts {
@@ -373,6 +384,7 @@ fn assemble(assembly: Assembly) -> Facts {
         returns,
         fields,
         envs,
+        locals,
     } = assembly;
     let text = |node: Node| node.utf8_text(source).unwrap_or_default();
     let mut defs: Vec<RawDef> = defs
@@ -507,6 +519,20 @@ fn assemble(assembly: Assembly) -> Facts {
             })
         })
         .collect();
+    if !locals.is_empty() {
+        let local_names: std::collections::HashSet<(Option<u32>, &str)> = locals
+            .iter()
+            .map(|(position, name)| (scope_of(*position), name.as_str()))
+            .collect();
+        // Bare names only: a parenthesized call or one with arguments names a method.
+        facts_refs.retain(|reference| {
+            let bare = reference.kind == RefKind::Value
+                || (reference.kind == RefKind::Call && reference.arity == facts::NO_ARITY);
+            !bare
+                || reference.qualifier.is_some()
+                || !local_names.contains(&(reference.scope, reference.name.as_str()))
+        });
+    }
     for (impl_node, target, trait_name) in &impls {
         if let Some(trait_name) = trait_name {
             facts_refs.push(Ref {

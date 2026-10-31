@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 43;
+pub const RESOLVE_VERSION: u32 = 44;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -2212,10 +2212,13 @@ impl<'a> Index<'a> {
                             EdgeKind::Implements
                         } else if kind == EdgeKind::Uses
                             && reference.kind == RefKind::Value
-                            && self.file_type(file) == Some(FileType::Pascal)
+                            && matches!(
+                                self.file_type(file),
+                                Some(FileType::Pascal | FileType::Ruby)
+                            )
                             && self.symbols[target as usize].kind.is_callable()
                         {
-                            // Pascal calls parameterless routines without parentheses.
+                            // Pascal and Ruby call parameterless routines without parentheses.
                             if source_is_test {
                                 EdgeKind::Tests
                             } else {
@@ -2899,10 +2902,13 @@ impl<'a> Index<'a> {
                         false
                     } else if reference.kind == RefKind::Value {
                         // C# and VB.NET method groups (`Register(Handle)`) name methods as values;
-                        // a bare Pascal method name in an expression calls it (`X := Count`).
+                        // a bare Pascal or Ruby method name in an expression calls it (`X := Count`).
                         kind == SymKind::Const
                             || ((jvm::is_dotnet(self.file_type(file))
-                                || self.file_type(file) == Some(FileType::Pascal))
+                                || matches!(
+                                    self.file_type(file),
+                                    Some(FileType::Pascal | FileType::Ruby)
+                                ))
                                 && kind.is_callable())
                     } else {
                         kind.is_callable()
@@ -3587,6 +3593,20 @@ impl<'a> Index<'a> {
         if candidates.is_empty() {
             return Outcome::Unresolved;
         }
+        // Ruby reopens classes and modules in several files: the parts are one constant.
+        let candidates = if candidates.len() > 1 && {
+            let first = &self.symbols[candidates[0] as usize];
+            self.file_type(first.file) == Some(FileType::Ruby)
+                && first.kind.is_type()
+                && candidates.iter().all(|&s| {
+                    let symbol = &self.symbols[s as usize];
+                    symbol.kind.is_type() && symbol.qualified == first.qualified
+                })
+        } {
+            candidates[..1].to_vec()
+        } else {
+            candidates
+        };
         let imported: Vec<u32> = candidates
             .iter()
             .copied()

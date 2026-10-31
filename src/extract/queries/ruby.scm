@@ -25,6 +25,27 @@
 ; Without parentheses or receiver a call looks like a variable: statements and predicate or bang
 ; names are calls.
 (body_statement (identifier) @name @reference.call)
+(then (identifier) @name @reference.value)
+(else (identifier) @name @reference.value)
+(block_body (identifier) @name @reference.value)
+; Bare names in expressions are method calls unless a local of the method has that name.
+(assignment right: (identifier) @name @reference.value)
+(binary [left: (identifier) right: (identifier)] @name @reference.value)
+(element_reference (identifier) @name @reference.value)
+(if condition: (identifier) @name @reference.value)
+(unless condition: (identifier) @name @reference.value)
+(if_modifier condition: (identifier) @name @reference.value)
+(unless_modifier condition: (identifier) @name @reference.value)
+(assignment left: (identifier) @local)
+(operator_assignment left: (identifier) @local)
+(method_parameters (identifier) @local)
+(lambda_parameters (identifier) @local)
+(block_parameters (identifier) @local)
+(optional_parameter name: (identifier) @local)
+(keyword_parameter name: (identifier) @local)
+(splat_parameter name: (identifier) @local)
+(hash_splat_parameter name: (identifier) @local)
+(block_parameter name: (identifier) @local)
 ((identifier) @name @reference.call (#match? @name "[?!]$"))
 (scope_resolution scope: (_) @qualifier name: (constant) @name) @reference.type
 (constant) @name @reference.type

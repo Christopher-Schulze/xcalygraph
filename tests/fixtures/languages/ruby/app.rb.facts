@@ -12,7 +12,6 @@ ref 6 Call put qualifier=repository scope=run args=1
 ref 7 Call fetch qualifier=ENV scope=run args=1
 ref 8 Call find qualifier=repository scope=run args=1
 ref 8 Call report qualifier=- scope=run args=2
-ref 8 Value url qualifier=- scope=run
 ref 16 Call new qualifier=Struct scope=Row args=1
 bind 5 "repository": Store::MemoryRepository declared scope=run
 env 7 APP_URL scope=run

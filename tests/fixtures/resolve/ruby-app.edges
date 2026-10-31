@@ -6,6 +6,10 @@ lib.App.run -calls-> lib/store.Store.MemoryRepository.put @6
 lib.App.run -uses-> lib/store.Store.MemoryRepository @5
 lib.App.run -uses?-> lib/store.Store @5
 lib/store.Store.Base.check -calls-> lib/store.Store.Base.valid? @11
+lib/store.Store.Limits.check -calls-> lib/store.Store.Limits.maximum @6
+lib/store.Store.Limits.check -calls-> lib/store.Store.Limits.ready @9
+lib/store.Store.Limits.check -calls-> lib/store.Store.Limits.reserve @5
+lib/store.Store.Limits.check -calls-> lib/store.Store.Limits.reset @7
 lib/store.Store.MemoryRepository -implements-> lib/store.Store.Readable @20
 lib/store.Store.MemoryRepository -inherits-> lib/store.Store.Base @19
 lib/store.Store.MemoryRepository.find -calls-> lib/store.Store.Base.check @27
