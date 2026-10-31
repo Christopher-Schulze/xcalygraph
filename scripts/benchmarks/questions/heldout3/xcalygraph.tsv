@@ -1,0 +1,11 @@
+question	expected
+decide whether a file path is a framework route and which kind	src/extract/routes.rs::classify
+blank tailwind class strings before collecting words	src/extract/terms.rs::without_class_lists
+path aliases and workspace packages for javascript imports	src/resolve/js.rs::tables
+byte ranges of script blocks in vue and svelte files	src/extract/sfc.rs::script_ranges
+load the stored file table unless the extraction version changed	src/app/refresh.rs::stored_state
+serialize the facts of one file into a shard	src/infra/store/facts_codec.rs::encode
+create the symlink from the claude skills folder	src/app/install.rs::link
+qualified name assembled from prefix and name	src/app/query/mod.rs::qualified
+turn a symbol into one output line with path and score	src/app/query/mod.rs::write_symbol
+strip a known source extension from a module path	src/resolve/js.rs::strip_extension

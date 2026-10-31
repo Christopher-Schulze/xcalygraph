@@ -1,0 +1,11 @@
+question	expected
+pricing page listing what the pro plan includes	app/(marketing)/pricing/page.tsx::PricingPage
+settings page where the user changes the name	app/(dashboard)/dashboard/settings/page.tsx::SettingsPage
+footer with the author credit and theme switch	components/site-footer.tsx::SiteFooter
+search box for the documentation	components/search.tsx::DocsSearch
+message shown when the user has no posts yet	components/empty-placeholder.tsx::EmptyPlaceholder
+show the user's image or initials	components/user-avatar.tsx::UserAvatar
+placeholder card while content is loading	components/card-skeleton.tsx::CardSkeleton
+highlighted note box inside documentation pages	components/callout.tsx::Callout
+allowed fields when updating a post	lib/validations/post.ts::postPatchSchema
+frontmatter fields of a blog post document	contentlayer.config.js::Post

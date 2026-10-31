@@ -1,0 +1,11 @@
+question	expected
+label, input and error message wrapper for form fields	src/components/ui/form/field-wrapper.tsx::FieldWrapper
+dropdown select field for forms	src/components/ui/form/select.tsx::Select
+router link styled for the app	src/components/ui/link/link.tsx::Link
+dialog asking the user to confirm a dangerous action	src/components/ui/dialog/confirmation-dialog/confirmation-dialog.tsx::ConfirmationDialog
+load the list of teams to join when registering	src/features/teams/api/get-teams.ts::useTeams
+email and password form to sign in	src/features/auth/components/login-form.tsx::LoginForm
+error screen inside the dashboard routes	src/app/routes/app/root.tsx::ErrorBoundary
+prefetch the users before the users page renders	src/app/routes/app/users.tsx::clientLoader
+drawer form where the user edits name, email and bio	src/features/users/components/update-profile.tsx::UpdateProfile
+button that deletes a user after confirmation	src/features/users/components/delete-user.tsx::DeleteUser

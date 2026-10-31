@@ -1,0 +1,11 @@
+question	expected
+error raised when a json web token has expired	src/utils/jwt/types.ts::JwtTokenExpired
+validate request input like json, form or query with a custom function	src/validator/validator.ts::validator
+the context object passed to handlers with request, response helpers and variables	src/context.ts::Context
+handle fetch events in a service worker	src/adapter/service-worker/handler.ts::handle
+client ip address and port on cloudflare workers	src/adapter/cloudflare-workers/conninfo.ts::getConnInfo
+list the routes that matched the current request	src/helper/route/index.ts::matchedRoutes
+stream a response body with a writer callback	src/helper/streaming/stream.ts::stream
+generate static html files with bun	src/adapter/bun/ssg.ts::toSSG
+upgrade an http request to a websocket on deno	src/adapter/deno/websocket.ts::upgradeWebSocket
+verify a jws signature with a public key	src/utils/jwt/jws.ts::verifying

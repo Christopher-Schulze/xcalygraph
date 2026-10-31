@@ -1,0 +1,11 @@
+question	expected
+write the graph as a set of linked wiki pages	graphify/wiki.py::to_wiki
+measure how many tokens a query saves compared to reading the files	graphify/benchmark.py::run_benchmark
+write the markdown report about the graph	graphify/report.py::generate
+find the start node for a change impact question	graphify/affected.py::resolve_seed
+crate name from a cargo manifest	graphify/cargo_introspect.py::package_name
+connect member calls across repositories after merging graphs	graphify/cross_repo_calls.py::link_cross_repo_member_calls
+extract zig functions and imports	graphify/extractors/zig.py::extract_zig
+resolve calls to functions inherited from parent contracts in solidity	graphify/extractors/solidity.py::resolve_solidity_inherited_calls
+extract robot framework test cases and keywords	graphify/extractors/robot.py::extract_robot
+read tables and columns from a postgres database	graphify/pg_introspect.py::introspect_postgres
