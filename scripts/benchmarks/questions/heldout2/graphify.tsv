@@ -1,0 +1,11 @@
+question	expected
+fetch open pull requests of a github repository	graphify/prs.py::fetch_prs
+push the graph into a falkordb database	graphify/exporters/graphdb.py::push_to_falkordb
+append every query to a log file	graphify/querylog.py::log_query
+extract many files in parallel with the language model	graphify/llm.py::extract_corpus_parallel
+remove the git hooks again	graphify/hooks.py::uninstall
+download a web page or paper and add it to the corpus	graphify/ingest.py::ingest
+link calls between files after all files were parsed	graphify/symbol_resolution.py::resolve_cross_file_raw_calls
+parse a lazarus form file	graphify/extractors/pascal_forms.py::extract_lazarus_form
+extract functions and calls from erlang modules	graphify/extractors/erlang.py::extract_erlang
+extract shell script functions	graphify/extractors/bash.py::extract_bash

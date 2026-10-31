@@ -1,0 +1,11 @@
+question	expected
+centered card layout for the login and register pages	src/components/layouts/auth-layout.tsx::AuthLayout
+generic table that renders rows from column definitions	src/components/ui/table/table.tsx::Table
+start the mock api in the browser during development	src/testing/mocks/index.ts::enableMocking
+toast with an icon for success, error, warning or info	src/components/ui/notifications/notification.tsx::Notification
+form to write a new comment under a discussion	src/features/comments/components/create-comment.tsx::CreateComment
+loading spinner in different sizes	src/components/ui/spinner/spinner.tsx::Spinner
+show one discussion with its title, author and body	src/features/discussions/components/discussion-view.tsx::DiscussionView
+confirmation before removing a comment	src/features/comments/components/delete-comment.tsx::DeleteComment
+validation rules for the sign up form	src/lib/auth.tsx::registerInputSchema
+page layout with a title for app pages	src/components/layouts/content-layout.tsx::ContentLayout

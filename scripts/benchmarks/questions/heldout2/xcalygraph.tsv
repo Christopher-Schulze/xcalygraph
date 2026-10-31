@@ -1,0 +1,11 @@
+question	expected
+insert semicolons so groovy scripts parse with the grammar	src/extract/lang/groovy.rs::terminate_statements
+hide platform specific macros before parsing c code	src/extract/lang/c.rs::mask_platform_macros
+environment variables read but never defined	src/app/query/audit.rs::drift
+read operations from an openapi yaml document	src/extract/contracts.rs::openapi_yaml
+targets and prerequisites of a makefile	src/extract/tasks.rs::makefile
+release archive file name for this operating system and cpu	src/app/update.rs::asset_name
+pick the language of a script without extension from its first line	src/domain/filetype.rs::shebang_type
+recover shell functions the grammar failed to parse	src/extract/lang/bash.rs::recover_functions
+show all indexes with their size and last use	src/app/indexes.rs::list
+link targets in a markdown line	src/extract/markdown.rs::links

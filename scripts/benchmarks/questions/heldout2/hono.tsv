@@ -1,0 +1,11 @@
+question	expected
+mount an app from another framework under a path prefix	src/middleware/mount/index.ts::mount
+pretty print json responses when a query parameter asks for it	src/middleware/pretty-json/index.ts::prettyJSON
+add the x-powered-by response header	src/middleware/powered-by/index.ts::poweredBy
+set an etag header and answer 304 when it matches	src/middleware/etag/index.ts::etag
+verify a json web token from the authorization header or a cookie	src/middleware/jwt/jwt.ts::jwt
+hash data with sha or md5 using web crypto	src/utils/crypto.ts::createHash
+websocket connection wrapper that sends messages and closes	src/helper/websocket/index.ts::WSContext
+hydrate server rendered jsx in the browser	src/jsx/dom/client.ts::hydrateRoot
+compare two objects shallowly for memo	src/jsx/base.ts::shallowEqual
+show a fallback when a child component throws while rendering	src/jsx/components.ts::ErrorBoundary

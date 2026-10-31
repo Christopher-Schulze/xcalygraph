@@ -1,0 +1,7 @@
+question	expected
+one comment with its author and a delete button	src/routes/article/[slug]/Comment.svelte
+list of comments below an article together with the input	src/routes/article/[slug]/CommentContainer.svelte
+send a delete request to the backend	src/lib/api.js::del
+page shown when a route fails with its status	src/routes/+error.svelte
+article page with rendered body, tags and comments	src/routes/article/[slug]/+page.svelte
+articles favorited by a user	src/routes/profile/@[user]/favorites/+page.server.js::load

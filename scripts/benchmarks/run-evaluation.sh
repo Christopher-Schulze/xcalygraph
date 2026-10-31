@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Answer quality and tokens per question against the rg and upstream Graphify baselines
 # (docs/spec.md section 12).
-# Usage: scripts/benchmarks/run-evaluation.sh [--no-upstream] [--heldout] [CORPUS...]
-#   --heldout: the held-out sets of scripts/benchmarks/questions/heldout/, never used for tuning.
+# Usage: scripts/benchmarks/run-evaluation.sh [--no-upstream] [--set NAME] [CORPUS...]
+#   --set NAME: the question sets of scripts/benchmarks/questions/NAME/ (held-out rounds heldout,
+#   heldout2, ...: written before a tuning round, evaluated once at its end).
 #   Question sets: scripts/benchmarks/questions/<corpus>.tsv and, for private corpora,
 #   scripts/benchmarks/questions/private/<corpus>.tsv; columns question, expected location as
 #   path::name (or path). Corpus roots: this repository (xcalygraph), the upstream clone
@@ -27,7 +28,7 @@ upstream=1
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --no-upstream) upstream=0 ;;
-    --heldout) QUESTIONS="${QUESTIONS}/heldout" ;;
+    --set) QUESTIONS="${QUESTIONS}/$2"; shift ;;
     *) echo "run-evaluation.sh: unknown flag $1" >&2; exit 2 ;;
   esac
   shift

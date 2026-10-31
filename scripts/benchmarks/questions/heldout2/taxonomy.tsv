@@ -1,0 +1,11 @@
+question	expected
+form that sends the user to stripe to upgrade or manage the plan	components/billing-form.tsx::BillingForm
+dropdown with the user's avatar, dashboard link and sign out	components/user-account-nav.tsx::UserAccountNav
+navigation menu shown on small screens	components/mobile-nav.tsx::MobileNav
+render compiled mdx content with custom components	components/mdx-components.tsx::Mdx
+single prisma client reused across hot reloads	lib/db.ts::db
+stripe client configured with the secret key	lib/stripe.ts::stripe
+error thrown when a free user reaches the post limit	lib/exceptions.ts
+format a date as month day and year	lib/utils.ts::formatDate
+only render children after the component mounted in the browser	hooks/use-mounted.ts::useMounted
+sidebar links of the documentation	config/docs.ts::docsConfig
