@@ -438,6 +438,46 @@ fn impact_on_dotnet_tests_prints_dotnet_test_filters() -> TestResult {
 }
 
 #[test]
+fn impact_on_script_language_tests_prints_their_runners() -> TestResult {
+    let dir = TempDir::new("script-impact")?;
+    dir.write(
+        "repo/lib/store/repo.ex",
+        "defmodule Store.Repo do\n  def get(rows, id), do: Map.get(rows, id)\nend\n",
+    )?;
+    dir.write(
+        "repo/test/repo_test.exs",
+        "defmodule Store.RepoTest do\n  use ExUnit.Case\n  alias Store.Repo\n\n  test \"get\" do\n    assert Repo.get(%{}, 1) == nil\n  end\nend\n",
+    )?;
+    dir.write(
+        "repo/src/repo.zig",
+        "pub fn count(n: u32) u32 {\n    return n;\n}\n\ntest \"count\" {\n    _ = count(1);\n}\n",
+    )?;
+    dir.write(
+        "repo/src/Store.php",
+        "<?php\nnamespace App;\n\nclass Store\n{\n    public function open(): int { return 1; }\n}\n",
+    )?;
+    dir.write(
+        "repo/tests/StoreTest.php",
+        "<?php\nnamespace App;\n\nclass StoreTest\n{\n    public function testOpen(): void { (new Store())->open(); }\n}\n",
+    )?;
+    let root = dir.0.join("repo");
+    let index = dir.0.join("index");
+    let elixir = String::from_utf8(run_in(&root, &index, &["impact", "Store.Repo.get"])?.stdout)?;
+    assert!(
+        elixir.contains("r mix test test/repo_test.exs\n"),
+        "{elixir}"
+    );
+    let zig = String::from_utf8(run_in(&root, &index, &["impact", "src/repo.count"])?.stdout)?;
+    assert!(zig.contains("r zig build test\n"), "{zig}");
+    let php = String::from_utf8(run_in(&root, &index, &["impact", "Store.open"])?.stdout)?;
+    assert!(
+        php.contains("r vendor/bin/phpunit --filter 'testOpen'\n"),
+        "{php}"
+    );
+    Ok(())
+}
+
+#[test]
 fn env_definitions_feed_map_env_and_audit_drift_without_values() -> TestResult {
     let dir = TempDir::new("env-surface")?;
     let root = dir.0.join("repo");

@@ -2,12 +2,16 @@
 
 #[cfg(feature = "lang-bash")]
 pub mod bash;
+#[cfg(any(feature = "lang-elixir", feature = "lang-erlang"))]
+pub mod beam;
 #[cfg(any(feature = "lang-c", feature = "lang-cpp", feature = "lang-objc"))]
 pub mod c;
 #[cfg(feature = "lang-cpp")]
 pub mod cpp;
 #[cfg(any(feature = "lang-csharp", feature = "lang-vbnet"))]
 pub mod csharp;
+#[cfg(feature = "lang-dart")]
+pub mod dart;
 #[cfg(feature = "lang-go")]
 pub mod go;
 #[cfg(feature = "lang-groovy")]
@@ -25,6 +29,8 @@ pub mod groovy;
 pub mod java;
 #[cfg(feature = "lang-kotlin")]
 pub mod kotlin;
+#[cfg(feature = "lang-lua")]
+pub mod lua;
 #[cfg(feature = "lang-objc")]
 pub mod objc;
 #[cfg(feature = "lang-php")]
@@ -43,6 +49,8 @@ pub mod swift;
 pub mod typescript;
 #[cfg(feature = "lang-vbnet")]
 pub mod vbnet;
+#[cfg(feature = "lang-zig")]
+pub mod zig;
 
 use std::sync::OnceLock;
 
@@ -100,6 +108,16 @@ const PACKS: &[&Pack] = &[
     &ruby::PACK,
     #[cfg(feature = "lang-php")]
     &php::PACK,
+    #[cfg(feature = "lang-dart")]
+    &dart::PACK,
+    #[cfg(feature = "lang-elixir")]
+    &beam::ELIXIR,
+    #[cfg(feature = "lang-erlang")]
+    &beam::ERLANG,
+    #[cfg(feature = "lang-lua")]
+    &lua::PACK,
+    #[cfg(feature = "lang-zig")]
+    &zig::PACK,
 ];
 
 /// One lazily compiled query per pack: a refresh compiles only the languages it extracts.

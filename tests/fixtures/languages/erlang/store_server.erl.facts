@@ -1,0 +1,10 @@
+package store_server
+sym 5-6 fn start_link parent=- owner= pub flags=2 sig="start_link() ->" doc=""
+sym 8-10 fn init parent=- owner= pub flags=2 sig="init([]) ->" doc=""
+sym 12-13 fn handle_call parent=- owner= pub flags=2 sig="handle_call(" doc=""
+ref 2 Implement gen_server qualifier=- scope=-
+ref 6 Call start_link qualifier=gen_server scope=start_link args=4
+ref 9 Call getenv qualifier=os scope=init args=1
+ref 13 Call get qualifier=maps scope=handle_call args=2
+ref 13 Call get qualifier=store_repo scope=handle_call args=2
+env 9 STORE_URL scope=init

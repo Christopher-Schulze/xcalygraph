@@ -1,0 +1,1 @@
+-record(row, {id, name}).

@@ -39,7 +39,13 @@ pub(super) fn has_implicit_this(file_type: Option<FileType>) -> bool {
     (is_class_based(file_type) && file_type != Some(FileType::Php))
         || matches!(
             file_type,
-            Some(FileType::Cpp | FileType::Swift | FileType::Ruby)
+            Some(
+                FileType::Cpp
+                    | FileType::Swift
+                    | FileType::Ruby
+                    | FileType::Dart
+                    | FileType::Elixir
+            )
         )
 }
 

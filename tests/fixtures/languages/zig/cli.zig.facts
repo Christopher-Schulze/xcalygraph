@@ -1,0 +1,13 @@
+sym 5-7 fn rows parent=- owner= pub flags=0 sig="pub fn rows(repo: *Repo) usize" doc=""
+sym 9-12 fn first parent=- owner= pub flags=0 sig="pub fn first(repo: *store.Repo, params: Params) ?[]const u8" doc=""
+import 1 "store" names= alias=store reexport=false
+import 2 "store" names=Repo alias=Repo reexport=false
+import 3 "repo.zig" names=Params alias=Params reexport=false
+ref 5 Type Repo qualifier=- scope=rows
+ref 6 Call count qualifier=store scope=rows
+ref 9 Type Params qualifier=- scope=first
+ref 9 Type Repo qualifier=store scope=first
+ref 11 Call get qualifier=repo scope=first
+bind 5 "repo": Repo declared scope=rows
+bind 9 "params": Params declared scope=first
+bind 9 "repo": store.Repo declared scope=first

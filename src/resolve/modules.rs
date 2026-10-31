@@ -215,6 +215,40 @@ fn module_of(map: &ModuleMap, record: &FileRecord, facts: Option<&Facts>) -> Mod
                 file_type: Some(FileType::Php),
             }
         }
+        Some(FileType::Elixir | FileType::Erlang | FileType::Lua | FileType::Zig)
+            if extracted_code =>
+        {
+            // One module per file: Erlang modules are named by the file stem (`m:f()`), Elixir
+            // modules are resolved by their `defmodule` name, Lua and Zig files are tables
+            // or structs bound by `require` and `@import`.
+            let stem = record
+                .path
+                .rsplit_once('.')
+                .map_or(record.path.as_str(), |(stem, _)| stem);
+            let key = match record.file_type {
+                Some(FileType::Erlang) => {
+                    format!("erl:{}", stem.rsplit('/').next().unwrap_or(stem))
+                }
+                _ => format!("file:{}", record.path),
+            };
+            ModuleInfo {
+                name: stem.to_owned(),
+                method_scope: key.clone(),
+                key,
+                separator: ".",
+                file_type: record.file_type,
+            }
+        }
+        Some(FileType::Dart) if extracted_code => {
+            let key = format!("dart:{}", record.path);
+            ModuleInfo {
+                name: record.path.trim_end_matches(".dart").to_owned(),
+                method_scope: "dart".to_owned(),
+                key,
+                separator: ".",
+                file_type: Some(FileType::Dart),
+            }
+        }
         Some(FileType::Go) if extracted_code => {
             let key = go_import_path(map, dir);
             ModuleInfo {

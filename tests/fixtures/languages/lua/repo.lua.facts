@@ -1,0 +1,4 @@
+sym 3-8 fn check parent=- owner= priv flags=0 sig="local function check(row)" doc=""
+sym 10-12 fn get parent=- owner= pub flags=0 sig="function M.get(rows, id)" doc=""
+sym 14-16 fn put parent=- owner= pub flags=0 sig="function M.put(rows, id, row)" doc=""
+ref 11 Call check qualifier=- scope=get args=1

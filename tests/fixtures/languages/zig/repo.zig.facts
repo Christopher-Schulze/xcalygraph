@@ -1,0 +1,21 @@
+sym 3-9 struct Repo parent=- owner= pub flags=0 sig="pub const Repo = struct" doc=""
+sym 6-8 method get parent=Repo owner=Repo pub flags=0 sig="pub fn get(self: *Repo, id: u32) ?[]const u8" doc=""
+sym 11-13 fn check parent=- owner= priv flags=0 sig="fn check(row: ?[]const u8) ?[]const u8" doc=""
+sym 15-17 fn count parent=- owner= pub flags=0 sig="pub fn count(repo: *Repo) usize" doc=""
+sym 19-21 fn "check passes rows" parent=- owner= priv flags=1 sig="test \"check passes rows\"" doc=""
+sym 23-25 struct Params parent=- owner= pub flags=0 sig="pub const Params = struct" doc=""
+import 1 "std" names= alias=std reexport=false
+ref 4 Call AutoHashMap qualifier=std scope=Repo
+ref 6 Type Repo qualifier=- scope=get
+ref 7 Call check qualifier=- scope=get
+ref 7 Call get qualifier=self.rows scope=get
+ref 15 Type Repo qualifier=- scope=count
+ref 16 Call count qualifier=repo.rows scope=count
+ref 20 Call check qualifier=- scope="check passes rows"
+ref 20 Call expect qualifier=std.testing scope="check passes rows"
+bind 6 "id": u32 declared scope=get
+bind 6 "self": Repo declared scope=get
+bind 11 "row": u8 declared scope=check
+bind 15 "repo": Repo declared scope=count
+fields Repo rows:std.AutoHashMap
+fields Params len:usize

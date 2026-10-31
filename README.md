@@ -104,6 +104,10 @@ NAME accepts `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get
 | C#, Visual Basic .NET | namespaces, `using`/`Imports` (aliases, global usings), partial types, extension methods, overloads with optional parameters, xUnit/NUnit/MSTest tests, `dotnet test` filters, framework entrypoints |
 | C, C++, CUDA, Metal | include resolution with CMake and `compile_commands.json` include directories, declarations mapped to definitions, namespaces, out-of-line members, virtual dispatch, function pointers and macro bodies |
 | Objective-C, Swift | classes, protocols, messages and selectors; SwiftPM modules, extensions, XCTest and `@Test`, `swift test` filters |
+| Ruby, PHP | Ruby constants, modules and `require`, RSpec and Minitest commands; PHP namespaces, `use`, traits, typed property chains, PHPUnit filters |
+| Lua, Zig | `require` bindings and `.toc` manifests; Zig `@import` bindings, `build.zig` named modules, `test` blocks |
+| Elixir, Erlang | modules by full name, `alias`/`import`/`use`, remote and piped calls, multi-clause functions, OTP callbacks; `m:f()` remote calls, `-include`, `mix test` paths |
+| Dart | `package:` imports, `export` and `part` libraries, constructor and call-result typing, `dart test` paths |
 | Bash | functions, commands as calls, sourced files, env reads |
 | OpenAPI, Protobuf, GraphQL | operations, rpcs and fields matched to the code handlers that implement them |
 | Terraform | resources, data sources, variables, locals, outputs and modules by address, with references and local module imports |
@@ -111,7 +115,7 @@ NAME accepts `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get
 | Config and env | key paths of JSON, YAML, TOML, XML, INI and properties files; env definitions from `.env.example`, Dockerfiles, compose, GitHub Actions and Kubernetes against code reads (values never stored) |
 | Markdown | headings, links and backticked mentions resolved to files and symbols (the basis of stale doc detection) |
 
-Next on the roadmap: Ruby, PHP, Lua, Zig, Elixir, Erlang and Dart, then documents and assets.
+Next on the roadmap: documents and assets (PDF, Office, notebooks, images), then specialized and structural languages.
 
 ## Install
 

@@ -20,7 +20,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 20;
+const EXTRACTION_VERSION: u32 = 21;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -57,8 +57,11 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
     } else {
         content
     };
+    // World of Warcraft `.toc` files list the addon's files; they are no Lua source.
+    let toc = record.path.ends_with(".toc");
     let mut facts = record
         .file_type
+        .filter(|_| !toc)
         .and_then(|file_type| lang::lookup(file_type, &record.path))
         .map(|(pack, language, query)| {
             engine::extract(&language, query, &pack.hooks, &record.path, content)
@@ -70,6 +73,10 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
         Some(FileType::C | FileType::Cpp | FileType::ObjC)
     ) {
         lang::c::macro_references(content, &mut facts);
+    }
+    #[cfg(feature = "lang-lua")]
+    if toc {
+        lang::lua::toc_imports(&String::from_utf8_lossy(content), &mut facts);
     }
     if record.file_type == Some(FileType::Terraform) {
         hcl::extract(&String::from_utf8_lossy(content), &mut facts);

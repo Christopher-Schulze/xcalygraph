@@ -1,0 +1,18 @@
+sym 1-19 class Store.Server parent=- owner= pub flags=0 sig="defmodule Store.Server do" doc=""
+sym 5-5 method start_link parent=Store.Server owner=Store.Server pub flags=2 sig="def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)" doc=""
+sym 7-10 method init parent=Store.Server owner=Store.Server pub flags=2 sig="def init(_opts) do" doc=""
+sym 12-14 method handle_call parent=Store.Server owner=Store.Server pub flags=2 sig="def handle_call(" doc=""
+sym 16-18 method handle_cast parent=Store.Server owner=Store.Server pub flags=2 sig="def handle_cast(" doc=""
+import 2 "GenServer" names= alias=- reexport=false
+import 3 "Store.Repo" names= alias=Store.Repo reexport=false
+ref 2 Type GenServer qualifier=- scope=Store.Server
+ref 3 Type Store.Repo qualifier=- scope=Store.Server
+ref 5 Type GenServer qualifier=- scope=start_link
+ref 5 Call start_link qualifier=GenServer scope=start_link args=3
+ref 8 Type System qualifier=- scope=init
+ref 8 Call get_env qualifier=System scope=init args=1
+ref 13 Type Repo qualifier=- scope=handle_call
+ref 13 Call get qualifier=Repo scope=handle_call args=2
+ref 17 Type Store.Repo qualifier=- scope=handle_cast
+ref 17 Call put qualifier=Store.Repo scope=handle_cast args=3
+env 8 STORE_URL scope=init

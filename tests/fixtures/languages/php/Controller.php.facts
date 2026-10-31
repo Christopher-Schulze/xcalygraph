@@ -13,11 +13,11 @@ ref 14 Call find qualifier=$this->repository scope=show args=1
 ref 15 Value $row qualifier=- scope=show
 ref 15 Call format_row qualifier=- scope=show args=1
 ref 15 Call getenv qualifier=- scope=show args=1
-ref 20 Call MemoryRepository qualifier=- scope=make
-ref 21 Call Row qualifier=- scope=make
+ref 20 Call MemoryRepository qualifier=- scope=make args=0
+ref 21 Call Row qualifier=- scope=make args=1
 ref 21 Call put qualifier=$repository scope=make args=1
 ref 22 Value $repository qualifier=- scope=make
-ref 22 Call Controller qualifier=- scope=make
+ref 22 Call Controller qualifier=- scope=make args=1
 ref 26 Type Row qualifier=- scope=format_row
 bind 12 "": string declared scope=show
 bind 12 "$id": int declared scope=show

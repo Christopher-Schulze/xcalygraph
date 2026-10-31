@@ -412,6 +412,10 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
     let mut dotnet: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     // SwiftPM package directory -> test classes.
     let mut swift: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    // Runner prefix -> test file paths (RSpec, Minitest, ExUnit, Dart), PHPUnit test names.
+    let mut by_path: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    let mut phpunit: BTreeSet<String> = BTreeSet::new();
+    let mut zig = false;
     let mut files: BTreeSet<String> = BTreeSet::new();
     let paths: Vec<&str> = index
         .derived
@@ -420,6 +424,33 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
         .map(|file| index.string(file.path))
         .collect();
     for &test in tests {
+        let path = index.path_of(test);
+        let runner = if path.ends_with("_spec.rb") {
+            Some("bundle exec rspec")
+        } else if path.ends_with(".rb") {
+            Some("bundle exec ruby -Itest")
+        } else if path.ends_with(".exs") {
+            Some("mix test")
+        } else if path.ends_with(".dart") {
+            Some("dart test")
+        } else {
+            None
+        };
+        if let Some(runner) = runner {
+            by_path.entry(runner).or_default().insert(path.to_owned());
+            continue;
+        }
+        if path.ends_with(".zig") {
+            zig = true;
+            continue;
+        }
+        if path.ends_with(".php")
+            && let Node::Symbol(symbol) = index.node(test)
+            && index.string(symbol.name).starts_with("test")
+        {
+            phpunit.insert(index.string(symbol.name).to_owned());
+            continue;
+        }
         let Node::Symbol(symbol) = index.node(test) else {
             files.insert(index.path_of(test).to_owned());
             continue;
@@ -590,6 +621,22 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
             "dotnet test{project} --filter \"{}\"",
             filter.join("|")
         ));
+    }
+    for (runner, paths) in by_path {
+        let paths: Vec<String> = paths.into_iter().collect();
+        if runner == "bundle exec ruby -Itest" {
+            // Minitest runs one file per process.
+            lines.extend(paths.iter().map(|path| format!("{runner} {path}")));
+        } else {
+            lines.push(format!("{runner} {}", paths.join(" ")));
+        }
+    }
+    if !phpunit.is_empty() {
+        let names: Vec<String> = phpunit.into_iter().collect();
+        lines.push(format!("vendor/bin/phpunit --filter '{}'", names.join("|")));
+    }
+    if zig {
+        lines.push("zig build test".to_owned());
     }
     lines.extend(files);
     lines

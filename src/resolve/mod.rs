@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 36;
+pub const RESOLVE_VERSION: u32 = 38;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -418,6 +418,11 @@ impl<'a> Index<'a> {
             Some(FileType::Swift) => self.swift_imports(facts, &mut imports),
             Some(FileType::Terraform) => self.terraform_imports(file, facts, &mut imports),
             Some(FileType::Ruby) => self.ruby_imports(file, facts, &mut imports),
+            Some(FileType::Dart) => self.dart_imports(file, facts, &mut imports),
+            Some(FileType::Elixir) => self.elixir_imports(file, facts, &mut imports),
+            Some(FileType::Erlang) => self.erlang_imports(file, facts, &mut imports),
+            Some(FileType::Lua) => self.lua_imports(file, facts, &mut imports),
+            Some(FileType::Zig) => self.zig_imports(file, facts, &mut imports),
             Some(
                 FileType::TypeScript
                 | FileType::JavaScript
@@ -449,6 +454,406 @@ impl<'a> Index<'a> {
                 None => {}
             }
         }
+    }
+
+    /// Elixir modules of the root named `name` (`Store.Repo`). Nested `defmodule`s carry the
+    /// enclosing modules' names; inside `file` a nested module is also reachable by its own
+    /// name (Elixir's implicit alias).
+    fn elixir_modules(&self, name: &str, file: u32) -> Vec<u32> {
+        let mut candidates: Vec<u32> = Vec::new();
+        let mut suffix = name;
+        loop {
+            candidates.extend(self.by_name.get(suffix).into_iter().flatten().copied());
+            match suffix.split_once('.') {
+                Some((_, rest)) => suffix = rest,
+                None => break,
+            }
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+        let modules = |symbol: &u32| {
+            let symbol = &self.symbols[*symbol as usize];
+            symbol.kind.is_type() && self.file_type(symbol.file) == Some(FileType::Elixir)
+        };
+        let exact: Vec<u32> = candidates
+            .iter()
+            .filter(|symbol| modules(symbol) && self.elixir_full_name(**symbol) == name)
+            .copied()
+            .collect();
+        if !exact.is_empty() {
+            return exact;
+        }
+        candidates
+            .into_iter()
+            .filter(|symbol| {
+                modules(symbol)
+                    && self.symbols[*symbol as usize].file == file
+                    && self.symbols[*symbol as usize].name == name
+            })
+            .collect()
+    }
+
+    /// `Outer.Inner` for a `defmodule Inner` nested in `defmodule Outer`.
+    fn elixir_full_name(&self, symbol: u32) -> String {
+        let mut name = self.symbols[symbol as usize].name.to_string();
+        let mut parent = self.symbols[symbol as usize].parent;
+        while parent != NONE {
+            let outer = &self.symbols[parent as usize];
+            if outer.kind.is_type() {
+                name = format!("{}.{name}", outer.name);
+            }
+            parent = outer.parent;
+        }
+        name
+    }
+
+    /// Elixir `Store.Repo.get` and Erlang `store_repo:get`: the module by its full name; a module
+    /// outside the root (`Map`, `GenServer`, `maps`, `gen_server`) is external.
+    fn beam_qualified(
+        &self,
+        file: u32,
+        imports: &Imports,
+        reference: &Ref,
+        qualifier: &str,
+    ) -> Option<Outcome> {
+        match self.file_type(file) {
+            // `:binary.match`: an Erlang module.
+            Some(FileType::Elixir) if qualifier.starts_with(':') => Some(Outcome::External),
+            Some(FileType::Elixir) if qualifier.starts_with(|ch: char| ch.is_ascii_uppercase()) => {
+                if imports.names.contains_key(qualifier) {
+                    return None;
+                }
+                let modules = self.elixir_modules(qualifier, file);
+                if modules.is_empty() {
+                    return Some(Outcome::External);
+                }
+                let members: Vec<u32> = modules
+                    .iter()
+                    .flat_map(|&m| self.members(m, &reference.name))
+                    .collect();
+                Some(pick_members(
+                    self,
+                    members,
+                    Confidence::Exact,
+                    reference.arity,
+                ))
+            }
+            Some(FileType::Erlang) if qualifier.starts_with(|ch: char| ch.is_ascii_lowercase()) => {
+                let Some(module) = self.modules.get(&format!("erl:{qualifier}")) else {
+                    return Some(Outcome::External);
+                };
+                let found = self.module_symbol(module, &reference.name, None);
+                Some(pick_members(
+                    self,
+                    found,
+                    Confidence::Exact,
+                    reference.arity,
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    /// `alias A.B` binds `B`; `import A.B` and `use A.B` make the module's functions visible.
+    /// Modules outside the root are external.
+    fn elixir_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        for import in &facts.imports {
+            let spec = import.spec.as_str();
+            let modules = self.elixir_modules(spec, file);
+            if modules.is_empty() {
+                imports
+                    .externals
+                    .push(spec.split('.').next().unwrap_or(spec).to_owned());
+                continue;
+            }
+            for &module in &modules {
+                let target = self.symbols[module as usize].file;
+                if target != file && !imports.files.contains(&(file, target)) {
+                    imports.files.push((file, target));
+                }
+                imports.modules.push(self.module_of(target));
+            }
+            if import.alias.is_some() {
+                let local = spec.rsplit('.').next().unwrap_or(spec).to_owned();
+                imports.names.insert(local, Target::Symbols(modules));
+            } else {
+                imports.globs.extend(
+                    modules
+                        .iter()
+                        .map(|&module| self.module_of(self.symbols[module as usize].file)),
+                );
+            }
+        }
+    }
+
+    /// `-include("x.hrl")` (relative, `include/`), `-import(m, [...])`: `m`'s functions visible.
+    fn erlang_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        for import in &facts.imports {
+            let spec = import.spec.as_str();
+            if spec.ends_with(".hrl") || spec.ends_with(".erl") {
+                let name = spec.trim_start_matches("./");
+                let target = [
+                    name.to_owned(),
+                    format!("../include/{name}"),
+                    format!("include/{name}"),
+                ]
+                .iter()
+                .find_map(|candidate| self.file_by_path(file, candidate));
+                if let Some(target) = target.filter(|&target| target != file) {
+                    imports.files.push((file, target));
+                }
+                continue;
+            }
+            match self.modules.get(&format!("erl:{spec}")) {
+                Some(module) => {
+                    imports.globs.push(module);
+                    imports.modules.push(module);
+                }
+                None => imports.externals.push(spec.to_owned()),
+            }
+        }
+    }
+
+    /// `local m = require("a.b")`: `a/b.lua` or `a/b/init.lua` under the root, `lua/` or `src/`;
+    /// the binding names the module. Other modules are external rocks.
+    fn lua_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        let (members, modules): (Vec<&facts::Import>, Vec<&facts::Import>) = facts
+            .imports
+            .iter()
+            .partition(|import| !import.names.is_empty());
+        for import in modules {
+            // `.toc` file lists name files relative to the manifest.
+            if import.spec.ends_with(".lua") || import.spec.ends_with(".xml") {
+                if let Some(target) = self.file_by_path(file, &import.spec) {
+                    imports.files.push((file, target));
+                }
+                continue;
+            }
+            let path = import.spec.replace('.', "/");
+            let target = ["", "lua/", "src/", "lib/"].iter().find_map(|base| {
+                [
+                    format!("{base}{path}.lua"),
+                    format!("{base}{path}/init.lua"),
+                ]
+                .iter()
+                .find_map(|candidate| self.path_index.get(candidate.as_str()).copied())
+            });
+            let Some(target) = target.filter(|&target| target != file) else {
+                let head = import
+                    .spec
+                    .split('.')
+                    .next()
+                    .unwrap_or(&import.spec)
+                    .to_owned();
+                if let Some(alias) = &import.alias {
+                    imports
+                        .names
+                        .insert(alias.clone(), Target::External(head.clone()));
+                }
+                imports.externals.push(head);
+                continue;
+            };
+            imports.files.push((file, target));
+            let module = self.module_of(target);
+            imports.modules.push(module);
+            if let Some(alias) = &import.alias {
+                imports.names.insert(alias.clone(), Target::Module(module));
+            }
+        }
+        // Members of required modules re-bound to locals; other tables are no imports.
+        for import in members {
+            let (Some(alias), Some(member)) = (&import.alias, import.names.first()) else {
+                continue;
+            };
+            match imports.names.get(&import.spec) {
+                Some(Target::Module(module)) => {
+                    let found = self.module_symbol(*module, member, None);
+                    if !found.is_empty() {
+                        imports.names.insert(alias.clone(), Target::Symbols(found));
+                    }
+                }
+                Some(Target::External(name)) => {
+                    let name = name.clone();
+                    imports.names.insert(alias.clone(), Target::External(name));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Root file of a named module `b.addModule("name", ...)` in a `build.zig` of the root; the
+    /// first definition in path order wins.
+    fn zig_named_module(&self, name: &str) -> Option<u32> {
+        self.input
+            .files
+            .iter()
+            .enumerate()
+            .find_map(|(index, record)| {
+                if !(record.path == "build.zig" || record.path.ends_with("/build.zig")) {
+                    return None;
+                }
+                let import = self
+                    .facts(index as u32)?
+                    .imports
+                    .iter()
+                    .find(|import| import.reexport && import.alias.as_deref() == Some(name))?;
+                self.file_by_path(index as u32, &import.spec)
+            })
+    }
+
+    /// `const x = @import("x.zig")`: a file relative to the importer binds `x`; named modules of
+    /// `build.zig` resolve to their root file; `std`, `builtin` and packages are external.
+    fn zig_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        // Whole modules first, then declarations re-binding one of their members.
+        let (members, modules): (Vec<&facts::Import>, Vec<&facts::Import>) = facts
+            .imports
+            .iter()
+            .filter(|import| !import.reexport)
+            .partition(|import| !import.names.is_empty());
+        for import in modules.into_iter().chain(members) {
+            let target = if let Some(bound) = imports
+                .names
+                .get(&import.spec)
+                .filter(|_| !import.names.is_empty())
+            {
+                bound.clone()
+            } else {
+                let file_target = if import.spec.ends_with(".zig") {
+                    self.file_by_path(file, &import.spec)
+                } else if matches!(import.spec.as_str(), "std" | "builtin" | "root") {
+                    None
+                } else {
+                    self.zig_named_module(&import.spec)
+                }
+                .filter(|&target| target != file);
+                match file_target {
+                    Some(target) => {
+                        imports.files.push((file, target));
+                        let module = self.module_of(target);
+                        imports.modules.push(module);
+                        Target::Module(module)
+                    }
+                    // `const x = local.y;` of a non-import: not an import.
+                    None if !import.names.is_empty()
+                        && !import.spec.ends_with(".zig")
+                        && !matches!(import.spec.as_str(), "std" | "builtin" | "root") =>
+                    {
+                        continue;
+                    }
+                    None => {
+                        if !matches!(import.spec.as_str(), "std" | "builtin" | "root") {
+                            imports.externals.push(import.spec.clone());
+                        }
+                        Target::External(import.spec.clone())
+                    }
+                }
+            };
+            let target = match (&target, import.names.first()) {
+                (Target::Module(module), Some(member)) => {
+                    let found = self.module_symbol(*module, member, None);
+                    if found.is_empty() {
+                        continue;
+                    }
+                    Target::Symbols(found)
+                }
+                (Target::Symbols(types), Some(member)) => {
+                    let found: Vec<u32> = types
+                        .iter()
+                        .flat_map(|&t| self.members(t, member))
+                        .collect();
+                    if found.is_empty() {
+                        continue;
+                    }
+                    Target::Symbols(found)
+                }
+                _ => target,
+            };
+            if let Some(alias) = &import.alias {
+                imports.names.insert(alias.clone(), target);
+            }
+        }
+    }
+
+    /// `import 'package:app/src/x.dart'` (the package's `lib/`), relative imports; imported files'
+    /// names become visible, with the files they `export` and their `part`s. A `part of` file
+    /// sees its library and the library's imports. `dart:` libraries are the platform, other
+    /// packages external.
+    fn dart_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        let mut visited = vec![file];
+        for import in &facts.imports {
+            let Some(target) = self.dart_target(file, &import.spec, imports) else {
+                continue;
+            };
+            imports.files.push((file, target));
+            self.dart_visible(target, imports, &mut visited);
+            // `part of`: the library's own imports apply to the part.
+            let library = self.facts(target);
+            let is_part_of = library.is_some_and(|library| {
+                library.imports.iter().any(|own| {
+                    own.reexport
+                        && self.dart_target(target, &own.spec, &mut Imports::default())
+                            == Some(file)
+                })
+            });
+            if is_part_of && let Some(library) = library {
+                for own in library.imports.iter().filter(|own| !own.reexport) {
+                    if let Some(other) = self.dart_target(target, &own.spec, imports) {
+                        self.dart_visible(other, imports, &mut visited);
+                    }
+                }
+            }
+        }
+    }
+
+    /// A library's names and, transitively, those it re-exports become visible.
+    fn dart_visible(&self, target: u32, imports: &mut Imports, visited: &mut Vec<u32>) {
+        if visited.contains(&target) || visited.len() > 64 {
+            return;
+        }
+        visited.push(target);
+        let module = self.module_of(target);
+        imports.globs.push(module);
+        imports.modules.push(module);
+        let Some(facts) = self.facts(target) else {
+            return;
+        };
+        for import in facts.imports.iter().filter(|import| import.reexport) {
+            if let Some(next) = self.dart_target(target, &import.spec, &mut Imports::default()) {
+                self.dart_visible(next, imports, visited);
+            }
+        }
+    }
+
+    /// File of a Dart URI relative to `file`; unknown packages are recorded as external.
+    fn dart_target(&self, file: u32, spec: &str, imports: &mut Imports) -> Option<u32> {
+        if spec.starts_with("dart:") {
+            return None;
+        }
+        let target = match spec.strip_prefix("package:") {
+            Some(rest) => {
+                let (package, path) = rest.split_once('/').unwrap_or((rest, ""));
+                let wanted = format!("lib/{path}");
+                let found: Vec<u32> = self
+                    .input
+                    .files
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, record)| {
+                        record.path == wanted || record.path.ends_with(&format!("/{wanted}"))
+                    })
+                    .map(|(index, _)| index as u32)
+                    .collect();
+                match found.as_slice() {
+                    [only] => Some(*only),
+                    _ => {
+                        imports.externals.push(package.to_owned());
+                        None
+                    }
+                }
+            }
+            None => self.file_by_path(file, spec),
+        };
+        target.filter(|&target| target != file)
     }
 
     /// Local `module` sources: the module directory's files are imported.
@@ -1000,6 +1405,14 @@ impl<'a> Index<'a> {
         let mut current = scope;
         while let Some(local) = current {
             let symbol = &facts.symbols[local as usize];
+            // The enclosing type itself when it carries the owner name (Elixir `Store.Repo`
+            // would otherwise resolve as a qualified name).
+            if let Some(parent) = symbol.parent
+                && facts.symbols[parent as usize].kind().is_type()
+                && facts.symbols[parent as usize].name == symbol.owner
+            {
+                return Some(vec![self.base[file as usize] + parent]);
+            }
             if !symbol.owner.is_empty() {
                 return self
                     .resolve_type(file, None, None, &symbol.owner)
@@ -1680,6 +2093,21 @@ impl<'a> Index<'a> {
 
     fn resolve_ref(&self, file: u32, imports: &Imports, reference: &Ref) -> Outcome {
         let wants_type = reference.kind == RefKind::Type;
+        if wants_type
+            && reference.qualifier.is_none()
+            && self.file_type(file) == Some(FileType::Elixir)
+        {
+            // Module names are global: `Store.Repo`, or the last segment bound by `alias`.
+            let modules = match imports.names.get(&reference.name) {
+                Some(Target::Symbols(symbols)) => symbols.clone(),
+                _ => self.elixir_modules(&reference.name, file),
+            };
+            return if modules.is_empty() {
+                Outcome::External
+            } else {
+                pick_members(self, modules, Confidence::Exact, facts::NO_ARITY)
+            };
+        }
         match reference.qualifier.as_deref() {
             None => self.resolve_plain(file, imports, reference, wants_type),
             Some(qualifier) => self.resolve_qualified(file, imports, reference, qualifier),
@@ -1903,6 +2331,9 @@ impl<'a> Index<'a> {
                 None => Outcome::Unresolved,
             };
         }
+        if let Some(outcome) = self.beam_qualified(file, imports, reference, qualifier) {
+            return outcome;
+        }
         // `a->b` (PHP, C++) and `a?->b` chain like `a.b`.
         let dotted = qualifier.replace("?->", ".").replace("->", ".");
         let chain: Vec<&str> = dotted.split('.').map(str::trim).collect();
@@ -1921,6 +2352,13 @@ impl<'a> Index<'a> {
             return pick_members(self, found, Confidence::Exact, reference.arity);
         }
         if plain_head && let Some(Target::External(_) | Target::Module(_)) = imports.names.get(head)
+        {
+            return Outcome::External;
+        }
+        // `std.heap.ArenaAllocator.init`: a chain through an external import stays external.
+        if !shadowed
+            && is_identifier(head)
+            && let Some(Target::External(_)) = imports.names.get(head)
         {
             return Outcome::External;
         }
@@ -2733,6 +3171,7 @@ fn has_module_rules(file_type: Option<FileType>) -> bool {
                 | FileType::Swift
                 | FileType::Terraform
                 | FileType::Php
+                | FileType::Dart
         )
     )
 }
@@ -3049,6 +3488,12 @@ fn normalize_path(path: &str) -> String {
 /// The callee of a receiver expression that is a single call: `Service()`, `pkg.open(x)`.
 fn call_receiver(qualifier: &str) -> Option<&str> {
     let qualifier = qualifier.trim();
+    // `(new Store())->open()`, PHP 8.4 `new Store()->open()`: the constructed type.
+    let qualifier = qualifier
+        .strip_prefix("(new ")
+        .and_then(|inner| inner.strip_suffix(')'))
+        .or_else(|| qualifier.strip_prefix("new "))
+        .map_or(qualifier, str::trim);
     let open = qualifier.find('(')?;
     let callee = &qualifier[..open];
     let rest = &qualifier[open..];

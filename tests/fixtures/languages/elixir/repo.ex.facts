@@ -1,0 +1,9 @@
+sym 1-12 class Store.Repo parent=- owner= pub flags=0 sig="defmodule Store.Repo do" doc=""
+sym 4-6 method get parent=Store.Repo owner=Store.Repo pub flags=0 sig="def get(rows, id) do" doc=""
+sym 8-8 method put parent=Store.Repo owner=Store.Repo pub flags=0 sig="def put(rows, id, row), do: Map.put(rows, id, row)" doc=""
+sym 10-11 method check parent=Store.Repo owner=Store.Repo priv flags=0 sig="defp check(nil), do:" doc=""
+ref 5 Type Map qualifier=- scope=get
+ref 5 Call check qualifier=- scope=get
+ref 5 Call get qualifier=Map scope=get
+ref 8 Type Map qualifier=- scope=put
+ref 8 Call put qualifier=Map scope=put args=3

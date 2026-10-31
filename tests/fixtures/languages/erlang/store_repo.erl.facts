@@ -1,0 +1,8 @@
+package store_repo
+sym 5-6 fn get parent=- owner= pub flags=0 sig="get(Rows, Id) ->" doc=""
+sym 8-9 fn put parent=- owner= pub flags=0 sig="put(Rows, #row" doc=""
+sym 11-12 fn check parent=- owner= pub flags=0 sig="check(undefined) ->" doc=""
+import 2 "records.hrl" names= alias=- reexport=false
+ref 6 Call check qualifier=- scope=get args=1
+ref 6 Call get qualifier=maps scope=get args=3
+ref 9 Call put qualifier=maps scope=put args=3

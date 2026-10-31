@@ -1,0 +1,3 @@
+sym 1-4 class A parent=- owner= pub flags=0 sig="defmodule A do" doc=""
+sym 3-3 method run parent=A owner=A pub flags=0 sig="def run(c), do: c.status" doc=""
+ref 2 Type Plug.Conn qualifier=- scope=A

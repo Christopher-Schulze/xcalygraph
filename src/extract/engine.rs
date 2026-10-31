@@ -84,6 +84,8 @@ struct RawDef<'tree> {
     name: String,
     name_node: usize,
     owner: Option<String>,
+    /// Last clause of a multi-clause definition (Elixir `def f(nil)` then `def f(x)`).
+    last_clause: Option<Node<'tree>>,
 }
 
 #[derive(Default)]
@@ -144,6 +146,7 @@ pub fn extract(
 }
 
 fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) -> Facts {
+    let elixir = path.ends_with(".ex") || path.ends_with(".exs");
     let names = query.capture_names();
     let text = |node: Node| node.utf8_text(source).unwrap_or_default();
     let mut defs: HashMap<usize, RawDef> = HashMap::new();
@@ -199,6 +202,9 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
             }
         } else if let Some(kind) = primary.strip_prefix("reference.") {
             let Some(name) = get("name") else { continue };
+            if elixir && kind == "call" && in_type_specification(name, source) {
+                continue;
+            }
             let reference = refs.entry(name.id()).or_default();
             let kind = ref_kind(kind);
             if priority(kind) < priority(reference.kind) {
@@ -369,9 +375,17 @@ fn assemble(assembly: Assembly) -> Facts {
         })
     });
     let def_name_nodes: Vec<usize> = defs.iter().map(|def| def.name_node).collect();
+    let defs = merge_clauses(defs);
     let ranges: Vec<(usize, usize)> = defs
         .iter()
-        .filter_map(|def| def.node.map(|node| (node.start_byte(), node.end_byte())))
+        .filter_map(|def| {
+            def.node.map(|node| {
+                (
+                    node.start_byte(),
+                    def.last_clause.unwrap_or(node).end_byte(),
+                )
+            })
+        })
         .collect();
     let context = FileContext {
         path,
@@ -439,7 +453,7 @@ fn assemble(assembly: Assembly) -> Facts {
             parent: parent.and_then(|p| u32::try_from(p).ok()),
             owner,
             line: row(node),
-            end_line: node.end_position().row as u32 + 1,
+            end_line: def.last_clause.unwrap_or(node).end_position().row as u32 + 1,
             signature,
             doc: doc_comment(node, source),
             exported,
@@ -662,7 +676,94 @@ fn priority(kind: Option<RefKind>) -> u8 {
 
 /// Argument count of a call node: its `arguments` field, else an argument list child (Kotlin
 /// `value_arguments`); a trailing lambda counts as an argument.
+/// Elixir `@spec`, `@type`, `@callback` attributes: their call syntax names types and the
+/// specified function, not calls.
+fn in_type_specification(name: Node, source: &[u8]) -> bool {
+    let mut current = name;
+    for _ in 0..8 {
+        let Some(parent) = current.parent() else {
+            return false;
+        };
+        if parent.kind() == "unary_operator" {
+            return parent
+                .child_by_field_name("operator")
+                .is_some_and(|op| op.kind() == "@")
+                && parent
+                    .child_by_field_name("operand")
+                    .and_then(|operand| operand.child_by_field_name("target"))
+                    .and_then(|target| target.utf8_text(source).ok())
+                    .is_some_and(|attribute| {
+                        matches!(
+                            attribute,
+                            "spec" | "type" | "typep" | "opaque" | "callback" | "macrocallback"
+                        )
+                    });
+        }
+        current = parent;
+    }
+    false
+}
+
+/// Consecutive sibling clauses of one function with the same name and parameter count (Elixir
+/// `def`/`defp` calls, Erlang `fun_decl`s) become one definition spanning all clauses.
+fn merge_clauses(defs: Vec<RawDef<'_>>) -> Vec<RawDef<'_>> {
+    let mut merged: Vec<RawDef> = Vec::with_capacity(defs.len());
+    for def in defs {
+        if let (Some(previous), Some(node)) = (merged.last_mut(), def.node)
+            && matches!(node.kind(), "call" | "fun_decl")
+            && previous.name == def.name
+            && previous.kind == def.kind
+            && previous
+                .last_clause
+                .or(previous.node)
+                .and_then(|last| last.next_named_sibling())
+                == Some(node)
+            && previous.node.and_then(clause_parameters) == clause_parameters(node)
+        {
+            previous.last_clause = Some(node);
+            continue;
+        }
+        merged.push(def);
+    }
+    merged
+}
+
+/// Parameter count of an Elixir definition call (`def name(a, b) when ...`) or an Erlang
+/// function clause.
+fn clause_parameters(node: Node) -> Option<usize> {
+    if node.kind() == "fun_decl" {
+        let clause = node.child_by_field_name("clause")?;
+        return Some(clause.child_by_field_name("args")?.named_child_count());
+    }
+    let mut walker = node.walk();
+    let arguments = node
+        .named_children(&mut walker)
+        .find(|child| child.kind() == "arguments")?;
+    let mut head = arguments.named_child(0)?;
+    if head.kind() == "binary_operator" {
+        head = head.child_by_field_name("left")?;
+    }
+    if head.kind() != "call" {
+        return Some(0);
+    }
+    let mut inner = head.walk();
+    let count = head
+        .named_children(&mut inner)
+        .find(|child| child.kind() == "arguments")
+        .map_or(0, |list| list.named_child_count());
+    Some(count)
+}
+
 fn arity(call: Node) -> u8 {
+    // Elixir `x |> f(y)`: the pipe passes the first argument.
+    if call.parent().is_some_and(|parent| {
+        parent.kind() == "binary_operator"
+            && parent
+                .child_by_field_name("operator")
+                .is_some_and(|op| op.kind() == "|>")
+    }) {
+        return facts::NO_ARITY;
+    }
     let mut walker = call.walk();
     let lists: Vec<Node> = match call.child_by_field_name("arguments") {
         Some(arguments) => vec![arguments],
@@ -680,7 +781,12 @@ fn arity(call: Node) -> u8 {
             .filter(|child| {
                 matches!(
                     child.kind(),
-                    "value_arguments" | "argument_list" | "annotated_lambda" | "lambda_literal"
+                    "value_arguments"
+                        | "argument_list"
+                        | "arguments"
+                        | "expr_args"
+                        | "annotated_lambda"
+                        | "lambda_literal"
                 )
             })
             .collect(),

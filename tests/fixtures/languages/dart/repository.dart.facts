@@ -1,0 +1,25 @@
+doc "Reads rows by id."
+sym 2-4 class Repository parent=- owner= pub flags=0 sig="abstract class Repository" doc="Reads rows by id."
+sym 3-3 method find parent=Repository owner=Repository pub flags=0 sig="Row? find(int id)" doc=""
+sym 6-9 class Row parent=- owner= pub flags=0 sig="class Row" doc=""
+sym 8-8 method Row parent=Row owner=Row pub flags=0 sig="Row(this.id)" doc=""
+sym 11-25 class MemoryRepository parent=- owner= pub flags=0 sig="class MemoryRepository implements Repository" doc=""
+sym 14-18 method find parent=MemoryRepository owner=MemoryRepository pub flags=0 sig="@override Row? find(int id)" doc=""
+sym 20-22 method put parent=MemoryRepository owner=MemoryRepository pub flags=0 sig="void put(Row row)" doc=""
+sym 24-24 method _check parent=MemoryRepository owner=MemoryRepository priv flags=0 sig="void _check(int id)" doc=""
+ref 3 Type Row qualifier=- scope=find
+ref 11 Implement Repository qualifier=- scope=MemoryRepository
+ref 12 Type Row qualifier=- scope=MemoryRepository
+ref 15 Type Row qualifier=- scope=find
+ref 16 Call _check qualifier=- scope=find args=1
+ref 16 Value id qualifier=- scope=find
+ref 20 Type Row qualifier=- scope=put
+bind 3 "id": int declared scope=find
+bind 14 "": Row declared scope=find
+bind 15 "id": int declared scope=find
+bind 20 "": void declared scope=put
+bind 20 "row": Row declared scope=put
+bind 24 "": void declared scope=_check
+bind 24 "id": int declared scope=_check
+fields Row id:int
+fields MemoryRepository _rows:Map

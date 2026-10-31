@@ -1,0 +1,12 @@
+sym 7-10 fn find parent=- owner= pub flags=0 sig="function App:find(id)" doc=""
+sym 12-18 fn new parent=- owner= pub flags=0 sig="function App.new()" doc=""
+import 1 "app.repo" names= alias=repo reexport=false
+import 2 "repo" names=put alias=put reexport=false
+import 3 "table" names=insert alias=insert reexport=false
+ref 8 Value id qualifier=- scope=find
+ref 8 Call put qualifier=- scope=find args=3
+ref 9 Call get qualifier=repo scope=find args=2
+ref 13 Call getenv qualifier=os scope=new args=1
+ref 15 Call put qualifier=repo scope=new args=3
+ref 16 Call insert qualifier=- scope=new args=2
+env 13 APP_URL scope=new

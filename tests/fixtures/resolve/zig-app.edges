@@ -1,0 +1,12 @@
+file:src/cli.zig -imports-> file:src/repo.zig @1
+file:src/main.zig -imports-> file:src/repo.zig @1
+src/cli.first -calls-> src/repo.Repo.get @11
+src/cli.first -uses-> src/repo.Params @9
+src/cli.first -uses-> src/repo.Repo @9
+src/cli.rows -calls-> src/repo.count @6
+src/cli.rows -uses-> src/repo.Repo @5
+src/main.main -calls-> src/repo.Repo.get @6
+src/main.main -calls-> src/repo.count @7
+src/repo."check passes rows" -tests-> src/repo.check @20
+src/repo.Repo.get -calls-> src/repo.check @7
+src/repo.count -uses-> src/repo.Repo @15

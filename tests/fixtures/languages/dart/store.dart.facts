@@ -1,0 +1,10 @@
+sym 7-7 fn cached parent=- owner= pub flags=0 sig="Cache cached(Repository repository)" doc=""
+import 1 "src/repository.dart" names= alias=- reexport=false
+import 3 "src/repository.dart" names= alias=- reexport=true
+import 5 "src/cache.dart" names= alias=- reexport=true
+ref 7 Call Cache qualifier=- scope=cached args=1
+ref 7 Type Cache qualifier=- scope=cached
+ref 7 Type Repository qualifier=- scope=cached
+ref 7 Value repository qualifier=- scope=cached
+bind 7 "": Cache declared scope=cached
+bind 7 "repository": Repository declared scope=cached
