@@ -5,8 +5,8 @@ sym 18-24 method Open parent=- owner=TStore pub flags=0 sig="procedure TStore.Op
 sym 26-29 method Count parent=- owner=TStore pub flags=0 sig="function TStore.Count: Integer" doc=""
 import 5 "Repo" names= alias=- reexport=false
 import 5 "SysUtils" names= alias=- reexport=false
-ref 8 Inherit IStore qualifier=- scope=TStore
-ref 8 Inherit TBase qualifier=- scope=TStore
+ref 8 Inherit IStore qualifier=- scope=TStore args=0
+ref 8 Inherit TBase qualifier=- scope=TStore args=0
 ref 10 Type TRepo qualifier=- scope=TStore
 ref 22 Call Load qualifier=FRows scope=Open args=1
 ref 22 Value Path qualifier=- scope=Open

@@ -8,8 +8,8 @@ sym 10-15 method open parent=Store owner=Store pub flags=0 sig="function open(ui
 sym 16-16 method helper parent=Store owner=Store priv flags=0 sig="function helper(uint x) internal" doc=""
 import 2 "./Base.sol" names= alias=- reexport=false
 import 3 "@oz/contracts/IStore.sol" names= alias=- reexport=false
-ref 5 Inherit Base qualifier=- scope=Store
-ref 5 Inherit IStore qualifier=- scope=Store
+ref 5 Inherit Base qualifier=- scope=Store args=0
+ref 5 Inherit IStore qualifier=- scope=Store args=0
 ref 10 Call onlyOwner qualifier=- scope=open
 ref 11 Call add qualifier=Math scope=open
 ref 12 Call Opened qualifier=- scope=open

@@ -221,6 +221,8 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
             reference.kind = kind;
             reference.arity = match kind {
                 Some(RefKind::Call) => arity(primary_node),
+                // Base lists: the type argument count tells `IRequest` from `IRequest<T>`.
+                Some(RefKind::Inherit | RefKind::Implement) => type_argument_count(name),
                 _ => facts::NO_ARITY,
             };
             reference.name = text(name).to_owned();
@@ -790,6 +792,26 @@ fn clause_parameters(node: Node) -> Option<usize> {
         .find(|child| child.kind() == "arguments")
         .map_or(0, |list| list.named_child_count());
     Some(count)
+}
+
+/// Type arguments written after a type name (`Base<A, B>` has two, `Base` none): the type
+/// argument list is a sibling of the name in a generic type node (C# `generic_name`, Java
+/// `generic_type`, Kotlin `user_type`).
+fn type_argument_count(name: Node) -> u8 {
+    let Some(parent) = name.parent() else {
+        return 0;
+    };
+    let mut walker = parent.walk();
+    let count = parent
+        .named_children(&mut walker)
+        .find(|child| child.kind().starts_with("type_argument"))
+        .map_or(0, |list| {
+            let mut inner = list.walk();
+            list.named_children(&mut inner)
+                .filter(|argument| !argument.kind().contains("comment"))
+                .count()
+        });
+    u8::try_from(count).unwrap_or(facts::NO_ARITY - 1)
 }
 
 fn arity(call: Node) -> u8 {

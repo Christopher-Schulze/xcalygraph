@@ -18,7 +18,7 @@ import 8 "example.com/app/internal/database" names= alias=db reexport=false
 ref 18 Type Row qualifier=- scope=Get
 ref 30 Type Row qualifier=- scope=Store
 ref 31 Type Client qualifier=db scope=Store
-ref 32 Inherit Reader qualifier=- scope=Store
+ref 32 Inherit Reader qualifier=- scope=Store args=0
 ref 38 Type Store qualifier=- scope=NewStore
 ref 40 Call New qualifier=errors scope=NewStore args=1
 ref 42 Call Connect qualifier=db scope=NewStore args=1

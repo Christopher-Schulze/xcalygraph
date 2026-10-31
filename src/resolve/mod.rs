@@ -2794,6 +2794,21 @@ impl<'a> Index<'a> {
             Some((types, confidence)) if types.len() == 1 => {
                 Outcome::Targets(vec![(types[0], confidence)], confidence)
             }
+            Some((types, confidence)) if reference.arity != facts::NO_ARITY => {
+                // Generic overloads by type parameter count (`IRequest`, `IRequest<T>`).
+                let matching: Vec<u32> = types
+                    .into_iter()
+                    .filter(|&candidate| {
+                        let symbol = &self.symbols[candidate as usize];
+                        type_parameter_count(&symbol.signature, &symbol.name)
+                            == usize::from(reference.arity)
+                    })
+                    .collect();
+                match matching.as_slice() {
+                    [only] => Outcome::Targets(vec![(*only, confidence)], confidence),
+                    _ => Outcome::Ambiguous,
+                }
+            }
             Some(_) => Outcome::Ambiguous,
             None => Outcome::Unresolved,
         }
@@ -4094,6 +4109,39 @@ fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence, arity: u
 /// Parameter counts of the declaration `name(...)` in a signature: required (without default
 /// values), total, and whether it is variadic; `None` when the list cannot be found (clipped or
 /// no parentheses).
+/// Type parameters declared right after `name` in a signature: `interface IRequest<out T>` has
+/// one, `class Store` none.
+fn type_parameter_count(signature: &str, name: &str) -> usize {
+    let bytes = signature.as_bytes();
+    let Some(start) = signature
+        .match_indices(name)
+        .map(|(position, _)| position)
+        .find(|&position| {
+            let before = position == 0
+                || !(bytes[position - 1].is_ascii_alphanumeric() || bytes[position - 1] == b'_');
+            let after = bytes.get(position + name.len()).copied();
+            before && !after.is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')
+        })
+    else {
+        return 0;
+    };
+    let Some(rest) = signature[start + name.len()..].strip_prefix('<') else {
+        return 0;
+    };
+    let mut depth = 0i32;
+    let mut count = 1;
+    for ch in rest.chars() {
+        match ch {
+            '<' | '(' | '[' => depth += 1,
+            '>' if depth == 0 => return count,
+            '>' | ')' | ']' => depth -= 1,
+            ',' if depth == 0 => count += 1,
+            _ => {}
+        }
+    }
+    count
+}
+
 fn parameter_count(signature: &str, name: &str) -> Option<(usize, usize, bool)> {
     // Objective-C `- (T)name:(A)a with:(B)b`: one parameter per selector colon.
     if let Some(rest) = signature

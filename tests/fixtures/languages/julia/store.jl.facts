@@ -10,7 +10,7 @@ sym 25-25 struct Node parent=- owner= pub flags=0 sig="mutable struct Node; next
 import 2 "Base.Threads" names= alias=- reexport=false
 import 3 "..Util" names= alias=- reexport=false
 import 4 "repo.jl" names= alias=- reexport=false
-ref 6 Inherit AbstractRepo qualifier=- scope=Repo
+ref 6 Inherit AbstractRepo qualifier=- scope=Repo args=0
 ref 11 Call Repo qualifier=- scope=open_store args=1
 ref 12 Call helper qualifier=- scope=open_store args=1
 ref 13 Call check qualifier=Util scope=open_store args=1

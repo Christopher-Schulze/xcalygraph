@@ -13,7 +13,7 @@ ref 9 Value formatter qualifier=- scope=Greeter
 ref 13 Value PREFIX qualifier=- scope=greet
 ref 13 Call format qualifier=formatter scope=greet args=2
 ref 13 Value name qualifier=- scope=greet
-ref 21 Implement Formatter qualifier=- scope=PlainFormatter
+ref 21 Implement Formatter qualifier=- scope=PlainFormatter args=0
 bind 8 "formatter": Formatter declared scope=Greeter
 bind 12 "": String declared scope=greet
 bind 12 "name": String declared scope=greet

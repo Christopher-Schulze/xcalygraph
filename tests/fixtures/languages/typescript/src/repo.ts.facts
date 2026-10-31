@@ -6,7 +6,7 @@ sym 9-15 class MemoryRepo parent=- owner= pub flags=0 sig="class MemoryRepo impl
 sym 12-14 method get parent=MemoryRepo owner=MemoryRepo pub flags=0 sig="get(id: string): Row | undefined" doc=""
 sym 17-19 fn openRepo parent=- owner= pub flags=0 sig="function openRepo(): Repo" doc=""
 ref 3 Type Row qualifier=- scope=get
-ref 9 Implement Repo qualifier=- scope=MemoryRepo
+ref 9 Implement Repo qualifier=- scope=MemoryRepo args=0
 ref 10 Type Row qualifier=- scope=MemoryRepo
 ref 12 Type Row qualifier=- scope=get
 ref 13 Call get qualifier=this.rows scope=get args=1

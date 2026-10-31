@@ -3,7 +3,7 @@ sym 7-16 class MemoryRepositoryTests parent=- owner= pub flags=0 sig="@implement
 sym 9-14 method testFindsStoredRow parent=MemoryRepositoryTests owner=MemoryRepositoryTests pub flags=1 sig="- (void)testFindsStoredRow" doc=""
 import 1 "sys:XCTest/XCTest.h" names= alias=- reexport=false
 import 2 "../Store/Repository.h" names= alias=- reexport=false
-ref 4 Inherit XCTestCase qualifier=- scope=MemoryRepositoryTests
+ref 4 Inherit XCTestCase qualifier=- scope=MemoryRepositoryTests args=0
 ref 10 Type MemoryRepository qualifier=- scope=testFindsStoredRow
 ref 10 Call alloc qualifier=MemoryRepository scope=testFindsStoredRow args=0
 ref 10 Call init qualifier=[MemoryRepository alloc] scope=testFindsStoredRow args=0

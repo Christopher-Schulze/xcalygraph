@@ -10,7 +10,7 @@ sym 26-26 method valid parent=MemoryRepository owner=MemoryRepository pub flags=
 import 2 "sys:string" names= alias=- reexport=false
 ref 9 Type string qualifier=std scope=Row
 ref 16 Type Row qualifier=- scope=find
-ref 19 Inherit Repository qualifier=- scope=MemoryRepository
+ref 19 Inherit Repository qualifier=- scope=MemoryRepository args=0
 ref 21 Type Row qualifier=- scope=find
 ref 22 Type Row qualifier=- scope=put
 ref 23 Type string qualifier=std scope=put

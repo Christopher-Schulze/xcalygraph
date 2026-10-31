@@ -3,7 +3,7 @@ sym 5-9 method testFindsStoredRow parent=MemoryRepositoryTests owner=MemoryRepos
 import 1 "XCTest" names= alias=- reexport=false
 import 2 "Store" names= alias=- reexport=false
 ref 2 Type testable qualifier=- scope=-
-ref 4 Implement XCTestCase qualifier=- scope=MemoryRepositoryTests
+ref 4 Implement XCTestCase qualifier=- scope=MemoryRepositoryTests args=0
 ref 6 Call MemoryRepository qualifier=- scope=testFindsStoredRow args=0
 ref 7 Call Row qualifier=- scope=testFindsStoredRow args=2
 ref 7 Call put qualifier=repository scope=testFindsStoredRow args=1

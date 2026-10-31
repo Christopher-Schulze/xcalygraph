@@ -6,7 +6,7 @@ sym 6-10 fn open-store parent=- owner= pub flags=0 sig="(defun open-store (path)
 sym 11-11 macro with-store parent=- owner= pub flags=0 sig="(defmacro with-store ((var) &body body) `(let ((,var (open-store \"x\"))),@body))" doc=""
 import 1 "cl" names= alias=:store reexport=false
 import 1 "util" names= alias=:store reexport=false
-ref 3 Inherit base qualifier=- scope=repo
+ref 3 Inherit base qualifier=- scope=repo args=0
 ref 4 Call repo qualifier=- scope=find-row
 ref 5 Call r qualifier=- scope=find-row
 ref 6 Call path qualifier=- scope=open-store

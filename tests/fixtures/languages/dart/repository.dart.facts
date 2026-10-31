@@ -8,7 +8,7 @@ sym 14-18 method find parent=MemoryRepository owner=MemoryRepository pub flags=0
 sym 20-22 method put parent=MemoryRepository owner=MemoryRepository pub flags=0 sig="void put(Row row)" doc=""
 sym 24-24 method _check parent=MemoryRepository owner=MemoryRepository priv flags=0 sig="void _check(int id)" doc=""
 ref 3 Type Row qualifier=- scope=find
-ref 11 Implement Repository qualifier=- scope=MemoryRepository
+ref 11 Implement Repository qualifier=- scope=MemoryRepository args=0
 ref 12 Type Row qualifier=- scope=MemoryRepository
 ref 15 Type Row qualifier=- scope=find
 ref 16 Call _check qualifier=- scope=find args=1

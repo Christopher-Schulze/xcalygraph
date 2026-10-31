@@ -1,3 +1,6 @@
+App.Messages.Admin.Purge -implements-> App.Messages.IRequest @4
+App.Messages.Notify -implements-> App.Messages.IRequest @10
+App.Messages.Ping -implements-> App.Messages.IRequest @8
 App.Store.BaseRepository.Check -uses-> App.Store.Limits.MaxId @20
 App.Store.MemoryRepository -implements-> App.Store.IRepository @5
 App.Store.MemoryRepository -inherits-> App.Store.BaseRepository @5
