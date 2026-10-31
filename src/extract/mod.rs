@@ -43,6 +43,15 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
         facts.lines = count_lines(content);
         return facts;
     }
+    #[cfg(feature = "lang-groovy")]
+    let terminated;
+    #[cfg(feature = "lang-groovy")]
+    let content = if record.file_type == Some(FileType::Groovy) {
+        terminated = lang::groovy::terminate_statements(content);
+        terminated.as_slice()
+    } else {
+        content
+    };
     let mut facts = record
         .file_type
         .and_then(|file_type| lang::lookup(file_type, &record.path))

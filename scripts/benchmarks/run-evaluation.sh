@@ -48,7 +48,12 @@ copy_corpus() {
   fi
   mkdir -p "${target}"
   if git -C "${source}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    git -C "${source}" ls-files -z | rsync -a --from0 --files-from=- "${source}/" "${target}/"
+    # Symlinks (mode 120000) are skipped: broken ones abort openrsync. Exit 23/24 (partial
+    # transfer, vanished files) still leaves a usable copy.
+    local status=0
+    git -C "${source}" ls-files -s | grep -v '^120000' | cut -f2- \
+      | rsync -a --files-from=- "${source}/" "${target}/" || status=$?
+    (( status == 0 || status == 23 || status == 24 )) || return 1
   else
     rsync -a --exclude .git --exclude target --exclude node_modules --exclude .cache "${source}/" "${target}/"
   fi

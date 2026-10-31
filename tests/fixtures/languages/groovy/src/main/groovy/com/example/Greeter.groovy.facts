@@ -1,0 +1,26 @@
+package com.example
+sym 4-15 class Greeter parent=- owner= pub flags=0 sig="class Greeter" doc="Builds greetings."
+sym 5-5 const PREFIX parent=Greeter owner= pub flags=0 sig="static final String PREFIX = \"Hello\"" doc=""
+sym 8-10 method Greeter parent=Greeter owner=Greeter pub flags=0 sig="Greeter(Formatter formatter)" doc=""
+sym 12-14 method greet parent=Greeter owner=Greeter pub flags=0 sig="String greet(String name)" doc=""
+sym 17-19 iface Formatter parent=- owner= pub flags=0 sig="interface Formatter" doc=""
+sym 18-18 method format parent=Formatter owner=Formatter pub flags=0 sig="String format(String prefix, String name)" doc=""
+sym 21-25 class PlainFormatter parent=- owner= pub flags=0 sig="class PlainFormatter implements Formatter" doc=""
+sym 22-24 method format parent=PlainFormatter owner=PlainFormatter pub flags=0 sig="String format(String prefix, String name)" doc=""
+ref 6 Type Formatter qualifier=- scope=Greeter
+ref 8 Type Formatter qualifier=- scope=Greeter
+ref 9 Value formatter qualifier=- scope=Greeter
+ref 13 Value PREFIX qualifier=- scope=greet
+ref 13 Call format qualifier=formatter scope=greet args=2
+ref 13 Value name qualifier=- scope=greet
+ref 21 Implement Formatter qualifier=- scope=PlainFormatter
+bind 8 "formatter": Formatter declared scope=Greeter
+bind 12 "": String declared scope=greet
+bind 12 "name": String declared scope=greet
+bind 18 "": String declared scope=format
+bind 18 "name": String declared scope=format
+bind 18 "prefix": String declared scope=format
+bind 22 "": String declared scope=format
+bind 22 "name": String declared scope=format
+bind 22 "prefix": String declared scope=format
+fields Greeter PREFIX:String formatter:Formatter

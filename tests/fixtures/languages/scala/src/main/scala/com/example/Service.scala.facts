@@ -1,0 +1,33 @@
+package com.example.app
+sym 5-12 class Service parent=- owner= pub flags=0 sig="class Service(repository: Repository)" doc=""
+sym 6-9 method name parent=Service owner=Service pub flags=0 sig="def name(id: Int): String" doc=""
+sym 11-11 method format parent=Service owner=Service priv flags=0 sig="private def format(row: Option[StoredRow]): String" doc=""
+sym 14-20 class Main parent=- owner= pub flags=0 sig="object Main" doc=""
+sym 15-19 method main parent=Main owner=Main pub flags=2 sig="def main(args: Array[String]): Unit" doc=""
+import 3 "com.example.store" names=MemoryRepository alias=- reexport=false
+import 3 "com.example.store" names=Repository alias=- reexport=false
+import 3 "com.example.store" names=Row alias=StoredRow reexport=false
+ref 5 Type Repository qualifier=- scope=Service
+ref 7 Type StoredRow qualifier=- scope=name
+ref 7 Call find qualifier=repository scope=name args=1
+ref 7 Value id qualifier=- scope=name
+ref 8 Call format qualifier=- scope=name args=1
+ref 8 Value row qualifier=- scope=name
+ref 11 Type StoredRow qualifier=- scope=format
+ref 11 Call getOrElse qualifier=row.map(_.name) scope=format args=1
+ref 11 Call map qualifier=row scope=format args=1
+ref 16 Call MemoryRepository qualifier=- scope=main args=0
+ref 16 Call Service qualifier=- scope=main args=1
+ref 17 Call env qualifier=sys scope=main args=1
+ref 18 Call name qualifier=service scope=main args=1
+bind 5 "repository": Repository declared scope=Service
+bind 6 "": String declared scope=name
+bind 6 "id": Int declared scope=name
+bind 7 "row": Option declared scope=name
+bind 11 "": String declared scope=format
+bind 11 "row": Option declared scope=format
+bind 15 "": Unit declared scope=main
+bind 15 "args": Array declared scope=main
+bind 16 "service": Service declared scope=main
+fields Service repository:Repository
+env 17 APP_URL scope=main

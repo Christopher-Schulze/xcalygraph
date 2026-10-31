@@ -4,7 +4,14 @@
 pub mod bash;
 #[cfg(feature = "lang-go")]
 pub mod go;
-#[cfg(any(feature = "lang-java", feature = "lang-kotlin"))]
+#[cfg(feature = "lang-groovy")]
+pub mod groovy;
+#[cfg(any(
+    feature = "lang-java",
+    feature = "lang-kotlin",
+    feature = "lang-scala",
+    feature = "lang-groovy"
+))]
 pub mod java;
 #[cfg(feature = "lang-kotlin")]
 pub mod kotlin;
@@ -12,6 +19,8 @@ pub mod kotlin;
 pub mod python;
 #[cfg(feature = "lang-rust")]
 pub mod rust;
+#[cfg(feature = "lang-scala")]
+pub mod scala;
 #[cfg(any(feature = "lang-typescript", feature = "lang-javascript"))]
 pub mod typescript;
 
@@ -51,6 +60,10 @@ const PACKS: &[&Pack] = &[
     &java::PACK,
     #[cfg(feature = "lang-kotlin")]
     &kotlin::PACK,
+    #[cfg(feature = "lang-scala")]
+    &scala::PACK,
+    #[cfg(feature = "lang-groovy")]
+    &groovy::PACK,
 ];
 
 /// One lazily compiled query per pack: a refresh compiles only the languages it extracts.

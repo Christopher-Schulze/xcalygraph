@@ -2,3 +2,5 @@ name	url	commit	languages
 hono	https://github.com/honojs/hono	17ad0e21f5a91c939eeafa3df05793a8ea60f016	typescript
 gson	https://github.com/google/gson	57731049da3e415be3d5d34db1ca3b80f3c73810	java
 kotlinpoet	https://github.com/square/kotlinpoet	d67e333d682de65620bf82c46c5b41038e1e450f	kotlin
+os-lib	https://github.com/com-lihaoyi/os-lib	8871ab0bda9bbcc4edbef9b1a402eb4c47ef9398	scala
+spock-example	https://github.com/spockframework/spock-example	8155d1e2a8f1bdfb1aeacca2e9fe5ded7c992a5e	groovy

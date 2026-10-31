@@ -25,7 +25,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 18;
+pub const RESOLVE_VERSION: u32 = 19;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -883,12 +883,16 @@ impl<'a> Index<'a> {
         {
             return Some(found);
         }
+        if jvm::is_jvm(self.file_type(file))
+            && imports.is_none_or(|imports| !imports.names.contains_key(qualifier))
+            && let Some(module) = self.modules.get(&jvm::package_key(qualifier))
+        {
+            // A package of the root (`com.example.Type`, Scala `os.read`).
+            let found = self.module_symbol(module, name, None);
+            return (!found.is_empty()).then_some(found);
+        }
         if jvm::is_jvm(self.file_type(file)) && qualifier.contains('.') {
-            // Fully qualified `com.example.Type`: a package of the root, else outside it.
-            if let Some(module) = self.modules.get(&jvm::package_key(qualifier)) {
-                let found = self.module_symbol(module, name, None);
-                return (!found.is_empty()).then_some(found);
-            }
+            // Fully qualified name outside the root.
             let head = qualifier.split('.').next().unwrap_or_default();
             if head.starts_with(|ch: char| ch.is_ascii_lowercase())
                 && imports.is_none_or(|imports| !imports.names.contains_key(head))

@@ -1,0 +1,7 @@
+package com.example
+sym 5-13 class GreeterSpec parent=- owner= pub flags=1 sig="class GreeterSpec extends Specification" doc=""
+import 3 "spock.lang" names=Specification alias=- reexport=false
+ref 5 Inherit Specification qualifier=- scope=GreeterSpec
+ref 8 Call Greeter qualifier=- scope=GreeterSpec args=1
+ref 8 Call PlainFormatter qualifier=- scope=GreeterSpec args=0
+ref 11 Call greet qualifier=greeter scope=GreeterSpec args=1

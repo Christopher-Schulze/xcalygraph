@@ -100,10 +100,11 @@ NAME accepts `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get
 | Vue, Svelte, Astro | script blocks and template component usage |
 | Java | packages, single-type, wildcard and static imports, implicit `this`, overloads by argument count, JUnit tests, Gradle and Maven test commands, framework entrypoints |
 | Kotlin | as Java, plus extension functions narrowed by receiver type, objects and companions, trailing lambdas |
+| Scala, Groovy | packages and imports as Java; Scala objects, traits and package-qualified calls; Groovy scripts and Spock specifications |
 | Bash | functions, commands as calls, sourced files, env reads |
 | Markdown | headings, links and backticked mentions resolved to files and symbols (the basis of stale doc detection) |
 
-Next on the roadmap: Scala, Groovy, C# and Visual Basic .NET, the C family and Swift, config and infrastructure files (env definitions, task runners, SQL), Ruby, PHP, Lua, Zig, Elixir, Erlang and Dart, then documents and assets.
+Next on the roadmap: C# and Visual Basic .NET, the C family and Swift, config and infrastructure files (env definitions, task runners, SQL), Ruby, PHP, Lua, Zig, Elixir, Erlang and Dart, then documents and assets.
 
 ## Install
 

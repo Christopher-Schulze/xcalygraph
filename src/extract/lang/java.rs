@@ -134,7 +134,8 @@ fn flags(definition: &Definition, context: &FileContext) -> u8 {
 
 /// JVM import statements (Java, Kotlin, Scala, Groovy): `import a.b.C` -> spec `a.b`, name `C`;
 /// `import a.b.*` (Scala `a.b._`) -> name `*`; `import a.b.C as D` (Scala `a.b.{C => D}`) ->
-/// alias `D`; `import static a.b.C.m` -> spec `static:a.b.C`, name `m`.
+/// alias `D`; `import static a.b.C.m` -> spec `static:a.b.C`, name `m`; Scala `import a.B, c.D`
+/// -> one import per path.
 pub(super) fn jvm_import(statement: &str, line: u32, _reexport: bool) -> Vec<Import> {
     let text = statement
         .trim()
@@ -142,6 +143,29 @@ pub(super) fn jvm_import(statement: &str, line: u32, _reexport: bool) -> Vec<Imp
         .trim()
         .trim_end_matches(';')
         .trim();
+    let mut depth = 0;
+    let mut start = 0;
+    let mut parts = Vec::new();
+    for (index, ch) in text.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(&text[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&text[start..]);
+    parts
+        .into_iter()
+        .flat_map(|part| import_path(part.trim(), line))
+        .collect()
+}
+
+/// One import path of [`jvm_import`].
+fn import_path(text: &str, line: u32) -> Vec<Import> {
     let (is_static, text) = match text.strip_prefix("static ") {
         Some(rest) => (true, rest.trim()),
         None => (false, text),
@@ -169,7 +193,10 @@ pub(super) fn jvm_import(statement: &str, line: u32, _reexport: bool) -> Vec<Imp
             .trim_end_matches('}')
             .split(',')
             .filter_map(|selector| {
-                let (name, alias) = match selector.split_once("=>") {
+                let (name, alias) = match selector
+                    .split_once("=>")
+                    .or_else(|| selector.split_once(" as "))
+                {
                     Some((name, alias)) => (name.trim(), Some(alias.trim())),
                     None => (selector.trim(), None),
                 };
@@ -258,6 +285,13 @@ mod tests {
         assert_eq!(
             specs("import a.b.C as D"),
             [("a.b".to_owned(), vec!["C".to_owned()], Some("D".to_owned()))]
+        );
+        assert_eq!(
+            specs("import a.B, c.{D as E}"),
+            [
+                ("a".to_owned(), vec!["B".to_owned()], None),
+                ("c".to_owned(), vec!["D".to_owned()], Some("E".to_owned())),
+            ]
         );
         assert_eq!(
             specs("import a.b.{C, D => E, _}"),
