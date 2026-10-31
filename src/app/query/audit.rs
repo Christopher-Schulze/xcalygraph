@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::output::{Value, Writer};
-use super::{Filter, Index};
+use super::{Filter, Index, Node};
 use crate::domain::facts::{
     EnvSource, FLAG_DECLARATION, FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST, SymKind,
 };
@@ -206,9 +206,11 @@ fn unreferenced(
             }
         } else if kind != SymKind::Method
             && export_semantics(index.file_of(node).file_type())
-            && incoming
-                .iter()
-                .all(|edge| index.file_of(edge.node).path == index.file_of(node).path)
+            // A framework route (`page /x`, `GET /api/x`) using it is its outside caller.
+            && incoming.iter().all(|edge| {
+                index.file_of(edge.node).path == index.file_of(node).path
+                    && !matches!(index.node(edge.node), Node::Symbol(caller) if caller.kind() == SymKind::Op)
+            })
         {
             unused.push(node);
         }

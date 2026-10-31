@@ -5,3 +5,7 @@
 (jsx_opening_element name: (member_expression object: (_) @qualifier property: (property_identifier) @name)) @reference.call
 (jsx_self_closing_element name: (member_expression object: (_) @qualifier property: (property_identifier) @name)) @reference.call
 (jsx_expression (identifier) @name @reference.value)
+; `<ThemeContext.Provider>` provides the context: a use of `ThemeContext`.
+(jsx_opening_element
+  name: (member_expression object: (identifier) @name property: (property_identifier) @_member)
+  (#any-of? @_member "Provider" "Consumer")) @reference.value

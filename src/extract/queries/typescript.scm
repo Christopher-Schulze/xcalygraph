@@ -80,6 +80,11 @@
 (assignment_expression right: (identifier) @name @reference.value)
 (export_statement (export_clause (export_specifier name: (identifier) @name @reference.value)))
 (export_statement value: (identifier) @name @reference.value)
+; A parenthesized expression statement only comes from Svelte markup (`onclick={save}`,
+; `{$user.name}`, src/extract/sfc.rs): the identifier or member object is used as a value.
+(expression_statement (parenthesized_expression (identifier) @name @reference.value))
+(expression_statement
+  (parenthesized_expression (member_expression object: (identifier) @name) @reference.value))
 
 ; Parameters and function locals shadow module names (`onResponse?.(x)` calls the parameter).
 (required_parameter pattern: (identifier) @local)

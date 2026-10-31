@@ -1,6 +1,7 @@
 //! TypeScript and JavaScript module rules (`docs/spec.md` section 6): relative specifiers with
 //! extension and index probing, `tsconfig.json` and `jsconfig.json` `paths` and `baseUrl`,
-//! workspace packages from `package.json`, external packages otherwise.
+//! workspace packages from `package.json`, the SvelteKit `$lib` alias, external packages
+//! otherwise.
 
 use super::modules::parent_dir;
 use super::{Imports, Index, Input, Target};
@@ -39,6 +40,13 @@ pub struct JsTables {
 pub fn tables(input: &Input) -> JsTables {
     let mut tables = JsTables::default();
     for (record, facts) in input.files.iter().zip(input.facts) {
+        // SvelteKit's default `$lib` alias; the generated tsconfig declaring it is not checked in.
+        if role::file_name(&record.path).starts_with("svelte.config.") {
+            let dir = parent_dir(&record.path);
+            tables
+                .aliases
+                .push(("$lib/".to_owned(), normalize(&join(dir, "src/lib"))));
+        }
         let Some(manifest) = facts.as_ref().and_then(|facts| facts.manifest.as_ref()) else {
             continue;
         };

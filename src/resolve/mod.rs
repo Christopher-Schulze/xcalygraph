@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 61;
+pub const RESOLVE_VERSION: u32 = 62;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -157,12 +157,14 @@ impl<'a> Index<'a> {
                     path.insert(0, symbol.owner.as_str());
                 }
                 path.reverse();
-                // Headings are found by title; their file path locates them.
-                if symbol.kind() == SymKind::Heading {
+                // Headings are found by title, routes by kind and path (`GET /api/users`,
+                // `action addToCart`); their file path locates them.
+                let route = symbol.kind() == SymKind::Op && symbol.name.contains(' ');
+                if symbol.kind() == SymKind::Heading || route {
                     let role = input.files[file].role;
                     symbols.push(GraphSymbol {
                         file: file as u32,
-                        kind: SymKind::Heading,
+                        kind: symbol.kind(),
                         name: symbol.name.clone(),
                         qualified: symbol.name.clone(),
                         parent,

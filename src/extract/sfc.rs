@@ -1,7 +1,10 @@
 //! Single-file components (Vue, Svelte, Astro): script blocks and Astro frontmatter are parsed
 //! as TypeScript or JavaScript in place (other bytes blanked, so lines stay exact); component
 //! tags of the template count as calls; the file itself is a component symbol named after its
-//! stem (`docs/spec.md` section 3, embedded code).
+//! stem (`docs/spec.md` section 3, embedded code). Svelte markup expressions (`{format(x)}`,
+//! `onclick={save}`, `{#if ready}`) are parsed in place as statements and `use:enhance`
+//! directives count as values, all scoped to the component, so script functions used only by
+//! the markup are not dead; `$store` reads name the store.
 
 use super::lang;
 use crate::domain::corpus::FileRecord;
@@ -19,6 +22,14 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
     for range in &scripts {
         blanked[range.clone()].copy_from_slice(&text.as_bytes()[range.clone()]);
     }
+    let svelte = record.file_type == Some(FileType::Svelte);
+    let mut skipped = scripts.clone();
+    if svelte {
+        skipped.extend(element_ranges(&text, "<style", "</style>"));
+        skipped.extend(element_ranges(&text, "<!--", "-->"));
+        skipped.sort_by_key(|range| range.start);
+        svelte_expressions(&text, &skipped, &mut blanked);
+    }
     let (file_type, path) = if typescript {
         (FileType::TypeScript, format!("{}.ts", record.path))
     } else {
@@ -29,12 +40,18 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
             engine::extract(&language, query, &pack.hooks, &record.path, &blanked)
         })
         .unwrap_or_default();
-    let stem = record
-        .path
-        .rsplit('/')
+    let mut parts = record.path.rsplit('/');
+    let stem = parts
         .next()
         .and_then(|name| name.split('.').next())
-        .unwrap_or_default();
+        .unwrap_or_default()
+        // SvelteKit `+page.svelte` is the `Page` component of its route.
+        .trim_start_matches('+');
+    // `ArticleList/index.svelte` is imported and used as `ArticleList`.
+    let stem = match (stem, parts.next()) {
+        ("index", Some(dir)) => dir,
+        _ => stem,
+    };
     let lines = text.lines().count() as u32;
     let component = facts.symbols.len() as u32;
     facts.symbols.push(Symbol {
@@ -56,7 +73,173 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
             arity: crate::domain::facts::NO_ARITY,
         });
     }
+    if svelte {
+        for (line, name) in directive_values(&text, &skipped) {
+            facts.refs.push(Ref {
+                kind: RefKind::Value,
+                name,
+                qualifier: None,
+                scope: None,
+                line,
+                arity: crate::domain::facts::NO_ARITY,
+            });
+        }
+        facts.refs.retain(|reference| {
+            !reference
+                .name
+                .strip_prefix('$')
+                .is_some_and(|rune| RUNES.contains(&rune))
+        });
+        // Top-level script code and markup run per component instance.
+        for reference in &mut facts.refs {
+            reference.scope.get_or_insert(component);
+            if let Some(store) = reference.name.strip_prefix('$')
+                && !store.is_empty()
+            {
+                reference.name = store.to_owned();
+            }
+        }
+    }
+    super::routes::add(&record.path, &text, Some(component), &mut facts);
     facts
+}
+
+/// Svelte 5 runes: compiler keywords, no stores.
+const RUNES: [&str; 7] = [
+    "state", "derived", "effect", "props", "bindable", "inspect", "host",
+];
+
+/// Byte ranges from each `open` to the end of the following `close`.
+fn element_ranges(text: &str, open: &str, close: &str) -> Vec<std::ops::Range<usize>> {
+    let lower = text.to_ascii_lowercase();
+    let mut ranges = Vec::new();
+    let mut from = 0;
+    while let Some(start) = lower[from..].find(open).map(|offset| from + offset) {
+        let end = lower[start..]
+            .find(close)
+            .map_or(text.len(), |offset| start + offset + close.len());
+        ranges.push(start..end);
+        from = end;
+    }
+    ranges
+}
+
+/// Copies the code of each markup expression into `blanked` as a parenthesized statement
+/// (`;(format(x))`): the braces become parentheses, a blank byte before them the separator.
+/// Block tags keep their expression (`{#if a}`, `{#each items as item}` -> `items`), closing and
+/// branch tags without one vanish.
+fn svelte_expressions(text: &str, skipped: &[std::ops::Range<usize>], blanked: &mut [u8]) {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if let Some(range) = skipped.iter().find(|range| range.contains(&index)) {
+            index = range.end;
+            continue;
+        }
+        if bytes[index] != b'{' {
+            index += 1;
+            continue;
+        }
+        let Some(close) = matching_brace(bytes, index) else {
+            break;
+        };
+        let keep = expression_range(text, index + 1, close);
+        let separator = (0..index)
+            .rev()
+            .find(|&at| blanked[at] != b'\n')
+            .filter(|&at| blanked[at] == b' ');
+        if let (Some(keep), Some(separator)) = (keep, separator) {
+            blanked[keep.clone()].copy_from_slice(&bytes[keep]);
+            blanked[separator] = b';';
+            blanked[index] = b'(';
+            blanked[close] = b')';
+        }
+        index = close + 1;
+    }
+}
+
+/// Index of the `}` closing the `{` at `open`, skipping nested braces and string literals.
+fn matching_brace(bytes: &[u8], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut quote: Option<u8> = None;
+    let mut index = open;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        match quote {
+            Some(_) if byte == b'\\' => index += 1,
+            Some(delimiter) if byte == delimiter => quote = None,
+            Some(_) => {}
+            None => match byte {
+                b'"' | b'\'' | b'`' => quote = Some(byte),
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(index);
+                    }
+                }
+                _ => {}
+            },
+        }
+        index += 1;
+    }
+    None
+}
+
+/// The code part of the expression between `start` and `end` (the braces excluded).
+fn expression_range(text: &str, start: usize, end: usize) -> Option<std::ops::Range<usize>> {
+    let inner = &text[start..end];
+    let lead = inner.len() - inner.trim_start().len();
+    let trimmed = inner.trim_start();
+    let (skip, cut): (usize, Option<&str>) = if let Some(block) = trimmed.strip_prefix('#') {
+        let keyword = block.split_whitespace().next().unwrap_or_default();
+        match keyword {
+            "if" | "key" => (1 + keyword.len(), None),
+            "each" => (1 + keyword.len(), Some(" as ")),
+            "await" => (1 + keyword.len(), Some(" then ")),
+            _ => return None,
+        }
+    } else if trimmed.starts_with(":else if") {
+        (":else if".len(), None)
+    } else if trimmed.starts_with([':', '/']) {
+        return None;
+    } else if let Some(tag) = trimmed.strip_prefix('@') {
+        let keyword = tag.split_whitespace().next().unwrap_or_default();
+        (1 + keyword.len(), None)
+    } else {
+        (0, None)
+    };
+    let code_start = start + lead + skip;
+    let code = &text[code_start..end];
+    let code_end = cut
+        .and_then(|cut| code.find(cut))
+        .map_or(end, |offset| code_start + offset);
+    (!text[code_start..code_end].trim().is_empty()).then_some(code_start..code_end)
+}
+
+/// Action, transition and animation directives name functions: `use:enhance`, `in:fly`.
+fn directive_values(text: &str, skipped: &[std::ops::Range<usize>]) -> Vec<(u32, String)> {
+    let mut found = Vec::new();
+    for prefix in ["use:", "transition:", "in:", "out:", "animate:"] {
+        let mut from = 0;
+        while let Some(at) = text[from..].find(prefix).map(|offset| from + offset) {
+            from = at + prefix.len();
+            let attribute = at > 0 && text.as_bytes()[at - 1].is_ascii_whitespace();
+            if !attribute || skipped.iter().any(|range| range.contains(&at)) {
+                continue;
+            }
+            let name: String = text[from..]
+                .chars()
+                .take_while(|ch| ch.is_alphanumeric() || matches!(ch, '_' | '$'))
+                .collect();
+            if !name.is_empty() {
+                let line = text[..at].matches('\n').count() as u32 + 1;
+                found.push((line, name));
+            }
+        }
+    }
+    found.sort();
+    found
 }
 
 /// Byte ranges of script contents and whether any is TypeScript.
@@ -189,5 +372,48 @@ mod tests {
             .map(|r| r.name.as_str())
             .collect();
         assert_eq!(calls, ["getTitle", "Layout", "Header"]);
+    }
+
+    #[test]
+    fn svelte_markup_expressions_directives_and_stores() {
+        let source = "<script>\n  import { enhance } from '$app/forms';\n  import { user } from '$lib/stores';\n  let { items } = $props();\n  function format(x) { return x }\n  function save() {}\n</script>\n\n{#each items as item}\n  <p>{format(item)}</p>\n{/each}\n<button onclick={save}>{$user.name}</button>\n<form use:enhance></form>\n<style>\n  p { color: red }\n</style>\n";
+        let facts = extract(
+            &record("src/routes/items/+page.svelte", FileType::Svelte),
+            source.as_bytes(),
+        );
+        let mut refs: Vec<(&str, u32)> = facts
+            .refs
+            .iter()
+            .filter(|r| matches!(r.kind, RefKind::Call | RefKind::Value))
+            .map(|r| (r.name.as_str(), r.line))
+            .collect();
+        refs.sort_unstable();
+        assert_eq!(
+            refs,
+            [
+                ("Page", 1),
+                ("enhance", 13),
+                ("format", 10),
+                ("item", 10),
+                ("save", 12),
+                ("user", 12)
+            ]
+        );
+        let component = facts.symbols.iter().position(|s| s.name == "Page");
+        assert!(
+            facts
+                .refs
+                .iter()
+                .filter(|r| r.kind != RefKind::Call || r.name != "Page")
+                .all(|r| r.scope.is_some())
+        );
+        assert!(component.is_some());
+        let routes: Vec<&str> = facts
+            .symbols
+            .iter()
+            .filter(|s| s.kind == Some(SymKind::Op))
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(routes, ["page /items"]);
     }
 }

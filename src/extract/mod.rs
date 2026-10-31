@@ -14,6 +14,7 @@ pub mod lang;
 pub mod manifest;
 pub mod markdown;
 mod prose;
+mod routes;
 pub mod sfc;
 mod sql;
 mod structural;
@@ -25,7 +26,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 48;
+const EXTRACTION_VERSION: u32 = 49;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -147,6 +148,18 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
         Some(FileType::C | FileType::Cpp | FileType::ObjC)
     ) {
         lang::c::macro_references(content, &mut facts);
+    }
+    if matches!(
+        record.file_type,
+        Some(FileType::TypeScript | FileType::JavaScript)
+    ) && matches!(record.role, Role::Src | Role::Gen)
+    {
+        routes::add(
+            &record.path,
+            &String::from_utf8_lossy(content),
+            None,
+            &mut facts,
+        );
     }
     if record.file_type == Some(FileType::Bash) {
         lang::bash::recover_functions(&String::from_utf8_lossy(content), &mut facts);

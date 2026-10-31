@@ -1,0 +1,24 @@
+GET /api/items -calls-> src/routes/api/items/+server.GET @3
+actions / -calls-> src/routes/+page.server.actions @7
+file:src/lib/Nav.svelte -imports-> file:src/lib/stores.ts @1
+file:src/routes/+layout.svelte -imports-> file:src/lib/Nav.svelte @1
+file:src/routes/+page.server.ts -imports-> file:src/lib/items.ts @1
+file:src/routes/+page.svelte -imports-> file:src/lib/format.ts @1
+file:src/routes/api/items/+server.ts -imports-> file:src/lib/items.ts @1
+hook handle -calls-> src/hooks.server.handle @1
+layout / -calls-> src/routes/+layout.Layout @1
+load / -calls-> src/routes/+page.server.load @3
+page / -calls-> src/routes/+page.Page @1
+src/lib/Nav.Nav -uses-> src/lib/stores.user @7
+src/lib/items.items -uses-> src/lib/items.Item @6
+src/lib/items.listItems -uses-> src/lib/items.Item @8
+src/lib/items.listItems -uses-> src/lib/items.items @9
+src/routes/+layout.Layout -calls-> src/lib/Nav.Nav @6
+src/routes/+page.Page -calls-> src/lib/format.formatDate @11
+src/routes/+page.Page -uses-> src/routes/+page.more @13
+src/routes/+page.Page -uses-> src/routes/+page.shown @10
+src/routes/+page.server.actions -calls-> src/lib/items.addItem @9
+src/routes/+page.server.load -calls-> src/lib/items.listItems @4
+src/routes/api/items/+server.GET -calls-> src/lib/items.listItems @4
+ext src/lib/Nav $app 1
+ext src/lib/stores svelte 1

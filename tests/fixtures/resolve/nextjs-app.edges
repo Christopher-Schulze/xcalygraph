@@ -1,0 +1,29 @@
+GET /api/products -calls-> src/app/api/products/route.GET @3
+POST /api/products -calls-> src/app/api/products/route.POST @7
+action addToCart -calls-> src/app/actions.addToCart @5
+api /api/legacy -calls-> src/pages/api/legacy.handler @3
+file:src/app/(shop)/products/[id]/page.tsx -imports-> file:src/components/product-card.tsx @1
+file:src/app/(shop)/products/[id]/page.tsx -imports-> file:src/lib/products.ts @1
+file:src/app/actions.ts -imports-> file:src/lib/products.ts @1
+file:src/app/api/products/route.ts -imports-> file:src/lib/products.ts @1
+file:src/app/layout.tsx -imports-> file:src/components/header.tsx @1
+file:src/components/product-card.tsx -imports-> file:src/app/actions.ts @1
+file:src/pages/api/legacy.ts -imports-> file:src/lib/products.ts @1
+layout / -calls-> src/app/layout.RootLayout @3
+loading /products -calls-> src/app/(shop)/products/loading.ProductsLoading @1
+middleware / -calls-> src/middleware.middleware @1
+page /products/[id] -calls-> src/app/(shop)/products/[id]/page.ProductPage @9
+page /products/[id] -calls-> src/app/(shop)/products/[id]/page.generateMetadata @4
+src/app/(shop)/products/[id]/page.ProductPage -calls-> src/components/product-card.ProductCard @11
+src/app/(shop)/products/[id]/page.ProductPage -calls-> src/lib/products.getProduct @10
+src/app/(shop)/products/[id]/page.generateMetadata -calls-> src/lib/products.getProduct @5
+src/app/actions.addToCart -calls-> src/lib/products.createProduct @6
+src/app/api/products/route.GET -calls-> src/lib/products.listProducts @4
+src/app/api/products/route.POST -calls-> src/lib/products.createProduct @8
+src/app/layout.RootLayout -calls-> src/components/header.Header @7
+src/components/product-card.ProductCard -calls-> src/app/actions.addToCart @6
+src/lib/products.createProduct -uses-> src/lib/products.Product @14
+src/lib/products.getProduct -uses-> src/lib/products.Product @6
+src/lib/products.listProducts -calls-> src/lib/products.getProduct @11
+src/lib/products.listProducts -uses-> src/lib/products.Product @10
+src/pages/api/legacy.handler -calls-> src/lib/products.listProducts @4

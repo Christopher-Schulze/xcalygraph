@@ -44,3 +44,6 @@ ripgrep	https://github.com/BurntSushi/ripgrep	91f5d22ef48bde459d90a8c7dbeab416e9
 cobra	https://github.com/spf13/cobra	adbc8813901bba65827259daa8e22ff94ec1f30e	go
 nvm	https://github.com/nvm-sh/nvm	5e38bc0caed342356ffd26eb21e0e9b995ac228b	bash
 bats-core	https://github.com/bats-core/bats-core	5b61d8f22b46abf001e218cdd63f2938c356fa93	bash
+taxonomy	https://github.com/shadcn-ui/taxonomy	298a8857c7128a0d121e7f699dfd729f23b3966d	typescript,nextjs
+bulletproof-react	https://github.com/alan2207/bulletproof-react	9506629ed003a561c6627735480cce4994244bb4	typescript,react
+svelte-realworld	https://github.com/sveltejs/realworld	df796708040f5200ec572b28ab7f88ecee5794dd	javascript,svelte

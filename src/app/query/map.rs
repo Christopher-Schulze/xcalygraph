@@ -337,7 +337,7 @@ fn api(index: &Index, filter: &Filter) -> Vec<(String, String)> {
         let (mut text, record) = symbol_line(index, node, "api");
         if symbol.kind() == SymKind::Op {
             let signature = index.string(symbol.signature);
-            if signature != index.string(symbol.name) {
+            if !signature.is_empty() && signature != index.string(symbol.name) {
                 text = text.replacen(' ', &format!(" {signature} "), 1);
             }
         }
