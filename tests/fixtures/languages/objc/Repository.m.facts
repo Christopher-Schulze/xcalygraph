@@ -6,7 +6,7 @@ sym 21-23 method put parent=MemoryRepository owner=MemoryRepository pub flags=0 
 import 1 "Repository.h" names= alias=- reexport=false
 ref 11 Value rowId qualifier=- scope=valid
 ref 14 Type Row qualifier=- scope=find
-ref 15 Call valid qualifier=self scope=find
+ref 15 Call valid qualifier=self scope=find args=1
 ref 16 Value nil qualifier=- scope=find
 ref 21 Type Row qualifier=- scope=put
 ref 22 Value row qualifier=- scope=put

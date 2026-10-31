@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 41;
+pub const RESOLVE_VERSION: u32 = 42;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1946,6 +1946,30 @@ impl<'a> Index<'a> {
     }
 
     /// Owner type of the method enclosing `scope`.
+    /// Every part of the Objective-C classes in `types`: the `@interface`, class extensions,
+    /// categories and the `@implementation` are separate symbols of one class.
+    fn objc_class_parts(&self, types: &[u32]) -> Vec<u32> {
+        let mut parts: Vec<u32> = types.to_vec();
+        for &type_symbol in types {
+            let name = self.symbols[type_symbol as usize].name.as_str();
+            parts.extend(
+                self.by_name
+                    .get(name)
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|&part| {
+                        let symbol = &self.symbols[part as usize];
+                        matches!(symbol.kind, SymKind::Class | SymKind::Iface)
+                            && self.file_type(symbol.file) == Some(FileType::ObjC)
+                    }),
+            );
+        }
+        parts.sort_unstable();
+        parts.dedup();
+        parts
+    }
+
     fn owner_type(&self, file: u32, scope: Option<u32>) -> Option<Vec<u32>> {
         let facts = self.facts(file)?;
         let mut current = scope;
@@ -2799,6 +2823,17 @@ impl<'a> Index<'a> {
                         .collect();
                     return Outcome::Targets(variants, Confidence::Exact);
                 }
+                // Objective-C: `@interface`, class extensions, categories and `@implementation`
+                // are parts of one class; the first part stands for it.
+                if self.file_type(file) == Some(FileType::ObjC)
+                    && found.iter().all(|&(_, part)| {
+                        let symbol = &self.symbols[part as usize];
+                        symbol.kind.is_type() && symbol.name == name
+                    })
+                    && let Some(&(_, first)) = found.iter().min_by_key(|&&(_, part)| part)
+                {
+                    return exact(first);
+                }
             }
         }
         // 2. Names bound by imports.
@@ -3224,11 +3259,29 @@ impl<'a> Index<'a> {
         line: u32,
     ) -> Receiver {
         let head = chain[0];
+        let objc = self.file_type(file) == Some(FileType::ObjC);
         let start = if matches!(head, "self" | "this" | "Self" | "$this") {
             match self.owner_type(file, scope) {
+                Some(types) if objc => Some((self.objc_class_parts(&types), Confidence::Exact)),
                 Some(types) => Some((types, Confidence::Exact)),
                 None => return Receiver::Unknown,
             }
+        } else if objc && head == "super" {
+            // `[super m]`: the superclass named by any part of the enclosing class.
+            let Some(types) = self.owner_type(file, scope) else {
+                return Receiver::Unknown;
+            };
+            let mut supers: Vec<u32> = self
+                .objc_class_parts(&types)
+                .iter()
+                .flat_map(|part| self.supertypes.get(part).into_iter().flatten().copied())
+                .collect();
+            supers.sort_unstable();
+            supers.dedup();
+            if supers.is_empty() {
+                return Receiver::External;
+            }
+            Some((self.objc_class_parts(&supers), Confidence::Exact))
         } else if let Some(binding) = self.binding(file, scope, head, line) {
             match self.binding_type(file, imports, scope, binding) {
                 Some(found) => Some(found),
@@ -3250,10 +3303,21 @@ impl<'a> Index<'a> {
             return Receiver::Unknown;
         };
         for field in &chain[1..] {
-            let Some(&type_symbol) = types.first() else {
+            if types.is_empty() {
                 return Receiver::Unknown;
+            }
+            // Objective-C declares properties in the interface or a class extension, not in
+            // the implementation the method belongs to: any part of the class carries them.
+            let parts = if objc {
+                self.objc_class_parts(&types)
+            } else {
+                types[..1].to_vec()
             };
-            let Some(&field_type) = self.field_types.get(&(type_symbol, *field)) else {
+            let Some((type_symbol, field_type)) = parts.iter().find_map(|&part| {
+                self.field_types
+                    .get(&(part, *field))
+                    .map(|&field_type| (part, field_type))
+            }) else {
                 return Receiver::Unknown;
             };
             let owner_file = self.symbols[type_symbol as usize].file;
@@ -3918,6 +3982,26 @@ fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence, arity: u
 /// values), total, and whether it is variadic; `None` when the list cannot be found (clipped or
 /// no parentheses).
 fn parameter_count(signature: &str, name: &str) -> Option<(usize, usize, bool)> {
+    // Objective-C `- (T)name:(A)a with:(B)b`: one parameter per selector colon.
+    if let Some(rest) = signature
+        .strip_prefix('-')
+        .or_else(|| signature.strip_prefix('+'))
+        && rest.trim_start().starts_with('(')
+    {
+        let mut depth = 0i32;
+        let colons = rest
+            .chars()
+            .filter(|&ch| {
+                match ch {
+                    '(' | '[' | '{' | '<' => depth += 1,
+                    ')' | ']' | '}' | '>' => depth -= 1,
+                    _ => {}
+                }
+                ch == ':' && depth == 0
+            })
+            .count();
+        return Some((colons, colons, false));
+    }
     let bytes = signature.as_bytes();
     let word = |index: usize| {
         bytes

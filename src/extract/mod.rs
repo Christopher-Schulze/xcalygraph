@@ -24,7 +24,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 27;
+const EXTRACTION_VERSION: u32 = 28;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -117,6 +117,19 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
             };
         }
     }
+    #[cfg(any(feature = "lang-c", feature = "lang-cpp", feature = "lang-objc"))]
+    let masked;
+    #[cfg(any(feature = "lang-c", feature = "lang-cpp", feature = "lang-objc"))]
+    let content = if matches!(
+        record.file_type,
+        Some(FileType::C | FileType::Cpp | FileType::ObjC)
+    ) && let Some(rewritten) = lang::c::mask_platform_macros(content)
+    {
+        masked = rewritten;
+        masked.as_slice()
+    } else {
+        content
+    };
     // World of Warcraft `.toc` files list the addon's files; they are no Lua source.
     let toc = record.path.ends_with(".toc");
     let mut facts = record
@@ -231,6 +244,70 @@ pub fn count_lines(content: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Grammar exploration for query work: prints the syntax tree of the file in
+    /// `XCALYGRAPH_TREE_FILE` (type from its name). Development only:
+    /// `XCALYGRAPH_TREE_FILE=x.m cargo test --release dump_tree -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "development tool; needs XCALYGRAPH_TREE_FILE"]
+    fn dump_tree() -> Result<(), Box<dyn std::error::Error>> {
+        let Some(path) = std::env::var_os("XCALYGRAPH_TREE_FILE") else {
+            return Ok(());
+        };
+        let path = std::path::PathBuf::from(path);
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        let source = std::fs::read(&path)?;
+        let file_type = match crate::domain::filetype::detect(name) {
+            crate::domain::filetype::Detection::Known(file_type) => Some(file_type),
+            crate::domain::filetype::Detection::Ambiguous(ambiguous) => {
+                crate::domain::filetype::resolve_ambiguous(ambiguous, &source, false)
+            }
+            _ => None,
+        }
+        .ok_or_else(|| format!("no file type for {name}"))?;
+        let Some((_, language, _)) = lang::lookup(file_type, name) else {
+            return Err(format!("no grammar for {name}").into());
+        };
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&language)?;
+        let tree = parser.parse(&source, None).ok_or("parse failed")?;
+        let mut cursor = tree.walk();
+        let mut depth = 0usize;
+        loop {
+            let node = cursor.node();
+            if node.is_named() {
+                let field = cursor
+                    .field_name()
+                    .map_or(String::new(), |field| format!("{field}: "));
+                let text: String = node
+                    .utf8_text(&source)
+                    .unwrap_or_default()
+                    .chars()
+                    .take(60)
+                    .map(|ch| if ch == '\n' { ' ' } else { ch })
+                    .collect();
+                println!(
+                    "{}{field}{} {} | {text}",
+                    "  ".repeat(depth),
+                    node.kind(),
+                    node.start_position().row + 1
+                );
+            }
+            if cursor.goto_first_child() {
+                depth += 1;
+                continue;
+            }
+            while !cursor.goto_next_sibling() {
+                if !cursor.goto_parent() {
+                    return Ok(());
+                }
+                depth -= 1;
+            }
+        }
+    }
 
     #[test]
     fn lines_count_a_missing_final_newline() {

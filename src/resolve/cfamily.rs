@@ -117,7 +117,31 @@ impl Index<'_> {
         candidates
             .iter()
             .find_map(|candidate| self.path_index.get(candidate.as_str()).copied())
+            .or_else(|| self.include_by_suffix(system, path))
             .filter(|&target| target != file)
+    }
+
+    /// Header search paths the tree does not declare (Xcode targets, framework-style
+    /// `<Kit/Header.h>`): the unique file whose path ends with the include path. System includes
+    /// qualify only with a directory part, so `<string.h>` never binds to a local `string.h`.
+    fn include_by_suffix(&self, system: bool, path: &str) -> Option<u32> {
+        let path = normalize(path);
+        if system && !path.contains('/') {
+            return None;
+        }
+        let name = path.rsplit('/').next()?;
+        let suffix = format!("/{path}");
+        let mut found = self
+            .name_index
+            .get(name)?
+            .iter()
+            .copied()
+            .filter(|&candidate| {
+                let candidate_path = self.input.files[candidate as usize].path.as_str();
+                candidate_path == path || candidate_path.ends_with(&suffix)
+            });
+        let first = found.next()?;
+        found.next().is_none().then_some(first)
     }
 
     /// Direct includes as files, external system headers as dependencies, the transitive closure

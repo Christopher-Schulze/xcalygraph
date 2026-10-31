@@ -242,6 +242,112 @@ fn is_c_keyword(word: &str) -> bool {
     )
 }
 
+/// Apple platform macros the grammars cannot parse, rewritten in place with the same byte length
+/// so every line and column stays valid: region markers (`NS_ASSUME_NONNULL_BEGIN`,
+/// `CF_EXTERN_C_BEGIN`) become blanks, and `typedef NS_ENUM(Base, Name) {...}` becomes
+/// `enum Name {...}` so its enumerators are definitions. `None` when nothing matched.
+pub fn mask_platform_macros(source: &[u8]) -> Option<Vec<u8>> {
+    const REGIONS: [&[u8]; 8] = [
+        b"NS_ASSUME_NONNULL_BEGIN",
+        b"NS_ASSUME_NONNULL_END",
+        b"CF_ASSUME_NONNULL_BEGIN",
+        b"CF_ASSUME_NONNULL_END",
+        b"CF_EXTERN_C_BEGIN",
+        b"CF_EXTERN_C_END",
+        b"CF_IMPLICIT_BRIDGING_ENABLED",
+        b"CF_IMPLICIT_BRIDGING_DISABLED",
+    ];
+    const ENUMS: [&[u8]; 7] = [
+        b"NS_ENUM",
+        b"NS_OPTIONS",
+        b"NS_CLOSED_ENUM",
+        b"NS_ERROR_ENUM",
+        b"CF_ENUM",
+        b"CF_OPTIONS",
+        b"CF_CLOSED_ENUM",
+    ];
+    if !REGIONS
+        .iter()
+        .chain(ENUMS.iter())
+        .any(|word| memchr_word(source, word, 0).is_some())
+    {
+        return None;
+    }
+    let mut out = source.to_vec();
+    for word in REGIONS {
+        let mut from = 0;
+        while let Some(start) = memchr_word(&out, word, from) {
+            out[start..start + word.len()].fill(b' ');
+            from = start + word.len();
+        }
+    }
+    for word in ENUMS {
+        let mut from = 0;
+        while let Some(start) = memchr_word(&out, word, from) {
+            from = start + word.len();
+            let Some(open) = out[from..]
+                .iter()
+                .position(|&b| !b.is_ascii_whitespace())
+                .map(|offset| from + offset)
+                .filter(|&open| out[open] == b'(')
+            else {
+                continue;
+            };
+            let Some(close) = out[open..]
+                .iter()
+                .position(|&b| b == b')' || b == b'\n')
+                .map(|offset| open + offset)
+                .filter(|&close| out[close] == b')')
+            else {
+                continue;
+            };
+            // The name is the last argument: `NS_ENUM(NSUInteger, Mode)`.
+            let comma = out[open..close].iter().rposition(|&b| b == b',');
+            let name_start = comma.map_or(open + 1, |offset| open + offset + 1);
+            out[start..name_start].fill(b' ');
+            out[start..start + 4].copy_from_slice(b"enum");
+            out[close] = b' ';
+            // A preceding `typedef` would leave a declaration without declarator.
+            let before = &out[..start];
+            let trimmed = before.len()
+                - before
+                    .iter()
+                    .rev()
+                    .take_while(|b| b.is_ascii_whitespace())
+                    .count();
+            if out[..trimmed].ends_with(b"typedef")
+                && (trimmed == 7 || !is_word_byte(out[trimmed - 8]))
+            {
+                out[trimmed - 7..trimmed].fill(b' ');
+            }
+        }
+    }
+    Some(out)
+}
+
+fn is_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+/// First whole-word occurrence of `word` at or after `from`.
+fn memchr_word(haystack: &[u8], word: &[u8], from: usize) -> Option<usize> {
+    let mut position = from;
+    while position + word.len() <= haystack.len() {
+        let offset = haystack[position..]
+            .windows(word.len())
+            .position(|window| window == word)?;
+        let start = position + offset;
+        let end = start + word.len();
+        let before = start == 0 || !is_word_byte(haystack[start - 1]);
+        let after = end == haystack.len() || !is_word_byte(haystack[end]);
+        if before && after {
+            return Some(start);
+        }
+        position = start + 1;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +367,24 @@ mod tests {
                 .first()
                 .is_some_and(|value| value == "MACRO_PATH")
         );
+    }
+
+    #[test]
+    fn platform_macros_are_masked_with_the_same_length() {
+        let source = b"NS_ASSUME_NONNULL_BEGIN\ntypedef NS_ENUM(NSUInteger, Mode) {\n    ModeNone,\n};\n@interface Foo : NSObject\n@end\nNS_ASSUME_NONNULL_END\n";
+        let masked = mask_platform_macros(source).unwrap_or_default();
+        assert_eq!(masked.len(), source.len());
+        let text = String::from_utf8(masked).unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0].trim(), "");
+        assert_eq!(
+            lines[1].split_whitespace().collect::<Vec<_>>(),
+            ["enum", "Mode", "{"]
+        );
+        assert_eq!(lines[4], "@interface Foo : NSObject");
+        assert_eq!(lines[6].trim(), "");
+        assert!(mask_platform_macros(b"@interface Foo : NSObject\n@end\n").is_none());
+        // Whole words only: a longer identifier stays untouched.
+        assert!(mask_platform_macros(b"int MY_NS_ENUM_COUNT = 1;\n").is_none());
     }
 }

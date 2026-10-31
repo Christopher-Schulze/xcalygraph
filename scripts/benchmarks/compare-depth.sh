@@ -8,7 +8,7 @@
 #   SAMPLES: misses listed per relation (default 15).
 #   Works on a copy of the tracked files below .cache/depth/; Graphify's graph is reused while
 #   the copy exists. Edges are matched by source file, source line (+-1) and target file;
-#   imports by the file pair.
+#   imports by the file pair; a C-family header and its implementation count as one target.
 # Requires: graphify, python3, rsync; the release test build is made here.
 set -euo pipefail
 
@@ -76,16 +76,21 @@ families = {
     "imports": {"imports", "uses", "references"},
 }
 
+def unit(path):
+    # A C-family declaration and its definition (`x.h`, `x.m`) are one target.
+    stem, dot, extension = path.rpartition(".")
+    return stem if dot and extension in {"h", "hh", "hpp", "hxx", "c", "cc", "cpp", "cxx", "m", "mm"} else path
+
 ours = collections.defaultdict(set)
 ours_by_kind = collections.Counter()
 with open(ours_path) as handle:
     for row in handle:
         kind, _, source, line, target, _, _ = row.rstrip("\n").split("\t")
-        ours[(source, target)].add((kind, int(line)))
+        ours[(source, unit(target))].add((kind, int(line)))
         ours_by_kind[kind] += 1
 
 def matched(relation, source, line, target):
-    for kind, our_line in ours.get((source, target), ()):
+    for kind, our_line in ours.get((source, unit(target)), ()):
         # File-level imports carry no line in xcalygraph, so only the file pair counts.
         if kind in families[relation] and (
             relation == "imports" or line == 0 or abs(our_line - line) <= 1

@@ -85,3 +85,8 @@
 (assignment_expression right: (pointer_expression argument: (identifier) @name) @reference.value)
 (conditional_expression consequence: (identifier) @name @reference.value)
 (conditional_expression alternative: (identifier) @name @reference.value)
+; Properties are fields of their class: `self.cache` receivers resolve through their type.
+(property_declaration
+  (struct_declaration (type_identifier) @field.type (struct_declarator (pointer_declarator declarator: (identifier) @field.name)))) @field
+(property_declaration
+  (struct_declaration (type_identifier) @field.type (struct_declarator (identifier) @field.name))) @field

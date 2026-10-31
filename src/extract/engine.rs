@@ -793,6 +793,26 @@ fn arity(call: Node) -> u8 {
     }) {
         return facts::NO_ARITY;
     }
+    // Objective-C `[receiver part:a other:b]`: the arguments are direct children.
+    if call.kind() == "message_expression" {
+        let mut cursor = call.walk();
+        let mut count = 0usize;
+        if cursor.goto_first_child() {
+            loop {
+                let node = cursor.node();
+                if node.is_named()
+                    && cursor.field_name().is_none()
+                    && !node.kind().contains("comment")
+                {
+                    count += 1;
+                }
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+        return u8::try_from(count).unwrap_or(facts::NO_ARITY - 1);
+    }
     let mut walker = call.walk();
     let lists: Vec<Node> = match call.child_by_field_name("arguments") {
         Some(arguments) => vec![arguments],
