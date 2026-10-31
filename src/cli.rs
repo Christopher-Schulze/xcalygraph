@@ -9,7 +9,7 @@ use crate::domain::facts::SymKind;
 use crate::domain::filetype::FileType;
 
 /// Every command, in help order.
-const COMMANDS: [CommandName; 12] = [
+const COMMANDS: [CommandName; 14] = [
     CommandName::Map,
     CommandName::Find,
     CommandName::Ctx,
@@ -18,6 +18,8 @@ const COMMANDS: [CommandName; 12] = [
     CommandName::Path,
     CommandName::Audit,
     CommandName::Index,
+    CommandName::Ls,
+    CommandName::Clean,
     CommandName::Install,
     CommandName::Update,
     CommandName::Version,
@@ -78,6 +80,8 @@ pub enum CommandName {
     Path,
     Audit,
     Index,
+    Ls,
+    Clean,
     Install,
     Update,
     Version,
@@ -99,6 +103,8 @@ impl CommandName {
             Self::Path => "path",
             Self::Audit => "audit",
             Self::Index => "index",
+            Self::Ls => "ls",
+            Self::Clean => "clean",
             Self::Install => "install",
             Self::Update => "update",
             Self::Version => "version",
@@ -115,7 +121,9 @@ impl CommandName {
             Self::Impact => "impact NAME... | --diff [REV]",
             Self::Path => "path FROM TO",
             Self::Audit => "audit",
-            Self::Index => "index [--drop]",
+            Self::Index => "index",
+            Self::Ls => "ls",
+            Self::Clean => "clean [ROOT...] [--all] [--missing]",
             Self::Install => "install [--no-link] [--skill-only]",
             Self::Update => "update [--check]",
             Self::Version => "version",
@@ -136,7 +144,9 @@ impl CommandName {
             Self::Audit => {
                 "dead code, unused exports, cycles, stale doc references, env drift, hidden coupling, hotspots"
             }
-            Self::Index => "build or refresh the index explicitly; --drop deletes it",
+            Self::Index => "build or refresh the index explicitly",
+            Self::Ls => "list indexes: root, size, last use, missing roots",
+            Self::Clean => "delete the index of ROOT (default: current root), --all or --missing",
             Self::Install => {
                 "install the binary to ~/.local/bin and the skill to ~/.agents/skills/xcalygraph"
             }
@@ -155,9 +165,11 @@ impl CommandName {
             Self::Show => (1, 1),
             Self::Impact => (0, usize::MAX),
             Self::Path => (2, 2),
+            Self::Clean => (0, usize::MAX),
             Self::Map
             | Self::Audit
             | Self::Index
+            | Self::Ls
             | Self::Install
             | Self::Update
             | Self::Version => (0, 0),
@@ -170,7 +182,9 @@ impl CommandName {
             Self::Map | Self::Find | Self::Ctx | Self::Path | Self::Audit => &QUERY_FLAGS,
             Self::Show => &SHOW_FLAGS,
             Self::Impact => &IMPACT_FLAGS,
-            Self::Index => &[Flag::Root, Flag::IndexDir, Flag::Drop],
+            Self::Index => &[Flag::Root, Flag::IndexDir],
+            Self::Ls => &[Flag::IndexDir],
+            Self::Clean => &[Flag::IndexDir, Flag::All, Flag::Missing],
             Self::Install => &[Flag::NoLink, Flag::SkillOnly],
             Self::Update => &[Flag::Check],
             Self::Version | Self::Help => &[],
@@ -193,7 +207,7 @@ const FLAGS: [Flag; 17] = [
     Flag::NoTests,
     Flag::All,
     Flag::Diff,
-    Flag::Drop,
+    Flag::Missing,
     Flag::NoLink,
     Flag::SkillOnly,
     Flag::Check,
@@ -214,7 +228,7 @@ pub enum Flag {
     NoTests,
     All,
     Diff,
-    Drop,
+    Missing,
     NoLink,
     SkillOnly,
     Check,
@@ -236,7 +250,7 @@ impl Flag {
             Self::NoTests => "--no-tests",
             Self::All => "--all",
             Self::Diff => "--diff",
-            Self::Drop => "--drop",
+            Self::Missing => "--missing",
             Self::NoLink => "--no-link",
             Self::SkillOnly => "--skill-only",
             Self::Check => "--check",
@@ -271,16 +285,18 @@ impl Flag {
             Self::Budget => "output budget in tokens (bytes / 3)",
             Self::Json => "JSON Lines output",
             Self::ReadOnly => "never build or refresh; exit 5 if missing or stale",
-            Self::IndexDir => "index base; default $XCALYGRAPH_INDEX_DIR, else ~/.cache/xcalygraph",
+            Self::IndexDir => {
+                "index base; default $XCALYGRAPH_INDEX_DIR, else the system temp directory"
+            }
             Self::Path => "keep results under GLOB (gitignore syntax); repeatable",
             Self::Lang => "comma-separated language ids",
             Self::Kind => "comma-separated symbol kinds",
             Self::Depth => "traversal depth (show 1, impact 3)",
             Self::Exact => "drop inferred facts",
             Self::NoTests => "drop test, generated and fixture files",
-            Self::All => "lift the per-section caps of show",
+            Self::All => "show: lift the per-section caps; clean: every index",
             Self::Diff => "impact of git changes against REV (default HEAD, work tree included)",
-            Self::Drop => "delete the index of the root",
+            Self::Missing => "clean: indexes whose root no longer exists",
             Self::NoLink => "skip the Claude Code link (made when ~/.claude exists)",
             Self::SkillOnly => "install the skill only, not the binary",
             Self::Check => "report an available update without installing it",
@@ -321,7 +337,7 @@ pub struct Options {
     pub no_tests: bool,
     pub all: bool,
     pub diff: bool,
-    pub drop: bool,
+    pub missing: bool,
     pub no_link: bool,
     pub skill_only: bool,
     pub check: bool,
@@ -492,7 +508,7 @@ fn apply(options: &mut Options, flag: Flag, value: Option<String>) -> Result<(),
         Flag::ReadOnly => options.read_only = true,
         Flag::Exact => options.exact = true,
         Flag::NoTests => options.no_tests = true,
-        Flag::Drop => options.drop = true,
+        Flag::Missing => options.missing = true,
         Flag::All => options.all = true,
         Flag::Diff => options.diff = true,
         Flag::Check => options.check = true,
@@ -668,14 +684,13 @@ mod tests {
 
     #[test]
     fn flags_take_values_in_both_forms_and_are_checked_per_command() {
-        let parsed = parse_strs(&["index", "-C", "/r", "--index-dir=/i", "--drop"]);
+        let parsed = parse_strs(&["clean", "--index-dir=/i", "--missing"]);
         let options = parsed.map(|invocation| invocation.options);
         assert_eq!(
             options,
             Ok(Options {
-                root: Some(PathBuf::from("/r")),
                 index_dir: Some(PathBuf::from("/i")),
-                drop: true,
+                missing: true,
                 ..Options::default()
             })
         );
@@ -688,8 +703,11 @@ mod tests {
             Err(UsageError::MissingValue("--root"))
         );
         assert_eq!(
-            parse_strs(&["index", "--drop=1"]),
-            Err(UsageError::InvalidValue("--drop", "--drop=1".to_owned()))
+            parse_strs(&["clean", "--missing=1"]),
+            Err(UsageError::InvalidValue(
+                "--missing",
+                "--missing=1".to_owned()
+            ))
         );
         assert_eq!(
             parse_strs(&["index", "--bogus"]),
@@ -793,10 +811,9 @@ mod tests {
     fn command_help_shows_synopsis_summary_and_flags() {
         assert_eq!(
             render(Command::Help(Some(CommandName::Index))),
-            "xcalygraph index [--drop]\n  build or refresh the index explicitly; --drop deletes it\n  \
+            "xcalygraph index\n  build or refresh the index explicitly\n  \
              -C, --root PATH  index root; default: nearest ancestor with .git, else cwd\n  \
-             --index-dir PATH  index base; default $XCALYGRAPH_INDEX_DIR, else ~/.cache/xcalygraph\n  \
-             --drop  delete the index of the root\n"
+             --index-dir PATH  index base; default $XCALYGRAPH_INDEX_DIR, else the system temp directory\n"
         );
     }
 

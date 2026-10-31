@@ -208,42 +208,49 @@ fn write_shards(
             members.entry(shard).or_default().push(record);
         }
     }
-    let mut written = 0;
-    for shard in affected {
-        let mut old: HashMap<String, Facts> = if rebuilt {
-            HashMap::new()
-        } else {
-            match store.read_shard(shard) {
-                Ok(entries) => entries.into_iter().collect(),
-                Err(OpenError::Missing | OpenError::Invalid(_) | OpenError::Io(_)) => {
-                    HashMap::new()
+    // Shards are independent: extracting, deflating and writing them in parallel keeps every
+    // core busy across shard boundaries (a full build touches all 64).
+    let work: Vec<(usize, Vec<&FileRecord>)> = affected
+        .into_iter()
+        .map(|shard| (shard, members.remove(&shard).unwrap_or_default()))
+        .collect();
+    let written: Vec<Result<u64, AppError>> = work
+        .into_par_iter()
+        .map(|(shard, files)| {
+            let mut old: HashMap<String, Facts> = if rebuilt {
+                HashMap::new()
+            } else {
+                match store.read_shard(shard) {
+                    Ok(entries) => entries.into_iter().collect(),
+                    Err(OpenError::Missing | OpenError::Invalid(_) | OpenError::Io(_)) => {
+                        HashMap::new()
+                    }
                 }
-            }
-        };
-        let files = members.remove(&shard).unwrap_or_default();
-        let facts: Vec<Facts> = files
-            .par_iter()
-            .map(|record| match old.get(&record.path) {
-                Some(_) if !changed.contains(record.path.as_str()) => None,
-                _ => Some(extract_file(workspace, record)),
-            })
-            .collect::<Vec<Option<Facts>>>()
-            .into_iter()
-            .zip(&files)
-            .map(|(fresh, record)| {
-                fresh.unwrap_or_else(|| old.remove(&record.path).unwrap_or_default())
-            })
-            .collect();
-        let entries: Vec<(&str, &Facts)> = files
-            .iter()
-            .map(|record| record.path.as_str())
-            .zip(facts.iter())
-            .collect();
-        written += store
-            .write_shard(shard, &entries)
-            .map_err(AppError::io(format!("write fact shard {shard:02}")))?;
-    }
-    Ok(written)
+            };
+            let facts: Vec<Facts> = files
+                .par_iter()
+                .map(|record| match old.get(&record.path) {
+                    Some(_) if !changed.contains(record.path.as_str()) => None,
+                    _ => Some(extract_file(workspace, record)),
+                })
+                .collect::<Vec<Option<Facts>>>()
+                .into_iter()
+                .zip(&files)
+                .map(|(fresh, record)| {
+                    fresh.unwrap_or_else(|| old.remove(&record.path).unwrap_or_default())
+                })
+                .collect();
+            let entries: Vec<(&str, &Facts)> = files
+                .iter()
+                .map(|record| record.path.as_str())
+                .zip(facts.iter())
+                .collect();
+            store
+                .write_shard(shard, &entries)
+                .map_err(AppError::io(format!("write fact shard {shard:02}")))
+        })
+        .collect();
+    written.into_iter().sum()
 }
 
 fn extract_file(workspace: &Workspace, record: &FileRecord) -> Facts {

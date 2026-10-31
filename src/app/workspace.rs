@@ -31,9 +31,19 @@ impl Workspace {
                 root.display()
             )));
         }
-        let base = index_base(options.index_dir.as_deref(), &cwd).ok_or_else(|| {
-            AppError::Invalid("no index directory: set --index-dir or HOME".to_owned())
-        })?;
+        let mut base = index_base(options.index_dir.as_deref(), &cwd);
+        // Agents confined to their repository cannot write the shared location: the index then
+        // lives in the root, excluded from the walk.
+        if options.index_dir.is_none()
+            && env::var_os("XCALYGRAPH_INDEX_DIR").is_none()
+            && create_private(&base).is_err()
+        {
+            base = root.join(LOCAL_DIR);
+            eprintln!(
+                "xcalygraph: index in {} (shared location not writable); add {LOCAL_DIR}/ to .gitignore",
+                base.display()
+            );
+        }
         Ok(Self {
             store: Store::new(store::index_dir(&base, &root)),
             root,
@@ -64,22 +74,41 @@ pub fn detect_root(cwd: &Path) -> PathBuf {
         .to_path_buf()
 }
 
-fn index_base(flag: Option<&Path>, cwd: &Path) -> Option<PathBuf> {
+/// Index directory inside the root when the shared location is not writable.
+pub const LOCAL_DIR: &str = ".xcalygraph";
+
+/// Index base: `--index-dir`, else `$XCALYGRAPH_INDEX_DIR`, else a per-user directory in the
+/// system temp directory. Indexes are disposable: a full build takes seconds, so the operating
+/// system's temp cleanup (reboot, unused files) bounds their number without a cleanup policy.
+pub fn index_base(flag: Option<&Path>, cwd: &Path) -> PathBuf {
     if let Some(dir) = flag {
-        return Some(absolute(cwd, dir));
+        return absolute(cwd, dir);
     }
-    let from_env = |name: &str| {
-        env::var_os(name)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    };
-    if let Some(dir) = from_env("XCALYGRAPH_INDEX_DIR") {
-        return Some(absolute(cwd, &dir));
+    if let Some(dir) = env::var_os("XCALYGRAPH_INDEX_DIR").filter(|value| !value.is_empty()) {
+        return absolute(cwd, &PathBuf::from(dir));
     }
-    if let Some(cache) = from_env("XDG_CACHE_HOME") {
-        return Some(absolute(cwd, &cache).join("xcalygraph"));
+    let user = ["USER", "LOGNAME", "USERNAME"]
+        .iter()
+        .find_map(|name| env::var(name).ok().filter(|value| !value.is_empty()))
+        .unwrap_or_else(|| "user".to_owned());
+    absolute(cwd, &env::temp_dir()).join(format!("xcalygraph-{user}"))
+}
+
+/// Creates the index base readable by its owner only (the temp directory may be shared).
+fn create_private(base: &Path) -> std::io::Result<()> {
+    if base.is_dir() {
+        // Writable check without leaving anything behind.
+        let probe = base.join(format!(".probe.{}", std::process::id()));
+        std::fs::write(&probe, b"")?;
+        return std::fs::remove_file(&probe);
     }
-    from_env("HOME").map(|home| home.join(".cache").join("xcalygraph"))
+    std::fs::create_dir_all(base)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(base, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 fn absolute(cwd: &Path, path: &Path) -> PathBuf {
@@ -145,7 +174,7 @@ mod tests {
     fn flag_wins_and_relative_paths_are_absolute() -> std::io::Result<()> {
         let dir = TestDir::new("workspace-base")?;
         let base = index_base(Some(Path::new("idx/new")), dir.path());
-        assert_eq!(base, Some(dir.path().join("idx/new")));
+        assert_eq!(base, dir.path().join("idx/new"));
         Ok(())
     }
 }

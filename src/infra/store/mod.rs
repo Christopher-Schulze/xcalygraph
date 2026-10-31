@@ -204,6 +204,33 @@ impl Store {
     }
 
     /// Deletes the whole index directory.
+    /// Stamps the last use (for `ls`), at most once an hour so queries stay write-free.
+    pub fn mark_used(&self) {
+        let stamp = self.path("used");
+        let recent = fs::metadata(&stamp)
+            .and_then(|meta| meta.modified())
+            .is_ok_and(|modified| {
+                modified
+                    .elapsed()
+                    .is_ok_and(|age| age < std::time::Duration::from_secs(3600))
+            });
+        if !recent {
+            let _ = fs::write(&stamp, b"");
+        }
+    }
+
+    /// Last use: the newer of the use stamp and the last index write.
+    pub fn last_used(&self) -> Option<std::time::SystemTime> {
+        ["used", "meta"]
+            .iter()
+            .filter_map(|name| {
+                fs::metadata(self.path(name))
+                    .and_then(|meta| meta.modified())
+                    .ok()
+            })
+            .max()
+    }
+
     pub fn drop_all(&self) -> io::Result<bool> {
         match fs::remove_dir_all(&self.dir) {
             Ok(()) => Ok(true),

@@ -148,7 +148,7 @@ fn run_in(root: &Path, index: &Path, args: &[&str]) -> io::Result<Output> {
 }
 
 #[test]
-fn index_builds_refreshes_and_drops() -> TestResult {
+fn index_builds_refreshes_lists_and_cleans() -> TestResult {
     let dir = TempDir::new("index")?;
     dir.write("root/main.go", "package main\n")?;
     dir.write("root/.env", "SECRET=1\n")?;
@@ -170,10 +170,25 @@ fn index_builds_refreshes_and_drops() -> TestResult {
         String::from_utf8(second.stdout)?,
         "files 1 changed 0 deleted 1\n"
     );
-    let dropped = run_in(&root, &index, &["index", "--drop"])?;
-    assert_eq!(String::from_utf8(dropped.stdout)?, "index dropped\n");
-    let again = run_in(&root, &index, &["index", "--drop"])?;
-    assert_eq!(String::from_utf8(again.stdout)?, "no index\n");
+    let tool = |args: &[&str]| {
+        Command::new(BINARY)
+            .args(args)
+            .arg("--index-dir")
+            .arg(&index)
+            .current_dir(&dir.0)
+            .output()
+    };
+    let listed = String::from_utf8(tool(&["ls"])?.stdout)?;
+    assert!(
+        listed.contains(&format!("{} ", root.canonicalize()?.display()))
+            && listed.contains("1 indexes"),
+        "{listed}"
+    );
+    let cleaned = String::from_utf8(tool(&["clean", "root"])?.stdout)?;
+    assert!(cleaned.starts_with("deleted "), "{cleaned}");
+    let again = String::from_utf8(tool(&["clean", "root"])?.stdout)?;
+    assert_eq!(again, "nothing to delete\n");
+    assert!(String::from_utf8(tool(&["ls"])?.stdout)?.starts_with("no indexes"));
     Ok(())
 }
 
@@ -184,6 +199,37 @@ fn missing_root_is_a_runtime_error() -> TestResult {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8(output.stderr)?.starts_with("xcalygraph: root "));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn confined_agents_get_the_index_inside_the_root() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new("confined")?;
+    dir.write("root/main.go", "package main\n")?;
+    let locked = dir.0.join("tmp");
+    fs::create_dir_all(&locked)?;
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o500))?;
+    let output = Command::new(BINARY)
+        .args(["index", "-C"])
+        .arg(dir.0.join("root"))
+        .env("TMPDIR", &locked)
+        .env_remove("XCALYGRAPH_INDEX_DIR")
+        .output()?;
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o700))?;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout)?,
+        "files 1 changed 1 deleted 0\n"
+    );
+    assert!(String::from_utf8(output.stderr)?.contains(".xcalygraph/ to .gitignore"));
+    assert!(dir.0.join("root/.xcalygraph").is_dir());
     Ok(())
 }
 

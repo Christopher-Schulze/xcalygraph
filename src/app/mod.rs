@@ -1,6 +1,7 @@
 //! Use cases: one per command.
 
 pub mod error;
+pub mod indexes;
 pub mod install;
 pub mod progress;
 pub mod query;
@@ -49,14 +50,19 @@ pub fn run(invocation: &Invocation) -> Result<String, AppError> {
             let out = update::update(options.check, &mut progress)?;
             return Ok(result_lines(&progress, out));
         }
+        CommandName::Ls => return indexes::list(options),
+        CommandName::Clean => return indexes::clean(options, &invocation.args),
         _ => {}
     }
     let workspace = Workspace::resolve(&invocation.options)?;
     match invocation.command {
-        CommandName::Index => index(&workspace, options.drop),
-        CommandName::Help | CommandName::Version | CommandName::Install | CommandName::Update => {
-            Ok(String::new())
-        }
+        CommandName::Index => index(&workspace),
+        CommandName::Help
+        | CommandName::Version
+        | CommandName::Install
+        | CommandName::Update
+        | CommandName::Ls
+        | CommandName::Clean => Ok(String::new()),
         command => {
             let mode = if options.read_only {
                 Mode::ReadOnly
@@ -64,6 +70,9 @@ pub fn run(invocation: &Invocation) -> Result<String, AppError> {
                 Mode::Write
             };
             refresh::refresh(&workspace, mode)?;
+            if mode == Mode::Write {
+                workspace.store.mark_used();
+            }
             let index = match query::open(&workspace.store) {
                 Ok(index) => index,
                 // A corrupt derived file (checksum) is rebuilt from the facts once.
@@ -174,6 +183,8 @@ fn run_query(
             })
         }
         CommandName::Index
+        | CommandName::Ls
+        | CommandName::Clean
         | CommandName::Help
         | CommandName::Version
         | CommandName::Install
@@ -220,20 +231,9 @@ fn version() -> String {
     out
 }
 
-fn index(workspace: &Workspace, drop: bool) -> Result<String, AppError> {
-    if drop {
-        let dropped = workspace.store.drop_all().map_err(AppError::io(format!(
-            "drop index {}",
-            workspace.store.dir.display()
-        )))?;
-        return Ok(if dropped {
-            "index dropped\n"
-        } else {
-            "no index\n"
-        }
-        .to_owned());
-    }
+fn index(workspace: &Workspace) -> Result<String, AppError> {
     let report = refresh::refresh(workspace, Mode::Write)?;
+    workspace.store.mark_used();
     Ok(format!(
         "files {} changed {} deleted {}\n",
         report.files, report.changed, report.deleted

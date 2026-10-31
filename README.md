@@ -107,7 +107,7 @@ src/domain/corpus.rs
 | `impact NAME... \| --diff [REV]` | What does this change affect? Dependents, tests reaching them, test commands to run. |
 | `path FROM TO` | How does A reach B? The shortest dependency path. |
 | `audit` | What should be cleaned up? Dead code, unused exports, cycles, stale doc references, env drift, unreferenced assets, files changed together without a static link, hotspots. |
-| `index`, `install`, `update`, `version`, `help` | Index control, skill installation, self-update, versions, syntax. |
+| `index`, `ls`, `clean`, `install`, `update`, `version`, `help` | Index control and housekeeping, installation, self-update, versions, syntax. |
 
 Shared flags: `-p GLOB` (paths), `-l go,rust` (languages), `-k fn,struct` (kinds), `--no-tests`, `--exact` (drop inferred edges), `-b N` (token budget), `--json` (JSON Lines), `--read-only` (never write; exit 5 when stale), `-C DIR` (root).
 
@@ -240,8 +240,9 @@ xcalygraph update --check   # only report whether one is available
 ### Uninstall
 
 ```bash
+xcalygraph clean --all          # every index
 rm ~/.local/bin/xcalygraph
-rm -r ~/.agents/skills/xcalygraph ~/.claude/skills/xcalygraph ~/.cache/xcalygraph
+rm -r ~/.agents/skills/xcalygraph ~/.claude/skills/xcalygraph
 ```
 
 ## How it works
@@ -254,7 +255,7 @@ walk (gitignore aware, parallel) -> stat diff -> hash candidates -> extract chan
 
 - **Extraction** runs one generic tree-sitter query engine. Each language is a query file plus small hooks.
 - **Resolution** follows each language's module rules: lexical scope, imports, the same module, receiver typing through bindings, call results and field chains, then interface and trait dispatch.
-- **Storage**: 64 deflated fact shards keyed by path hash; one checksummed `derived` file with string tables, CSR adjacency, ranks, modules and delta-coded search postings; a git history cache keyed by HEAD. Every write goes to a temp file that is then renamed into place, and unchanged files are never rewritten.
+- **Storage**: indexes are disposable and live in the system temp directory, never in your repository (inside it only when an agent may not write elsewhere); `xcalygraph ls` lists them, `xcalygraph clean` removes them, and a lost index costs one full build (1.3 s for 8,000 files). Each index holds 64 deflated fact shards keyed by path hash; one checksummed `derived` file with string tables, CSR adjacency, ranks, modules and delta-coded search postings; a git history cache keyed by HEAD. Every write goes to a temp file that is then renamed into place, and unchanged files are never rewritten.
 - **Correctness gates**: golden fact and edge fixtures per language, byte-identical output across thread counts, edge precision sampled against source, and a retrieval evaluation against Graphify and `rg`.
 
 xcalygraph is a clean-room Rust rewrite of a selected subset of [Graphify](https://github.com/Graphify-Labs/graphify), redesigned around one question: how much useful, verifiable context does the agent get per token?

@@ -16,7 +16,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | `-b, --budget N` | per command | output budget in tokens; estimate = ceil(bytes / 3) |
 | `--json` | off | JSON Lines instead of text (section 8) |
 | `--read-only` | off | never create or refresh the index; exit 5 if missing or stale |
-| `--index-dir PATH` | `$XCALYGRAPH_INDEX_DIR`, else `$XDG_CACHE_HOME/xcalygraph`, else `~/.cache/xcalygraph` | index base directory |
+| `--index-dir PATH` | `$XCALYGRAPH_INDEX_DIR`, else `<system temp directory>/xcalygraph-<user>` (created mode 0700); when that is not writable, `<root>/.xcalygraph/` with a one-line notice | index base directory |
 | `-p, --path GLOB` | whole root | keep results whose root-relative path matches GLOB (gitignore glob syntax); repeatable |
 | `-l, --lang LIST` | all | comma-separated language ids (section 3) |
 | `-k, --kind LIST` | all | comma-separated symbol kinds (section 5) |
@@ -33,7 +33,9 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | `impact` | `NAME...` or `--diff [REV]` | 1500 | changed and affected symbols, tests, run commands (7.5) |
 | `path` | `FROM TO` | 400 | shortest dependency path (7.6) |
 | `audit` | none | 2000 | dead code, cycles, stale doc references, env drift, unreferenced assets, hidden coupling, hotspots (7.7) |
-| `index` | `[--drop]` | none | explicit build or refresh; `--drop` deletes the index of the root |
+| `index` | none | none | explicit build or refresh |
+| `ls` | none | none | indexes in the index base: root, size, last use, `missing` when the root is gone, totals |
+| `clean` | `[ROOT...] [--all] [--missing]` | none | delete the index of each ROOT (default: the current root, also `<root>/.xcalygraph`), of every root, or of missing roots |
 | `install` | `[--no-link] [--skill-only]` | none | install the running binary, the embedded skill and the Claude Code link (section 10) |
 | `update` | `[--check]` | none | self-update the binary, then refresh a stale skill |
 | `version` | none | none | binary, index format and installed skill versions |
@@ -343,6 +345,7 @@ Location: `<index-dir>/<root basename>-<XXH3-64 hex of the canonical root path>/
 | `files` | per file: path, size, mtime_ns, content hash, role, language, shard | file set or stat records change |
 | `facts/NN` (64 shards by path hash) | fact records of the shard's files, shard-local string table | a file of the shard changes |
 | `derived` | interned strings, symbol table, CSR graph, ranks, modules, search index, test map, audit data | derived content changes |
+| `used` | empty; its mtime is the last use for `ls` | a writing query when older than an hour |
 | `git` | churn, co-change, hotspots keyed by HEAD | HEAD changes and git data is requested |
 | `lock` | writer lock | never |
 
