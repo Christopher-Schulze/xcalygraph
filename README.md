@@ -240,7 +240,7 @@ xcalygraph update --check   # only report whether one is available
 ### Uninstall
 
 ```bash
-xcalygraph clean --all          # every index
+xcalygraph clean                # every index
 rm ~/.local/bin/xcalygraph
 rm -r ~/.agents/skills/xcalygraph ~/.claude/skills/xcalygraph
 ```

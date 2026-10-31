@@ -50,25 +50,22 @@ pub fn list(options: &Options) -> Result<String, AppError> {
     Ok(out)
 }
 
-/// Deletes the indexes of the given roots (default: the current root), `--all` of every root,
-/// `--missing` of roots that no longer exist; one line per deleted index.
+/// Deletes every index, only those of the given roots (also `<root>/.xcalygraph`), or with
+/// `--missing` those whose root no longer exists; one line per deleted index.
 pub fn clean(options: &Options, roots: &[String]) -> Result<String, AppError> {
     let base = base(options)?;
     let cwd = env::current_dir().map_err(AppError::io("current directory"))?;
-    let targets: Vec<PathBuf> = if options.all || options.missing {
+    let targets: Vec<PathBuf> = if roots.is_empty() {
         entries(&base)
             .into_iter()
-            .filter(|entry| options.all || entry.root.as_ref().is_none_or(|root| !root.is_dir()))
+            .filter(|entry| {
+                !options.missing || entry.root.as_ref().is_none_or(|root| !root.is_dir())
+            })
             .map(|entry| entry.dir)
             .collect()
     } else {
-        let wanted: Vec<PathBuf> = if roots.is_empty() {
-            vec![workspace::detect_root(&cwd)]
-        } else {
-            roots.iter().map(|root| cwd.join(root)).collect()
-        };
         let mut dirs = Vec::new();
-        for root in wanted {
+        for root in roots.iter().map(|root| cwd.join(root)) {
             let canonical = root.canonicalize().unwrap_or(root);
             dirs.push(store::index_dir(&base, &canonical));
             // An index the root holds itself (confined agents) goes too.

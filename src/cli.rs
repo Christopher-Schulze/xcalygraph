@@ -123,7 +123,7 @@ impl CommandName {
             Self::Audit => "audit",
             Self::Index => "index",
             Self::Ls => "ls",
-            Self::Clean => "clean [ROOT...] [--all] [--missing]",
+            Self::Clean => "clean [ROOT...] [--missing]",
             Self::Install => "install [--no-link] [--skill-only]",
             Self::Update => "update [--check]",
             Self::Version => "version",
@@ -146,7 +146,7 @@ impl CommandName {
             }
             Self::Index => "build or refresh the index explicitly",
             Self::Ls => "list indexes: root, size, last use, missing roots",
-            Self::Clean => "delete the index of ROOT (default: current root), --all or --missing",
+            Self::Clean => "delete every index, only those of ROOT..., or --missing roots",
             Self::Install => {
                 "install the binary to ~/.local/bin and the skill to ~/.agents/skills/xcalygraph"
             }
@@ -184,7 +184,7 @@ impl CommandName {
             Self::Impact => &IMPACT_FLAGS,
             Self::Index => &[Flag::Root, Flag::IndexDir],
             Self::Ls => &[Flag::IndexDir],
-            Self::Clean => &[Flag::IndexDir, Flag::All, Flag::Missing],
+            Self::Clean => &[Flag::IndexDir, Flag::Missing],
             Self::Install => &[Flag::NoLink, Flag::SkillOnly],
             Self::Update => &[Flag::Check],
             Self::Version | Self::Help => &[],
@@ -294,7 +294,7 @@ impl Flag {
             Self::Depth => "traversal depth (show 1, impact 3)",
             Self::Exact => "drop inferred facts",
             Self::NoTests => "drop test, generated and fixture files",
-            Self::All => "show: lift the per-section caps; clean: every index",
+            Self::All => "lift the per-section caps of show",
             Self::Diff => "impact of git changes against REV (default HEAD, work tree included)",
             Self::Missing => "clean: indexes whose root no longer exists",
             Self::NoLink => "skip the Claude Code link (made when ~/.claude exists)",

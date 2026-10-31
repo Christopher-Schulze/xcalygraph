@@ -188,6 +188,10 @@ fn index_builds_refreshes_lists_and_cleans() -> TestResult {
     assert!(cleaned.starts_with("deleted "), "{cleaned}");
     let again = String::from_utf8(tool(&["clean", "root"])?.stdout)?;
     assert_eq!(again, "nothing to delete\n");
+    // Without arguments every index goes.
+    run_in(&root, &index, &["index"])?;
+    let all = String::from_utf8(tool(&["clean"])?.stdout)?;
+    assert!(all.starts_with("deleted "), "{all}");
     assert!(String::from_utf8(tool(&["ls"])?.stdout)?.starts_with("no indexes"));
     Ok(())
 }
