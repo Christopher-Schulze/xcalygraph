@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 54;
+pub const RESOLVE_VERSION: u32 = 56;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -2066,6 +2066,30 @@ impl<'a> Index<'a> {
             })
     }
 
+    /// Members `name` of the inline module path `qualifier` declared in `file`.
+    fn rust_inline_module(&self, file: u32, qualifier: &str, name: &str) -> Option<Vec<u32>> {
+        let facts = self.facts(file)?;
+        let base = self.base[file as usize];
+        let mut parent: Option<u32> = None;
+        for segment in qualifier.split("::") {
+            let found = facts.symbols.iter().position(|symbol| {
+                symbol.kind() == SymKind::Mod
+                    && symbol.name == segment
+                    && (parent.is_none() || symbol.parent == parent)
+            })?;
+            parent = Some(found as u32);
+        }
+        let module = parent?;
+        let members: Vec<u32> = facts
+            .symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, symbol)| symbol.parent == Some(module) && symbol.name == name)
+            .map(|(local, _)| base + local as u32)
+            .collect();
+        (!members.is_empty()).then_some(members)
+    }
+
     /// Names of the namespaces enclosing a symbol, outermost first.
     fn namespaces(&self, symbol: u32) -> Vec<&str> {
         let mut names = Vec::new();
@@ -2175,6 +2199,10 @@ impl<'a> Index<'a> {
             }
         }
         let rust = self.file_type(file) == Some(FileType::Rust);
+        // Inline modules of this file (`mod convert { pub fn usize() }`, `convert::usize(v)`).
+        if rust && let Some(found) = self.rust_inline_module(file, qualifier, name) {
+            return Some(found);
+        }
         if rust && qualifier.contains("::") {
             let segments: Vec<&str> = qualifier.split("::").collect();
             let base = self.rust_path(file, &segments).or_else(|| {
@@ -3652,15 +3680,35 @@ impl<'a> Index<'a> {
                     arity: facts::NO_ARITY,
                 },
             };
-            let Outcome::Targets(callees, _) = self.resolve_ref(file, imports, &reference) else {
-                return None;
+            // Rust constructors by convention (`Type::new()`, `Type::default()`, `Type::with_x()`,
+            // `Type::from_x()`): derived or external constructors have no source, yet return
+            // `Self`.
+            let constructor = |name: &str| {
+                matches!(name, "new" | "default" | "from")
+                    || name.starts_with("new_")
+                    || name.starts_with("with_")
+                    || name.starts_with("from_")
             };
-            let (callee, _) = *callees.first()?;
+            let rust_self = || {
+                let qualifier = reference.qualifier.as_deref()?;
+                (self.file_type(file) == Some(FileType::Rust) && constructor(&reference.name))
+                    .then(|| self.resolve_type(file, Some(imports), scope, qualifier))
+                    .flatten()
+                    .map(|(types, _)| (types, Confidence::Inferred))
+            };
+            let Outcome::Targets(callees, _) = self.resolve_ref(file, imports, &reference) else {
+                return rust_self();
+            };
+            let Some(&(callee, _)) = callees.first() else {
+                return rust_self();
+            };
             // A call of a type is a constructor: the result is the type itself.
             if self.symbols[callee as usize].kind.is_type() {
                 return Some((vec![callee], Confidence::Inferred));
             }
-            let result = *self.returns.get(&callee)?;
+            let Some(&result) = self.returns.get(&callee) else {
+                return rust_self();
+            };
             let callee_file = self.symbols[callee as usize].file;
             let callee_scope = Some(callee - self.base[callee_file as usize]);
             let (types, _) = self.resolve_type(callee_file, None, callee_scope, result)?;

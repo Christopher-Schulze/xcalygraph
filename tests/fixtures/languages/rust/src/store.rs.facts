@@ -30,7 +30,7 @@ ref 24 Type Id qualifier=- scope=Store
 ref 24 Type Row qualifier=- scope=Store
 ref 25 Type Client qualifier=- scope=Store
 ref 33 Type Row qualifier=- scope=Rows
-ref 37 Call new qualifier=- scope=row
+ref 37 Call new qualifier=Row scope=row
 ref 41 Type Store qualifier=- scope=-
 ref 43 Type Error qualifier=- scope=open
 ref 44 Type Client qualifier=- scope=open

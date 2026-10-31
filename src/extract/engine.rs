@@ -216,6 +216,16 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
             }
         } else if let Some(kind) = primary.strip_prefix("reference.") {
             let Some(name) = get("name") else { continue };
+            // Rust macro token trees: `.method(...)` after anything but a plain receiver name
+            // (`a.b().len()`) has an unknown receiver; query anchors skip the anonymous `.`.
+            if primary_node.kind() == "token_tree"
+                && get("qualifier").is_none()
+                && name
+                    .prev_sibling()
+                    .is_some_and(|previous| previous.kind() == ".")
+            {
+                continue;
+            }
             if elixir && kind == "call" && in_type_specification(name, source) {
                 continue;
             }

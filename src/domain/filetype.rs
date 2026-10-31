@@ -381,27 +381,30 @@ pub fn resolve_ambiguous(ambiguous: Ambiguous, head: &[u8], cpp_sibling: bool) -
     }
 }
 
-/// True when the first line is a `sh`, `bash` or `zsh` shebang.
-pub fn is_shell_shebang(head: &[u8]) -> bool {
-    let Some(rest) = head.strip_prefix(b"#!") else {
-        return false;
-    };
+/// Language of an extensionless script by its `#!` interpreter: shells, Python, Node and Ruby.
+pub fn shebang_type(head: &[u8]) -> Option<FileType> {
+    let rest = head.strip_prefix(b"#!")?;
     let line_end = rest
         .iter()
         .position(|&byte| byte == b'\n')
         .unwrap_or(rest.len());
     let line = String::from_utf8_lossy(&rest[..line_end]);
     let mut words = line.split_whitespace();
-    let Some(program) = words.next() else {
-        return false;
-    };
+    let program = words.next()?;
     let program = program.rsplit('/').next().unwrap_or(program);
     let interpreter = if program == "env" {
         words.find(|word| !word.starts_with('-')).unwrap_or("")
     } else {
         program
     };
-    matches!(interpreter, "sh" | "bash" | "zsh")
+    let base = interpreter.trim_end_matches(|ch: char| ch.is_ascii_digit() || ch == '.');
+    match base {
+        "sh" | "bash" | "zsh" => Some(FileType::Bash),
+        "python" => Some(FileType::Python),
+        "node" | "nodejs" | "bun" => Some(FileType::JavaScript),
+        "ruby" => Some(FileType::Ruby),
+        _ => None,
+    }
 }
 
 /// Whole-word containment over ASCII identifier boundaries.
@@ -496,10 +499,21 @@ mod tests {
 
     #[test]
     fn shell_shebangs_are_recognized() {
-        assert!(is_shell_shebang(b"#!/bin/sh\necho"));
-        assert!(is_shell_shebang(b"#!/usr/bin/env bash\n"));
-        assert!(is_shell_shebang(b"#!/usr/bin/env -S zsh -f\n"));
-        assert!(!is_shell_shebang(b"#!/usr/bin/env python3\n"));
-        assert!(!is_shell_shebang(b"echo hi"));
+        assert_eq!(shebang_type(b"#!/bin/sh\necho"), Some(FileType::Bash));
+        assert_eq!(shebang_type(b"#!/usr/bin/env bash\n"), Some(FileType::Bash));
+        assert_eq!(
+            shebang_type(b"#!/usr/bin/env -S zsh -f\n"),
+            Some(FileType::Bash)
+        );
+        assert_eq!(
+            shebang_type(b"#!/usr/bin/env python3\n"),
+            Some(FileType::Python)
+        );
+        assert_eq!(
+            shebang_type(b"#!/usr/local/bin/python3.12\n"),
+            Some(FileType::Python)
+        );
+        assert_eq!(shebang_type(b"#!/usr/bin/perl\n"), None);
+        assert_eq!(shebang_type(b"echo hi"), None);
     }
 }

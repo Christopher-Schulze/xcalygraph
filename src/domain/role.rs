@@ -195,7 +195,7 @@ fn detect_type(file: &FileFacts) -> Option<FileType> {
         Detection::Ambiguous(ambiguous) => {
             filetype::resolve_ambiguous(ambiguous, head, file.cpp_sibling)
         }
-        Detection::Shebang => filetype::is_shell_shebang(head).then_some(FileType::Bash),
+        Detection::Shebang => filetype::shebang_type(head),
         Detection::Unknown => None,
     }
 }
@@ -466,6 +466,14 @@ mod tests {
             Some(FileType::Bash)
         );
         assert_eq!(classify_text("bin/tool", "plain").file_type, None);
+        assert_eq!(
+            classify_text("benchsuite", "#!/usr/bin/env python3\nimport os").file_type,
+            Some(FileType::Python)
+        );
+        assert_eq!(
+            classify_text("bin/cli", "#!/usr/bin/env node\nrequire('x')").file_type,
+            Some(FileType::JavaScript)
+        );
         assert_eq!(
             classify_text("src/Foo.m", "@implementation Foo").role,
             Role::Src
