@@ -187,11 +187,8 @@ impl Index<'_> {
     }
 
     fn exported_at(&self, module: u32, name: &str, depth: usize) -> Vec<u32> {
-        let own: Vec<u32> = self
-            .module_symbol(module, name, None)
-            .into_iter()
-            .filter(|&symbol| self.symbols[symbol as usize].kind != SymKind::Mod)
-            .collect();
+        // TypeScript namespaces are module symbols that importers name.
+        let own: Vec<u32> = self.module_symbol(module, name, None);
         if !own.is_empty() || depth >= 8 {
             return own;
         }

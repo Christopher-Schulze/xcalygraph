@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 51;
+pub const RESOLVE_VERSION: u32 = 53;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1993,13 +1993,38 @@ impl<'a> Index<'a> {
         let owner_of: for<'s> fn(&'s str, &str) -> Option<(&'s str, char)> =
             match self.file_type(file) {
                 Some(FileType::Lua) => lua_owner,
-                Some(FileType::JavaScript) => js_owner,
+                Some(FileType::JavaScript | FileType::TypeScript) => js_owner,
                 _ => return None,
             };
         if !is_identifier(qualifier) {
             return None;
         }
         let facts = self.facts(file)?;
+        let base = self.base[file as usize];
+        // An object literal of this file: `const config = { total() {} }`, `config.total()`.
+        if let Some(object) = facts
+            .symbols
+            .iter()
+            .position(|symbol| symbol.parent.is_none() && symbol.name == qualifier)
+        {
+            let members: Vec<u32> = facts
+                .symbols
+                .iter()
+                .enumerate()
+                .filter(|(_, symbol)| {
+                    symbol.parent == Some(object as u32) && symbol.name == reference.name
+                })
+                .map(|(local, _)| base + local as u32)
+                .collect();
+            if !members.is_empty() {
+                return Some(pick_members(
+                    self,
+                    members,
+                    Confidence::Exact,
+                    reference.arity,
+                ));
+            }
+        }
         let table = if matches!(qualifier, "self" | "this") {
             let mut scope = reference.scope;
             let mut owner = None;
@@ -2015,7 +2040,7 @@ impl<'a> Index<'a> {
         } else {
             qualifier
         };
-        let base = self.base[file as usize];
+
         let found: Vec<u32> = facts
             .symbols
             .iter()
@@ -2932,6 +2957,12 @@ impl<'a> Index<'a> {
         if let Some(outcome) = self.global_name(file, imports, reference) {
             return outcome;
         }
+        // JavaScript and TypeScript call constants holding functions (`const isFunction =
+        // typeOfTest("function")`).
+        let js_like = matches!(
+            self.file_type(file),
+            Some(FileType::JavaScript | FileType::TypeScript)
+        );
         // Lisp lists also spell lambda lists, bindings and slots: only functions are called.
         let lisp_call =
             reference.kind == RefKind::Call && self.file_type(file) == Some(FileType::Lisp);
@@ -2944,7 +2975,7 @@ impl<'a> Index<'a> {
             } else {
                 kind.is_callable()
                     || kind.is_type()
-                    || (reference.kind == RefKind::Value
+                    || ((reference.kind == RefKind::Value || js_like)
                         && matches!(kind, SymKind::Const | SymKind::Var))
             }
         };
@@ -3053,7 +3084,11 @@ impl<'a> Index<'a> {
                 Target::Symbols(symbols) => {
                     let wanted: Vec<u32> =
                         symbols.iter().copied().filter(|&s| kind_ok(s)).collect();
-                    pick(&wanted, Confidence::Exact)
+                    if self.overload_set(&wanted) {
+                        pick_members(self, wanted, Confidence::Exact, reference.arity)
+                    } else {
+                        pick(&wanted, Confidence::Exact)
+                    }
                 }
                 Target::Module(_) | Target::External(_) => Outcome::External,
             };

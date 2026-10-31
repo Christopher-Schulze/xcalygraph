@@ -1,5 +1,7 @@
 file:lib/app.js -imports-> file:lib/util.js @1
 file:lib/format.js -imports-> file:lib/util.js @1
+file:src/geometry/index.ts -imports-> file:src/geometry/shapes.ts @1
+file:src/geometry/use.ts -imports-> file:src/geometry/index.ts @1
 file:src/service.ts -imports-> file:lib/format.js @1
 file:src/service.ts -imports-> file:src/store/index.ts @1
 file:src/service.ts -imports-> file:src/store/repo.ts @1
@@ -13,6 +15,9 @@ lib/app.render -calls-> lib/app.enabled @11
 lib/app.render -calls-> lib/util.trim @12
 lib/format.format -calls-> lib/util.trim @5
 src/cache/lru.Lru.set -calls-> src/cache/lru.Lru.#evict @6
+src/geometry/use.config.total -calls-> src/geometry/shapes.Geometry.unit @6
+src/geometry/use.config.total -calls-> src/geometry/shapes.scale @6
+src/geometry/use.main -calls-> src/geometry/use.config.total @11
 src/service.Service.constructor -uses-> src/store/repo.Repo @7
 src/service.Service.find -calls-> lib/format.format @11
 src/service.Service.find -calls-> src/store/repo.Repo.get @10

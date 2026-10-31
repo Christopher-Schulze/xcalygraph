@@ -2,14 +2,14 @@
 //! component usage; `.tsx` uses the TSX grammar.
 
 use super::Pack;
-use crate::domain::facts::{Import, SymKind};
+use crate::domain::facts::{FLAG_DECLARATION, Import, SymKind};
 use crate::domain::filetype::FileType;
 use crate::extract::engine::{Definition, FileContext, Hooks, unquote};
 
 pub const HOOKS: Hooks = Hooks {
     exported,
     signature_prefix,
-    flags: |_: &Definition, _: &FileContext| 0,
+    flags,
     expand_import,
     builtin,
 };
@@ -49,6 +49,16 @@ pub static JAVASCRIPT: Pack = Pack {
 
 /// `export`ed declarations, plus members of exported classes and interfaces that are not
 /// `private`, `protected` or `#private`.
+/// Overload signatures (`function scale(x: number): number;`) declare the implementation that
+/// follows them.
+fn flags(definition: &Definition, _: &FileContext) -> u8 {
+    if definition.node_kind == "function_signature" {
+        FLAG_DECLARATION
+    } else {
+        0
+    }
+}
+
 fn exported(definition: &Definition) -> bool {
     // `exports.f = function`, `app.f = function`: reachable through the object.
     if definition.export_wrapper || definition.node_kind == "assignment_expression" {

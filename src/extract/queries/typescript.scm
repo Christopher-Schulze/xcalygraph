@@ -19,6 +19,9 @@
 (interface_declaration name: (type_identifier) @name) @definition.interface
 (type_alias_declaration name: (type_identifier) @name) @definition.type
 (enum_declaration name: (identifier) @name) @definition.enum
+; `namespace Geometry { export function unit() }`: members resolve as `Geometry.unit`.
+(internal_module name: (identifier) @name) @definition.module
+(internal_module name: (nested_identifier) @name) @definition.module
 
 (class_heritage (extends_clause value: (identifier) @name) @reference.inherit)
 (class_heritage (extends_clause value: (member_expression object: (_) @qualifier property: (property_identifier) @name)) @reference.inherit)
