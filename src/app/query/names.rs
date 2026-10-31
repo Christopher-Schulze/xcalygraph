@@ -29,7 +29,7 @@ pub fn lookup(index: &Index, filter: &Filter, name: &str) -> Vec<u32> {
         (0..symbols.len() as u32)
             .filter(|&node| {
                 let symbol = &symbols[node as usize];
-                let qualified = index.string(symbol.qualified).replace("::", ".");
+                let qualified = index.qualified(symbol).replace("::", ".");
                 predicate(index.string(symbol.name), &qualified) && filter.symbol(index, symbol)
             })
             .collect()
@@ -98,7 +98,7 @@ fn in_file(index: &Index, filter: &Filter, path: &str, name: &str) -> Vec<u32> {
     (record.first_symbol..record.first_symbol + record.symbol_count)
         .filter(|&node| {
             let symbol = &index.derived.symbols()[node as usize];
-            let qualified = index.string(symbol.qualified).replace("::", ".");
+            let qualified = index.qualified(symbol).replace("::", ".");
             (index.string(symbol.name) == normalized
                 || has_qualified_suffix(&qualified, &normalized))
                 && filter.symbol(index, symbol)

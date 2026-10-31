@@ -242,7 +242,7 @@ fn symbol_line(index: &Index, node: u32, rel: &str) -> (String, String) {
     let record = json_object(&[
         ("t", Value::Str("sym")),
         ("rel", Value::Str(rel)),
-        ("name", Value::Str(label)),
+        ("name", Value::Str(&label)),
         ("path", Value::Str(path)),
         ("line", Value::Int(u64::from(line))),
     ]);
@@ -284,7 +284,7 @@ fn tasks(index: &Index, filter: &Filter) -> Vec<(String, String)> {
             continue;
         }
         let node = id as u32;
-        let runs: Vec<&str> = index
+        let runs: Vec<_> = index
             .derived
             .outgoing(node)
             .iter()
@@ -327,7 +327,7 @@ fn api(index: &Index, filter: &Filter) -> Vec<(String, String)> {
             continue;
         }
         let node = id as u32;
-        let handlers: Vec<&str> = index
+        let handlers: Vec<_> = index
             .derived
             .incoming(node)
             .iter()

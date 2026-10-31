@@ -17,7 +17,9 @@ use crate::domain::search::{self, FIELDS};
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct SymbolRecord {
     pub name: u32,
-    pub qualified: u32,
+    /// Qualified name without the trailing name (`pkg/store.Store.`), shared by all symbols of a
+    /// module and parent chain; the whole qualified name when `whole` is set.
+    pub prefix: u32,
     pub signature: u32,
     pub doc: u32,
     pub file: u32,
@@ -28,7 +30,7 @@ pub struct SymbolRecord {
     pub kind: u8,
     pub flags: u8,
     pub exported: u8,
-    pub pad: u8,
+    pub whole: u8,
 }
 
 #[repr(C)]
@@ -227,20 +229,23 @@ pub fn build(graph: &Graph) -> Vec<u8> {
     let symbols: Vec<SymbolRecord> = graph
         .symbols
         .iter()
-        .map(|symbol| SymbolRecord {
-            name: strings.id(&symbol.name),
-            qualified: strings.id(&symbol.qualified),
-            signature: strings.append(&symbol.signature),
-            doc: strings.append(&symbol.doc),
-            file: symbol.file,
-            parent: symbol.parent,
-            line: symbol.line,
-            end_line: symbol.end_line,
-            rank: symbol.rank,
-            kind: symbol.kind as u8,
-            flags: symbol.flags,
-            exported: u8::from(symbol.exported),
-            pad: 0,
+        .map(|symbol| {
+            let prefix = symbol.qualified.strip_suffix(symbol.name.as_str());
+            SymbolRecord {
+                name: strings.id(&symbol.name),
+                prefix: strings.id(prefix.unwrap_or(&symbol.qualified)),
+                signature: strings.append(&symbol.signature),
+                doc: strings.append(&symbol.doc),
+                file: symbol.file,
+                parent: symbol.parent,
+                line: symbol.line,
+                end_line: symbol.end_line,
+                rank: symbol.rank,
+                kind: symbol.kind as u8,
+                flags: symbol.flags,
+                exported: u8::from(symbol.exported),
+                whole: u8::from(prefix.is_none()),
+            }
         })
         .collect();
     let nodes = graph.node_count();
@@ -375,6 +380,9 @@ fn adjacency(nodes: usize, graph: &Graph, reverse: bool) -> (Vec<u32>, Vec<EdgeR
     (offsets, records)
 }
 
+/// Caller and user names kept per symbol for the `used_by` search field.
+const USED_BY_NAMES: usize = 16;
+
 struct SearchIndex {
     tokens: Vec<(String, u32, u32)>,
     postings: Vec<u8>,
@@ -390,6 +398,27 @@ struct Chunk {
 fn search_index(graph: &Graph) -> SearchIndex {
     let nodes = graph.node_count();
     let symbol_count = graph.symbols.len();
+    // Names of the callers and users of each symbol, distinct, at most USED_BY_NAMES.
+    let mut used_by: Vec<String> = vec![String::new(); symbol_count];
+    for edge in &graph.edges {
+        let (source, target) = (edge.source as usize, edge.target as usize);
+        if !matches!(edge.kind, EdgeKind::Calls | EdgeKind::Uses)
+            || source >= symbol_count
+            || target >= symbol_count
+            || source == target
+        {
+            continue;
+        }
+        let names = &mut used_by[target];
+        let name = &graph.symbols[source].name;
+        if names.split(' ').count() < USED_BY_NAMES && !names.split(' ').any(|known| known == name)
+        {
+            if !names.is_empty() {
+                names.push(' ');
+            }
+            names.push_str(name);
+        }
+    }
     // Node texts per field; files first so symbols can take their file's path length.
     let texts = |node: usize| -> [&str; FIELDS] {
         if node >= symbol_count {
@@ -418,6 +447,7 @@ fn search_index(graph: &Graph) -> SearchIndex {
         fields[search::SIGNATURE] = &symbol.signature;
         fields[search::DOC] = &symbol.doc;
         fields[search::BODY] = &symbol.terms;
+        fields[search::USED_BY] = &used_by[node];
         fields
     };
     const CHUNK: usize = 4096;

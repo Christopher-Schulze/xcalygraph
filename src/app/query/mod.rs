@@ -10,6 +10,8 @@ pub mod output;
 pub mod path;
 pub mod show;
 
+use std::borrow::Cow;
+
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
 use crate::app::error::AppError;
@@ -17,6 +19,7 @@ use crate::cli::Options;
 use crate::domain::facts::{FLAG_GENERATED, FLAG_TEST, SymKind};
 use crate::domain::filetype::FileType;
 use crate::domain::role::Role;
+
 use crate::infra::store::derived::{Derived, EdgeRecord, FileRecord, SymbolRecord};
 use output::{Value, Writer};
 
@@ -163,10 +166,21 @@ impl Index {
     }
 
     /// Short display name: qualified name of a symbol, path of a file.
-    pub fn label(&self, node: u32) -> &str {
+    pub fn label(&self, node: u32) -> Cow<'_, str> {
         match self.node(node) {
-            Node::Symbol(symbol) => self.string(symbol.qualified),
-            Node::File(file) => self.string(file.path),
+            Node::Symbol(symbol) => self.qualified(symbol),
+            Node::File(file) => Cow::Borrowed(self.string(file.path)),
+        }
+    }
+
+    /// Qualified name of a symbol: its stored prefix and its name.
+    pub fn qualified(&self, symbol: &SymbolRecord) -> Cow<'_, str> {
+        let prefix = self.string(symbol.prefix);
+        let name = self.string(symbol.name);
+        match (symbol.whole != 0, prefix.is_empty()) {
+            (true, _) => Cow::Borrowed(prefix),
+            (false, true) => Cow::Borrowed(name),
+            (false, false) => Cow::Owned(format!("{prefix}{name}")),
         }
     }
 
@@ -220,13 +234,14 @@ impl Index {
             text.push_str(" // ");
             text.push_str(doc);
         }
+        let qualified = self.qualified(symbol);
         let mut record = vec![
             ("t", Value::Str("sym")),
             ("path", Value::Str(path)),
             ("line", Value::Int(u64::from(symbol.line))),
             ("end", Value::Int(u64::from(symbol.end_line))),
             ("kind", Value::Str(symbol.kind().id())),
-            ("name", Value::Str(self.string(symbol.qualified))),
+            ("name", Value::Str(&qualified)),
             ("sig", Value::Str(self.string(symbol.signature))),
             ("doc", Value::Str(doc)),
         ];

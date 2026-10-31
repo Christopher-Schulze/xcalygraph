@@ -100,7 +100,7 @@ pub fn render(
             &[
                 ("t", Value::Str("edge")),
                 ("rel", Value::Str(if *reversed { "in" } else { "out" })),
-                ("name", Value::Str(label)),
+                ("name", Value::Str(&label)),
                 ("path", Value::Str(path)),
                 ("line", Value::Int(u64::from(line))),
                 (

@@ -262,7 +262,7 @@ fn render(
             &[
                 ("t", Value::Str("sym")),
                 ("rel", Value::Str("chg")),
-                ("name", Value::Str(label)),
+                ("name", Value::Str(&label)),
                 ("path", Value::Str(path)),
                 ("line", Value::Int(u64::from(line))),
                 ("kind", Value::Str(&target.note)),
@@ -335,7 +335,7 @@ fn render(
             &[
                 ("t", Value::Str("edge")),
                 ("rel", Value::Str("in")),
-                ("name", Value::Str(label)),
+                ("name", Value::Str(&label)),
                 ("path", Value::Str(path)),
                 ("line", Value::Int(u64::from(line))),
                 ("n", Value::Int(*depth as u64)),
@@ -359,7 +359,7 @@ fn render(
             &[
                 ("t", Value::Str("edge")),
                 ("rel", Value::Str("test")),
-                ("name", Value::Str(label)),
+                ("name", Value::Str(&label)),
                 ("path", Value::Str(path)),
                 ("line", Value::Int(u64::from(line))),
             ],
@@ -487,7 +487,7 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
             Some(FileType::Java | FileType::Kotlin | FileType::Scala | FileType::Groovy)
                 if symbol.parent != u32::MAX =>
             {
-                let class = index.string(index.derived.symbols()[symbol.parent as usize].qualified);
+                let class = index.qualified(&index.derived.symbols()[symbol.parent as usize]);
                 let dir = parent(path);
                 let build = ["build.gradle", "build.gradle.kts"]
                     .iter()
@@ -498,7 +498,7 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
                     });
                 match build {
                     Some(key) => {
-                        jvm.entry(key).or_default().insert(class.to_owned());
+                        jvm.entry(key).or_default().insert(class.into_owned());
                     }
                     None => {
                         files.insert(path.to_owned());
@@ -519,7 +519,7 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
                 }
             }
             Some(FileType::CSharp | FileType::VbNet) => {
-                let qualified = index.string(symbol.qualified).to_owned();
+                let qualified = index.qualified(symbol).into_owned();
                 match nearest_project(&paths, parent(path)) {
                     Some(project) => {
                         dotnet.entry(project).or_default().insert(qualified);

@@ -11,6 +11,7 @@ const RANK_WEIGHT: f32 = 2.0;
 /// BM25 scales by the share of query terms a node matches (coordination): a node covering
 /// three of five terms in its body beats one matching a single term in its name.
 const COORD_EXPONENT: f32 = 1.0;
+const DIVERSITY: f32 = 0.4;
 /// Hits below this share of the top score are noise.
 const RELEVANCE_FLOOR: f32 = 0.05;
 
@@ -100,7 +101,7 @@ pub fn search(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
                 }
                 if let Some(qualified) = &qualified_query
                     && index
-                        .string(symbol.qualified)
+                        .qualified(symbol)
                         .replace("::", ".")
                         .ends_with(qualified.as_str())
                 {
@@ -114,6 +115,22 @@ pub fn search(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
             }
         })
         .collect();
+    hits.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| index.path_of(a.node).cmp(index.path_of(b.node)))
+            .then_with(|| index.line_of(a.node).cmp(&index.line_of(b.node)))
+    });
+    // Diversity: each further hit of a file counts DIVERSITY times the one before, so one file's
+    // near-identical siblings (a UI kit's `NavigationMenu*`) cannot fill the first results.
+    let mut seen_per_file: HashMap<u32, i32> = HashMap::new();
+    for hit in &mut hits {
+        let seen = seen_per_file
+            .entry(index.file_index_of(hit.node))
+            .or_default();
+        hit.score *= DIVERSITY.powi(*seen);
+        *seen += 1;
+    }
     hits.sort_by(|a, b| {
         b.score
             .total_cmp(&a.score)

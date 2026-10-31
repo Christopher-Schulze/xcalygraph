@@ -242,7 +242,7 @@ Resolution order for a reference, first hit wins:
 | stale doc references | doc mentions of identifiers matching no symbol and of relative paths matching no file |
 | env drift | variables read without a definition site; variables defined without a read site |
 | unreferenced assets | `asset` files without incoming `references` |
-| search index | token -> symbol postings from name, parent chain, path, signature, doc and body words (tokens of the identifiers, strings, comments and markup of the symbol's lines, its doc comment included, outside nested symbols, CSS class lists skipped, max 64, source role only, multi-line symbols only); token -> file postings from text segments, config key paths and words of top-level code |
+| search index | token -> symbol postings from name, parent chain, path, signature, doc, the names of its callers and users (max 16) and body words (tokens of the identifiers, strings, comments and markup of the symbol's lines, its doc comment included, outside nested symbols, CSS class lists skipped, max 64, source role only, multi-line symbols only); token -> file postings from text segments, config key paths and words of top-level code |
 
 - Tokenization: split on non-alphanumerics, camelCase and PascalCase boundaries and letter-digit boundaries; lowercase; light English suffix stripping (`-s`, `-es` after sibilants, `-ies`, `-ed`, `-ing`); common code abbreviations and their spelled-out words map to one form (`dir`, `config`, `repo`, `env`, `error`, `context`); an English stopword list applies to query terms only. File nodes index their leading comment (module documentation) in the doc field.
 
@@ -268,8 +268,8 @@ Sections in priority order: root line (name, files per language, symbol count) -
 
 1. Tokenize the query; look up exact names for the raw query and each term.
 2. Candidates = union of the postings.
-3. Score = BM25F (k1 1.2, b 0.75; field weights name 3, body 1.8, parent 1.5, path 1, doc 1, signature 0.5; tokens stemmed, code abbreviations and synonyms canonicalized: `remove` and `delete`, `sign in` and `login`, `invalidate` and `refresh`) times the share of query terms the node matches, + exact-name bonus 5 when the whole query names the symbol, multiplied by the role weight (src 1, test 0.3, gen 0.2, doc 0.5, config 0.5, manifest 0.5, asset 0.3), + 2 x normalized log rank.
-4. Order: score descending, then path, then line; files matched by path tokens appear as file lines, unless one of their symbols ranks higher; output keeps the score order, adjacent hits of one file share its path line.
+3. Score = BM25F (k1 1.2, b 0.75; field weights name 3, body 1.8, parent 1.5, path 1, doc 1, signature 0.5, used by 0.5; tokens stemmed, code abbreviations and synonyms canonicalized: `remove` and `delete`, `sign in` and `login`, `invalidate` and `refresh`) times the share of query terms the node matches, + exact-name bonus 5 when the whole query names the symbol, multiplied by the role weight (src 1, test 0.3, gen 0.2, doc 0.5, config 0.5, manifest 0.5, asset 0.3), + 2 x normalized log rank.
+4. Order: score descending, then path, then line; files matched by path tokens appear as file lines, unless one of their symbols ranks higher; each further hit of a file counts 0.4 times the one before (diversity); output keeps the score order, adjacent hits of one file share its path line.
 
 ### 7.3 ctx
 

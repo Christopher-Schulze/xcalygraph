@@ -96,7 +96,7 @@ fn header(index: &Index, writer: &mut Writer, node: u32) {
     match index.node(node) {
         Node::Symbol(symbol) => {
             let path = index.path_of(node);
-            let qualified = index.string(symbol.qualified);
+            let qualified = index.qualified(symbol);
             let text = format!(
                 "{path}:{}-{} {} {qualified}",
                 symbol.line,
@@ -111,7 +111,7 @@ fn header(index: &Index, writer: &mut Writer, node: u32) {
                 ("line", Value::Int(u64::from(symbol.line))),
                 ("end", Value::Int(u64::from(symbol.end_line))),
                 ("kind", Value::Str(symbol.kind().id())),
-                ("name", Value::Str(qualified)),
+                ("name", Value::Str(&qualified)),
                 ("sig", Value::Str(signature)),
                 ("doc", Value::Str(doc)),
             ];
@@ -178,12 +178,13 @@ fn members(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: 
         };
         let path = index.path_of(*member);
         let text = format!("m {} {}:{}", index.summary(symbol), path, symbol.line);
+        let qualified = index.qualified(symbol);
         writer.line(
             &text,
             &[
                 ("t", Value::Str("edge")),
                 ("rel", Value::Str("member")),
-                ("name", Value::Str(index.string(symbol.qualified))),
+                ("name", Value::Str(&qualified)),
                 ("path", Value::Str(path)),
                 ("line", Value::Int(u64::from(symbol.line))),
                 ("sig", Value::Str(index.string(symbol.signature))),
@@ -302,7 +303,7 @@ fn write_edge(
             ("t", Value::Str("edge")),
             ("rel", Value::Str(rel)),
             ("kind", Value::Str(edge.kind().id())),
-            ("name", Value::Str(label)),
+            ("name", Value::Str(&label)),
             ("path", Value::Str(path)),
             ("line", Value::Int(u64::from(line))),
             (
