@@ -5,8 +5,9 @@
 #   Question sets: scripts/benchmarks/questions/<corpus>.tsv and, for private corpora,
 #   scripts/benchmarks/questions/private/<corpus>.tsv; columns question, expected location as
 #   path::name (or path). Corpus roots: this repository (xcalygraph), the upstream clone
-#   (graphify), pinned public corpora under research/corpora/ (hono) and private corpora from
-#   scripts/benchmarks/questions/private/corpora.tsv.
+#   (graphify), pinned public corpora under research/corpora/ (hono; a subdirectory such as
+#   bulletproof-react/apps/react-vite names its question set with dashes) and private corpora
+#   from scripts/benchmarks/questions/private/corpora.tsv.
 #   Per corpus: hit@5 of find and ctx, mean tokens per answer (bytes / 3), the rg baseline
 #   (output of rg for the two longest question words plus a full read of the expected file
 #   when rg shows it) and the upstream baseline (graphify query on a graph of a copy below
@@ -75,10 +76,11 @@ corpus_root() {
 }
 
 question_file() {
-  if [[ -f "${QUESTIONS}/$1.tsv" ]]; then
-    echo "${QUESTIONS}/$1.tsv"
-  elif [[ -f "${QUESTIONS}/private/$1.tsv" ]]; then
-    echo "${QUESTIONS}/private/$1.tsv"
+  local name="${1//\//-}"
+  if [[ -f "${QUESTIONS}/${name}.tsv" ]]; then
+    echo "${QUESTIONS}/${name}.tsv"
+  elif [[ -f "${QUESTIONS}/private/${name}.tsv" ]]; then
+    echo "${QUESTIONS}/private/${name}.tsv"
   fi
 }
 
@@ -134,14 +136,15 @@ for corpus in "${corpora[@]}"; do
   root="$(corpus_root "${corpus}")"
   questions="$(question_file "${corpus}")"
   [[ -n "${root}" && -d "${root}" && -n "${questions}" ]] || continue
-  index="${WORK}/index-${corpus}"
-  misses="${WORK}/misses-${corpus}.txt"
+  index="${WORK}/index-${corpus//\//-}"
+  misses="${WORK}/misses-${corpus//\//-}.txt"
   : > "${misses}"
-  query() { "${BINARY}" "$@" -C "${root}" --index-dir "${index}"; }
+  # A question without any match (exit 4) scores zero instead of aborting the run.
+  query() { "${BINARY}" "$@" -C "${root}" --index-dir "${index}" || (( $? == 4 )); }
   query index >/dev/null
   graph=""
   if (( upstream )); then
-    copy="${WORK}/upstream-${corpus}"
+    copy="${WORK}/upstream-${corpus//\//-}"
     if [[ ! -f "${copy}/graphify-out/graph.json" ]]; then
       rm -rf "${copy}"
       copy_corpus "${root}" "${copy}" || continue

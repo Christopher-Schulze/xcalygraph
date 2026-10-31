@@ -1,0 +1,16 @@
+question	expected
+which api handler creates a new post	app/api/posts/route.ts::POST
+delete a post through the api	app/api/posts/[postId]/route.ts::DELETE
+check that the signed in user owns the post before changing it	app/api/posts/[postId]/route.ts::verifyCurrentUserHasAccessToPost
+stripe webhook that stores the subscription after checkout completes	app/api/webhooks/stripe/route.ts::POST
+open the stripe billing portal or a checkout session to upgrade	app/api/users/stripe/route.ts::GET
+render the open graph image for a page	app/api/og/route.tsx::GET
+page that shows the current subscription plan and billing form	app/(dashboard)/dashboard/billing/page.tsx::BillingPage
+dashboard page listing the user's posts	app/(dashboard)/dashboard/page.tsx::DashboardPage
+load a post for the editor only when the user wrote it	app/(editor)/editor/[postId]/page.tsx::getPostForUser
+which subscription plan is a user on	lib/subscription.ts::getUserSubscriptionPlan
+redirect visitors without a session to the login page	middleware.ts
+fetch the github star count shown on the landing page	app/(marketing)/page.tsx::getGitHubStars
+build the table of contents from markdown headings	lib/toc.ts::getTableOfContents
+previous and next links between documentation pages	components/pager.tsx::getPagerForDoc
+api endpoint that updates the user's display name	app/api/users/[userId]/route.ts::PATCH

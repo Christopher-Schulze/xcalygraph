@@ -1,0 +1,16 @@
+question	expected
+post a new comment on an article	src/routes/article/[slug]/+page.server.js::createComment
+remove a comment from an article	src/routes/article/[slug]/+page.server.js::deleteComment
+follow or unfollow an author from their profile	src/routes/profile/@[user]/+page.server.js::toggleFollow
+read the jwt cookie and attach the user to every request	src/hooks.server.js::handle
+send an http request to the conduit backend with the auth token	src/lib/api.js::send
+sign in with email and password and store the session cookie	src/routes/login/+page.server.js::actions
+create a new account	src/routes/register/+page.server.js::actions
+log out from the settings page	src/routes/settings/+page.server.js::logout
+save changes to the user's profile settings	src/routes/settings/+page.server.js::save
+publish a new article from the editor	src/routes/editor/+page.server.js::actions
+load an article and its comments and sanitize the markdown body	src/routes/article/[slug]/+page.server.js::load
+fetch the articles written or favorited by a profile page by page	src/routes/profile/@[user]/get_articles.js::get_articles
+home page feed with tag filter and pagination	src/routes/+page.server.js::load
+component that shows the page numbers below a list	src/routes/Pagination.svelte
+show the validation errors returned by the api	src/lib/ListErrors.svelte

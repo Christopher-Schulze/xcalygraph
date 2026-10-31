@@ -100,7 +100,7 @@ src/domain/corpus.rs
 
 | command | answers |
 |---|---|
-| `map` | How is this repository laid out and run? Languages, largest modules with their top symbols, entrypoints, tasks (Makefile, scripts, CI jobs, services) with what they run, hubs, API operations with their handlers, cycles, layers, external dependencies, env vars. |
+| `map` | How is this repository laid out and run? Languages, largest modules with their top symbols, entrypoints, tasks (Makefile, scripts, CI jobs, services) with what they run, hubs, API operations and framework routes with their handlers, cycles, layers, external dependencies, env vars. |
 | `find TERMS...` | Where is X? Ranked symbols and files (BM25F over names, parents, paths, signatures and docs, combined with graph rank). |
 | `ctx TERMS...` | What do I need to read for X? The best seeds with their doc sentence plus related symbols by personalized PageRank. |
 | `show NAME` | What is X? Signature, doc, members, fields, supertypes, implementations, callers, callees, tests, env reads. |
@@ -168,8 +168,9 @@ About 60 languages and formats, each resolved by its own module rules rather tha
 | Go | packages, `go.mod` and `go.work` modules, receivers, interfaces satisfied by method sets, build-tag variants |
 | Rust | module tree, workspace crates, `use` paths and re-exports, traits and impls, `cfg` variants |
 | Python | dotted modules and packages, `src/` layout, absolute and relative imports, aliases, docstrings, env reads |
-| TypeScript, JavaScript, JSX, TSX | `tsconfig` paths, `package.json` exports and workspaces, CommonJS, re-exports |
-| Vue, Svelte, Astro | script blocks and template component usage |
+| TypeScript, JavaScript, JSX, TSX | `tsconfig` paths, `package.json` exports and workspaces, CommonJS, re-exports, React components, hooks and context providers |
+| Next.js, SvelteKit | file-based routes (`page /products/[id]`, `GET /api/posts`, `load /login`), middleware, hooks and server actions, each calling its handler, so `impact` of a component lists the pages rendering it |
+| Vue, Svelte, Astro | script blocks and template component usage; Svelte markup expressions, directives and `$store` reads; SvelteKit `$lib` |
 | Java | packages, single-type, wildcard and static imports, implicit `this`, overloads by argument count, JUnit tests, Gradle and Maven test commands, framework entrypoints |
 | Kotlin | as Java, plus extension functions narrowed by receiver type, objects and companions, trailing lambdas |
 | Scala, Groovy | packages and imports as Java; Scala objects, traits and package-qualified calls; Groovy scripts and Spock specifications |
