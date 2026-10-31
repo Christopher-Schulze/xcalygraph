@@ -69,6 +69,9 @@ graph_before = graph.stat()
 assert prepare(upstream=True) == graph_source
 assert graph.stat().st_ino == graph_before.st_ino and graph.stat().st_mtime_ns == graph_before.st_mtime_ns
 content = json.loads(graph.read_text())
+verified = subprocess.run(["bash", str(helper), "--verify", str(graph_source)],
+                          env=environment, capture_output=True, text=True, check=True)
+assert Path(verified.stdout.strip()) == graph_source
 assert any("Later" in node.get("label", "") for node in content["nodes"])
 assert not any("Earlier" in node.get("label", "") for node in content["nodes"])
 binary = repo / "target/debug/xcalygraph"
@@ -82,6 +85,9 @@ original = graph.read_bytes()
 graph.write_bytes(original + b" ")
 assert "identity mismatch" in prepare(upstream=True, succeeds=False)
 assert graph.read_bytes() == original + b" "
+verified = subprocess.run(["bash", str(helper), "--verify", str(graph_source)],
+                          env=environment, capture_output=True, text=True)
+assert verified.returncode != 0 and "identity mismatch" in verified.stderr
 (changed / "unexpected.go").write_text("package sample\n")
 assert "file set changed" in prepare(succeeds=False)
 assert (changed / "unexpected.go").exists()

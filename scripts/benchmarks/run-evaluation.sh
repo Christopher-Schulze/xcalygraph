@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Answer quality and tokens per question against the rg and upstream Graphify baselines
 # (docs/spec.md section 12).
-# Usage: scripts/benchmarks/run-evaluation.sh [--no-upstream] [--set NAME] [CORPUS...]
+# Usage: scripts/benchmarks/run-evaluation.sh [--no-upstream] [--set NAME] [--phase final|development] [--validate] [CORPUS...]
 #   --set NAME: the question sets of scripts/benchmarks/questions/NAME/ (held-out rounds heldout,
 #   heldout2, ...: written before a tuning round, evaluated once at its end).
 #   Question sets: scripts/benchmarks/questions/<corpus>.tsv and, for private corpora,
@@ -28,10 +28,14 @@ QUESTIONS="${REPO_ROOT}/scripts/benchmarks/questions"
 readonly PRIVATE_LIST="${QUESTIONS}/private/corpora.tsv"
 
 upstream=1
+phase=final
+validate=0
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --no-upstream) upstream=0 ;;
     --set) QUESTIONS="${QUESTIONS}/$2"; shift ;;
+    --phase) phase="$2"; shift ;;
+    --validate) validate=1 ;;
     *) echo "run-evaluation.sh: unknown flag $1" >&2; exit 2 ;;
   esac
   shift
@@ -46,6 +50,19 @@ if (( upstream )) && ! command -v graphify >/dev/null; then
 fi
 
 cd "${REPO_ROOT}"
+if [[ -f "${QUESTIONS}/manifest.json" ]]; then
+  (( upstream )) || { echo "run-evaluation.sh: sealed comparisons require Graphify" >&2; exit 2; }
+  if (( validate )); then
+    phase=validate
+  else
+    cargo build --release --locked -q
+  fi
+  exec bash "${REPO_ROOT}/scripts/benchmarks/evaluate-sealed.sh" "${QUESTIONS}/manifest.json" "${phase}" "${BINARY}" "$@"
+fi
+if (( validate )) || [[ "${phase}" != final ]]; then
+  echo "run-evaluation.sh: --phase/--validate require a manifest-backed question set" >&2
+  exit 2
+fi
 cargo build --release --locked -q
 mkdir -p "${WORK_BASE}"
 WORK="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")"

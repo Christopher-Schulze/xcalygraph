@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Prepare a content-addressed, verified source snapshot, optionally with a matching Graphify graph.
 # Usage: prepare-corpus.sh ROOT SNAPSHOT_BASE [--graphify]
+#        prepare-corpus.sh --verify SNAPSHOT_SOURCE
 # Prints only the source directory; evidence and tool output stay beside it. Existing artifacts
 # are verified and reused, never overwritten or deleted. Requires python3, git/rg; Graphify for --graphify.
 set -euo pipefail
@@ -160,7 +161,26 @@ def prepare(root, base, upstream):
     return source
 
 
+def verify_snapshot(source):
+    metadata = json.loads((source.parent / "snapshot.json").read_text())
+    if digest(encoded(metadata["source"])) != metadata["source_sha256"]:
+        raise ValueError("snapshot metadata checksum mismatch")
+    verify_source(source, metadata["source"]["files"])
+    if metadata["upstream"] is not None:
+        if graphify_identity()[1] != metadata["upstream"]:
+            raise ValueError("installed Graphify identity changed")
+        proof = json.loads((source.parent / "graph.json.identity").read_text())
+        expected = {"snapshot": digest(encoded(metadata)),
+                    "graph_sha256": digest((source / "graphify-out/graph.json").read_bytes())}
+        if proof != expected:
+            raise ValueError("Graphify graph identity mismatch; existing evidence retained")
+    return source
+
+
 try:
+    if len(sys.argv) == 3 and sys.argv[1] == "--verify":
+        print(verify_snapshot(Path(sys.argv[2]).resolve(strict=True)))
+        sys.exit(0)
     if len(sys.argv) not in (3, 4) or len(sys.argv) == 4 and sys.argv[3] != "--graphify":
         raise ValueError("usage: prepare-corpus.sh ROOT SNAPSHOT_BASE [--graphify]")
     root, base = Path(sys.argv[1]).resolve(strict=True), Path(sys.argv[2]).resolve()
