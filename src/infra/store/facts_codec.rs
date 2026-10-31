@@ -3,7 +3,7 @@
 use super::codec::{DecodeError, DecodeResult, Decoder, Encoder};
 use crate::domain::facts::{
     AssetMeta, Binding, ConfigKey, EnvDef, EnvRead, EnvSource, Facts, Fields, Import, Manifest,
-    Ref, RefKind, SymKind, Symbol, TextSegment,
+    Ref, RefKind, SymKind, Symbol, TextSegment, ValueKind,
 };
 
 fn opt_index(encoder: &mut Encoder, value: Option<u32>) {
@@ -78,6 +78,7 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
     encoder.var_usize(facts.config_keys.len());
     for key in &facts.config_keys {
         encoder.str(&key.path);
+        encoder.u8(key.kind as u8);
         encoder.var_u32(key.line);
     }
     encoder.var_usize(facts.texts.len());
@@ -197,6 +198,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
     for _ in 0..decoder.len()? {
         facts.config_keys.push(ConfigKey {
             path: decoder.string()?,
+            kind: ValueKind::from_u8(decoder.u8()?).ok_or(DecodeError("value kind"))?,
             line: decoder.var_u32()?,
         });
     }
@@ -309,6 +311,7 @@ mod tests {
             }],
             config_keys: vec![ConfigKey {
                 path: "services.api.image".to_owned(),
+                kind: ValueKind::String,
                 line: 3,
             }],
             texts: vec![TextSegment {

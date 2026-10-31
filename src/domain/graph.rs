@@ -89,6 +89,8 @@ pub struct GraphFile {
     pub entry: bool,
     /// Leading file comment (module documentation).
     pub doc: String,
+    /// Config key paths and env definition names, for the search index only.
+    pub keys: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

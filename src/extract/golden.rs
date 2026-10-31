@@ -106,6 +106,12 @@ pub fn render(facts: &Facts) -> String {
             scope(env.scope)
         );
     }
+    for def in &facts.env_defs {
+        let _ = writeln!(out, "envdef {} {} {}", def.line, def.name, def.source.id());
+    }
+    for key in &facts.config_keys {
+        let _ = writeln!(out, "key {} {} {}", key.line, key.path, key.kind.id());
+    }
     out
 }
 

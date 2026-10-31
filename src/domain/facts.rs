@@ -267,7 +267,47 @@ pub struct EnvDef {
 pub struct ConfigKey {
     /// Dotted key path, max depth 6; values are never stored.
     pub path: String,
+    pub kind: ValueKind,
     pub line: u32,
+}
+
+/// Kind of a config value; the value itself is never stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum ValueKind {
+    Object = 1,
+    Array,
+    String,
+    Number,
+    Bool,
+    Null,
+}
+
+impl ValueKind {
+    pub fn from_u8(value: u8) -> Option<Self> {
+        [
+            Self::Object,
+            Self::Array,
+            Self::String,
+            Self::Number,
+            Self::Bool,
+            Self::Null,
+        ]
+        .into_iter()
+        .find(|kind| *kind as u8 == value)
+    }
+
+    #[cfg(test)]
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Object => "object",
+            Self::Array => "array",
+            Self::String => "string",
+            Self::Number => "number",
+            Self::Bool => "bool",
+            Self::Null => "null",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

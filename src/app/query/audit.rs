@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::output::{Value, Writer};
 use super::{Filter, Index};
-use crate::domain::facts::{FLAG_DECLARATION, FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST, SymKind};
+use crate::domain::facts::{
+    EnvSource, FLAG_DECLARATION, FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST, SymKind,
+};
 use crate::domain::graph::EdgeKind;
 use crate::domain::history::History;
 use crate::domain::role::Role;
@@ -80,7 +82,7 @@ pub fn render(
     );
     section(&mut writer, "cycles", cycles(index));
     section(&mut writer, "stale", stale(index, filter, root));
-    section(&mut writer, "drift", drift(index));
+    section(&mut writer, "drift", drift(index, root));
     match history {
         Some(history) => {
             section(&mut writer, "coupling", coupling(index, filter, history));
@@ -344,7 +346,7 @@ fn stale(index: &Index, filter: &Filter, root: &std::path::Path) -> Vec<String> 
 
 /// Variables read without a definition site and defined without a read site; only when the
 /// root defines any environment variable (otherwise every read would be listed).
-fn drift(index: &Index) -> Vec<String> {
+fn drift(index: &Index, root: &std::path::Path) -> Vec<String> {
     let envs = index.derived.envs();
     let defined: BTreeSet<&str> = envs
         .iter()
@@ -370,9 +372,29 @@ fn drift(index: &Index) -> Vec<String> {
             ));
         }
     }
-    for env in envs.iter().filter(|env| env.source != 0) {
+    // Unread definitions count only for runtime configuration: CI and Dockerfile variables are
+    // often read by tools and base images, not by the code.
+    let runtime = |source: u32| {
+        u8::try_from(source)
+            .ok()
+            .and_then(EnvSource::from_u8)
+            .is_some_and(|source| {
+                matches!(
+                    source,
+                    EnvSource::EnvExample | EnvSource::Compose | EnvSource::Kubernetes
+                )
+            })
+    };
+    let unread: BTreeSet<&str> = envs
+        .iter()
+        .filter(|env| runtime(env.source))
+        .map(|env| index.string(env.name))
+        .filter(|name| !read.contains(name))
+        .collect();
+    let wrapped = quoted_in_code(index, root, &unread);
+    for env in envs.iter().filter(|env| runtime(env.source)) {
         let name = index.string(env.name);
-        if !read.contains(name) {
+        if unread.contains(name) && !wrapped.contains(name) {
             lines.push(format!(
                 "defined {name} {}:{} unread",
                 index.path_of(env.node),
@@ -387,6 +409,40 @@ fn drift(index: &Index) -> Vec<String> {
             .eq(b.split_whitespace().take(2))
     });
     lines
+}
+
+/// Names of `candidates` written as string literals (`"NAME"`, `'NAME'`) in source files: read
+/// through a wrapper (`mustMapEnv(&x, "NAME")`, `config["NAME"]`) the extractor cannot see.
+fn quoted_in_code<'a>(
+    index: &Index,
+    root: &std::path::Path,
+    candidates: &BTreeSet<&'a str>,
+) -> BTreeSet<&'a str> {
+    use rayon::prelude::*;
+    if candidates.is_empty() {
+        return BTreeSet::new();
+    }
+    let paths: Vec<&str> = index
+        .derived
+        .files()
+        .iter()
+        .filter(|file| matches!(file.role(), Role::Src | Role::Test))
+        .map(|file| index.string(file.path))
+        .collect();
+    paths
+        .par_iter()
+        .flat_map_iter(|path| {
+            let text = std::fs::read(root.join(path)).unwrap_or_default();
+            let text = String::from_utf8_lossy(&text).into_owned();
+            candidates
+                .iter()
+                .filter(|name| {
+                    text.contains(&format!("\"{name}\"")) || text.contains(&format!("'{name}'"))
+                })
+                .copied()
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// Co-change pairs with at least one source file and without any static edge between the two.

@@ -105,9 +105,10 @@ NAME accepts `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get
 | C, C++, CUDA, Metal | include resolution with CMake and `compile_commands.json` include directories, declarations mapped to definitions, namespaces, out-of-line members, virtual dispatch, function pointers and macro bodies |
 | Objective-C, Swift | classes, protocols, messages and selectors; SwiftPM modules, extensions, XCTest and `@Test`, `swift test` filters |
 | Bash | functions, commands as calls, sourced files, env reads |
+| Config and env | key paths of JSON, YAML, TOML, XML, INI and properties files; env definitions from `.env.example`, Dockerfiles, compose, GitHub Actions and Kubernetes against code reads (values never stored) |
 | Markdown | headings, links and backticked mentions resolved to files and symbols (the basis of stale doc detection) |
 
-Next on the roadmap: config and infrastructure files (env definitions, task runners, SQL), Ruby, PHP, Lua, Zig, Elixir, Erlang and Dart, then documents and assets.
+Next on the roadmap: task runners, SQL, Terraform and API contracts, Ruby, PHP, Lua, Zig, Elixir, Erlang and Dart, then documents and assets.
 
 ## Install
 

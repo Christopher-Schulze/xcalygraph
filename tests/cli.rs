@@ -436,3 +436,42 @@ fn impact_on_dotnet_tests_prints_dotnet_test_filters() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn env_definitions_feed_map_env_and_audit_drift_without_values() -> TestResult {
+    let dir = TempDir::new("env-surface")?;
+    let root = dir.0.join("repo");
+    dir.write(
+        "repo/.env.example",
+        "DATABASE_URL=postgres://secret-value\nUNUSED_FLAG=1\n",
+    )?;
+    dir.write(
+        "repo/docker-compose.yml",
+        "services:\n  api:\n    environment:\n      - DATABASE_URL=postgres://db\n    healthcheck:\n      retries: 3\n",
+    )?;
+    dir.write(
+        "repo/main.go",
+        "package main\n\nimport \"os\"\n\nfunc main() {\n\t_ = os.Getenv(\"DATABASE_URL\")\n\t_ = os.Getenv(\"MISSING_TOKEN\")\n}\n",
+    )?;
+    let index = dir.0.join("index");
+    let map = String::from_utf8(run_in(&root, &index, &["map"])?.stdout)?;
+    assert!(
+        map.contains("DATABASE_URL 1r .env.example,compose main.go:6"),
+        "{map}"
+    );
+    let audit = String::from_utf8(run_in(&root, &index, &["audit"])?.stdout)?;
+    assert!(
+        audit.contains("read MISSING_TOKEN main.go:7 undefined"),
+        "{audit}"
+    );
+    assert!(
+        audit.contains("defined UNUSED_FLAG .env.example:2 unread"),
+        "{audit}"
+    );
+    let found = String::from_utf8(run_in(&root, &index, &["find", "healthcheck retries"])?.stdout)?;
+    assert!(found.starts_with("docker-compose.yml"), "{found}");
+    for output in [&map, &audit, &found] {
+        assert!(!output.contains("secret-value"), "{output}");
+    }
+    Ok(())
+}

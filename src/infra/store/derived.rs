@@ -399,6 +399,8 @@ fn search_index(graph: &Graph) -> SearchIndex {
             fields[search::NAME] = file.path.rsplit('/').next().unwrap_or(&file.path);
             fields[search::PATH] = &file.path;
             fields[search::DOC] = &file.doc;
+            // Config key paths and env names weigh like a signature.
+            fields[search::SIGNATURE] = &file.keys;
             return fields;
         }
         let symbol = &graph.symbols[node];

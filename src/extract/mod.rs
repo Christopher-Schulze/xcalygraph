@@ -1,5 +1,6 @@
 //! Fact extraction: content bytes to per-file facts (`docs/spec.md` section 5). Pure; no IO.
 
+mod config;
 pub mod engine;
 #[cfg(test)]
 mod golden;
@@ -15,7 +16,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 5;
+const EXTRACTION_VERSION: u32 = 9;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -69,6 +70,28 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
     #[cfg(feature = "lang-vbnet")]
     if record.file_type == Some(FileType::VbNet) {
         lang::vbnet::scan_lines(content, &mut facts);
+    }
+    // Shell variables read without assignment count as environment only when written like
+    // environment variables (`HOME`, `API_TOKEN`); `$1` and lowercase locals do not.
+    if record.file_type == Some(FileType::Bash) {
+        facts.envs.retain(|env| {
+            env.name
+                .starts_with(|ch: char| ch.is_ascii_uppercase() || ch == '_')
+                && env
+                    .name
+                    .chars()
+                    .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+        });
+    }
+    if record.role == Role::Config
+        && let Some(file_type) = record.file_type
+    {
+        config::extract(
+            &record.path,
+            file_type,
+            &String::from_utf8_lossy(content),
+            &mut facts,
+        );
     }
     facts.lines = count_lines(content);
     if record.role == Role::Manifest {

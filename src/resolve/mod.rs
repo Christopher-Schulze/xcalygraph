@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 26;
+pub const RESOLVE_VERSION: u32 = 27;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -2288,6 +2288,13 @@ impl<'a> Index<'a> {
                 ambiguous: 0,
                 entry: facts.is_some_and(|facts| facts.entry),
                 doc: facts.map(|facts| facts.doc.clone()).unwrap_or_default(),
+                keys: facts
+                    .map(|facts| {
+                        let keys = facts.config_keys.iter().map(|key| key.path.as_str());
+                        let envs = facts.env_defs.iter().map(|def| def.name.as_str());
+                        keys.chain(envs).collect::<Vec<_>>().join(" ")
+                    })
+                    .unwrap_or_default(),
             });
         }
         let mut edges: Vec<Edge> = Vec::new();

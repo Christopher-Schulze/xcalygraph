@@ -10,3 +10,4 @@ lua	https://github.com/lua/lua	8cb93bada561977eb370819e39d7d644e5fd0a3f	c
 leveldb	https://github.com/google/leveldb	bb74ef739973a70ca9f0d90788a1da89b788c0ad	cpp
 swift-argument-parser	https://github.com/apple/swift-argument-parser	38ca4eceb349155836701b88da3e0986eb9d1e1c	swift
 afnetworking	https://github.com/AFNetworking/AFNetworking	d9f589cc2c1fe9d55eb5eea00558010afea7a41e	objc
+microservices-demo	https://github.com/GoogleCloudPlatform/microservices-demo	c7cb6d5bfd6ea3aed768634ebbcb98cb7a523712	yaml,dockerfile
