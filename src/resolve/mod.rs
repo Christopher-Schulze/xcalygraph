@@ -2,6 +2,7 @@
 //! resolution order steps 1 to 8). Pure; recomputed from cached facts on every change (D6).
 
 pub mod derive;
+mod dotnet;
 mod js;
 mod jvm;
 pub mod modules;
@@ -25,7 +26,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 19;
+pub const RESOLVE_VERSION: u32 = 21;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -74,6 +75,8 @@ struct Index<'a> {
     /// Implementations of abstract types and supertypes of concrete ones.
     implementations: HashMap<u32, Vec<u32>>,
     supertypes: HashMap<u32, Vec<u32>>,
+    /// .NET `global using` directives with their file: visible in every file of the language.
+    global_usings: Vec<(u32, &'a facts::Import)>,
 }
 
 /// Where an import or path leads.
@@ -269,6 +272,7 @@ impl<'a> Index<'a> {
             field_names: HashSet::default(),
             implementations: HashMap::default(),
             supertypes: HashMap::default(),
+            global_usings: Vec::new(),
         };
         index.build_tables();
         index
@@ -278,6 +282,15 @@ impl<'a> Index<'a> {
         let input = self.input;
         for (file, facts) in input.facts.iter().enumerate() {
             let Some(facts) = facts else { continue };
+            if jvm::is_dotnet(input.files[file].file_type) {
+                self.global_usings.extend(
+                    facts
+                        .imports
+                        .iter()
+                        .filter(|import| import.reexport)
+                        .map(|import| (file as u32, import)),
+                );
+            }
             let module = self.modules.file_module[file];
             let scope = self.scope_ids[module as usize];
             let base = self.base[file];
@@ -367,6 +380,9 @@ impl<'a> Index<'a> {
             Some(FileType::Python) => self.python_imports(file, facts, &mut imports),
             Some(FileType::Bash) => self.path_imports(file, facts, &mut imports),
             file_type if jvm::is_jvm(file_type) => self.jvm_imports(file, facts, &mut imports),
+            Some(FileType::CSharp | FileType::VbNet) => {
+                self.dotnet_imports(file, facts, &mut imports)
+            }
             Some(
                 FileType::TypeScript
                 | FileType::JavaScript
@@ -720,6 +736,24 @@ impl<'a> Index<'a> {
         if jvm::is_jvm(self.file_type(symbol.file)) {
             return self.declared_members(type_symbol, name);
         }
+        if jvm::is_dotnet(self.file_type(symbol.file)) {
+            // Partial types: every part of the same name and nesting contributes members.
+            let module = self.module_of(symbol.file);
+            let parts = self
+                .types
+                .get(&(module, symbol.name.as_str()))
+                .cloned()
+                .unwrap_or_default();
+            let mut found: Vec<u32> = parts
+                .iter()
+                .filter(|&&part| self.symbols[part as usize].parent == NONE || part == type_symbol)
+                .flat_map(|&part| self.declared_members(part, name))
+                .collect();
+            if found.is_empty() {
+                found = self.declared_members(type_symbol, name);
+            }
+            return found;
+        }
         let scope = self.scope_ids[self.module_of(symbol.file) as usize];
         self.methods
             .get(&(scope, symbol.name.as_str(), name))
@@ -811,7 +845,7 @@ impl<'a> Index<'a> {
             }
         }
         // JVM types come only from the package, imports and `java.lang`: no root-wide guess.
-        if jvm::is_jvm(self.file_type(file)) {
+        if jvm::is_class_based(self.file_type(file)) {
             return None;
         }
         let candidates: Vec<u32> = self
@@ -883,15 +917,17 @@ impl<'a> Index<'a> {
         {
             return Some(found);
         }
-        if jvm::is_jvm(self.file_type(file))
+        if jvm::is_class_based(self.file_type(file))
             && imports.is_none_or(|imports| !imports.names.contains_key(qualifier))
-            && let Some(module) = self.modules.get(&jvm::package_key(qualifier))
+            && let Some(module) = self
+                .modules
+                .get(&jvm::namespace_key(self.file_type(file), qualifier))
         {
             // A package of the root (`com.example.Type`, Scala `os.read`).
             let found = self.module_symbol(module, name, None);
             return (!found.is_empty()).then_some(found);
         }
-        if jvm::is_jvm(self.file_type(file)) && qualifier.contains('.') {
+        if jvm::is_class_based(self.file_type(file)) && qualifier.contains('.') {
             // Fully qualified name outside the root.
             let head = qualifier.split('.').next().unwrap_or_default();
             if head.starts_with(|ch: char| ch.is_ascii_lowercase())
@@ -1330,7 +1366,7 @@ impl<'a> Index<'a> {
         };
         // 0. JVM and .NET class bodies: methods and constants of the enclosing class and its
         // supertypes need no `this`.
-        if !wants_type && jvm::is_jvm(self.file_type(file)) {
+        if !wants_type && jvm::is_class_based(self.file_type(file)) {
             let members: Vec<u32> = self
                 .enclosing_members(file, reference.scope, name)
                 .into_iter()
@@ -1343,7 +1379,9 @@ impl<'a> Index<'a> {
                     if constructor {
                         false
                     } else if reference.kind == RefKind::Value {
+                        // C# and VB.NET method groups (`Register(Handle)`) name methods as values.
                         kind == SymKind::Const
+                            || (jvm::is_dotnet(self.file_type(file)) && kind.is_callable())
                     } else {
                         kind.is_callable()
                     }
@@ -1422,6 +1460,9 @@ impl<'a> Index<'a> {
                     Confidence::Exact,
                 );
             }
+            if jvm::is_class_based(self.file_type(file)) {
+                return pick_members(self, same, Confidence::Exact, reference.arity);
+            }
             return pick(&same, Confidence::Exact);
         }
         for &glob in &imports.globs {
@@ -1431,12 +1472,15 @@ impl<'a> Index<'a> {
                 .filter(|&s| kind_ok(s))
                 .collect();
             if !found.is_empty() {
+                if jvm::is_class_based(self.file_type(file)) {
+                    return pick_members(self, found, Confidence::Exact, reference.arity);
+                }
                 return pick(&found, Confidence::Exact);
             }
         }
         // JVM names come from the file, the enclosing class, the package and imports only;
         // nested types of other classes are not visible unqualified.
-        if jvm::is_jvm(self.file_type(file)) {
+        if jvm::is_class_based(self.file_type(file)) {
             return Outcome::Unresolved;
         }
         // 7. Unique name among imported modules, then in the root. Go and Rust only see
@@ -1499,7 +1543,7 @@ impl<'a> Index<'a> {
     ) -> Outcome {
         let name = reference.name.as_str();
         let rust = self.file_type(file) == Some(FileType::Rust);
-        if reference.kind == RefKind::Type && jvm::is_jvm(self.file_type(file)) {
+        if reference.kind == RefKind::Type && jvm::is_class_based(self.file_type(file)) {
             // `Outer.Inner`, `pkg.Type`, `Map.Entry`: a type or nothing, never a member.
             return match self.resolve_type(
                 file,
@@ -1665,9 +1709,10 @@ impl<'a> Index<'a> {
                 let symbol = &self.symbols[candidate as usize];
                 arity != facts::NO_ARITY
                     && parameter_count(&symbol.signature, &symbol.name).is_none_or(
-                        |(count, variadic)| {
-                            usize::from(arity) == count
-                                || (variadic && usize::from(arity) + 1 >= count)
+                        |(required, total, variadic)| {
+                            let arity = usize::from(arity);
+                            (required..=total).contains(&arity)
+                                || (variadic && arity + 1 >= required)
                         },
                     )
             })
@@ -1749,7 +1794,7 @@ impl<'a> Index<'a> {
                 None if binding.type_name.ends_with("()") => return Receiver::Unknown,
                 None => return Receiver::External,
             }
-        } else if let Some(field) = jvm::is_jvm(self.file_type(file))
+        } else if let Some(field) = jvm::is_class_based(self.file_type(file))
             .then(|| self.enclosing_field_type(file, scope, head))
             .flatten()
         {
@@ -2279,6 +2324,8 @@ fn has_module_rules(file_type: Option<FileType>) -> bool {
                 | FileType::Kotlin
                 | FileType::Scala
                 | FileType::Groovy
+                | FileType::CSharp
+                | FileType::VbNet
         )
     )
 }
@@ -2351,6 +2398,21 @@ fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence, arity: u
     let mut found = found;
     found.sort_unstable();
     found.dedup();
+    // .NET partial types: the parts of one type collapse to its first part.
+    if found.len() > 1 {
+        let first = &index.symbols[found[0] as usize];
+        let partial = first.kind.is_type()
+            && jvm::is_dotnet(index.file_type(first.file))
+            && found.iter().all(|&s| {
+                let symbol = &index.symbols[s as usize];
+                symbol.name == first.name
+                    && symbol.kind.is_type()
+                    && index.module_of(symbol.file) == index.module_of(first.file)
+            });
+        if partial {
+            found.truncate(1);
+        }
+    }
     if found.len() > 1 {
         let non_test: Vec<u32> = found
             .iter()
@@ -2382,9 +2444,10 @@ fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence, arity: u
     pick(&found, confidence)
 }
 
-/// Parameter count of the declaration `name(...)` in a signature and whether it is variadic;
-/// `None` when the list cannot be found (clipped or no parentheses).
-fn parameter_count(signature: &str, name: &str) -> Option<(usize, bool)> {
+/// Parameter counts of the declaration `name(...)` in a signature: required (without default
+/// values), total, and whether it is variadic; `None` when the list cannot be found (clipped or
+/// no parentheses).
+fn parameter_count(signature: &str, name: &str) -> Option<(usize, usize, bool)> {
     let bytes = signature.as_bytes();
     let word = |index: usize| {
         bytes
@@ -2410,6 +2473,8 @@ fn parameter_count(signature: &str, name: &str) -> Option<(usize, bool)> {
     }
     let inner = rest.strip_prefix('(')?;
     let (mut depth, mut commas, mut end) = (0i32, 0, None);
+    let mut defaults = 0;
+    let mut in_default = false;
     let mut previous = ' ';
     for (index, ch) in inner.char_indices() {
         // `->` and `=>` in function types are no closing brackets.
@@ -2425,20 +2490,25 @@ fn parameter_count(signature: &str, name: &str) -> Option<(usize, bool)> {
                 break;
             }
             ')' | '>' | ']' | '}' => depth -= 1,
-            ',' if depth == 0 => commas += 1,
+            ',' if depth == 0 => {
+                commas += 1;
+                in_default = false;
+            }
+            '=' if depth == 0 && !in_default => {
+                defaults += 1;
+                in_default = true;
+            }
             _ => {}
         }
     }
     let list = &inner[..end?];
-    let count = if list.trim().is_empty() {
+    let count: usize = if list.trim().is_empty() {
         0
     } else {
         commas + 1
     };
-    Some((
-        count,
-        list.contains("...") || list.contains("vararg ") || list.contains("params "),
-    ))
+    let variadic = list.contains("...") || list.contains("vararg ") || list.contains("params ");
+    Some((count.saturating_sub(defaults), count, variadic))
 }
 
 /// The single candidate, preferring non-test symbols when several exist.

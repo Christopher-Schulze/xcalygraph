@@ -23,6 +23,25 @@ pub(super) fn package_key(package: &str) -> String {
     format!("jvm:{package}")
 }
 
+pub(super) fn is_dotnet(file_type: Option<FileType>) -> bool {
+    matches!(file_type, Some(FileType::CSharp | FileType::VbNet))
+}
+
+/// JVM and .NET: names come from the class body, the package or namespace and imports only;
+/// members of the enclosing class need no `this`.
+pub(super) fn is_class_based(file_type: Option<FileType>) -> bool {
+    is_jvm(file_type) || is_dotnet(file_type)
+}
+
+/// Module key of a JVM package or .NET namespace.
+pub(super) fn namespace_key(file_type: Option<FileType>, name: &str) -> String {
+    if is_dotnet(file_type) {
+        super::dotnet::namespace_key(name)
+    } else {
+        package_key(name)
+    }
+}
+
 impl Index<'_> {
     pub(super) fn jvm_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
         for import in &facts.imports {
@@ -144,6 +163,9 @@ impl Index<'_> {
         name: &str,
         receiver: Option<&str>,
     ) -> Option<super::Outcome> {
+        if self.file_type(file) == Some(FileType::CSharp) {
+            return self.csharp_extension(file, imports, name, receiver);
+        }
         if self.file_type(file) != Some(FileType::Kotlin) {
             return None;
         }

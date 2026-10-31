@@ -1,0 +1,14 @@
+package App.Tests
+sym 6-15 class MemoryRepositoryTests parent=- owner= pub flags=0 sig="public class MemoryRepositoryTests" doc=""
+sym 8-14 method FindsStoredRow parent=MemoryRepositoryTests owner=MemoryRepositoryTests pub flags=1 sig="[Fact] public void FindsStoredRow()" doc=""
+import 1 "App.Store" names=* alias=- reexport=false
+import 2 "Xunit" names=* alias=- reexport=false
+ref 1 Type Store qualifier=App scope=-
+ref 4 Type Tests qualifier=App scope=-
+ref 8 Type Fact qualifier=- scope=FindsStoredRow
+ref 11 Call MemoryRepository qualifier=- scope=FindsStoredRow args=0
+ref 12 Call Put qualifier=repository scope=FindsStoredRow args=1
+ref 12 Call Row qualifier=- scope=FindsStoredRow args=2
+ref 13 Call Find qualifier=repository scope=FindsStoredRow args=1
+bind 8 "": void declared scope=FindsStoredRow
+bind 11 "repository": MemoryRepository declared scope=FindsStoredRow

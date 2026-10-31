@@ -409,3 +409,30 @@ fn impact_on_jvm_tests_prints_gradle_and_maven_run_lines() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn impact_on_dotnet_tests_prints_dotnet_test_filters() -> TestResult {
+    let dir = TempDir::new("dotnet-impact")?;
+    dir.write("repo/src/App/App.csproj", "<Project />\n")?;
+    dir.write(
+        "repo/src/App/Store.cs",
+        "namespace App;\n\npublic class Store\n{\n    public int Open() => 1;\n}\n",
+    )?;
+    dir.write("repo/tests/App.Tests/App.Tests.csproj", "<Project />\n")?;
+    dir.write(
+        "repo/tests/App.Tests/StoreTests.cs",
+        "using App;\nusing Xunit;\n\nnamespace App.Tests;\n\npublic class StoreTests\n{\n    [Fact]\n    public void Opens()\n    {\n        var store = new Store();\n        store.Open();\n    }\n}\n",
+    )?;
+    let output = run_in(
+        &dir.0.join("repo"),
+        &dir.0.join("index"),
+        &["impact", "Store.Open"],
+    )?;
+    let text = String::from_utf8(output.stdout)?;
+    assert!(text.contains("t App.Tests.StoreTests.Opens "), "{text}");
+    assert!(
+        text.contains("r dotnet test tests/App.Tests --filter \"FullyQualifiedName~App.Tests.StoreTests.Opens\"\n"),
+        "{text}"
+    );
+    Ok(())
+}

@@ -141,6 +141,24 @@ fn module_of(map: &ModuleMap, record: &FileRecord, facts: Option<&Facts>) -> Mod
                 file_type: record.file_type,
             }
         }
+        Some(FileType::CSharp | FileType::VbNet) if extracted_code => {
+            // The namespace declaration, shared across files, directories and both languages.
+            let namespace = facts
+                .and_then(|facts| facts.package.clone())
+                .unwrap_or_default();
+            let key = super::dotnet::namespace_key(&namespace);
+            ModuleInfo {
+                name: if namespace.is_empty() {
+                    ".".to_owned()
+                } else {
+                    namespace
+                },
+                method_scope: key.clone(),
+                key,
+                separator: ".",
+                file_type: record.file_type,
+            }
+        }
         Some(FileType::Go) if extracted_code => {
             let key = go_import_path(map, dir);
             ModuleInfo {

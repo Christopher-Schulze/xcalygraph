@@ -300,6 +300,16 @@ pub fn is_test_path(file_type: FileType, path: &str) -> bool {
                 || (name.starts_with("test_") && name.ends_with(".rb"))
                 || has_dir(&["spec", "test"])
         }
+        // .NET test projects: `X.Tests/`, `X.UnitTests/`, `tests/`; test classes `*Tests.cs`.
+        CSharp | VbNet => {
+            directories(path).any(|segment| {
+                segment.ends_with(".Tests")
+                    || segment.ends_with(".UnitTests")
+                    || segment.ends_with(".IntegrationTests")
+            }) || has_dir(&["tests", "test", "Tests"])
+                || stem.ends_with("Tests")
+                || stem.ends_with("Test")
+        }
         Php => name.ends_with("Test.php") || has_dir(&["tests"]),
         Lua => name.ends_with("_spec.lua") || has_dir(&["spec"]),
         Elixir => name.ends_with("_test.exs") || has_dir(&["test"]),

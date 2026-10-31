@@ -59,6 +59,10 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
             engine::extract(&language, query, &pack.hooks, &record.path, content)
         })
         .unwrap_or_default();
+    #[cfg(feature = "lang-vbnet")]
+    if record.file_type == Some(FileType::VbNet) {
+        lang::vbnet::scan_lines(content, &mut facts);
+    }
     facts.lines = count_lines(content);
     if record.role == Role::Manifest {
         let name = role::file_name(&record.path);

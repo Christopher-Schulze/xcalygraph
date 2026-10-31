@@ -266,29 +266,43 @@ fn parameter_counts_come_from_the_declaration_list() {
     let count = super::parameter_count;
     assert_eq!(
         count("@GetMapping(PREFIX) public List<User> list()", "list"),
-        Some((0, false))
+        Some((0, 0, false))
     );
     assert_eq!(
         count(
             "public JsonWriter value(Map<String, Long> v, int x)",
             "value"
         ),
-        Some((2, false))
+        Some((2, 2, false))
     );
     assert_eq!(
         count(
             "public static <T> T fromJson(String json, Class<T> classOfT)",
             "fromJson"
         ),
-        Some((2, false))
+        Some((2, 2, false))
     );
     assert_eq!(
         count("void log(String format, Object... args)", "log"),
-        Some((2, true))
+        Some((2, 2, true))
     );
     assert_eq!(
         count("fun <T> run(block: () -> T): T", "run"),
-        Some((1, false))
+        Some((1, 1, false))
+    );
+    assert_eq!(
+        count(
+            "Task Send(object request, CancellationToken ct = default)",
+            "Send"
+        ),
+        Some((1, 2, false))
+    );
+    assert_eq!(
+        count(
+            "fun all(limit: Int = Registry.LIMIT, x: Map<A, B> = mapOf())",
+            "all"
+        ),
+        Some((0, 2, false))
     );
     assert_eq!(count("const value = 1", "value"), None);
 }

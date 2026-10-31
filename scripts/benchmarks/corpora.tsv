@@ -4,3 +4,5 @@ gson	https://github.com/google/gson	57731049da3e415be3d5d34db1ca3b80f3c73810	jav
 kotlinpoet	https://github.com/square/kotlinpoet	d67e333d682de65620bf82c46c5b41038e1e450f	kotlin
 os-lib	https://github.com/com-lihaoyi/os-lib	8871ab0bda9bbcc4edbef9b1a402eb4c47ef9398	scala
 spock-example	https://github.com/spockframework/spock-example	8155d1e2a8f1bdfb1aeacca2e9fe5ded7c992a5e	groovy
+mediatr	https://github.com/jbogard/MediatR	62010baf12851770553f275ce4047e93f4471e79	csharp
+compactgui	https://github.com/IridiumIO/CompactGUI	a71142fdc7945b51153862b7d2ba2ce4f46b5f03	vbnet

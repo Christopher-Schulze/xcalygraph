@@ -193,7 +193,8 @@ fn unreferenced(
             // are used from outside (`Type.CONSTANT`, static imports) is alive.
             if incoming.is_empty()
                 && !index.derived.is_ambiguous_name(index.string(symbol.name))
-                && !(kind.is_type() && members_used_outside(index, node))
+                && !(kind.is_type()
+                    && (members_used_outside(index, node) || has_entry_member(index, node)))
             {
                 dead.push(node);
             }
@@ -217,6 +218,13 @@ fn unreferenced(
     by_path(&mut dead);
     by_path(&mut unused);
     (dead, unused)
+}
+
+/// Whether a member of the type is an entrypoint or test (`Program` with `static Main`).
+fn has_entry_member(index: &Index, owner: u32) -> bool {
+    index.derived.members(owner).any(|member| {
+        index.derived.symbols()[member as usize].flags & (FLAG_ENTRY | FLAG_TEST) != 0
+    })
 }
 
 /// Whether a member of the type `owner` has an incoming edge from outside the type.

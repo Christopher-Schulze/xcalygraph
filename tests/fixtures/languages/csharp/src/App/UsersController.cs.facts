@@ -1,0 +1,33 @@
+package App.Web
+sym 6-29 class UsersController parent=- owner= pub flags=2 sig="[ApiController] public class UsersController" doc=""
+sym 11-14 method UsersController parent=UsersController owner=UsersController pub flags=0 sig="public UsersController(Repo repository)" doc=""
+sym 16-21 method Get parent=UsersController owner=UsersController pub flags=2 sig="[HttpGet] public string Get(int id)" doc=""
+sym 23-28 method Main parent=UsersController owner=UsersController pub flags=2 sig="public static void Main(string[] args)" doc=""
+import 1 "App.Store" names=* alias=- reexport=false
+import 2 "App.Store" names=IRepository alias=Repo reexport=false
+ref 1 Type Store qualifier=App scope=-
+ref 2 Type Store qualifier=App scope=-
+ref 4 Type Web qualifier=App scope=-
+ref 6 Type ApiController qualifier=- scope=UsersController
+ref 9 Type Repo qualifier=- scope=UsersController
+ref 9 Value repository qualifier=- scope=UsersController
+ref 11 Type Repo qualifier=- scope=UsersController
+ref 16 Type HttpGet qualifier=- scope=Get
+ref 19 Call Find qualifier=repository scope=Get args=1
+ref 19 Value id qualifier=- scope=Get
+ref 20 Call Label qualifier=row scope=Get args=0
+ref 25 Call MemoryRepository qualifier=- scope=Main args=0
+ref 25 Call UsersController qualifier=- scope=Main args=1
+ref 26 Call GetEnvironmentVariable qualifier=Environment scope=Main args=1
+ref 27 Call Get qualifier=controller scope=Main args=1
+ref 27 Call WriteLine qualifier=Console scope=Main args=1
+ref 27 Value url qualifier=- scope=Main
+bind 11 "repository": Repo declared scope=UsersController
+bind 16 "": string declared scope=Get
+bind 17 "id": int declared scope=Get
+bind 19 "row": Row declared scope=Get
+bind 23 "": void declared scope=Main
+bind 23 "args": string declared scope=Main
+bind 25 "controller": UsersController declared scope=Main
+fields UsersController repository:Repo
+env 26 APP_URL scope=Main

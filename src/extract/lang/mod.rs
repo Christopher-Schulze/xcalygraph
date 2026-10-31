@@ -2,6 +2,8 @@
 
 #[cfg(feature = "lang-bash")]
 pub mod bash;
+#[cfg(any(feature = "lang-csharp", feature = "lang-vbnet"))]
+pub mod csharp;
 #[cfg(feature = "lang-go")]
 pub mod go;
 #[cfg(feature = "lang-groovy")]
@@ -10,7 +12,9 @@ pub mod groovy;
     feature = "lang-java",
     feature = "lang-kotlin",
     feature = "lang-scala",
-    feature = "lang-groovy"
+    feature = "lang-groovy",
+    feature = "lang-csharp",
+    feature = "lang-vbnet"
 ))]
 pub mod java;
 #[cfg(feature = "lang-kotlin")]
@@ -23,6 +27,8 @@ pub mod rust;
 pub mod scala;
 #[cfg(any(feature = "lang-typescript", feature = "lang-javascript"))]
 pub mod typescript;
+#[cfg(feature = "lang-vbnet")]
+pub mod vbnet;
 
 use std::sync::OnceLock;
 
@@ -64,6 +70,10 @@ const PACKS: &[&Pack] = &[
     &scala::PACK,
     #[cfg(feature = "lang-groovy")]
     &groovy::PACK,
+    #[cfg(feature = "lang-csharp")]
+    &csharp::PACK,
+    #[cfg(feature = "lang-vbnet")]
+    &vbnet::PACK,
 ];
 
 /// One lazily compiled query per pack: a refresh compiles only the languages it extracts.

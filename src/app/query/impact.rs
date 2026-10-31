@@ -408,6 +408,8 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
     let mut rust: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     // (build tool, project directory) -> test classes.
     let mut jvm: BTreeMap<(JvmBuild, String), BTreeSet<String>> = BTreeMap::new();
+    // .NET project directory -> fully qualified test names.
+    let mut dotnet: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut files: BTreeSet<String> = BTreeSet::new();
     let paths: Vec<&str> = index
         .derived
@@ -464,6 +466,17 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
                 match build {
                     Some(key) => {
                         jvm.entry(key).or_default().insert(class.to_owned());
+                    }
+                    None => {
+                        files.insert(path.to_owned());
+                    }
+                }
+            }
+            Some(FileType::CSharp | FileType::VbNet) => {
+                let qualified = index.string(symbol.qualified).to_owned();
+                match nearest_project(&paths, parent(path)) {
+                    Some(project) => {
+                        dotnet.entry(project).or_default().insert(qualified);
                     }
                     None => {
                         files.insert(path.to_owned());
@@ -536,8 +549,53 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
             }
         });
     }
+    for (project, names) in dotnet {
+        let project = if project.is_empty() {
+            String::new()
+        } else {
+            format!(" {project}")
+        };
+        let filter: Vec<String> = names
+            .iter()
+            .map(|name| format!("FullyQualifiedName~{name}"))
+            .collect();
+        lines.push(format!(
+            "dotnet test{project} --filter \"{}\"",
+            filter.join("|")
+        ));
+    }
     lines.extend(files);
     lines
+}
+
+/// Directory of the nearest `.csproj`, `.vbproj` or `.fsproj` at or above `dir`.
+fn nearest_project(paths: &[&str], dir: &str) -> Option<String> {
+    let mut current = dir.to_owned();
+    loop {
+        let prefix = if current.is_empty() {
+            String::new()
+        } else {
+            format!("{current}/")
+        };
+        let start = paths.partition_point(|path| *path < prefix.as_str());
+        let found = paths[start..]
+            .iter()
+            .take_while(|path| path.starts_with(&prefix))
+            .any(|path| {
+                let rest = &path[prefix.len()..];
+                !rest.contains('/')
+                    && [".csproj", ".vbproj", ".fsproj"]
+                        .iter()
+                        .any(|suffix| rest.ends_with(suffix))
+            });
+        if found {
+            return Some(current);
+        }
+        if current.is_empty() {
+            return None;
+        }
+        current = parent(&current).to_owned();
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

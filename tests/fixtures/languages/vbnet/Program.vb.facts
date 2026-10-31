@@ -1,0 +1,19 @@
+package App.Web
+sym 6-18 class Program parent=- owner= pub flags=0 sig="Public Module Program" doc=""
+sym 7-13 method Main parent=Program owner=Program pub flags=2 sig="Public Sub Main()" doc=""
+sym 14-17 method Report parent=Program owner=Program priv flags=0 sig="Private Sub Report(row As Row)" doc=""
+import 1 "App.Store" names=* alias=- reexport=false
+import 2 "App.Store" names=IRepository alias=Repo reexport=false
+ref 8 Call MemoryRepository qualifier=- scope=Main args=0
+ref 8 Type Repo qualifier=- scope=Main
+ref 9 Call Find qualifier=repository scope=Main args=1
+ref 9 Type Row qualifier=- scope=Main
+ref 10 Call GetEnvironmentVariable qualifier=Environment scope=Main args=1
+ref 11 Call Report qualifier=- scope=Main args=1
+ref 11 Value row qualifier=- scope=Main
+ref 14 Type Row qualifier=- scope=Report
+ref 15 Call WriteLine qualifier=Console scope=Report args=1
+bind 8 "repository": Repo declared scope=Main
+bind 9 "row": Row declared scope=Main
+bind 14 "row": Row declared scope=Report
+env 10 APP_URL scope=Main
