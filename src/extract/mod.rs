@@ -4,6 +4,7 @@ mod config;
 pub mod engine;
 #[cfg(test)]
 mod golden;
+mod hcl;
 pub mod json;
 pub mod lang;
 pub mod manifest;
@@ -18,7 +19,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 16;
+const EXTRACTION_VERSION: u32 = 18;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -68,6 +69,9 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
         Some(FileType::C | FileType::Cpp | FileType::ObjC)
     ) {
         lang::c::macro_references(content, &mut facts);
+    }
+    if record.file_type == Some(FileType::Terraform) {
+        hcl::extract(&String::from_utf8_lossy(content), &mut facts);
     }
     // SQL objects of `.sql` files; SQL statements in string literals of code.
     if record.file_type == Some(FileType::Sql) {

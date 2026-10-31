@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 30;
+pub const RESOLVE_VERSION: u32 = 31;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -414,6 +414,7 @@ impl<'a> Index<'a> {
                 self.cfamily_imports(file, facts, &mut imports)
             }
             Some(FileType::Swift) => self.swift_imports(facts, &mut imports),
+            Some(FileType::Terraform) => self.terraform_imports(file, facts, &mut imports),
             Some(
                 FileType::TypeScript
                 | FileType::JavaScript
@@ -424,6 +425,27 @@ impl<'a> Index<'a> {
             _ => {}
         }
         imports
+    }
+
+    /// Local `module` sources: the module directory's files are imported.
+    fn terraform_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        let dir = modules::parent_dir(&self.input.files[file as usize].path);
+        for import in &facts.imports {
+            let target = normalize_path(&if dir.is_empty() {
+                import.spec.clone()
+            } else {
+                format!("{dir}/{}", import.spec)
+            });
+            let Some(module) = self.modules.get(&format!("dir:{target}")) else {
+                continue;
+            };
+            imports.modules.push(module);
+            for (other, &other_module) in self.modules.file_module.iter().enumerate() {
+                if other_module == module && other as u32 != file {
+                    imports.files.push((file, other as u32));
+                }
+            }
+        }
     }
 
     /// `import Module`: a SwiftPM target of the root becomes visible; platform modules are
@@ -1717,6 +1739,12 @@ impl<'a> Index<'a> {
     /// A value reference: a local definition, an imported or same-module symbol, or a qualified
     /// name; never a local variable (those shadow nothing in the symbol table).
     fn resolve_value(&self, file: u32, imports: &Imports, reference: &Ref) -> Outcome {
+        // Terraform addresses (`var.x`, `module.m`, `aws_s3_bucket.logs`) name blocks of the
+        // module directory.
+        if self.file_type(file) == Some(FileType::Terraform) {
+            let found = self.module_symbol(self.module_of(file), &reference.name, None);
+            return pick(&found, Confidence::Exact);
+        }
         let local_binding = reference.qualifier.is_none()
             && self
                 .binding(file, reference.scope, &reference.name, reference.line)
@@ -2596,6 +2624,7 @@ fn has_module_rules(file_type: Option<FileType>) -> bool {
                 | FileType::CSharp
                 | FileType::VbNet
                 | FileType::Swift
+                | FileType::Terraform
         )
     )
 }
