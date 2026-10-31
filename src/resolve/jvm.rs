@@ -85,16 +85,31 @@ impl Index<'_> {
                             .get(&namespace_key(self.file_type(file), package))?;
                         let found =
                             self.module_symbol(module, outer, Some(|kind: SymKind| kind.is_type()));
-                        (!found.is_empty()).then_some(module)
+                        (!found.is_empty()).then_some((module, found))
                     });
                     match nested {
-                        Some(module) if name != "*" => {
+                        Some((module, outers)) if name != "*" => {
                             imports.modules.push(module);
                             if let Some(types) = self.types.get(&(module, name.as_str())) {
                                 self.push_symbols(file, types.clone(), local, imports);
+                            } else {
+                                // Scala `import a.b.Util.{f, g}`: members of the object.
+                                let members: Vec<u32> = outers
+                                    .iter()
+                                    .flat_map(|&outer| self.members_direct(outer, name))
+                                    .collect();
+                                if !members.is_empty() {
+                                    self.push_symbols(file, members, local, imports);
+                                }
                             }
                         }
-                        Some(module) => imports.modules.push(module),
+                        Some((module, outers)) => {
+                            // Scala `import a.b.Util._`: every member of the object or class.
+                            imports.modules.push(module);
+                            for outer in outers {
+                                self.import_members(file, outer, imports);
+                            }
+                        }
                         None => self.jvm_external(&import.spec, name, local, imports),
                     }
                     continue;
@@ -151,6 +166,35 @@ impl Index<'_> {
             .collect();
         if !members.is_empty() {
             self.push_symbols(file, members, local, imports);
+        }
+    }
+
+    /// Binds the direct members of `outer` by their names (a wildcard import of a type).
+    fn import_members(&self, file: u32, outer: u32, imports: &mut Imports) {
+        let owner_file = self.symbols[outer as usize].file as usize;
+        let end = self
+            .base
+            .get(owner_file + 1)
+            .copied()
+            .unwrap_or(self.symbols.len() as u32);
+        let mut members: std::collections::BTreeMap<&str, Vec<u32>> = Default::default();
+        for member in self.base[owner_file]..end {
+            let symbol = &self.symbols[member as usize];
+            if symbol.parent == outer {
+                members
+                    .entry(symbol.name.as_str())
+                    .or_default()
+                    .push(member);
+            }
+        }
+        if !members.is_empty() && owner_file as u32 != file {
+            imports.files.push((file, owner_file as u32));
+        }
+        for (name, symbols) in members {
+            imports
+                .names
+                .entry(name.to_owned())
+                .or_insert(Target::Symbols(symbols));
         }
     }
 

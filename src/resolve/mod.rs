@@ -2790,7 +2790,25 @@ impl<'a> Index<'a> {
             Some(qualifier) => format!("{qualifier}.{}", reference.name),
             None => reference.name.clone(),
         };
-        match self.resolve_type(file, Some(imports), reference.scope, &name) {
+        let resolved = self
+            .resolve_type(file, Some(imports), reference.scope, &name)
+            .map(|(mut types, confidence)| {
+                // Singleton objects (Scala and Kotlin companions) cannot be extended: a
+                // `trait T` and its `object T` leave the trait.
+                let singleton = |&s: &u32| {
+                    let symbol = &self.symbols[s as usize];
+                    symbol
+                        .signature
+                        .split(symbol.name.as_str())
+                        .next()
+                        .is_some_and(|head| head.split_whitespace().any(|word| word == "object"))
+                };
+                if types.len() > 1 && types.iter().any(singleton) && !types.iter().all(singleton) {
+                    types.retain(|s| !singleton(s));
+                }
+                (types, confidence)
+            });
+        match resolved {
             Some((types, confidence)) if types.len() == 1 => {
                 Outcome::Targets(vec![(types[0], confidence)], confidence)
             }

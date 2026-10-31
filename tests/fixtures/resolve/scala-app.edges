@@ -1,3 +1,4 @@
+com.example.app.Keys.key -calls-> com.example.store.Util.normalize @7
 com.example.app.Main.main -calls-> com.example.app.Service @16
 com.example.app.Main.main -calls-> com.example.app.Service.name @18
 com.example.app.Main.main -calls-> com.example.store.MemoryRepository @16
@@ -7,7 +8,10 @@ com.example.app.Service.name -calls-> com.example.app.Service.format @8
 com.example.app.Service.name -calls-> com.example.store.Repository.find @7
 com.example.app.Service.name -calls?-> com.example.store.MemoryRepository.find @7
 com.example.app.Service.name -uses-> com.example.store.Row @7
+com.example.app.Tools.clean -calls-> com.example.store.Util.normalize @7
 com.example.store.BaseRepository.check -uses-> com.example.store.Limits.MaxId @15
+com.example.store.FileType.Dir -implements-> com.example.store.FileType @8
+com.example.store.FileType.File -implements-> com.example.store.FileType @7
 com.example.store.MemoryRepository -implements-> com.example.store.Repository @18
 com.example.store.MemoryRepository -inherits-> com.example.store.BaseRepository @18
 com.example.store.MemoryRepository -uses-> com.example.store.Row @19
@@ -21,5 +25,7 @@ com.example.store.MemoryRepositorySpec -tests-> com.example.store.MemoryReposito
 com.example.store.MemoryRepositorySpec -tests-> com.example.store.MemoryRepository.put @8
 com.example.store.MemoryRepositorySpec -tests-> com.example.store.Row @8
 com.example.store.Repository.find -uses-> com.example.store.Row @5
+file:src/main/scala/com/example/app/Keys.scala -imports-> file:src/main/scala/com/example/store/Util.scala @1
 file:src/main/scala/com/example/app/Service.scala -imports-> file:src/main/scala/com/example/store/Store.scala @1
+file:src/main/scala/com/example/app/Tools.scala -imports-> file:src/main/scala/com/example/store/Util.scala @1
 ext com.example.store org.scalatest 1
