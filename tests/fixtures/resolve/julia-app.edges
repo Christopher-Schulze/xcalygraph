@@ -4,4 +4,10 @@ file:test/runtests.jl -tests-> src/Store.Store.open_store @5
 src/Store.Store.open_store -calls-> src/Store.Store.Repo @13
 src/Store.Store.open_store -calls-> src/util.Util.check @14
 src/Store.Store.open_store -calls-> src/util.Util.normalize @15
+src/util.Util.check -calls?-> src/util.Util.isempty @3
+src/util.Util.empty_box -calls?-> src/util.Util.isempty @21
+src/util.Util.empty_box -uses-> src/util.Util.Box @21
+src/util.Util.first_key -calls-> src/util.Util.check @10
+src/util.Util.isempty -uses-> src/util.Util.Box @19
+src/util.Util.last_key -calls-> src/util.Util.first_key @13
 ext test/runtests Test 1

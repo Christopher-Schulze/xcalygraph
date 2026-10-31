@@ -3,10 +3,19 @@
 (module_definition name: (identifier) @name) @definition.module
 (function_definition (signature (call_expression . (identifier) @name))) @definition.function
 (function_definition (signature (call_expression . (field_expression (identifier) @name .)))) @definition.function
+; `f(x::T) where T` and `f(x)::R` signatures wrap the call.
+(function_definition (signature (where_expression . (call_expression . (identifier) @name)))) @definition.function
+(function_definition (signature (where_expression . (call_expression . (field_expression (identifier) @name .))))) @definition.function
+(function_definition (signature (typed_expression . (call_expression . (identifier) @name)))) @definition.function
+(function_definition (signature (typed_expression . (call_expression . (field_expression (identifier) @name .))))) @definition.function
+(function_definition (signature (where_expression . (typed_expression . (call_expression . (identifier) @name))))) @definition.function
+(function_definition (signature (where_expression . (typed_expression . (call_expression . (field_expression (identifier) @name .)))))) @definition.function
 (macro_definition (signature (call_expression . (identifier) @name))) @definition.macro
 ; Short form `f(x) = ...` and method extensions `Base.show(io, x) = ...`.
 (assignment . (call_expression . (identifier) @name) (operator)) @definition.function
 (assignment . (call_expression . (field_expression (identifier) @name .)) (operator)) @definition.function
+(assignment . (where_expression . (call_expression . (identifier) @name)) (operator)) @definition.function
+(assignment . (where_expression . (call_expression . (field_expression (identifier) @name .))) (operator)) @definition.function
 (struct_definition (type_head (identifier) @name)) @definition.struct
 (struct_definition (type_head (binary_expression . (identifier) @name))) @definition.struct
 (struct_definition (type_head (binary_expression (operator) (identifier) @name)) @reference.inherit)

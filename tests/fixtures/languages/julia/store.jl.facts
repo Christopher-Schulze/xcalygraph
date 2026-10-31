@@ -5,7 +5,7 @@ sym 10-15 fn open_store parent=Store owner= pub flags=0 sig="function open_store
 sym 16-16 fn size parent=Store owner= pub flags=0 sig="size(r::Repo) = length(r.rows)" doc=""
 sym 19-19 const LIMIT parent=- owner= pub flags=0 sig="const LIMIT = 10" doc=""
 sym 20-20 fn show parent=- owner= pub flags=0 sig="Base.show(io::IO, r::Repo) = print(io, r)" doc=""
-sym 24-24 macro m parent=- owner= pub flags=0 sig="macro m(x) end" doc=""
+sym 24-24 macro m parent=- owner= pub flags=0 sig="macro m(x)" doc=""
 sym 25-25 struct Node parent=- owner= pub flags=0 sig="mutable struct Node; next end" doc=""
 import 2 "Base.Threads" names= alias=- reexport=false
 import 3 "..Util" names= alias=- reexport=false

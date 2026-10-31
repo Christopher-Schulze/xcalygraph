@@ -2194,6 +2194,18 @@ impl<'a> Index<'a> {
                         } else {
                             kind
                         };
+                        // Julia `Base.length(q::Queue)` extends a generic function: a call of
+                        // `length` reaches it only for arguments of that type.
+                        let dispatch = self.file_type(file) == Some(FileType::Julia)
+                            && reference.qualifier.is_none()
+                            && self.symbols[target as usize]
+                                .signature
+                                .contains(&format!("Base.{}(", reference.name));
+                        let target_confidence = if dispatch {
+                            Confidence::Inferred
+                        } else {
+                            target_confidence
+                        };
                         resolved.edges.push(Edge {
                             source,
                             target,

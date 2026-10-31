@@ -479,11 +479,20 @@ fn assemble(assembly: Assembly) -> Facts {
             candidate = symbols[candidate].parent? as usize;
         }
     };
+    // A builtin name the file defines as a function names that definition: a Python module
+    // shadowing `open`, Julia `Base.length(q::Queue)` extending `length` for its type.
+    let local_functions: std::collections::HashSet<&str> = symbols
+        .iter()
+        .filter(|symbol| symbol.kind == Some(SymKind::Fn))
+        .map(|symbol| symbol.name.as_str())
+        .collect();
     let mut facts_refs: Vec<Ref> = refs
         .into_iter()
         .filter(|(name_node, raw)| {
             !def_name_nodes.contains(name_node)
-                && !(raw.qualifier.is_none() && (hooks.builtin)(&raw.name))
+                && !(raw.qualifier.is_none()
+                    && (hooks.builtin)(&raw.name)
+                    && !local_functions.contains(raw.name.as_str()))
         })
         .filter_map(|(_, raw)| {
             Some(Ref {
@@ -967,6 +976,17 @@ pub fn result_type(text: &str) -> String {
 /// Definition text up to its body, on one line.
 fn signature(node: Node, source: &[u8]) -> String {
     let start = node.start_byte();
+    let mut walker = node.walk();
+    // Julia `function f(x::Union{A, B}) where T`: braces are type parameters, the `signature`
+    // child ends the header.
+    if matches!(node.kind(), "function_definition" | "macro_definition")
+        && let Some(header) = node
+            .named_children(&mut walker)
+            .find(|child| child.kind() == "signature")
+    {
+        let raw = String::from_utf8_lossy(&source[start..header.end_byte().min(source.len())]);
+        return tidy_brackets(&facts::normalize_space(&raw));
+    }
     let mut walker = node.walk();
     let body = node
         .child_by_field_name("body")
