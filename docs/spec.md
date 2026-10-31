@@ -34,8 +34,8 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | `path` | `FROM TO` | 400 | shortest dependency path (7.6) |
 | `audit` | none | 2000 | dead code, cycles, stale doc references, env drift, unreferenced assets, hidden coupling, hotspots (7.7) |
 | `index` | `[--drop]` | none | explicit build or refresh; `--drop` deletes the index of the root |
-| `install` | `[--link claude]` | none | install the embedded skill (section 10) |
-| `update` | `[--check]` | none | self-update the binary, then `install` |
+| `install` | `[--no-link] [--skill-only]` | none | install the running binary, the embedded skill and the Claude Code link (section 10) |
+| `update` | `[--check]` | none | self-update the binary, then refresh a stale skill |
 | `version` | none | none | binary, index format and installed skill versions |
 | `help` | `[COMMAND]` | none | syntax reference |
 
@@ -357,10 +357,11 @@ Location: `<index-dir>/<root basename>-<XXH3-64 hex of the canonical root path>/
 | source | `skills/xcalygraph/SKILL.md`, embedded in the binary |
 | content | purpose; when to use it and when `rg` or direct reads are better; command table; output markers; exit codes; rules (verify against source, `--read-only` in read-only tasks, budget) |
 | size | max 1500 tokens |
-| install target | `~/.agents/skills/xcalygraph/SKILL.md` plus `.version` stamp, written atomically |
-| `--link claude` | creates the symlink `~/.claude/skills/xcalygraph` -> install target if absent |
+| install | running binary -> `~/.local/bin/xcalygraph` (`$XCALYGRAPH_INSTALL_DIR`) by temp file plus rename unless it runs from there; skill -> `~/.agents/skills/xcalygraph/SKILL.md` plus `.version` stamp, written atomically; symlink `~/.claude/skills/xcalygraph` -> skill directory when `~/.claude` exists and the link is absent (`--no-link` skips it; foreign entries are reported, never replaced); `--skill-only` skips the binary; PATH problems (directory missing from PATH, another binary first) reported, shell files never edited |
 | update source | GitHub Releases of the project repository; assets `xcalygraph-<version>-<os>-<arch>.tar.gz` and `SHA256SUMS` |
-| update flow | latest release metadata -> download asset -> verify SHA-256 -> atomic replace of the running binary -> `install` with the new binary |
+| update flow | latest release metadata -> download asset -> verify SHA-256 -> smoke test (`version` reports the release) -> atomic replace of the running binary -> `install --skill-only` with the new binary; when already current, the skill is rewritten if its stamp or content differs |
+| progress | phases on stderr when it is a terminal (spinner, download bar with bytes, speed and remaining time, one line per finished phase); off a terminal only the result lines on stdout |
+| installer | `install.sh` attached to every release (`releases/latest/download/install.sh`): latest or `--version X.Y.Z`, SHA-256 check, smoke test, then the binary installs itself, the skill and the link; `--no-skill` installs the binary only |
 | version mismatch | binary vs installed skill, one line from `version`, `install`, `update`; query commands stay silent |
 | platforms | darwin-arm64, darwin-amd64, linux-arm64, linux-amd64 |
 | binary location | `~/.local/bin/xcalygraph` |

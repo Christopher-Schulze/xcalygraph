@@ -116,7 +116,7 @@ impl CommandName {
             Self::Path => "path FROM TO",
             Self::Audit => "audit",
             Self::Index => "index [--drop]",
-            Self::Install => "install [--link claude]",
+            Self::Install => "install [--no-link] [--skill-only]",
             Self::Update => "update [--check]",
             Self::Version => "version",
             Self::Help => "help [COMMAND]",
@@ -137,8 +137,10 @@ impl CommandName {
                 "dead code, unused exports, cycles, stale doc references, env drift, hidden coupling, hotspots"
             }
             Self::Index => "build or refresh the index explicitly; --drop deletes it",
-            Self::Install => "install the embedded agent skill to ~/.agents/skills/xcalygraph",
-            Self::Update => "self-update from GitHub Releases, then install the skill",
+            Self::Install => {
+                "install the binary to ~/.local/bin and the skill to ~/.agents/skills/xcalygraph"
+            }
+            Self::Update => "self-update from GitHub Releases and refresh a stale skill",
             Self::Version => {
                 "binary, index format and installed skill versions; also -V, --version"
             }
@@ -169,7 +171,7 @@ impl CommandName {
             Self::Show => &SHOW_FLAGS,
             Self::Impact => &IMPACT_FLAGS,
             Self::Index => &[Flag::Root, Flag::IndexDir, Flag::Drop],
-            Self::Install => &[Flag::Link],
+            Self::Install => &[Flag::NoLink, Flag::SkillOnly],
             Self::Update => &[Flag::Check],
             Self::Version | Self::Help => &[],
         }
@@ -177,7 +179,7 @@ impl CommandName {
 }
 
 /// Every flag, in help order.
-const FLAGS: [Flag; 16] = [
+const FLAGS: [Flag; 17] = [
     Flag::Root,
     Flag::Budget,
     Flag::Json,
@@ -192,7 +194,8 @@ const FLAGS: [Flag; 16] = [
     Flag::All,
     Flag::Diff,
     Flag::Drop,
-    Flag::Link,
+    Flag::NoLink,
+    Flag::SkillOnly,
     Flag::Check,
 ];
 
@@ -212,7 +215,8 @@ pub enum Flag {
     All,
     Diff,
     Drop,
-    Link,
+    NoLink,
+    SkillOnly,
     Check,
 }
 
@@ -233,7 +237,8 @@ impl Flag {
             Self::All => "--all",
             Self::Diff => "--diff",
             Self::Drop => "--drop",
-            Self::Link => "--link",
+            Self::NoLink => "--no-link",
+            Self::SkillOnly => "--skill-only",
             Self::Check => "--check",
         }
     }
@@ -256,7 +261,6 @@ impl Flag {
             Self::Budget | Self::Depth => Some("N"),
             Self::Path => Some("GLOB"),
             Self::Lang | Self::Kind => Some("LIST"),
-            Self::Link => Some("HOST"),
             _ => None,
         }
     }
@@ -277,7 +281,8 @@ impl Flag {
             Self::All => "lift the per-section caps of show",
             Self::Diff => "impact of git changes against REV (default HEAD, work tree included)",
             Self::Drop => "delete the index of the root",
-            Self::Link => "also link the skill for HOST (claude: ~/.claude/skills/xcalygraph)",
+            Self::NoLink => "skip the Claude Code link (made when ~/.claude exists)",
+            Self::SkillOnly => "install the skill only, not the binary",
             Self::Check => "report an available update without installing it",
         }
     }
@@ -317,7 +322,8 @@ pub struct Options {
     pub all: bool,
     pub diff: bool,
     pub drop: bool,
-    pub link: Option<String>,
+    pub no_link: bool,
+    pub skill_only: bool,
     pub check: bool,
 }
 
@@ -490,12 +496,8 @@ fn apply(options: &mut Options, flag: Flag, value: Option<String>) -> Result<(),
         Flag::All => options.all = true,
         Flag::Diff => options.diff = true,
         Flag::Check => options.check = true,
-        Flag::Link => {
-            if value != "claude" {
-                return Err(invalid());
-            }
-            options.link = Some(value);
-        }
+        Flag::NoLink => options.no_link = true,
+        Flag::SkillOnly => options.skill_only = true,
         Flag::Path => options.paths.push(value),
         Flag::Lang => {
             for id in value.split(',').filter(|id| !id.is_empty()) {

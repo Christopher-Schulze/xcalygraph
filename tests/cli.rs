@@ -192,7 +192,9 @@ fn install_writes_the_skill_and_version_reports_mismatches() -> TestResult {
     let dir = TempDir::new("install")?;
     let home = dir.0.join("home");
     let with_home = |args: &[&str]| Command::new(BINARY).args(args).env("HOME", &home).output();
-    let installed = with_home(&["install", "--link", "claude"])?;
+    // The Claude Code link appears without a flag once `~/.claude` exists.
+    fs::create_dir_all(home.join(".claude"))?;
+    let installed = with_home(&["install"])?;
     assert_eq!(
         installed.status.code(),
         Some(0),
@@ -201,9 +203,13 @@ fn install_writes_the_skill_and_version_reports_mismatches() -> TestResult {
     );
     let text = String::from_utf8(installed.stdout)?;
     assert!(
-        text.contains("written") && text.contains("created"),
+        text.contains("binary ") && text.contains("written") && text.contains("created"),
         "{text}"
     );
+    // The binary lands in ~/.local/bin and runs from there.
+    let copied = home.join(".local/bin/xcalygraph");
+    let copied_version = Command::new(&copied).arg("version").output()?;
+    assert!(String::from_utf8(copied_version.stdout)?.starts_with("xcalygraph "));
     let skill = fs::read_to_string(home.join(".agents/skills/xcalygraph/SKILL.md"))?;
     assert!(skill.starts_with("---\nname: xcalygraph\n"));
     assert!(
@@ -221,6 +227,14 @@ fn install_writes_the_skill_and_version_reports_mismatches() -> TestResult {
     assert!(stale.contains("! installed skill 0.0.1"), "{stale}");
     let bad = with_home(&["install", "--link", "vim"])?;
     assert_eq!(bad.status.code(), Some(2));
+    let skill_only =
+        String::from_utf8(with_home(&["install", "--skill-only", "--no-link"])?.stdout)?;
+    assert!(
+        skill_only.starts_with("skill ")
+            && !skill_only.contains("binary")
+            && !skill_only.contains("link"),
+        "{skill_only}"
+    );
     Ok(())
 }
 
@@ -243,7 +257,25 @@ fn update_check_compares_with_the_latest_release() -> TestResult {
         String::from_utf8_lossy(&output.stderr)
     );
     let text = String::from_utf8(output.stdout)?;
-    assert!(text.contains("is current (latest release 0.0.1)"), "{text}");
+    assert!(text.contains("is current"), "{text}");
+    // Without --check an up-to-date binary still refreshes a stale skill.
+    let skill = dir.0.join("home/.agents/skills/xcalygraph");
+    fs::create_dir_all(&skill)?;
+    fs::write(skill.join(".version"), "0.0.1\n")?;
+    let refreshed = Command::new(BINARY)
+        .arg("update")
+        .env("HOME", dir.0.join("home"))
+        .env(
+            "XCALYGRAPH_UPDATE_URL",
+            format!("file://{}", dir.0.join("latest.json").display()),
+        )
+        .output()?;
+    let refreshed_text = String::from_utf8(refreshed.stdout)?;
+    assert!(refreshed_text.contains("written"), "{refreshed_text}");
+    assert_eq!(
+        fs::read_to_string(skill.join(".version"))?.trim(),
+        env!("CARGO_PKG_VERSION")
+    );
     dir.write("latest.json", "{\"tag_name\": \"v99.0.0\", \"assets\": []}")?;
     let newer = Command::new(BINARY)
         .args(["update", "--check"])

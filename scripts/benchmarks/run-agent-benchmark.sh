@@ -52,7 +52,7 @@ prepare_home() {
   mkdir -p "${home}/.claude"
   case "${arm}" in
     graphify) HOME="${home}" graphify install --platform claude >/dev/null ;;
-    xcalygraph) HOME="${home}" "${BINARY}" install --link claude >/dev/null ;;
+    xcalygraph) HOME="${home}" "${BINARY}" install --skill-only >/dev/null ;;
   esac
   echo "${home}"
 }

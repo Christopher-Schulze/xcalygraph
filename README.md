@@ -5,7 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-stable-orange.svg)
 ![Languages](https://img.shields.io/badge/languages-~60-green.svg)
-![Status](https://img.shields.io/badge/status-pre--release-lightgrey.svg)
+![Release](https://img.shields.io/github/v/release/Christopher-Schulze/xcalygraph)
+
+[Install](#install) · [What an agent sees](#what-an-agent-sees) · [Commands](#commands) · [Benchmarks](#benchmarks) · [Languages](#languages) · [Install and update](#install-and-update) · [How it works](#how-it-works) · [Documentation](docs/documentation.md) · [Releases](https://github.com/Christopher-Schulze/xcalygraph/releases)
 
 Coding agents spend most of their tokens finding things: grepping, opening whole files, and following calls by hand. xcalygraph does that work up front and hands the agent exactly the facts it needs, each with `path:line` so it can verify instead of trust.
 
@@ -17,17 +19,22 @@ Coding agents spend most of their tokens finding things: grepping, opening whole
 
 <sub>Measured on three public corpora; details and method in [Benchmarks](#benchmarks).</sub>
 
-## Contents
+## Install
 
-- [Why](#why)
-- [Quick start](#quick-start)
-- [What an agent sees](#what-an-agent-sees)
-- [Commands](#commands)
-- [Benchmarks](#benchmarks)
-- [Languages](#languages)
-- [How it works](#how-it-works)
-- [Status](#status)
-- [License](#license)
+**macOS and Linux**
+
+```bash
+curl -fsSL https://github.com/Christopher-Schulze/xcalygraph/releases/latest/download/install.sh | bash
+```
+
+**Build from source**
+
+```bash
+git clone https://github.com/Christopher-Schulze/xcalygraph && cd xcalygraph
+cargo build --release && target/release/xcalygraph install
+```
+
+Both install the binary to `~/.local/bin`, the agent skill to `~/.agents/skills/xcalygraph/`, and link it for Claude Code when `~/.claude` exists. Your agent then uses xcalygraph on its own; the first query builds the index. Details: [Install and update](#install-and-update).
 
 ## Why
 
@@ -39,21 +46,7 @@ Coding agents spend most of their tokens finding things: grepping, opening whole
 - **Deterministic**: the same tree always gives byte-identical output.
 - **Self-contained**: one binary with the agent skill embedded. No LLM calls, no interpreter, no service, no network except `update`.
 
-## Quick start
-
-Build from source with the pinned stable toolchain (`rust-toolchain.toml`):
-
-```sh
-git clone https://github.com/Christopher-Schulze/xcalygraph
-cd xcalygraph
-cargo build --release
-install -m 755 target/release/xcalygraph ~/.local/bin/xcalygraph
-xcalygraph install --link claude
-```
-
-`install` writes the embedded skill to `~/.agents/skills/xcalygraph/`. `--link claude` links it into `~/.claude/skills/` for Claude Code; any other agent host can read the same directory. From then on the agent uses xcalygraph on its own. No index command is needed, because the first query builds the index.
-
-Try it yourself in any repository:
+## Try it
 
 ```sh
 xcalygraph map                      # layout, entrypoints, tasks, hubs
@@ -203,6 +196,54 @@ About 60 languages and formats, each resolved by its own module rules rather tha
 
 </details>
 
+## Install and update
+
+### Release installer
+
+The [one-liner](#install) fetches `install.sh` from the latest [release](https://github.com/Christopher-Schulze/xcalygraph/releases), never from `main`. The installer:
+
+- picks the archive for your platform (macOS and Linux, arm64 and x86-64);
+- verifies it against the release's `SHA256SUMS`;
+- smoke-tests the new binary before it replaces an existing one;
+- lets the binary install itself, the skill and the Claude Code link;
+- reports a missing PATH entry with the exact `export` line instead of editing your shell profile.
+
+```bash
+# a specific version, or the binary without the skill
+curl -fsSL https://github.com/Christopher-Schulze/xcalygraph/releases/latest/download/install.sh | bash -s -- --version 0.1.0
+curl -fsSL https://github.com/Christopher-Schulze/xcalygraph/releases/latest/download/install.sh | bash -s -- --no-skill
+```
+
+`XCALYGRAPH_INSTALL_DIR` changes the target directory (default `~/.local/bin`).
+
+### What `xcalygraph install` does
+
+```bash
+xcalygraph install               # binary, skill, Claude Code link
+xcalygraph install --skill-only  # skill (and link) only
+xcalygraph install --no-link     # no Claude Code link
+```
+
+- **Binary**: copies the running executable to `~/.local/bin/xcalygraph` unless it already runs from there.
+- **Skill**: writes the embedded skill to `~/.agents/skills/xcalygraph/SKILL.md`, the shared location agent hosts read. The skill always matches the binary's version.
+- **Claude Code**: when `~/.claude` exists, links `~/.claude/skills/xcalygraph` to that directory. A foreign file or link there is reported and never replaced.
+
+### Update
+
+```bash
+xcalygraph update           # newest release, then a fresh skill
+xcalygraph update --check   # only report whether one is available
+```
+
+`update` downloads the release for your platform, verifies the checksum, smoke-tests the new binary, replaces the old one atomically and installs the matching skill. When the binary is already current, it still rewrites a skill that is out of date. On a terminal every step shows live progress (download bar with speed and remaining time); in scripts and agent runs only the result lines appear.
+
+### Uninstall
+
+```bash
+rm ~/.local/bin/xcalygraph
+rm -r ~/.agents/skills/xcalygraph ~/.claude/skills/xcalygraph ~/.cache/xcalygraph
+```
+
 ## How it works
 
 ```
@@ -220,7 +261,7 @@ xcalygraph is a clean-room Rust rewrite of a selected subset of [Graphify](https
 
 ## Status
 
-Pre-release (0.1.0). Commands, output format and index format may still change until the first tagged release. Once GitHub Releases are published, `scripts/utils/install.sh` installs a verified prebuilt binary, and `xcalygraph update` replaces the binary and refreshes the skill in one step.
+Early release (0.1.0). Commands, output format and index format may still change between minor versions; `update` keeps binary and skill in step, and indexes rebuild themselves when their format changes.
 
 ## License
 

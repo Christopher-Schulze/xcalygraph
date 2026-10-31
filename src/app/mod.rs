@@ -2,6 +2,7 @@
 
 pub mod error;
 pub mod install;
+pub mod progress;
 pub mod query;
 pub mod refresh;
 pub mod update;
@@ -12,6 +13,22 @@ use error::AppError;
 use refresh::Mode;
 use workspace::Workspace;
 
+/// Result lines of `install` and `update`: on a live terminal the progress lines already showed
+/// every step, so only `!` notices (PATH remediation, conflicts) and the update summary remain.
+fn result_lines(progress: &progress::Progress, out: String) -> String {
+    if !progress.is_live() {
+        return out;
+    }
+    out.lines()
+        .filter(|line| {
+            line.starts_with('!')
+                || line.starts_with("updated ")
+                || line.starts_with("update available")
+        })
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
 /// Runs a command that needs the index and returns its stdout text.
 pub fn run(invocation: &Invocation) -> Result<String, AppError> {
     let options = &invocation.options;
@@ -19,14 +36,18 @@ pub fn run(invocation: &Invocation) -> Result<String, AppError> {
         CommandName::Version => return Ok(version()),
         CommandName::Install => {
             let home = install::home()?;
-            return install::install(&home, options.link.is_some());
+            let mut progress = progress::Progress::stderr();
+            let options = install::Options {
+                binary: !options.skill_only,
+                link: !options.no_link,
+            };
+            let out = install::install(&home, options, &mut progress)?;
+            return Ok(result_lines(&progress, out));
         }
         CommandName::Update => {
-            let mut out = update::update(options.check)?;
-            if let Ok(home) = install::home() {
-                out.push_str(&install::mismatch_line(&home));
-            }
-            return Ok(out);
+            let mut progress = progress::Progress::stderr();
+            let out = update::update(options.check, &mut progress)?;
+            return Ok(result_lines(&progress, out));
         }
         _ => {}
     }

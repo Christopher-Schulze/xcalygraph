@@ -1,52 +1,94 @@
 #!/usr/bin/env bash
-# Install the latest xcalygraph release to ~/.local/bin and install its agent skill.
-# Usage: curl -fsSL https://raw.githubusercontent.com/Christopher-Schulze/xcalygraph/main/scripts/utils/install.sh | bash
-#   Verifies the archive against SHA256SUMS. Links the skill for Claude Code when ~/.claude exists.
+# Install xcalygraph from a GitHub release: verified binary in ~/.local/bin, agent skill in
+# ~/.agents/skills/xcalygraph, linked for Claude Code when ~/.claude exists.
+# Usage (attached to every release, never fetched from main):
+#   curl -fsSL https://github.com/Christopher-Schulze/xcalygraph/releases/latest/download/install.sh | bash
+#   bash install.sh [--version X.Y.Z] [--no-skill]
+#   XCALYGRAPH_INSTALL_DIR=DIR   install directory (default ~/.local/bin)
+#   XCALYGRAPH_RELEASE_BASE=URL  release download base (default GitHub; file:// for tests)
+# Verifies the archive against SHA256SUMS and smoke-tests the binary before it replaces an
+# existing one. Shell profiles are never edited: a missing PATH entry is reported.
 # Requires: curl, tar, and shasum or sha256sum.
 set -euo pipefail
 
 readonly REPOSITORY="Christopher-Schulze/xcalygraph"
-readonly BIN_DIR="${HOME}/.local/bin"
+readonly RELEASE_BASE="${XCALYGRAPH_RELEASE_BASE:-https://github.com/${REPOSITORY}/releases/download}"
+readonly BIN_DIR="${XCALYGRAPH_INSTALL_DIR:-${HOME}/.local/bin}"
+
+say() { printf '>> %s\n' "$1" >&2; }
+die() { printf 'install.sh: %s\n' "$1" >&2; exit 1; }
+
+version=""
+skill=1
+while (( $# > 0 )); do
+  case "$1" in
+    --version) [[ $# -ge 2 ]] || die "--version needs a value"; version="${2#v}"; shift 2 ;;
+    --version=*) version="${1#--version=}"; version="${version#v}"; shift ;;
+    --no-skill) skill=0; shift ;;
+    -h | --help) sed -n '2,12p' "$0" 2>/dev/null || true; exit 0 ;;
+    *) die "unknown argument $1 (use --version X.Y.Z or --no-skill)" ;;
+  esac
+done
 
 case "$(uname -s)" in
   Darwin) os=darwin ;;
   Linux) os=linux ;;
-  *) echo "install.sh: unsupported system $(uname -s)" >&2; exit 1 ;;
+  *) die "unsupported system $(uname -s)" ;;
 esac
 case "$(uname -m)" in
   arm64 | aarch64) arch=arm64 ;;
   x86_64 | amd64) arch=amd64 ;;
-  *) echo "install.sh: unsupported architecture $(uname -m)" >&2; exit 1 ;;
+  *) die "unsupported architecture $(uname -m)" ;;
 esac
 
-tag="$(curl -fsSL "https://api.github.com/repos/${REPOSITORY}/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)"
-[[ -n "${tag}" ]] || { echo "install.sh: no release found" >&2; exit 1; }
-version="${tag#v}"
-name="xcalygraph-${version}-${os}-${arch}"
-base="https://github.com/${REPOSITORY}/releases/download/${tag}"
+if [[ -z "${version}" ]]; then
+  say "resolving the latest release"
+  version="$(curl -fsSL "https://api.github.com/repos/${REPOSITORY}/releases/latest" \
+    | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -n 1)"
+  [[ -n "${version}" ]] || die "no published release found"
+fi
+[[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || die "invalid version ${version}"
 
+name="xcalygraph-${version}-${os}-${arch}"
+base="${RELEASE_BASE}/v${version}"
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
-curl -fsSL -o "${work}/${name}.tar.gz" "${base}/${name}.tar.gz"
-curl -fsSL -o "${work}/SHA256SUMS" "${base}/SHA256SUMS"
+
+say "downloading ${name}.tar.gz"
+curl -fSL --progress-bar -o "${work}/${name}.tar.gz" "${base}/${name}.tar.gz" \
+  || die "download failed: ${base}/${name}.tar.gz"
+curl -fsSL -o "${work}/SHA256SUMS" "${base}/SHA256SUMS" || die "download failed: ${base}/SHA256SUMS"
+
+say "verifying SHA-256"
 expected="$(awk -v file="${name}.tar.gz" '$2 == file || $2 == "*" file { print $1 }' "${work}/SHA256SUMS")"
 if command -v sha256sum >/dev/null; then
   actual="$(sha256sum "${work}/${name}.tar.gz" | awk '{ print $1 }')"
 else
   actual="$(shasum -a 256 "${work}/${name}.tar.gz" | awk '{ print $1 }')"
 fi
-[[ -n "${expected}" && "${expected}" == "${actual}" ]] || { echo "install.sh: checksum mismatch for ${name}.tar.gz" >&2; exit 1; }
+[[ -n "${expected}" ]] || die "SHA256SUMS lists no ${name}.tar.gz"
+[[ "${expected}" == "${actual}" ]] || die "checksum mismatch for ${name}.tar.gz"
 
 tar -C "${work}" -xzf "${work}/${name}.tar.gz"
-mkdir -p "${BIN_DIR}"
-install -m 0755 "${work}/${name}/xcalygraph" "${BIN_DIR}/xcalygraph.new"
-mv "${BIN_DIR}/xcalygraph.new" "${BIN_DIR}/xcalygraph"
-if [[ -d "${HOME}/.claude" ]]; then
-  "${BIN_DIR}/xcalygraph" install --link claude
+candidate="${work}/${name}/xcalygraph"
+[[ -x "${candidate}" ]] || die "archive contains no xcalygraph binary"
+
+say "smoke test"
+reported="$("${candidate}" version 2>/dev/null | head -n 1 || true)"
+[[ "${reported}" == "xcalygraph ${version}" ]] \
+  || die "downloaded binary failed its smoke test (reported '${reported}'); nothing was replaced"
+
+if (( skill )); then
+  # The binary installs itself, the skill and the Claude Code link, and reports PATH problems.
+  XCALYGRAPH_INSTALL_DIR="${BIN_DIR}" "${candidate}" install
 else
-  "${BIN_DIR}/xcalygraph" install
+  mkdir -p "${BIN_DIR}"
+  install -m 0755 "${candidate}" "${BIN_DIR}/.xcalygraph.new"
+  mv "${BIN_DIR}/.xcalygraph.new" "${BIN_DIR}/xcalygraph"
+  echo "binary ${BIN_DIR}/xcalygraph installed"
+  case ":${PATH}:" in
+    *":${BIN_DIR}:"*) ;;
+    *) echo "! ${BIN_DIR} is not on PATH; add: export PATH=\"${BIN_DIR}:\$PATH\"" ;;
+  esac
 fi
-case ":${PATH}:" in
-  *":${BIN_DIR}:"*) ;;
-  *) echo "add ${BIN_DIR} to PATH to run xcalygraph" ;;
-esac
+say "xcalygraph ${version} installed"

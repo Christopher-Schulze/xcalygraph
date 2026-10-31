@@ -1,5 +1,5 @@
 # Builds release archives for every platform of docs/spec.md section 10 on a version tag and
-# publishes them with SHA256SUMS to the GitHub release of that tag.
+# publishes them with SHA256SUMS and the installer script to the GitHub release of that tag.
 name: release
 
 on:
@@ -40,12 +40,15 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      - name: Checksums
-        run: cd dist && sha256sum *.tar.gz > SHA256SUMS
+      - name: Checksums and installer
+        run: |
+          cd dist && sha256sum *.tar.gz > SHA256SUMS
+          cp ../scripts/utils/install.sh install.sh
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
