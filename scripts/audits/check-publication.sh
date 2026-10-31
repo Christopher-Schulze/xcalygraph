@@ -37,9 +37,11 @@ if (( ${#commits[@]} == 0 )); then
 fi
 
 patterns="$(mktemp)"
-trap 'rm -f "${patterns}"' EXIT
+home_patterns="$(mktemp)"
+trap 'rm -f "${patterns}" "${home_patterns}"' EXIT
 grep -Ev '^[[:space:]]*(#|$)' "${PATTERN_FILE}" > "${patterns}" || true
-printf '%s\n' "${HOME_PATH_PATTERNS[@]}" >> "${patterns}"
+# Home paths match case-sensitively: `/users/` in `app/api/users/route.ts` is no home path.
+printf '%s\n' "${HOME_PATH_PATTERNS[@]}" > "${home_patterns}"
 
 findings=0
 for commit in "${commits[@]}"; do
@@ -48,7 +50,8 @@ for commit in "${commits[@]}"; do
     echo "${short}: local-only file tracked" >&2
     findings=1
   fi
-  if git grep -n -I -i -E -f "${patterns}" "${commit}" -- .; then
+  if git grep -n -I -i -E -f "${patterns}" "${commit}" -- . \
+    || git grep -n -I -E -f "${home_patterns}" "${commit}" -- .; then
     echo "${short}: private pattern in tree" >&2
     findings=1
   fi
@@ -56,7 +59,8 @@ for commit in "${commits[@]}"; do
     echo "${short}: co-author trailer in commit message" >&2
     findings=1
   fi
-  if git log -1 --format=%B "${commit}" | grep -n -i -E -f "${patterns}"; then
+  message="$(git log -1 --format=%B "${commit}")"
+  if grep -n -i -E -f "${patterns}" <<<"${message}" || grep -n -E -f "${home_patterns}" <<<"${message}"; then
     echo "${short}: private pattern in commit message" >&2
     findings=1
   fi
