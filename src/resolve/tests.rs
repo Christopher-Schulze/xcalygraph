@@ -193,21 +193,7 @@ fn sample_edges() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(50);
-    let changes = crate::infra::scan::scan(&root, &[], &[], i64::MAX);
-    let facts: Vec<Option<crate::domain::facts::Facts>> = changes
-        .records
-        .iter()
-        .map(|record| {
-            record.role.is_extracted().then(|| {
-                let content = fs::read(root.join(&record.path)).unwrap_or_default();
-                extract(record, &content)
-            })
-        })
-        .collect();
-    let graph = build(&Input {
-        files: &changes.records,
-        facts: &facts,
-    });
+    let graph = corpus_graph(&root);
     let symbols = graph.symbols.len() as u32;
     let location = |node: u32| -> (String, u32, String) {
         if node < symbols {
@@ -258,6 +244,68 @@ fn sample_edges() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     }
+    Ok(())
+}
+
+/// Scans, extracts and resolves a whole root, as a full index build does.
+fn corpus_graph(root: &Path) -> Graph {
+    let changes = crate::infra::scan::scan(root, &[], &[], i64::MAX);
+    let facts: Vec<Option<crate::domain::facts::Facts>> = changes
+        .records
+        .iter()
+        .map(|record| {
+            record.role.is_extracted().then(|| {
+                let content = fs::read(root.join(&record.path)).unwrap_or_default();
+                extract(record, &content)
+            })
+        })
+        .collect();
+    build(&Input {
+        files: &changes.records,
+        facts: &facts,
+    })
+}
+
+/// Depth comparison input (`scripts/benchmarks/compare-depth.sh`): writes every edge of the
+/// root in `XCALYGRAPH_DUMP_ROOT` to `XCALYGRAPH_DUMP_FILE` as TSV lines `kind confidence
+/// source_path line target_path target_line target_name`. Development only.
+#[test]
+#[ignore = "development tool; needs XCALYGRAPH_DUMP_ROOT and XCALYGRAPH_DUMP_FILE"]
+fn dump_edges() -> Result<(), Box<dyn std::error::Error>> {
+    let (Some(root), Some(file)) = (
+        std::env::var_os("XCALYGRAPH_DUMP_ROOT"),
+        std::env::var_os("XCALYGRAPH_DUMP_FILE"),
+    ) else {
+        return Ok(());
+    };
+    let graph = corpus_graph(&PathBuf::from(root).canonicalize()?);
+    let symbols = graph.symbols.len() as u32;
+    let location = |node: u32| -> (&str, u32, &str) {
+        if node < symbols {
+            let symbol = &graph.symbols[node as usize];
+            (
+                &graph.files[symbol.file as usize].path,
+                symbol.line,
+                &symbol.name,
+            )
+        } else {
+            let path = &graph.files[(node - symbols) as usize].path;
+            (path, 1, path)
+        }
+    };
+    let mut out = String::new();
+    for edge in &graph.edges {
+        let (source_path, _, _) = location(edge.source);
+        let (target_path, target_line, target_name) = location(edge.target);
+        writeln!(
+            out,
+            "{}\t{}\t{source_path}\t{}\t{target_path}\t{target_line}\t{target_name}",
+            edge.kind.id(),
+            edge.confidence as u8,
+            edge.line
+        )?;
+    }
+    fs::write(file, out)?;
     Ok(())
 }
 
