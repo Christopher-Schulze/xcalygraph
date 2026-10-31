@@ -4,6 +4,9 @@
 use super::{Imports, Index, Target};
 use crate::domain::facts::{Facts, SymKind};
 
+/// Modules a re-exported name is followed through (`pkg/__init__` -> `pkg/api` -> `pkg/impl`).
+const MAX_REEXPORT_DEPTH: usize = 3;
+
 impl Index<'_> {
     pub(super) fn python_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
         self.python_module_imports(file, facts, imports);
@@ -75,11 +78,7 @@ impl Index<'_> {
                 let target = match (self.python_module(&child), base) {
                     (Some(module), _) => Some(Target::Module(module)),
                     (None, Some(module)) => {
-                        let found: Vec<u32> = self
-                            .module_symbol(module, name, None)
-                            .into_iter()
-                            .filter(|&symbol| self.symbols[symbol as usize].kind != SymKind::Mod)
-                            .collect();
+                        let found = self.python_exported(module, name, 0);
                         imports.modules.push(module);
                         (!found.is_empty()).then_some(Target::Symbols(found))
                     }
@@ -103,6 +102,51 @@ impl Index<'_> {
                 }
             }
         }
+    }
+
+    /// Symbols a module offers as `name`: its own definitions, else names it imports itself
+    /// (`__init__.py` and facade re-exports such as `from .install import claude_install`),
+    /// followed through at most a few modules.
+    fn python_exported(&self, module: u32, name: &str, depth: usize) -> Vec<u32> {
+        let own: Vec<u32> = self
+            .module_symbol(module, name, None)
+            .into_iter()
+            .filter(|&symbol| self.symbols[symbol as usize].kind != SymKind::Mod)
+            .collect();
+        if !own.is_empty() || depth >= MAX_REEXPORT_DEPTH {
+            return own;
+        }
+        let current = self.modules.modules[module as usize].name.clone();
+        for (file, &file_module) in self.modules.file_module.iter().enumerate() {
+            if file_module != module {
+                continue;
+            }
+            let Some(facts) = self.input.facts[file].as_ref() else {
+                continue;
+            };
+            let is_package = self.input.files[file].path.ends_with("__init__.py");
+            for import in &facts.imports {
+                let Some(original) = import
+                    .names
+                    .iter()
+                    .find(|imported| import.alias.as_deref().unwrap_or(imported.as_str()) == name)
+                else {
+                    continue;
+                };
+                let Some(source) = absolute(&import.spec, &current, is_package)
+                    .and_then(|path| self.python_module(&path))
+                else {
+                    continue;
+                };
+                if source != module {
+                    let found = self.python_exported(source, original, depth + 1);
+                    if !found.is_empty() {
+                        return found;
+                    }
+                }
+            }
+        }
+        Vec::new()
     }
 
     fn python_module(&self, dotted: &str) -> Option<u32> {
