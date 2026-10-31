@@ -8,7 +8,8 @@
 #   SAMPLES: misses listed per relation (default 15).
 #   Works on a copy of the tracked files below .cache/depth/; Graphify's graph is reused while
 #   the copy exists. Edges are matched by source file, source line (+-1) and target file;
-#   imports by the file pair; a C-family header and its implementation count as one target.
+#   imports by the file pair; a C-family header and its implementation count as one target; an
+#   edge of the same family from the same source file to a target of the same name also counts.
 # Requires: graphify, python3, rsync; the release test build is made here.
 set -euo pipefail
 
@@ -81,15 +82,25 @@ def unit(path):
     stem, dot, extension = path.rpartition(".")
     return stem if dot and extension in {"h", "hh", "hpp", "hxx", "c", "cc", "cpp", "cxx", "m", "mm"} else path
 
+def plain(label):
+    # Graphify labels: `.write()`, `Run()`, `-init`, `+manager`.
+    return (label or "").strip().lstrip(".-+").removesuffix("()").lower()
+
 ours = collections.defaultdict(set)
+ours_names = set()
 ours_by_kind = collections.Counter()
 with open(ours_path) as handle:
     for row in handle:
-        kind, _, source, line, target, _, _ = row.rstrip("\n").split("\t")
+        kind, _, source, line, target, _, name = row.rstrip("\n").split("\t")
         ours[(source, unit(target))].add((kind, int(line)))
+        ours_names.add((source, kind, name.lower()))
         ours_by_kind[kind] += 1
 
-def matched(relation, source, line, target):
+def matched(relation, source, line, target, label):
+    # Some Graphify extractors place calls at the caller's first line and bind unresolved
+    # bases to stubs at the class line: the same source file naming the same target counts.
+    if any((source, kind, plain(label)) in ours_names for kind in families[relation]):
+        return True
     for kind, our_line in ours.get((source, unit(target)), ()):
         # File-level imports carry no line in xcalygraph, so only the file pair counts.
         if kind in families[relation] and (
@@ -97,6 +108,18 @@ def matched(relation, source, line, target):
         ):
             return True
     return False
+
+# Graphify binds unresolved base types to stub nodes in the referencing file. Real definitions are
+# contained in their file (or own methods); a stub whose label names no real definition stands
+# for an external type (`TThread`, `Exception`) and is no in-corpus relation.
+real = {link["target"] for link in graph["links"] if link.get("relation") == "contains"}
+real |= {link["source"] for link in graph["links"] if link.get("relation") == "method"}
+real_labels = {plain(nodes[node].get("label")) for node in real if node in nodes}
+
+def external_stub(link, target, source_file):
+    if link.get("relation") not in {"inherits", "implements"}:
+        return False
+    return link["target"] not in real and plain(target.get("label")) not in real_labels
 
 totals = collections.Counter()
 hits = collections.Counter()
@@ -111,10 +134,12 @@ for link in graph["links"]:
     # Only in-corpus targets: external libraries are not graph nodes in xcalygraph.
     if not source_file or not target_file or source_file == target_file and relation == "imports":
         continue
+    if external_stub(link, target, source_file):
+        continue
     line = line_of(link.get("source_location"))
     key = (relation, link.get("confidence", "?"))
     totals[key] += 1
-    if matched(relation, source_file, line, target_file):
+    if matched(relation, source_file, line, target_file, target.get("label")):
         hits[key] += 1
     else:
         misses[relation].append(

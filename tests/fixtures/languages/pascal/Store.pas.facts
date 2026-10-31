@@ -9,7 +9,9 @@ ref 8 Inherit IStore qualifier=- scope=TStore
 ref 8 Inherit TBase qualifier=- scope=TStore
 ref 10 Type TRepo qualifier=- scope=TStore
 ref 22 Call Load qualifier=FRows scope=Open args=1
+ref 22 Value Path qualifier=- scope=Open
 ref 23 Call Helper qualifier=- scope=Open args=1
+ref 28 Call Count qualifier=FRows scope=Count
 bind 12 "Path": string declared scope=Open
 bind 18 "Path": string declared scope=Open
 bind 19 "Url": string declared scope=Open

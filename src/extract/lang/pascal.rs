@@ -66,6 +66,21 @@ fn flags(definition: &Definition, context: &FileContext) -> u8 {
     if callable && !lower.contains("begin") && !lower.contains(" asm") {
         return FLAG_DECLARATION;
     }
+    // Forward class declarations (`TCore = class;`) announce the type defined later;
+    // `EError = class(Exception);` is a complete definition.
+    if definition.kind.is_type() {
+        let forward = ["class", "interface", "dispinterface"]
+            .iter()
+            .any(|keyword| {
+                lower
+                    .split_once('=')
+                    .map(|(_, rest)| rest.trim().trim_end_matches(';').trim_end())
+                    .is_some_and(|rest| rest == *keyword)
+            });
+        if forward {
+            return FLAG_DECLARATION;
+        }
+    }
     let test_file = context.path.to_ascii_lowercase().contains("test");
     if callable && test_file && definition.name.starts_with("Test") {
         return FLAG_TEST;

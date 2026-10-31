@@ -1847,6 +1847,25 @@ impl<'a> Index<'a> {
         scope: Option<u32>,
         name: &str,
     ) -> Option<(Vec<u32>, Confidence)> {
+        // Forward declarations (Pascal `TCore = class;`, C `struct s;` prototypes) stand for the
+        // definition next to them.
+        self.resolve_type_candidates(file, imports, scope, name)
+            .map(|(mut types, confidence)| {
+                let declared = |s: &u32| self.symbols[*s as usize].flags & FLAG_DECLARATION != 0;
+                if types.iter().any(declared) && !types.iter().all(declared) {
+                    types.retain(|s| !declared(s));
+                }
+                (types, confidence)
+            })
+    }
+
+    fn resolve_type_candidates(
+        &self,
+        file: u32,
+        imports: Option<&Imports>,
+        scope: Option<u32>,
+        name: &str,
+    ) -> Option<(Vec<u32>, Confidence)> {
         let imports = imports.or_else(|| self.file_imports.get(file as usize));
         let name = name.trim();
         if name.is_empty() {
@@ -1945,7 +1964,6 @@ impl<'a> Index<'a> {
             .collect()
     }
 
-    /// Owner type of the method enclosing `scope`.
     /// Every part of the Objective-C classes in `types`: the `@interface`, class extensions,
     /// categories and the `@implementation` are separate symbols of one class.
     fn objc_class_parts(&self, types: &[u32]) -> Vec<u32> {
@@ -1970,6 +1988,7 @@ impl<'a> Index<'a> {
         parts
     }
 
+    /// Owner type of the method enclosing `scope`.
     fn owner_type(&self, file: u32, scope: Option<u32>) -> Option<Vec<u32>> {
         let facts = self.facts(file)?;
         let mut current = scope;
@@ -2152,6 +2171,29 @@ impl<'a> Index<'a> {
                         if target == source || self.is_trivial(source, target, kind) {
                             continue;
                         }
+                        // One base list names the superclass and the interfaces (Pascal
+                        // `class(TBase, IRoute)`, Kotlin `: Base(), Route`): a class
+                        // naming an interface implements it.
+                        let kind = if kind == EdgeKind::Inherits
+                            && source < file_node
+                            && !matches!(self.symbols[source as usize].kind, SymKind::Iface)
+                            && self.symbols[target as usize].kind == SymKind::Iface
+                        {
+                            EdgeKind::Implements
+                        } else if kind == EdgeKind::Uses
+                            && reference.kind == RefKind::Value
+                            && self.file_type(file) == Some(FileType::Pascal)
+                            && self.symbols[target as usize].kind.is_callable()
+                        {
+                            // Pascal calls parameterless routines without parentheses.
+                            if source_is_test {
+                                EdgeKind::Tests
+                            } else {
+                                EdgeKind::Calls
+                            }
+                        } else {
+                            kind
+                        };
                         resolved.edges.push(Edge {
                             source,
                             target,
@@ -2773,9 +2815,12 @@ impl<'a> Index<'a> {
                     if constructor {
                         false
                     } else if reference.kind == RefKind::Value {
-                        // C# and VB.NET method groups (`Register(Handle)`) name methods as values.
+                        // C# and VB.NET method groups (`Register(Handle)`) name methods as values;
+                        // a bare Pascal method name in an expression calls it (`X := Count`).
                         kind == SymKind::Const
-                            || (jvm::is_dotnet(self.file_type(file)) && kind.is_callable())
+                            || ((jvm::is_dotnet(self.file_type(file))
+                                || self.file_type(file) == Some(FileType::Pascal))
+                                && kind.is_callable())
                     } else {
                         kind.is_callable()
                     }
@@ -2809,6 +2854,21 @@ impl<'a> Index<'a> {
                 if best.is_none_or(|(best_depth, _)| depth > best_depth) {
                     best = Some((depth, id));
                 }
+            }
+            // Forward declarations and prototypes announce a definition of the same file.
+            let declared = |id: u32| self.symbols[id as usize].flags & FLAG_DECLARATION != 0;
+            if found.iter().any(|&(_, id)| declared(id))
+                && !found.iter().all(|&(_, id)| declared(id))
+            {
+                found.retain(|&(_, id)| !declared(id));
+                count = found.len();
+                best = found.iter().copied().fold(None, |best, (depth, id)| {
+                    if best.is_none_or(|(best_depth, _)| depth > best_depth) {
+                        Some((depth, id))
+                    } else {
+                        best
+                    }
+                });
             }
             if let Some((best_depth, id)) = best {
                 if count == 1 {
@@ -3915,9 +3975,12 @@ fn pick(candidates: &[u32], confidence: Confidence) -> Outcome {
 }
 
 /// Languages whose modules hold declarations next to definitions (OCaml `.mli` and `.ml`, Lisp
-/// `defgeneric` and `defmethod`).
+/// `defgeneric` and `defmethod`, Pascal forward class declarations and interface sections).
 fn has_declarations(file_type: Option<FileType>) -> bool {
-    matches!(file_type, Some(FileType::OCaml | FileType::Lisp))
+    matches!(
+        file_type,
+        Some(FileType::OCaml | FileType::Lisp | FileType::Pascal)
+    )
 }
 
 fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence, arity: u8) -> Outcome {
