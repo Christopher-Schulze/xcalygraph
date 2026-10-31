@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 46;
+pub const RESOLVE_VERSION: u32 = 47;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1979,6 +1979,44 @@ impl<'a> Index<'a> {
             .collect()
     }
 
+    /// Lua module tables: `array2d.reshape(...)` and `self:read()` name functions this file
+    /// defines as `function array2d.reshape` and `function SR:read` (for `self`, the table of
+    /// the enclosing `function SR:method`).
+    fn lua_table_member(&self, file: u32, reference: &Ref, qualifier: &str) -> Option<Outcome> {
+        if self.file_type(file) != Some(FileType::Lua) || !is_identifier(qualifier) {
+            return None;
+        }
+        let facts = self.facts(file)?;
+        let table = if qualifier == "self" {
+            let mut scope = reference.scope;
+            let mut owner = None;
+            while let Some(local) = scope {
+                let symbol = &facts.symbols[local as usize];
+                if let Some((table, _)) = lua_owner(&symbol.signature, &symbol.name) {
+                    owner = Some(table);
+                    break;
+                }
+                scope = symbol.parent;
+            }
+            owner?
+        } else {
+            qualifier
+        };
+        let base = self.base[file as usize];
+        let found: Vec<u32> = facts
+            .symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, symbol)| {
+                symbol.name == reference.name
+                    && lua_owner(&symbol.signature, &symbol.name)
+                        .is_some_and(|(owner, _)| owner == table)
+            })
+            .map(|(local, _)| base + local as u32)
+            .collect();
+        (!found.is_empty()).then(|| pick_members(self, found, Confidence::Exact, reference.arity))
+    }
+
     /// Several callables of one name (overloads in Swift, C++, Dart and other languages
     /// without class-bound lookup): the argument count may pick one.
     fn overload_set(&self, candidates: &[u32]) -> bool {
@@ -3142,6 +3180,9 @@ impl<'a> Index<'a> {
         if let Some(outcome) = self.module_qualified(file, imports, reference, qualifier) {
             return outcome;
         }
+        if let Some(outcome) = self.lua_table_member(file, reference, qualifier) {
+            return outcome;
+        }
         // `a->b` (PHP, C++) and `a?->b` chain like `a.b`.
         let dotted = qualifier.replace("?->", ".").replace("->", ".");
         let chain: Vec<&str> = dotted.split('.').map(str::trim).collect();
@@ -4163,6 +4204,24 @@ fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence, arity: u
         }
     }
     pick(&found, confidence)
+}
+
+/// Table and separator of a Lua function defined as a table member: `function M.f(...)` gives
+/// `("M", '.')`, `function SR:read(...)` gives `("SR", ':')`.
+fn lua_owner<'s>(signature: &'s str, name: &str) -> Option<(&'s str, char)> {
+    let rest = signature
+        .trim_start()
+        .strip_prefix("local ")
+        .unwrap_or(signature.trim_start());
+    let path = rest.strip_prefix("function ")?.split('(').next()?.trim();
+    let (table, separator) = path.strip_suffix(name).and_then(|head| {
+        head.strip_suffix('.')
+            .map(|table| (table, '.'))
+            .or_else(|| head.strip_suffix(':').map(|table| (table, ':')))
+    })?;
+    // `a.b.c` nested tables: the last table names the owner.
+    let table = table.rsplit('.').next().unwrap_or(table);
+    is_identifier(table).then_some((table, separator))
 }
 
 /// Type parameters declared right after `name` in a signature: `interface IRequest<out T>` has

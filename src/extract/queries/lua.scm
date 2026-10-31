@@ -12,11 +12,12 @@
         name: (identifier) @_require
         arguments: (arguments (string content: (string_content) @import.path)))))
   (#eq? @_require "require")) @import
-([(chunk) (block)]
-  (function_call
+; Every `require "x"`: statements, arguments (`setmetatable(t, require "x")`) and member access
+; (`require("x").f`).
+((function_call
     name: (identifier) @_require
-    arguments: (arguments (string content: (string_content) @import.path))
-    (#eq? @_require "require")) @import)
+    arguments: (arguments (string content: (string_content) @import.path)))
+  (#eq? @_require "require")) @import
 
 ; `local assert_arg = utils.assert_arg`: a member of a required module re-bound locally.
 (variable_declaration

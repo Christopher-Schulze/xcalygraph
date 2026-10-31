@@ -1,5 +1,6 @@
 sym 7-10 fn find parent=- owner= pub flags=0 sig="function App:find(id)" doc=""
 sym 12-18 fn new parent=- owner= pub flags=0 sig="function App.new()" doc=""
+import 1 "app.repo" names= alias=- reexport=false
 import 1 "app.repo" names= alias=repo reexport=false
 import 2 "repo" names=put alias=put reexport=false
 import 3 "table" names=insert alias=insert reexport=false
