@@ -1979,6 +1979,21 @@ impl<'a> Index<'a> {
             .collect()
     }
 
+    /// Names of the namespaces enclosing a symbol, outermost first.
+    fn namespaces(&self, symbol: u32) -> Vec<&str> {
+        let mut names = Vec::new();
+        let mut current = self.symbols[symbol as usize].parent;
+        while current != NONE {
+            let enclosing = &self.symbols[current as usize];
+            if enclosing.kind == SymKind::Mod {
+                names.push(enclosing.name.as_str());
+            }
+            current = enclosing.parent;
+        }
+        names.reverse();
+        names
+    }
+
     /// Every part of the Objective-C classes in `types`: the `@interface`, class extensions,
     /// categories and the `@implementation` are separate symbols of one class.
     fn objc_class_parts(&self, types: &[u32]) -> Vec<u32> {
@@ -2216,7 +2231,15 @@ impl<'a> Index<'a> {
                             && self.symbols[target as usize]
                                 .signature
                                 .contains(&format!("Base.{}(", reference.name));
-                        let target_confidence = if dispatch {
+                        // C++: an unqualified name reaches a namespace that encloses the
+                        // reference; another namespace needs a `using` the graph does not track.
+                        let foreign_namespace = self.file_type(file) == Some(FileType::Cpp)
+                            && reference.qualifier.is_none()
+                            && source < file_node
+                            && !self
+                                .namespaces(source)
+                                .starts_with(&self.namespaces(target));
+                        let target_confidence = if dispatch || foreign_namespace {
                             Confidence::Inferred
                         } else {
                             target_confidence

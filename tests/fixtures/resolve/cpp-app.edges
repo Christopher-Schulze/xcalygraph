@@ -24,6 +24,6 @@ src/repository::store::MemoryRepository::put -uses-> include/store/repository::s
 src/repository::store::MemoryRepository::put -uses-> include/store/repository::store::Row @9
 tests/repository_test::TEST -tests-> src/repository::store::MemoryRepository::find @7
 tests/repository_test::TEST -tests-> src/repository::store::MemoryRepository::put @6
-tests/repository_test::TEST -uses-> include/store/repository::store::MemoryRepository @4
+tests/repository_test::TEST -uses-> include/store/repository::store::MemoryRepository @5
 tests/repository_test::TEST -uses-> include/store/repository::store::Row @6
 ext tests/repository_test gtest 1
