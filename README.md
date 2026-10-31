@@ -159,6 +159,10 @@ Same files for both tools; Graphify runs `graphify update .`, and its numbers ar
 
 Compared with Graphify, xcalygraph builds 8 to 24 times faster, needs 3 to 8 times less memory and disk, and updates after an edit 40 to 120 times faster.
 
+### Language depth
+
+`scripts/benchmarks/compare-depth.sh` checks, for each language corpus, which of Graphify's relations between files of the corpus xcalygraph also finds. Across the 26 public corpora with at least 50 such calls (pinned in `scripts/benchmarks/corpora.tsv`), the median match is 95 % for calls (lowest 74 %) and 97 % for inheritance and implementation. Spot checks of the misses against the source show they are mostly Graphify errors (library methods bound to same-named local functions), recursion (xcalygraph drops self-loops) or generated files left out on purpose.
+
 ## Languages
 
 About 60 languages and formats, each resolved by its own module rules rather than by name matching alone.
