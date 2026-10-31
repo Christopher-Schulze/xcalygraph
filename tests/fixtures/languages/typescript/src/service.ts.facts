@@ -25,7 +25,7 @@ bind 9 "id": string declared scope=find
 bind 10 "row": this.repo.get() inferred scope=find
 bind 15 "": Service declared scope=makeService
 bind 16 "repo": openRepo() inferred scope=makeService
-bind 17 "memory": MemoryRepo inferred scope=makeService
-bind 19 "other": store.MemoryRepo inferred scope=makeService
+bind 17 "memory": MemoryRepo declared scope=makeService
+bind 19 "other": store.MemoryRepo declared scope=makeService
 fields Service repo:Repo
 env 11 DEFAULT_ID scope=find

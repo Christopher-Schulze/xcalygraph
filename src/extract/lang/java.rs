@@ -1,11 +1,15 @@
 //! Java: `public`/`protected` visibility, JUnit tests, `static main` entry, annotation-registered
 //! framework methods as entrypoints. The import and annotation helpers serve every JVM language.
 
+#[cfg(feature = "lang-java")]
 use super::Pack;
 use crate::domain::facts::{FLAG_ENTRY, FLAG_TEST, Import, SymKind};
 use crate::domain::filetype::FileType;
-use crate::extract::engine::{Definition, FileContext, Hooks};
+#[cfg(feature = "lang-java")]
+use crate::extract::engine::Hooks;
+use crate::extract::engine::{Definition, FileContext};
 
+#[cfg(feature = "lang-java")]
 pub static PACK: Pack = Pack {
     suffixes: &[],
     file_type: FileType::Java,
@@ -33,6 +37,7 @@ pub(super) fn header<'a>(definition: &Definition<'a>) -> &'a str {
         .map_or(text, |(start, _)| &text[..start])
 }
 
+#[cfg(feature = "lang-java")]
 fn exported(definition: &Definition) -> bool {
     let modifiers = header(definition);
     modifiers
@@ -122,6 +127,7 @@ pub(super) fn jvm_flags(
     flags
 }
 
+#[cfg(feature = "lang-java")]
 fn flags(definition: &Definition, context: &FileContext) -> u8 {
     jvm_flags(definition, context, FileType::Java, &[], true)
 }
@@ -179,6 +185,7 @@ pub(super) fn jvm_import(statement: &str, line: u32, _reexport: bool) -> Vec<Imp
 }
 
 /// `java.lang` types, visible everywhere without import.
+#[cfg(feature = "lang-java")]
 fn builtin(name: &str) -> bool {
     matches!(
         name,

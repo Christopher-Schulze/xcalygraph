@@ -80,3 +80,4 @@
 (assignment_expression right: (identifier) @name @reference.value)
 (variable_declarator value: (identifier) @name @reference.value)
 (variable_declarator value: (field_access object: (identifier) @qualifier field: (identifier) @name) @reference.value)
+(field_access object: (identifier) @qualifier field: (identifier) @name (#match? @qualifier "^[A-Z]")) @reference.value

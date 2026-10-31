@@ -11,8 +11,8 @@ src/service.Service.find -calls-> src/store/repo.Repo.get @10
 src/service.Service.find -calls?-> src/store/repo.MemoryRepo.get @10
 src/service.makeService -calls-> src/service.Service @20
 src/service.makeService -calls-> src/store/repo.MemoryRepo @17
+src/service.makeService -calls-> src/store/repo.MemoryRepo.get @18
 src/service.makeService -calls-> src/store/repo.openRepo @16
-src/service.makeService -calls?-> src/store/repo.MemoryRepo.get @18
 src/service.makeService -uses-> src/service.Service @15
 src/service.viaIndex -calls-> src/store/repo.MemoryRepo @24
 src/store/repo.MemoryRepo -implements-> src/store/repo.Repo @9

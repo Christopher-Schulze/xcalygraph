@@ -4,8 +4,10 @@
 pub mod bash;
 #[cfg(feature = "lang-go")]
 pub mod go;
-#[cfg(feature = "lang-java")]
+#[cfg(any(feature = "lang-java", feature = "lang-kotlin"))]
 pub mod java;
+#[cfg(feature = "lang-kotlin")]
+pub mod kotlin;
 #[cfg(feature = "lang-python")]
 pub mod python;
 #[cfg(feature = "lang-rust")]
@@ -47,6 +49,8 @@ const PACKS: &[&Pack] = &[
     &bash::PACK,
     #[cfg(feature = "lang-java")]
     &java::PACK,
+    #[cfg(feature = "lang-kotlin")]
+    &kotlin::PACK,
 ];
 
 /// One lazily compiled query per pack: a refresh compiles only the languages it extracts.

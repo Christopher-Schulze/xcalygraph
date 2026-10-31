@@ -25,7 +25,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 15;
+pub const RESOLVE_VERSION: u32 = 18;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -701,15 +701,7 @@ impl<'a> Index<'a> {
 
     /// Methods and associated items `name` of a type, including those of its supertypes.
     fn members(&self, type_symbol: u32, name: &str) -> Vec<u32> {
-        let symbol = &self.symbols[type_symbol as usize];
-        let scope = self.scope_ids[self.module_of(symbol.file) as usize];
-        let mut found: Vec<u32> = self
-            .methods
-            .get(&(scope, symbol.name.as_str(), name))
-            .into_iter()
-            .flatten()
-            .copied()
-            .collect();
+        let mut found = self.members_direct(type_symbol, name);
         if found.is_empty() {
             for &supertype in self.supertypes.get(&type_symbol).into_iter().flatten() {
                 if supertype != type_symbol {
@@ -725,11 +717,30 @@ impl<'a> Index<'a> {
 
     fn members_direct(&self, type_symbol: u32, name: &str) -> Vec<u32> {
         let symbol = &self.symbols[type_symbol as usize];
+        if jvm::is_jvm(self.file_type(symbol.file)) {
+            return self.declared_members(type_symbol, name);
+        }
         let scope = self.scope_ids[self.module_of(symbol.file) as usize];
         self.methods
             .get(&(scope, symbol.name.as_str(), name))
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Members `name` declared in the body of `type_symbol`: JVM types of one package may share a
+    /// simple name (nested `Builder` classes), so the owner name alone is ambiguous.
+    fn declared_members(&self, type_symbol: u32, name: &str) -> Vec<u32> {
+        self.by_name
+            .get(name)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&member| {
+                let symbol = &self.symbols[member as usize];
+                symbol.parent == type_symbol
+                    && (symbol.kind.is_callable() || symbol.kind == SymKind::Const)
+            })
+            .collect()
     }
 
     /// Resolves a type name as written in `file` (`T`, `pkg.T`, `a::b::T`, `Self`).
@@ -1451,6 +1462,16 @@ impl<'a> Index<'a> {
             Some(qualifier) => {
                 match self.qualified_symbols(file, Some(imports), qualifier, &reference.name) {
                     Some(found) => pick_members(self, found, Confidence::Exact, reference.arity),
+                    // `Type.MEMBER` whose member is no symbol (a field, an enum entry outside
+                    // the root): the type itself is used.
+                    None if is_identifier(qualifier)
+                        && qualifier.starts_with(|ch: char| ch.is_uppercase()) =>
+                    {
+                        match self.resolve_type(file, Some(imports), reference.scope, qualifier) {
+                            Some((types, Confidence::Exact)) => pick(&types, Confidence::Exact),
+                            _ => Outcome::Unresolved,
+                        }
+                    }
                     None => Outcome::Unresolved,
                 }
             }
@@ -1509,7 +1530,9 @@ impl<'a> Index<'a> {
         // type of the call, inferred.
         if let Some(callee) = call_receiver(qualifier) {
             if self.call_result_is_external(file, imports, reference, callee) {
-                return Outcome::External;
+                return self
+                    .extension(file, imports, reference.scope, name, None)
+                    .unwrap_or(Outcome::External);
             }
             let binding = Binding {
                 scope: reference.scope,
@@ -1533,8 +1556,16 @@ impl<'a> Index<'a> {
         if chain.iter().all(|segment| is_identifier(segment)) {
             let receiver =
                 self.receiver_type(file, imports, reference.scope, &chain, reference.line);
+            // Declared type of a single receiver variable: selects among extension overloads.
+            let receiver_name = (chain.len() == 1)
+                .then(|| self.binding(file, reference.scope, head, reference.line))
+                .flatten()
+                .filter(|binding| binding.declared)
+                .map(|binding| binding.type_name.as_str());
             if let Receiver::External = receiver {
-                return Outcome::External;
+                return self
+                    .extension(file, imports, reference.scope, name, receiver_name)
+                    .unwrap_or(Outcome::External);
             }
             if let Receiver::Known(types, confidence) = receiver {
                 let mut targets = Vec::new();
@@ -1575,8 +1606,25 @@ impl<'a> Index<'a> {
                 if !targets.is_empty() {
                     return Outcome::Targets(targets, confidence);
                 }
-                return Outcome::Unresolved;
+                let owner = types
+                    .first()
+                    .map(|&owner| self.symbols[owner as usize].name.as_str());
+                return self
+                    .extension(file, imports, reference.scope, name, owner)
+                    .unwrap_or(Outcome::Unresolved);
             }
+        }
+        // `Type.f()` on a type outside the root (`Character.isUpperCase`) is a static call, not
+        // an extension call.
+        let static_call = chain.len() == 1
+            && head.starts_with(|ch: char| ch.is_uppercase())
+            && self
+                .binding(file, reference.scope, head, reference.line)
+                .is_none();
+        if !static_call
+            && let Some(extension) = self.extension(file, imports, reference.scope, name, None)
+        {
+            return extension;
         }
         // 7. Unique method name in the root, unless the name is too common to trust.
         if is_common_member(name) {

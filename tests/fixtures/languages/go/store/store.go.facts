@@ -52,7 +52,7 @@ bind 47 "s": Store declared scope=Get
 bind 56 "": int declared scope=Len
 bind 56 "s": Store declared scope=Len
 bind 59 "st": NewStore() inferred scope=load
-bind 60 "r": Row inferred scope=load
+bind 60 "r": Row declared scope=load
 bind 61 "reader": Reader declared scope=load
 fields Row ID:int Name:string
 fields Store rows:Row client:db.Client

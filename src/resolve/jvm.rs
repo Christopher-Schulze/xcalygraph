@@ -133,6 +133,64 @@ impl Index<'_> {
         }
     }
 
+    /// Kotlin extension functions `fun Receiver.name(...)` visible in the file (own package,
+    /// imports, wildcard imports, members of the enclosing class): the target of `x.name()` when the receiver type is outside the
+    /// root or has no such member. Several candidates are inferred.
+    pub(super) fn extension(
+        &self,
+        file: u32,
+        imports: &Imports,
+        scope: Option<u32>,
+        name: &str,
+        receiver: Option<&str>,
+    ) -> Option<super::Outcome> {
+        if self.file_type(file) != Some(FileType::Kotlin) {
+            return None;
+        }
+        // Member extensions of the enclosing class or object come first.
+        let mut candidates = self.enclosing_members(file, scope, name);
+        candidates.extend(self.module_symbol(self.module_of(file), name, None));
+        if let Some(Target::Symbols(symbols)) = imports.names.get(name) {
+            candidates.extend(symbols);
+        }
+        for &glob in &imports.globs {
+            candidates.extend(self.module_symbol(glob, name, None));
+        }
+        candidates.retain(|&candidate| {
+            let symbol = &self.symbols[candidate as usize];
+            matches!(symbol.kind, SymKind::Fn | SymKind::Method)
+                && (symbol.signature.contains(&format!(".{name}("))
+                    || symbol.signature.contains(&format!(".{name}<")))
+        });
+        candidates.sort_unstable();
+        candidates.dedup();
+        if let Some(receiver) = receiver.map(simple_type) {
+            let matching: Vec<u32> = candidates
+                .iter()
+                .copied()
+                .filter(|&candidate| {
+                    let symbol = &self.symbols[candidate as usize];
+                    extension_receiver(&symbol.signature, name)
+                        .is_some_and(|declared| declared == receiver)
+                })
+                .collect();
+            if !matching.is_empty() {
+                candidates = matching;
+            }
+        }
+        let confidence = if candidates.len() == 1 {
+            crate::domain::graph::Confidence::Exact
+        } else {
+            crate::domain::graph::Confidence::Inferred
+        };
+        (!candidates.is_empty()).then(|| {
+            super::Outcome::Targets(
+                candidates.iter().map(|&c| (c, confidence)).collect(),
+                confidence,
+            )
+        })
+    }
+
     /// Members `name` of the class enclosing `scope`, its supertypes included: unqualified calls
     /// and constants inside a class body.
     pub(super) fn enclosing_members(&self, file: u32, scope: Option<u32>, name: &str) -> Vec<u32> {
@@ -162,5 +220,66 @@ impl Index<'_> {
             let owner_file = self.symbols[owner as usize].file;
             Some(self.resolve_type(owner_file, None, None, field_type))
         })
+    }
+}
+
+/// Simple name of a type expression: `kotlin.collections.List<T>?` -> `List`.
+fn simple_type(text: &str) -> &str {
+    let base = text
+        .split('<')
+        .next()
+        .unwrap_or(text)
+        .trim()
+        .trim_end_matches('?');
+    base.rsplit('.').next().unwrap_or(base)
+}
+
+/// Receiver type of an extension declaration `fun <T> Receiver<T>.name(...)` in a signature.
+fn extension_receiver<'a>(signature: &'a str, name: &str) -> Option<&'a str> {
+    let end = signature
+        .find(&format!(".{name}("))
+        .or_else(|| signature.find(&format!(".{name}<")))?;
+    let head = &signature[..end];
+    let mut receiver = head
+        .rsplit_once("fun ")
+        .map_or(head, |(_, rest)| rest)
+        .trim();
+    if receiver.starts_with('<') {
+        let mut depth = 0;
+        let close = receiver.char_indices().find_map(|(index, ch)| {
+            match ch {
+                '<' => depth += 1,
+                '>' => depth -= 1,
+                _ => {}
+            }
+            (depth == 0).then_some(index)
+        })?;
+        receiver = receiver[close + 1..].trim();
+    }
+    Some(simple_type(receiver))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extension_receivers_come_from_the_declaration() {
+        assert_eq!(
+            extension_receiver("public fun TypeMirror.asTypeName(): TypeName", "asTypeName"),
+            Some("TypeMirror")
+        );
+        assert_eq!(
+            extension_receiver(
+                "fun <T : Any> KClass<T>.asTypeName(): ClassName",
+                "asTypeName"
+            ),
+            Some("KClass")
+        );
+        assert_eq!(
+            extension_receiver("internal fun kotlin.String?.shout(n: Int)", "shout"),
+            Some("String")
+        );
+        assert_eq!(extension_receiver("fun plain(): Int", "plain"), None);
     }
 }

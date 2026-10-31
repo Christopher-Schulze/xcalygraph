@@ -1,0 +1,53 @@
+package com.example
+sym 7-7 class User parent=- owner= pub flags=0 sig="data class User(val id: Long, val name: String)" doc="User records."
+sym 9-9 enum Role parent=- owner= pub flags=0 sig="enum class Role" doc=""
+sym 9-9 const ADMIN parent=Role owner= pub flags=0 sig="ADMIN" doc=""
+sym 9-9 const MEMBER parent=Role owner= pub flags=0 sig="MEMBER" doc=""
+sym 11-18 class Registry parent=- owner= pub flags=0 sig="object Registry" doc=""
+sym 12-12 const LIMIT parent=Registry owner= pub flags=0 sig="const val LIMIT = 10" doc=""
+sym 15-17 method add parent=Registry owner=Registry pub flags=0 sig="fun add(user: User)" doc=""
+sym 20-30 class UserService parent=- owner= pub flags=2 sig="@Service class UserService(private val db: Db)" doc=""
+sym 22-22 method all parent=UserService owner=UserService pub flags=0 sig="fun all(limit: Int = Registry.LIMIT): List<User>" doc=""
+sym 24-27 method count parent=UserService owner=UserService pub flags=0 sig="internal fun count(): Int" doc=""
+sym 29-29 method unused parent=UserService owner=UserService priv flags=0 sig="private fun unused()" doc=""
+sym 32-32 fn shout parent=- owner= pub flags=0 sig="fun String.shout(): String" doc=""
+sym 34-38 fn main parent=- owner= pub flags=2 sig="fun main(args: Array<String>)" doc=""
+import 3 "kotlinx.coroutines.flow" names=Flow alias=- reexport=false
+import 4 "com.example.db" names=Database alias=Db reexport=false
+ref 13 Type User qualifier=- scope=Registry
+ref 15 Type User qualifier=- scope=add
+ref 16 Call add qualifier=users scope=add args=1
+ref 16 Value user qualifier=- scope=add
+ref 20 Type Service qualifier=- scope=UserService
+ref 21 Type Db qualifier=- scope=UserService
+ref 22 Value LIMIT qualifier=Registry scope=all
+ref 22 Call User qualifier=- scope=all args=2
+ref 22 Type User qualifier=- scope=all
+ref 22 Value id qualifier=it scope=all
+ref 22 Value limit qualifier=- scope=all
+ref 22 Call map qualifier=db.query(limit) scope=all args=1
+ref 22 Value name qualifier=it scope=all
+ref 22 Call query qualifier=db scope=all args=1
+ref 25 Call all qualifier=- scope=count args=0
+ref 32 Call uppercase qualifier=- scope=shout args=0
+ref 35 Call getenv qualifier=System scope=main args=1
+ref 36 Call Db qualifier=- scope=main args=0
+ref 36 Call UserService qualifier=- scope=main args=1
+ref 36 Call all qualifier=UserService(Db()) scope=main args=0
+ref 37 Call User qualifier=- scope=main args=2
+ref 37 Call add qualifier=Registry scope=main args=1
+ref 37 Value token qualifier=- scope=main
+bind 7 "id": Long declared scope=User
+bind 7 "name": String declared scope=User
+bind 13 "users": mutableListOf() inferred scope=Registry
+bind 15 "user": User declared scope=add
+bind 21 "db": Db declared scope=UserService
+bind 22 "": List declared scope=all
+bind 22 "limit": Int declared scope=all
+bind 24 "": Int declared scope=count
+bind 25 "list": all() inferred scope=count
+bind 32 "": String declared scope=shout
+bind 34 "args": Array declared scope=main
+fields User id:Long name:String
+fields UserService db:Db
+env 35 TOKEN scope=main

@@ -72,7 +72,7 @@ bind 17 "id": Id declared scope=get
 bind 18 "": usize declared scope=len
 bind 43 "": Self declared scope=open
 bind 43 "path": str declared scope=open
-bind 44 "client": Client inferred scope=open
+bind 44 "client": Client declared scope=open
 bind 50 "row": Row declared scope=insert
 bind 57 "": Row declared scope=get
 bind 57 "id": Id declared scope=get
@@ -80,7 +80,7 @@ bind 61 "": usize declared scope=len
 bind 66 "": usize declared scope=load
 bind 66 "reader": Reader declared scope=load
 bind 68 "other": Store declared scope=load
-bind 80 "store": Store inferred scope=opens
+bind 80 "store": Store declared scope=opens
 fields Store rows:HashMap client:Client
 env 45 DB_URL scope=open
 env 46 BUILD_TAG scope=open

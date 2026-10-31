@@ -201,15 +201,8 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
                 continue;
             }
             reference.kind = kind;
-            reference.arity = match (kind, primary_node.child_by_field_name("arguments")) {
-                (Some(RefKind::Call), Some(arguments)) => {
-                    let mut walker = arguments.walk();
-                    let count = arguments
-                        .named_children(&mut walker)
-                        .filter(|argument| !argument.kind().contains("comment"))
-                        .count();
-                    u8::try_from(count).unwrap_or(facts::NO_ARITY - 1)
-                }
+            reference.arity = match kind {
+                Some(RefKind::Call) => arity(primary_node),
                 _ => facts::NO_ARITY,
             };
             reference.name = text(name).to_owned();
@@ -270,7 +263,9 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
                         entry.type_name = Some(type_name(text(node)));
                         entry.declared = true;
                     } else if let Some(node) = get("binding.ctor") {
+                        // A constructor call fixes the type as firmly as a declaration.
                         entry.type_name = Some(type_name(text(node)));
+                        entry.declared = true;
                     } else if let Some(node) = get("binding.range") {
                         entry.type_name = Some(format!("range:{}", text(node)));
                     } else if let Some(node) = get("binding.call") {
@@ -661,6 +656,40 @@ fn priority(kind: Option<RefKind>) -> u8 {
     }
 }
 
+/// Argument count of a call node: its `arguments` field, else an argument list child (Kotlin
+/// `value_arguments`); a trailing lambda counts as an argument.
+fn arity(call: Node) -> u8 {
+    let mut walker = call.walk();
+    let lists: Vec<Node> = match call.child_by_field_name("arguments") {
+        Some(arguments) => vec![arguments],
+        None => call
+            .named_children(&mut walker)
+            .filter(|child| {
+                matches!(
+                    child.kind(),
+                    "value_arguments" | "argument_list" | "annotated_lambda"
+                )
+            })
+            .collect(),
+    };
+    if lists.is_empty() {
+        return facts::NO_ARITY;
+    }
+    let count: usize = lists
+        .iter()
+        .map(|list| {
+            if list.kind() == "annotated_lambda" {
+                return 1;
+            }
+            let mut inner = list.walk();
+            list.named_children(&mut inner)
+                .filter(|argument| !argument.kind().contains("comment"))
+                .count()
+        })
+        .sum();
+    u8::try_from(count).unwrap_or(facts::NO_ARITY - 1)
+}
+
 fn row(node: Node) -> u32 {
     node.start_position().row as u32 + 1
 }
@@ -752,8 +781,14 @@ pub fn result_type(text: &str) -> String {
 /// Definition text up to its body, on one line.
 fn signature(node: Node, source: &[u8]) -> String {
     let start = node.start_byte();
+    let mut walker = node.walk();
     let body = node
         .child_by_field_name("body")
+        .or_else(|| {
+            // Grammars without a `body` field (Kotlin `class_body`, `function_body`).
+            node.named_children(&mut walker)
+                .find(|child| child.kind().ends_with("_body") && child.kind() != "type_body")
+        })
         .map(|body| body.start_byte())
         .or_else(|| {
             node.child_by_field_name("type")
