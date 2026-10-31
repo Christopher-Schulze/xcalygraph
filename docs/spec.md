@@ -405,4 +405,6 @@ Reference corpora: xcalygraph itself, the upstream Graphify clone at the pinned 
 
 Question sets: `scripts/benchmarks/questions/<corpus>.tsv` with columns question, expected location (`path:line` or qualified name); sets for private corpora under `scripts/benchmarks/questions/private/` (gitignored).
 
+Sealed evaluation: `scripts/benchmarks/questions/sealed/manifest.json` records corpus revisions/content hashes, case hashes, prior tuning exposure and answer budgets. JSON Lines cases carry id, question, family and required locator groups; each group contains acceptable source alternatives with path, declaration line, name and file/evidence hashes. Multi-location success requires every group; absent-symbol negatives count returned locators as false positives. File hit@5, exact locator coverage and final agent-answer correctness remain separate metrics. Same-author exposure and question correlation are explicit limitations; inspected sealed sets become development data.
+
 ## 13. Deferred features - See docs/deferred.md

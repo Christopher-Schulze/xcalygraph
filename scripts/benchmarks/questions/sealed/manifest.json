@@ -1,0 +1,255 @@
+{
+  "schema": 1,
+  "purpose": "Source-backed retrieval locator evaluation; not final agent-answer correctness.",
+  "exposure": "Questions authored by the same agent that maintains retrieval. Sources and labels frozen before further retrieval edits; no retrieval on these questions before freeze. Not author-blinded.",
+  "negative_intent": "Exact symbols verified absent from every file of the identified source snapshot. A returned source locator is a false positive, not proof that its underlying fact is invented.",
+  "intervals": "Descriptive Wilson binomial intervals; correlated questions and shared code prevent a statistical superiority claim.",
+  "budgets": [
+    200,
+    600,
+    1200
+  ],
+  "reference_budget": 600,
+  "corpora": [
+    {
+      "name": "xcalygraph",
+      "commit": "125379ed20e229dbbd24661424477f382f58364b",
+      "source_sha256": "3c81909f1de4c41b09749d81b47364fb178ebf0684ef26f4fcea32cc1196af3e",
+      "snapshot": ".cache/corpus-snapshots/3c81909f1de4c41b09749d81b47364fb178ebf0684ef26f4fcea32cc1196af3e/7face28a8927a8f56671b1269827fc3bc1dffe28ceb026e0531226bea8010641/source",
+      "upstream": {
+        "code_sha256": "2a6bc3132e8d5c656e39205c0bfca2c6fc0d7fcf359527be28c2c4b9917c7f63",
+        "environment": {
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONHASHSEED": "0",
+          "PYTHONSAFEPATH": "1"
+        },
+        "mode": [
+          "update",
+          "."
+        ],
+        "version": "0.9.97"
+      },
+      "cases": "xcalygraph.jsonl",
+      "cases_sha256": "fbf983c193800240a10a665314043c6a169d4ae25d38da54ddf9058b8752ca76",
+      "count": 30,
+      "families": {
+        "symbol": 6,
+        "behavior": 12,
+        "relationship": 3,
+        "multi": 6,
+        "negative": 3
+      },
+      "retrieval_tuning_exposure": "corpus_used_in_prior_tuning"
+    },
+    {
+      "name": "graphify",
+      "commit": "0a8cd4e1e342235fe53e881fb5d591bf0460071f",
+      "source_sha256": "2e3ba0a2e8b3420e062bca0922078c09fa67077f782070583790f2cdef47d800",
+      "snapshot": ".cache/corpus-snapshots/2e3ba0a2e8b3420e062bca0922078c09fa67077f782070583790f2cdef47d800/7face28a8927a8f56671b1269827fc3bc1dffe28ceb026e0531226bea8010641/source",
+      "upstream": {
+        "code_sha256": "2a6bc3132e8d5c656e39205c0bfca2c6fc0d7fcf359527be28c2c4b9917c7f63",
+        "environment": {
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONHASHSEED": "0",
+          "PYTHONSAFEPATH": "1"
+        },
+        "mode": [
+          "update",
+          "."
+        ],
+        "version": "0.9.97"
+      },
+      "cases": "graphify.jsonl",
+      "cases_sha256": "a9668dff0dc57e8241ff8479c4a617ba37bb74227252931819c824790de416a3",
+      "count": 30,
+      "families": {
+        "symbol": 6,
+        "behavior": 12,
+        "relationship": 3,
+        "multi": 6,
+        "negative": 3
+      },
+      "retrieval_tuning_exposure": "corpus_used_in_prior_tuning"
+    },
+    {
+      "name": "hono",
+      "commit": "17ad0e21f5a91c939eeafa3df05793a8ea60f016",
+      "source_sha256": "e9578d0a7b9398e0b04c121125781259e04d9b8203edf1f45d8c6b6f8441a2c8",
+      "snapshot": ".cache/corpus-snapshots/e9578d0a7b9398e0b04c121125781259e04d9b8203edf1f45d8c6b6f8441a2c8/7face28a8927a8f56671b1269827fc3bc1dffe28ceb026e0531226bea8010641/source",
+      "upstream": {
+        "code_sha256": "2a6bc3132e8d5c656e39205c0bfca2c6fc0d7fcf359527be28c2c4b9917c7f63",
+        "environment": {
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONHASHSEED": "0",
+          "PYTHONSAFEPATH": "1"
+        },
+        "mode": [
+          "update",
+          "."
+        ],
+        "version": "0.9.97"
+      },
+      "cases": "hono.jsonl",
+      "cases_sha256": "71dbd3bfdbf00b604a4ffad35632fb88886af516274c7bd59f41caaf38f6cd00",
+      "count": 30,
+      "families": {
+        "symbol": 6,
+        "behavior": 12,
+        "relationship": 3,
+        "multi": 6,
+        "negative": 3
+      },
+      "retrieval_tuning_exposure": "corpus_used_in_prior_tuning"
+    },
+    {
+      "name": "taxonomy",
+      "commit": "298a8857c7128a0d121e7f699dfd729f23b3966d",
+      "source_sha256": "f71420d722a1cc1e9df95279fc685829169189bf8e551efd63c9b7f3134220fc",
+      "snapshot": ".cache/corpus-snapshots/f71420d722a1cc1e9df95279fc685829169189bf8e551efd63c9b7f3134220fc/7face28a8927a8f56671b1269827fc3bc1dffe28ceb026e0531226bea8010641/source",
+      "upstream": {
+        "code_sha256": "2a6bc3132e8d5c656e39205c0bfca2c6fc0d7fcf359527be28c2c4b9917c7f63",
+        "environment": {
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONHASHSEED": "0",
+          "PYTHONSAFEPATH": "1"
+        },
+        "mode": [
+          "update",
+          "."
+        ],
+        "version": "0.9.97"
+      },
+      "cases": "taxonomy.jsonl",
+      "cases_sha256": "216288d5dc28595d86c397cd1b961de6f271ea0893495de2ec6fd8ab74294ef4",
+      "count": 30,
+      "families": {
+        "symbol": 6,
+        "behavior": 12,
+        "relationship": 3,
+        "multi": 6,
+        "negative": 3
+      },
+      "retrieval_tuning_exposure": "corpus_used_in_prior_tuning"
+    },
+    {
+      "name": "svelte-realworld",
+      "commit": "df796708040f5200ec572b28ab7f88ecee5794dd",
+      "source_sha256": "b4339a79e11af6a3d6e4b536fad9b6157f00df8ed42ffd0b2c3205b133146cc0",
+      "snapshot": ".cache/corpus-snapshots/b4339a79e11af6a3d6e4b536fad9b6157f00df8ed42ffd0b2c3205b133146cc0/7face28a8927a8f56671b1269827fc3bc1dffe28ceb026e0531226bea8010641/source",
+      "upstream": {
+        "code_sha256": "2a6bc3132e8d5c656e39205c0bfca2c6fc0d7fcf359527be28c2c4b9917c7f63",
+        "environment": {
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONHASHSEED": "0",
+          "PYTHONSAFEPATH": "1"
+        },
+        "mode": [
+          "update",
+          "."
+        ],
+        "version": "0.9.97"
+      },
+      "cases": "svelte-realworld.jsonl",
+      "cases_sha256": "c57a3cae86c5e7d5beab2f5f99f2845d173f6f382f1dd33d362968c78b93af95",
+      "count": 30,
+      "families": {
+        "symbol": 6,
+        "behavior": 12,
+        "relationship": 3,
+        "multi": 6,
+        "negative": 3
+      },
+      "retrieval_tuning_exposure": "corpus_used_in_prior_tuning"
+    },
+    {
+      "name": "bulletproof-react/apps/react-vite",
+      "commit": "9506629ed003a561c6627735480cce4994244bb4",
+      "source_sha256": "bc5fafe90d8d2f2c87352577df85d8af2d45e31d95b9af4c5ab14842715284ec",
+      "snapshot": ".cache/corpus-snapshots/bc5fafe90d8d2f2c87352577df85d8af2d45e31d95b9af4c5ab14842715284ec/7face28a8927a8f56671b1269827fc3bc1dffe28ceb026e0531226bea8010641/source",
+      "upstream": {
+        "code_sha256": "2a6bc3132e8d5c656e39205c0bfca2c6fc0d7fcf359527be28c2c4b9917c7f63",
+        "environment": {
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONHASHSEED": "0",
+          "PYTHONSAFEPATH": "1"
+        },
+        "mode": [
+          "update",
+          "."
+        ],
+        "version": "0.9.97"
+      },
+      "cases": "bulletproof-react-apps-react-vite.jsonl",
+      "cases_sha256": "1b2e3309e86fa10e5d9c7170a0e4c385f9b586f6a4a0a0aa3247ce5e86fa46cb",
+      "count": 30,
+      "families": {
+        "symbol": 6,
+        "behavior": 12,
+        "relationship": 3,
+        "multi": 6,
+        "negative": 3
+      },
+      "retrieval_tuning_exposure": "corpus_used_in_prior_tuning"
+    },
+    {
+      "name": "httpx",
+      "commit": "b5addb64f0161ff6bfe94c124ef76f6a1fba5254",
+      "source_sha256": "86660b6f61f5500834e728258915b40d6507fd4852d363a80a5afb89d2b1d72b",
+      "snapshot": ".cache/corpus-snapshots/86660b6f61f5500834e728258915b40d6507fd4852d363a80a5afb89d2b1d72b/7face28a8927a8f56671b1269827fc3bc1dffe28ceb026e0531226bea8010641/source",
+      "upstream": {
+        "code_sha256": "2a6bc3132e8d5c656e39205c0bfca2c6fc0d7fcf359527be28c2c4b9917c7f63",
+        "environment": {
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONHASHSEED": "0",
+          "PYTHONSAFEPATH": "1"
+        },
+        "mode": [
+          "update",
+          "."
+        ],
+        "version": "0.9.97"
+      },
+      "cases": "httpx.jsonl",
+      "cases_sha256": "72a8b51c43c0306e0ac95b030eacc0d4d6221fd638653f742e5394552dc73037",
+      "count": 30,
+      "families": {
+        "symbol": 6,
+        "behavior": 12,
+        "relationship": 3,
+        "multi": 6,
+        "negative": 3
+      },
+      "retrieval_tuning_exposure": "no_prior_retrieval_tuning"
+    },
+    {
+      "name": "ripgrep",
+      "commit": "91f5d22ef48bde459d90a8c7dbeab416e97d0f2b",
+      "source_sha256": "674eaa4a05e36d6c0f41f5b246aa46b9df0074034cc1160436407392bc06bf7c",
+      "snapshot": ".cache/corpus-snapshots/674eaa4a05e36d6c0f41f5b246aa46b9df0074034cc1160436407392bc06bf7c/7face28a8927a8f56671b1269827fc3bc1dffe28ceb026e0531226bea8010641/source",
+      "upstream": {
+        "code_sha256": "2a6bc3132e8d5c656e39205c0bfca2c6fc0d7fcf359527be28c2c4b9917c7f63",
+        "environment": {
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONHASHSEED": "0",
+          "PYTHONSAFEPATH": "1"
+        },
+        "mode": [
+          "update",
+          "."
+        ],
+        "version": "0.9.97"
+      },
+      "cases": "ripgrep.jsonl",
+      "cases_sha256": "d02fdbd641ccbdaf0d3967368a83ac97397c0f83cd4b0c0ea46830eb6e7c7338",
+      "count": 30,
+      "families": {
+        "symbol": 6,
+        "behavior": 12,
+        "relationship": 3,
+        "multi": 6,
+        "negative": 3
+      },
+      "retrieval_tuning_exposure": "no_prior_retrieval_tuning"
+    }
+  ]
+}
