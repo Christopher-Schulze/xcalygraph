@@ -169,8 +169,9 @@ impl Index<'_> {
         }
     }
 
-    /// Binds the direct members of `outer` by their names (a wildcard import of a type).
-    fn import_members(&self, file: u32, outer: u32, imports: &mut Imports) {
+    /// Binds the direct members of `outer` by their names (a wildcard import of a type, Elixir
+    /// `import Mod`).
+    pub(super) fn import_members(&self, file: u32, outer: u32, imports: &mut Imports) {
         let owner_file = self.symbols[outer as usize].file as usize;
         let end = self
             .base
@@ -180,7 +181,8 @@ impl Index<'_> {
         let mut members: std::collections::BTreeMap<&str, Vec<u32>> = Default::default();
         for member in self.base[owner_file]..end {
             let symbol = &self.symbols[member as usize];
-            if symbol.parent == outer {
+            // Private members (`defp`, Scala `private def`) are not imported.
+            if symbol.parent == outer && symbol.exported {
                 members
                     .entry(symbol.name.as_str())
                     .or_default()

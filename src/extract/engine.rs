@@ -502,9 +502,21 @@ fn assemble(assembly: Assembly) -> Facts {
     };
     // A builtin name the file defines as a function names that definition: a Python module
     // shadowing `open`, Julia `Base.length(q::Queue)` extending `length` for its type.
+    let elixir = path.ends_with(".ex") || path.ends_with(".exs");
     let local_functions: std::collections::HashSet<&str> = symbols
         .iter()
-        .filter(|symbol| symbol.kind == Some(SymKind::Fn))
+        .filter(|symbol| {
+            // Functions, and functions of a module (Julia and OCaml module blocks, Elixir
+            // `defmodule` with `defp derive`); methods of a class never shadow a builtin call
+            // (`len(x)` next to `def len(self)`).
+            symbol.kind == Some(SymKind::Fn)
+                || (symbol.kind == Some(SymKind::Method)
+                    && symbol.parent.is_some_and(|parent| {
+                        let parent_kind = symbols[parent as usize].kind;
+                        parent_kind == Some(SymKind::Mod)
+                            || (elixir && parent_kind == Some(SymKind::Class))
+                    }))
+        })
         .map(|symbol| symbol.name.as_str())
         .collect();
     let mut facts_refs: Vec<Ref> = refs

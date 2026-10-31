@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 47;
+pub const RESOLVE_VERSION: u32 = 48;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1106,6 +1106,12 @@ impl<'a> Index<'a> {
                         .iter()
                         .map(|&module| self.module_of(self.symbols[module as usize].file)),
                 );
+                // `import Plug.Conn`: the module's functions are callable unqualified.
+                if import.names.is_empty() {
+                    for &module in &modules {
+                        self.import_members(file, module, imports);
+                    }
+                }
             }
         }
     }
