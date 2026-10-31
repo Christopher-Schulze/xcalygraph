@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 60;
+pub const RESOLVE_VERSION: u32 = 61;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -3330,6 +3330,22 @@ impl<'a> Index<'a> {
         }
         if let Some(outcome) = self.lua_table_member(file, reference, qualifier) {
             return outcome;
+        }
+        // Python `super().__init__(...)`: the member in the enclosing class's supertypes.
+        if qualifier == "super()" && self.file_type(file) == Some(FileType::Python) {
+            let Some(types) = self.owner_type(file, reference.scope) else {
+                return Outcome::Unresolved;
+            };
+            let found: Vec<u32> = types
+                .iter()
+                .flat_map(|owner| self.supertypes.get(owner).into_iter().flatten().copied())
+                .flat_map(|supertype| self.members(supertype, &reference.name))
+                .collect();
+            return if found.is_empty() {
+                Outcome::External
+            } else {
+                pick_members(self, found, Confidence::Exact, reference.arity)
+            };
         }
         // `a->b` (PHP, C++) and `a?->b` chain like `a.b`.
         let dotted = qualifier.replace("?->", ".").replace("->", ".");

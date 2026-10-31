@@ -11,8 +11,14 @@
 ; CommonJS and object-member functions: `exports.f = function`, `module.exports.f = ...`,
 ; `app.handle = function handle()`; `Type.prototype.m = function` is a method of `Type`.
 (program (expression_statement (assignment_expression
-  left: (member_expression object: (identifier) property: (property_identifier) @name)
-  right: [(function_expression) (arrow_function)]) @definition.function))
+  left: (member_expression object: (identifier) @_exports property: (property_identifier) @name)
+  right: [(function_expression) (arrow_function)]) @definition.function)
+  (#eq? @_exports "exports"))
+; `app.render = function`: a method of the object, not a bare name of the module.
+(program (expression_statement (assignment_expression
+  left: (member_expression object: (identifier) @owner property: (property_identifier) @name)
+  right: [(function_expression) (arrow_function)]) @definition.method)
+  (#not-eq? @owner "exports"))
 (program (expression_statement (assignment_expression
   left: (member_expression
     object: (member_expression object: (identifier) @_module property: (property_identifier) @_exports)
@@ -84,3 +90,15 @@
 (assignment_expression right: (identifier) @name @reference.value)
 (export_statement (export_clause (export_specifier name: (identifier) @name @reference.value)))
 (export_statement value: (identifier) @name @reference.value)
+
+; Parameters and function locals shadow module names (`onResponse?.(x)` calls the parameter).
+(formal_parameters (identifier) @local)
+(formal_parameters (assignment_pattern left: (identifier) @local))
+(arrow_function parameter: (identifier) @local)
+(statement_block (lexical_declaration (variable_declarator name: (identifier) @local)))
+(statement_block (variable_declaration (variable_declarator name: (identifier) @local)))
+; Destructured parameters and locals (`({text, onResponse}) => ...`, `const [a, b] = ...`).
+(object_pattern (shorthand_property_identifier_pattern) @local)
+(object_pattern (pair_pattern value: (identifier) @local))
+(object_pattern (object_assignment_pattern left: (shorthand_property_identifier_pattern) @local))
+(array_pattern (identifier) @local)

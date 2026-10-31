@@ -20,3 +20,19 @@ class Account:
 @logged
 def describe(account: Account) -> str:
     return account.label
+
+
+class AdminAccount(Account):
+    def __init__(self, id: int) -> None:
+        super().__init__(id, "admin")
+        super().label
+
+
+class Saver:
+    def save(self) -> int:
+        return 1
+
+
+class AuditedSaver(Saver):
+    def save(self) -> int:
+        return super().save() + 1

@@ -80,3 +80,15 @@
 (assignment_expression right: (identifier) @name @reference.value)
 (export_statement (export_clause (export_specifier name: (identifier) @name @reference.value)))
 (export_statement value: (identifier) @name @reference.value)
+
+; Parameters and function locals shadow module names (`onResponse?.(x)` calls the parameter).
+(required_parameter pattern: (identifier) @local)
+(optional_parameter pattern: (identifier) @local)
+(arrow_function parameter: (identifier) @local)
+(statement_block (lexical_declaration (variable_declarator name: (identifier) @local)))
+(statement_block (variable_declaration (variable_declarator name: (identifier) @local)))
+; Destructured parameters and locals (`({text, onResponse}) => ...`, `const [a, b] = ...`).
+(object_pattern (shorthand_property_identifier_pattern) @local)
+(object_pattern (pair_pattern value: (identifier) @local))
+(object_pattern (object_assignment_pattern left: (shorthand_property_identifier_pattern) @local))
+(array_pattern (identifier) @local)

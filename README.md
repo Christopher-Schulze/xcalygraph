@@ -132,10 +132,10 @@ Each question describes code in plain words ("compare two secrets in constant ti
 | corpus | questions | xcalygraph `find` | Graphify `query` | `rg` + read |
 |---|---|---|---|---|
 | hono | 32 | 71 %, 589 tokens | 75 %, 2,200 tokens | 75 %, 33,693 tokens |
-| Graphify source | 26 | 92 %, 589 tokens | 88 %, 2,254 tokens | 100 %, 175,310 tokens |
-| xcalygraph source | 32 | 81 %, 590 tokens | 75 %, 2,796 tokens | 100 %, 16,427 tokens |
+| Graphify source | 26 | 96 %, 588 tokens | 88 %, 2,254 tokens | 100 %, 175,310 tokens |
+| xcalygraph source | 32 | 84 %, 590 tokens | 75 %, 2,796 tokens | 100 %, 18,211 tokens |
 
-At a similar hit rate, xcalygraph answers with about a quarter of Graphify's tokens and 1/30 to 1/300 of what `rg` plus reading costs. `impact` finds 100 % of the expected dependents and tests on the xcalygraph impact set, at 294 tokens per answer.
+At a similar hit rate, xcalygraph answers with about a quarter of Graphify's tokens and 1/30 to 1/300 of what `rg` plus reading costs. `impact` finds 100 % of the expected dependents and tests on the xcalygraph impact set, at 305 tokens per answer.
 
 ### Building and updating the index
 
