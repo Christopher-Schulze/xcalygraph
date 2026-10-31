@@ -36,6 +36,7 @@ pub fn render(
         section("entry", entrypoints(index, filter), SECTION_LINES),
         section("tasks", tasks(index, filter), SECTION_LINES),
         section("hubs", hubs(index, filter), SECTION_LINES),
+        section("api", api(index, filter), SECTION_LINES),
         section("cycles", cycles(index), SECTION_LINES),
         section("layers", layers(index), SECTION_LINES),
         section("ext", externals(index), EXTERNAL_LINES),
@@ -292,6 +293,55 @@ fn tasks(index: &Index, filter: &Filter) -> Vec<(String, String)> {
         found.push((runs.len(), text, record));
     }
     found.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    found
+        .into_iter()
+        .map(|(_, text, record)| (text, record))
+        .collect()
+}
+
+/// API operations (OpenAPI `op`, Protobuf rpcs, GraphQL root fields) with their handlers:
+/// `<name> [METHOD /path] <path>:<line> < <handler>, ...`; implemented operations first.
+fn api(index: &Index, filter: &Filter) -> Vec<(String, String)> {
+    use crate::domain::filetype::FileType;
+    let symbols = index.derived.symbols();
+    let mut found: Vec<(bool, String, String)> = Vec::new();
+    for (id, symbol) in symbols.iter().enumerate() {
+        let file_type = index.file_of(id as u32).file_type();
+        let root_field = symbol.parent != u32::MAX
+            && matches!(
+                index.string(symbols[symbol.parent as usize].name),
+                "Query" | "Mutation" | "Subscription"
+            );
+        let contract = symbol.kind() == SymKind::Op
+            || (symbol.kind() == SymKind::Method && file_type == Some(FileType::Proto))
+            || (symbol.kind() == SymKind::Method
+                && file_type == Some(FileType::GraphQl)
+                && root_field);
+        if !contract || !filter.symbol(index, symbol) {
+            continue;
+        }
+        let node = id as u32;
+        let handlers: Vec<&str> = index
+            .derived
+            .incoming(node)
+            .iter()
+            .filter(|edge| edge.kind() == EdgeKind::Implements)
+            .map(|edge| index.label(edge.node))
+            .collect();
+        let (mut text, record) = symbol_line(index, node, "api");
+        if symbol.kind() == SymKind::Op {
+            let signature = index.string(symbol.signature);
+            if signature != index.string(symbol.name) {
+                text = text.replacen(' ', &format!(" {signature} "), 1);
+            }
+        }
+        if !handlers.is_empty() {
+            text.push_str(" < ");
+            text.push_str(&handlers.join(", "));
+        }
+        found.push((handlers.is_empty(), text, record));
+    }
+    found.sort();
     found
         .into_iter()
         .map(|(_, text, record)| (text, record))

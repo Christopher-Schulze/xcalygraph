@@ -76,7 +76,7 @@ src/domain/corpus.rs
 
 | command | answers |
 |---|---|
-| `map` | How is this repository laid out and run? Languages, largest modules with their top symbols, entrypoints, tasks (Makefile, scripts, CI jobs, services) with what they run, hubs, cycles, layers, external dependencies, env vars. |
+| `map` | How is this repository laid out and run? Languages, largest modules with their top symbols, entrypoints, tasks (Makefile, scripts, CI jobs, services) with what they run, hubs, API operations with their handlers, cycles, layers, external dependencies, env vars. |
 | `find TERMS...` | Where is X? Ranked symbols and files (BM25F over names, parents, paths, signatures, docs, combined with graph rank). |
 | `ctx TERMS...` | What do I need to read for X? The best seeds with their doc sentence plus related symbols by personalized PageRank. |
 | `show NAME` | What is X? Signature, doc, members, fields, supertypes, implementations, callers, callees, tests, env reads. |
@@ -105,12 +105,13 @@ NAME accepts `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get
 | C, C++, CUDA, Metal | include resolution with CMake and `compile_commands.json` include directories, declarations mapped to definitions, namespaces, out-of-line members, virtual dispatch, function pointers and macro bodies |
 | Objective-C, Swift | classes, protocols, messages and selectors; SwiftPM modules, extensions, XCTest and `@Test`, `swift test` filters |
 | Bash | functions, commands as calls, sourced files, env reads |
+| OpenAPI, Protobuf, GraphQL | operations, rpcs and fields matched to the code handlers that implement them |
 | Terraform | resources, data sources, variables, locals, outputs and modules by address, with references and local module imports |
 | SQL | tables, views and functions from DDL; `queries` edges from code that names them in SQL strings |
 | Config and env | key paths of JSON, YAML, TOML, XML, INI and properties files; env definitions from `.env.example`, Dockerfiles, compose, GitHub Actions and Kubernetes against code reads (values never stored) |
 | Markdown | headings, links and backticked mentions resolved to files and symbols (the basis of stale doc detection) |
 
-Next on the roadmap: API contracts (OpenAPI, Protobuf, GraphQL), Ruby, PHP, Lua, Zig, Elixir, Erlang and Dart, then documents and assets.
+Next on the roadmap: Ruby, PHP, Lua, Zig, Elixir, Erlang and Dart, then documents and assets.
 
 ## Install
 

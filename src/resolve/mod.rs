@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 31;
+pub const RESOLVE_VERSION: u32 = 33;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1187,6 +1187,84 @@ impl<'a> Index<'a> {
     }
 
     /// A literal relative path: relative to the referring file, then to the root.
+    /// Contract `implements` edges (inferred): code functions and methods whose normalized name
+    /// equals an OpenAPI `operationId`, a Protobuf rpc or a GraphQL root field (`Query`,
+    /// `Mutation`, `Subscription`; also `resolve<Field>`). Several matches narrow to handlers whose
+    /// owner names the service; otherwise no edge.
+    fn contract_edges(&self) -> Vec<Edge> {
+        let normalize = |name: &str| name.to_ascii_lowercase().replace(['_', '-'], "");
+        let contract_file = |file: u32| {
+            matches!(
+                self.file_type(file),
+                Some(FileType::Proto | FileType::GraphQl)
+            )
+        };
+        let mut handlers: HashMap<String, Vec<u32>> = HashMap::default();
+        for (id, symbol) in self.symbols.iter().enumerate() {
+            let code = self
+                .file_type(symbol.file)
+                .is_some_and(|file_type| file_type.is_code())
+                && self.file_type(symbol.file) != Some(FileType::Sql)
+                && self.input.files[symbol.file as usize].role == Role::Src;
+            if code && matches!(symbol.kind, SymKind::Fn | SymKind::Method) {
+                let key = normalize(&symbol.name);
+                let key = key
+                    .strip_prefix("resolve")
+                    .filter(|rest| !rest.is_empty())
+                    .map_or(key.clone(), str::to_owned);
+                handlers.entry(key).or_default().push(id as u32);
+            }
+        }
+        let mut edges = Vec::new();
+        for (id, contract) in self.symbols.iter().enumerate() {
+            let parent = (contract.parent != NONE).then(|| &self.symbols[contract.parent as usize]);
+            let service = match (contract.kind, self.file_type(contract.file)) {
+                (SymKind::Op, _) if !contract.name.contains(' ') => String::new(),
+                (SymKind::Method, Some(FileType::Proto)) => parent
+                    .map(|service| service.name.clone())
+                    .unwrap_or_default(),
+                (SymKind::Method, Some(FileType::GraphQl))
+                    if parent.is_some_and(|root| {
+                        matches!(root.name.as_str(), "Query" | "Mutation" | "Subscription")
+                    }) =>
+                {
+                    String::new()
+                }
+                _ => continue,
+            };
+            let Some(candidates) = handlers.get(&normalize(&contract.name)) else {
+                continue;
+            };
+            let candidates: Vec<u32> = candidates
+                .iter()
+                .copied()
+                .filter(|&handler| !contract_file(self.symbols[handler as usize].file))
+                .collect();
+            let chosen: Vec<u32> = if candidates.len() == 1 {
+                candidates
+            } else if !service.is_empty() {
+                let wanted = normalize(&service);
+                let owned: Vec<u32> = candidates
+                    .into_iter()
+                    .filter(|&handler| normalize(&self.owner_name(handler)).contains(&wanted))
+                    .collect();
+                if owned.len() == 1 { owned } else { Vec::new() }
+            } else {
+                Vec::new()
+            };
+            for handler in chosen {
+                edges.push(Edge {
+                    source: handler,
+                    target: id as u32,
+                    kind: EdgeKind::Implements,
+                    confidence: Confidence::Inferred,
+                    line: self.symbols[handler as usize].line,
+                });
+            }
+        }
+        edges
+    }
+
     /// What a task runs: a script path (a directory means its `main.go`, `main.rs`, `__main__.py`
     /// or `index` file), a task of the same file (`needs`, prerequisites, `depends_on`), or a
     /// Makefile target (`make t`) or package script (`npm run t`) elsewhere, nearest first.
@@ -2442,6 +2520,8 @@ impl<'a> Index<'a> {
     // ---------------------------------------------------------------- graph
 
     fn into_graph(mut self, resolved: Vec<Resolved>) -> Graph {
+        // Before the symbols move into the graph.
+        let contract_edges = self.contract_edges();
         let members = self.member_pairs();
         let symbol_count = self.symbols.len() as u32;
         let symbols = std::mem::take(&mut self.symbols);
@@ -2504,6 +2584,7 @@ impl<'a> Index<'a> {
                 line,
             });
         }
+        edges.extend(contract_edges);
         graph.edges = dedupe_edges(edges);
         graph.module_edges = module_imports
             .into_iter()

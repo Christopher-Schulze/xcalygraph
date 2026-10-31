@@ -18,7 +18,7 @@ Local, deterministic index of the repository (symbols, calls, type uses, imports
 
 | command | use |
 |---|---|
-| `xcalygraph map` | languages, largest modules with top symbols, entrypoints, tasks (make, scripts, CI, services) with what they run, hubs, cycles, layers, external deps, env vars |
+| `xcalygraph map` | languages, largest modules with top symbols, entrypoints, tasks (make, scripts, CI, services) with what they run, hubs, API operations with handlers, cycles, layers, external deps, env vars |
 | `xcalygraph find TERMS...` | ranked symbols and files, one line each; natural-language terms work |
 | `xcalygraph ctx TERMS...` | best matches with doc sentence plus related symbols, grouped by file |
 | `xcalygraph show NAME` | card: signature, doc, members, supertypes, implementations, callers, callees, tests, env reads |

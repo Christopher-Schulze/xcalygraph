@@ -1,6 +1,7 @@
 //! Fact extraction: content bytes to per-file facts (`docs/spec.md` section 5). Pure; no IO.
 
 mod config;
+mod contracts;
 pub mod engine;
 #[cfg(test)]
 mod golden;
@@ -19,7 +20,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 18;
+const EXTRACTION_VERSION: u32 = 20;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -105,6 +106,17 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
         let text = String::from_utf8_lossy(content);
         if record.role == Role::Config {
             config::extract(&record.path, file_type, &text, &mut facts);
+        }
+        match file_type {
+            FileType::Proto => contracts::proto(&text, &mut facts),
+            FileType::GraphQl => contracts::graphql(&text, &mut facts),
+            FileType::Yaml if contracts::is_openapi(&text) => {
+                contracts::openapi_yaml(&text, &mut facts)
+            }
+            FileType::Json if contracts::is_openapi(&text) => {
+                contracts::openapi_json(&text, &mut facts)
+            }
+            _ => {}
         }
         match file_type {
             FileType::Make => tasks::makefile(&text, &mut facts),

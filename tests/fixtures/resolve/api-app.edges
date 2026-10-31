@@ -1,0 +1,4 @@
+api.UserService.FetchUser -uses-> api.GetUserRequest @12
+api.UserService.FetchUser -uses-> api.User @12
+server.GetUser -implements?-> api.getUser @9
+server.userServiceServer.FetchUser -implements?-> api.UserService.FetchUser @6
