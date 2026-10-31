@@ -103,7 +103,7 @@ Resolution order for all of them is `docs/spec.md` section 6: lexical scope, imp
 
 ## Agent skill
 
-`skills/xcalygraph/SKILL.md` is embedded in the binary, so skill version equals binary version. It states when to use xcalygraph and when `rg` or direct reads are better, the command table, NAME forms, flags, output markers, exit codes and three rules (verify at the cited line before editing, `--read-only` in read-only tasks, `show` instead of whole-file reads). Size: 2.7 KB, about 700 to 900 tokens (limit 1500, enforced by a unit test).
+`skills/xcalygraph/SKILL.md` is embedded in the binary, so skill version equals binary version. It states when to use xcalygraph and when `rg` or direct reads are better, the command table with every command (housekeeping included; a unit test checks that `help` and the skill list every CLI command), NAME forms, flags, output markers, exit codes and three rules (verify at the cited line before editing, `--read-only` in read-only tasks, `show` instead of whole-file reads). Size: 3.5 KB, about 1,000 tokens (limit 1500, enforced by a unit test).
 
 ## Installation and releases
 

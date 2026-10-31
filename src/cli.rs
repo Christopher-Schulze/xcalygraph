@@ -808,6 +808,23 @@ mod tests {
     }
 
     #[test]
+    fn every_command_is_in_help_and_in_the_skill() {
+        // Agents learn the command set from the skill and check syntax with `help`: both list
+        // every command.
+        let help = render(Command::Help(None));
+        let skill = crate::app::install::SKILL;
+        for command in COMMANDS {
+            let name = command.name();
+            assert!(help.contains(&format!("\n  {name}")), "help lacks {name}");
+            assert!(
+                skill.contains(&format!("xcalygraph {name}"))
+                    || skill.contains(&format!("`{name}")),
+                "skill lacks {name}"
+            );
+        }
+    }
+
+    #[test]
     fn command_help_shows_synopsis_summary_and_flags() {
         assert_eq!(
             render(Command::Help(Some(CommandName::Index))),

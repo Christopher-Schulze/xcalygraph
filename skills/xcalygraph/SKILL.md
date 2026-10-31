@@ -25,7 +25,9 @@ Local, deterministic index of the repository (symbols, calls, type uses, imports
 | `xcalygraph path FROM TO` | shortest dependency path |
 | `xcalygraph impact NAME... \| --diff [REV]` | dependents of a change, tests reaching them, test commands to run |
 | `xcalygraph audit` | dead code, unused exports, cycles, stale doc references, env drift, unreferenced assets, files co-changed without static link, hotspots |
-| `xcalygraph help [COMMAND]` | full syntax |
+| `xcalygraph index`, `ls`, `clean [ROOT...] [--missing]` | refresh explicitly; list indexes (root, size, last use); delete all, some or orphaned (disposable, rebuilt on the next query) |
+| `xcalygraph install`, `update [--check]`, `version` | install or repair binary and skill; self-update with skill refresh; versions |
+| `xcalygraph help [COMMAND]` | full syntax of every command and flag |
 
 NAME: `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get`), `path:line`, `path::name`, a file path, or a unique bare name.
 
