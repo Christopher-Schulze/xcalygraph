@@ -347,6 +347,13 @@ fn parameter_counts_come_from_the_declaration_list() {
     );
     assert_eq!(
         count(
+            "func join(_ parts: [String], separator: String = \", \", open: String = \"(\")",
+            "join"
+        ),
+        Some((1, 3, false))
+    );
+    assert_eq!(
+        count(
             "Task Send(object request, CancellationToken ct = default)",
             "Send"
         ),

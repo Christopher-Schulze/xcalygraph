@@ -469,7 +469,14 @@ fn assemble(assembly: Assembly) -> Facts {
         let exported = (hooks.exported)(&definition);
         let flags = (hooks.flags)(&definition, &context) | inherited;
         let prefix = (hooks.signature_prefix)(kind, node_text);
-        let signature = facts::clip(&format!("{prefix}{}", signature(node, source)), 160);
+        let signature = facts::clip(
+            &compact_parameters(
+                &format!("{prefix}{}", signature(node, source)),
+                &def.name,
+                160,
+            ),
+            160,
+        );
         symbols.push(Symbol {
             kind: Some(kind),
             name: def.name.clone(),
@@ -1061,6 +1068,125 @@ fn signature(node: Node, source: &[u8]) -> String {
         .to_owned()
 }
 
+/// A signature over `max` characters keeps its parameter list whole: each parameter shrinks to
+/// its label and name (`for _`, `columns = …`), so the parameter count and the defaults survive
+/// clipping. Shorter signatures stay as written.
+fn compact_parameters(signature: &str, name: &str, max: usize) -> String {
+    if signature.chars().count() <= max {
+        return signature.to_owned();
+    }
+    // The declared name, not a type that contains it: a whole word followed by `(` or `<`.
+    let bytes = signature.as_bytes();
+    let Some(name_end) = signature
+        .match_indices(name)
+        .map(|(start, _)| (start, start + name.len()))
+        .find(|&(start, end)| {
+            (start == 0 || !(bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_'))
+                && matches!(bytes.get(end), Some(b'(' | b'<'))
+        })
+        .map(|(_, end)| end)
+    else {
+        return signature.to_owned();
+    };
+    let rest = &signature[name_end..];
+    // Generic parameters (`<T: P>`) stay; the list starts at the first `(` after them.
+    let Some(open) = rest.find('(').map(|offset| name_end + offset) else {
+        return signature.to_owned();
+    };
+    let mut depth = 0i32;
+    let mut close = None;
+    let mut cuts = vec![open + 1];
+    let mut quote: Option<char> = None;
+    for (offset, ch) in signature[open + 1..].char_indices() {
+        let index = open + 1 + offset;
+        // Default values may be strings with brackets or commas (`separator: String = ", "`).
+        if let Some(open_quote) = quote {
+            if ch == open_quote && !signature[..index].ends_with('\\') {
+                quote = None;
+            }
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+            continue;
+        }
+        match ch {
+            '(' | '[' | '{' | '<' => depth += 1,
+            ')' if depth == 0 => {
+                close = Some(index);
+                break;
+            }
+            ')' | ']' | '}' => depth -= 1,
+            '>' if !signature[..index].ends_with('-') && !signature[..index].ends_with('=') => {
+                depth -= 1
+            }
+            ',' if depth == 0 => cuts.push(index + 1),
+            _ => {}
+        }
+    }
+    let Some(close) = close else {
+        return signature.to_owned();
+    };
+    cuts.push(close + 1);
+    let parameters: Vec<String> = cuts
+        .windows(2)
+        .map(|pair| {
+            let parameter = signature[pair[0]..pair[1] - 1].trim();
+            let has_default = top_level_byte(parameter, b'=').is_some();
+            let head = match top_level_byte(parameter, b':') {
+                // `label name: Type` (Swift, Kotlin, TypeScript, Python, Rust).
+                Some(colon) => parameter[..colon].trim(),
+                // `Type name` (Java, C#, C, C++): the last word.
+                None => {
+                    let before_default = top_level_byte(parameter, b'=')
+                        .map_or(parameter, |equals| parameter[..equals].trim());
+                    before_default
+                        .rsplit(|ch: char| ch.is_whitespace() || ch == '*' || ch == '&')
+                        .next()
+                        .unwrap_or(before_default)
+                }
+            };
+            if has_default {
+                format!("{head} = …")
+            } else {
+                head.to_owned()
+            }
+        })
+        .filter(|parameter| !parameter.is_empty())
+        .collect();
+    format!(
+        "{}{}{}",
+        &signature[..=open],
+        parameters.join(", "),
+        &signature[close..]
+    )
+}
+
+/// Byte offset of `wanted` outside brackets and string quotes.
+fn top_level_byte(text: &str, wanted: u8) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    for (index, byte) in text.bytes().enumerate() {
+        if let Some(open_quote) = quote {
+            if byte == open_quote {
+                quote = None;
+            }
+            continue;
+        }
+        if byte == b'"' || byte == b'\'' {
+            quote = Some(byte);
+            continue;
+        }
+        match byte {
+            b'(' | b'[' | b'{' | b'<' => depth += 1,
+            b')' | b']' | b'}' | b'>' => depth -= 1,
+            _ if byte == wanted && depth == 0 => return Some(index),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Removes the spaces and trailing commas that line breaks leave inside brackets.
 fn tidy_brackets(text: &str) -> String {
     let mut out = text.to_owned();
@@ -1212,6 +1338,28 @@ fn strip_comment(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_signatures_keep_their_parameter_list() {
+        let swift = "public func requireHelp<T: ParsableArguments>(_ visibility: ArgumentVisibility, for _: T.Type, columns: Int? = 80, equals expected: String, sourceLocation: SourceLocation = #_sourceLocation) throws";
+        assert_eq!(
+            compact_parameters(swift, "requireHelp", 160),
+            "public func requireHelp<T: ParsableArguments>(_ visibility, for _, columns = …, equals expected, sourceLocation = …) throws"
+        );
+        let java = "public static <T> List<T> merge(final Map<String, List<T>> left, final Map<String, List<T>> right, Comparator<? super T> comparator, int limit = 10)";
+        assert_eq!(
+            compact_parameters(java, "merge", 80),
+            "public static <T> List<T> merge(left, right, comparator, limit = …)"
+        );
+        // String defaults with commas or brackets stay one parameter.
+        let defaults = "public func render<T>(_ value: T, separator: String = \", \", open: String = \"(\", terminator: String = \"\\n\") -> String where T: CustomStringConvertible, T: Sendable";
+        assert_eq!(
+            compact_parameters(defaults, "render", 100),
+            "public func render<T>(_ value, separator = …, open = …, terminator = …) -> String where T: CustomStringConvertible, T: Sendable"
+        );
+        // Short signatures stay as written.
+        assert_eq!(compact_parameters("fn f(a: u8)", "f", 160), "fn f(a: u8)");
+    }
 
     #[test]
     fn type_names_drop_decoration() {

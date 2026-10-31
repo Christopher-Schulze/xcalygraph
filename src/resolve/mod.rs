@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 45;
+pub const RESOLVE_VERSION: u32 = 46;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1979,6 +1979,17 @@ impl<'a> Index<'a> {
             .collect()
     }
 
+    /// Several callables of one name (overloads in Swift, C++, Dart and other languages
+    /// without class-bound lookup): the argument count may pick one.
+    fn overload_set(&self, candidates: &[u32]) -> bool {
+        candidates.len() > 1
+            && candidates.iter().all(|&s| {
+                let symbol = &self.symbols[s as usize];
+                symbol.kind.is_callable()
+                    && symbol.name == self.symbols[candidates[0] as usize].name
+            })
+    }
+
     /// Names of the namespaces enclosing a symbol, outermost first.
     fn namespaces(&self, symbol: u32) -> Vec<&str> {
         let mut names = Vec::new();
@@ -3014,7 +3025,10 @@ impl<'a> Index<'a> {
                     Confidence::Exact,
                 );
             }
-            if jvm::is_class_based(self.file_type(file)) || has_declarations(self.file_type(file)) {
+            if jvm::is_class_based(self.file_type(file))
+                || has_declarations(self.file_type(file))
+                || self.overload_set(&same)
+            {
                 return pick_members(self, same, Confidence::Exact, reference.arity);
             }
             return pick(&same, Confidence::Exact);
@@ -3028,6 +3042,7 @@ impl<'a> Index<'a> {
             if !found.is_empty() {
                 if jvm::is_class_based(self.file_type(file))
                     || has_declarations(self.file_type(file))
+                    || self.overload_set(&found)
                 {
                     return pick_members(self, found, Confidence::Exact, reference.arity);
                 }
@@ -4235,7 +4250,21 @@ fn parameter_count(signature: &str, name: &str) -> Option<(usize, usize, bool)> 
     let mut defaults = 0;
     let mut in_default = false;
     let mut previous = ' ';
+    let mut quote: Option<char> = None;
     for (index, ch) in inner.char_indices() {
+        // String defaults may hold commas or brackets (`sep: String = ", "`).
+        if let Some(open) = quote {
+            if ch == open && previous != '\\' {
+                quote = None;
+            }
+            previous = ch;
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+            previous = ch;
+            continue;
+        }
         // `->` and `=>` in function types are no closing brackets.
         let arrow = ch == '>' && matches!(previous, '-' | '=');
         previous = ch;
