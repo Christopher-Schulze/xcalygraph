@@ -28,24 +28,31 @@ tree-sitter-bash = { version = "0.25.1", optional = true }
 tree-sitter-c = { version = "0.24.2", optional = true }
 tree-sitter-c-sharp = { version = "0.23.5", optional = true }
 tree-sitter-cpp = { version = "0.23.4", optional = true }
+tree-sitter-dart = { version = "0.3.0", optional = true }
+tree-sitter-elixir = { version = "0.3.5", optional = true }
+tree-sitter-erlang = { version = "0.21.0", optional = true }
 tree-sitter-go = { version = "0.25.0", optional = true }
 tree-sitter-groovy = { version = "0.1.2", optional = true }
 tree-sitter-java = { version = "0.23.5", optional = true }
 tree-sitter-javascript = { version = "0.25.0", optional = true }
 tree-sitter-kotlin-ng = { version = "1.1.0", optional = true }
 tree-sitter-language = "0.1.9"
+tree-sitter-lua = { version = "0.5.0", optional = true }
 tree-sitter-objc = { version = "3.0.2", optional = true }
+tree-sitter-php = { version = "0.25.1", optional = true }
 tree-sitter-python = { version = "0.25.0", optional = true }
+tree-sitter-ruby = { version = "0.23.1", optional = true }
 tree-sitter-rust = { version = "0.24.2", optional = true }
 tree-sitter-scala = { version = "0.26.3", optional = true }
 tree-sitter-swift = { version = "0.7.4", optional = true }
 tree-sitter-typescript = { version = "0.23.2", optional = true }
 tree-sitter-vb-dotnet = { version = "0.1.0", optional = true }
+tree-sitter-zig = { version = "1.1.2", optional = true }
 ureq = "3.5.0"
 xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 
 [features]
-default = ["lang-go", "lang-rust", "lang-python", "lang-typescript", "lang-javascript", "lang-bash", "lang-java", "lang-kotlin", "lang-scala", "lang-groovy", "lang-csharp", "lang-vbnet", "lang-c", "lang-cpp", "lang-objc", "lang-swift"]
+default = ["lang-go", "lang-rust", "lang-python", "lang-typescript", "lang-javascript", "lang-bash", "lang-java", "lang-kotlin", "lang-scala", "lang-groovy", "lang-csharp", "lang-vbnet", "lang-c", "lang-cpp", "lang-objc", "lang-swift", "lang-ruby", "lang-php", "lang-lua", "lang-zig", "lang-elixir", "lang-erlang", "lang-dart"]
 lang-go = ["dep:tree-sitter-go"]
 lang-rust = ["dep:tree-sitter-rust"]
 lang-python = ["dep:tree-sitter-python"]
@@ -62,3 +69,10 @@ lang-c = ["dep:tree-sitter-c"]
 lang-cpp = ["dep:tree-sitter-cpp"]
 lang-objc = ["dep:tree-sitter-objc"]
 lang-swift = ["dep:tree-sitter-swift"]
+lang-ruby = ["dep:tree-sitter-ruby"]
+lang-php = ["dep:tree-sitter-php"]
+lang-lua = ["dep:tree-sitter-lua"]
+lang-zig = ["dep:tree-sitter-zig"]
+lang-elixir = ["dep:tree-sitter-elixir"]
+lang-erlang = ["dep:tree-sitter-erlang"]
+lang-dart = ["dep:tree-sitter-dart"]

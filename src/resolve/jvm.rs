@@ -30,18 +30,25 @@ pub(super) fn is_dotnet(file_type: Option<FileType>) -> bool {
 /// JVM and .NET: names come from the class body, the package or namespace and imports only;
 /// members of the enclosing class need no `this`.
 pub(super) fn is_class_based(file_type: Option<FileType>) -> bool {
-    is_jvm(file_type) || is_dotnet(file_type)
+    is_jvm(file_type) || is_dotnet(file_type) || file_type == Some(FileType::Php)
 }
 
 /// Class bodies where members need no `this`: JVM, .NET and C++.
 pub(super) fn has_implicit_this(file_type: Option<FileType>) -> bool {
-    is_class_based(file_type) || matches!(file_type, Some(FileType::Cpp | FileType::Swift))
+    // PHP calls methods only through `$this->`; a bare call is a function.
+    (is_class_based(file_type) && file_type != Some(FileType::Php))
+        || matches!(
+            file_type,
+            Some(FileType::Cpp | FileType::Swift | FileType::Ruby)
+        )
 }
 
 /// Module key of a JVM package or .NET namespace.
 pub(super) fn namespace_key(file_type: Option<FileType>, name: &str) -> String {
     if is_dotnet(file_type) {
         super::dotnet::namespace_key(name)
+    } else if file_type == Some(FileType::Php) {
+        format!("php:{name}")
     } else {
         package_key(name)
     }
@@ -56,10 +63,15 @@ impl Index<'_> {
                     self.jvm_static_import(file, class_path, name, local, imports);
                     continue;
                 }
-                let Some(module) = self.modules.get(&package_key(&import.spec)) else {
+                let Some(module) = self
+                    .modules
+                    .get(&namespace_key(self.file_type(file), &import.spec))
+                else {
                     // `import a.b.Outer.Inner`: the spec names a class of a package.
                     let nested = import.spec.rsplit_once('.').and_then(|(package, outer)| {
-                        let module = self.modules.get(&package_key(package))?;
+                        let module = self
+                            .modules
+                            .get(&namespace_key(self.file_type(file), package))?;
                         let found =
                             self.module_symbol(module, outer, Some(|kind: SymKind| kind.is_type()));
                         (!found.is_empty()).then_some(module)
@@ -84,10 +96,10 @@ impl Index<'_> {
                 let found = self.module_symbol(module, name, None);
                 if found.is_empty() {
                     // Kotlin top-level functions and Scala objects may live in sub-packages.
-                    if let Some(child) = self
-                        .modules
-                        .get(&package_key(&format!("{}.{name}", import.spec)))
-                    {
+                    if let Some(child) = self.modules.get(&namespace_key(
+                        self.file_type(file),
+                        &format!("{}.{name}", import.spec),
+                    )) {
                         imports.names.insert(local, Target::Module(child));
                     }
                     continue;
@@ -110,7 +122,10 @@ impl Index<'_> {
         let Some((package, class)) = class_path.rsplit_once('.') else {
             return;
         };
-        let Some(module) = self.modules.get(&package_key(package)) else {
+        let Some(module) = self
+            .modules
+            .get(&namespace_key(self.file_type(file), package))
+        else {
             self.jvm_external(class_path, name, local, imports);
             return;
         };

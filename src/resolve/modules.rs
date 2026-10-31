@@ -197,6 +197,24 @@ fn module_of(map: &ModuleMap, record: &FileRecord, facts: Option<&Facts>) -> Mod
                 file_type: Some(FileType::Swift),
             }
         }
+        Some(FileType::Php) if extracted_code => {
+            // The namespace declaration, independent of directories (PSR-4 maps them anyway).
+            let namespace = facts
+                .and_then(|facts| facts.package.clone())
+                .unwrap_or_default();
+            let key = format!("php:{namespace}");
+            ModuleInfo {
+                name: if namespace.is_empty() {
+                    ".".to_owned()
+                } else {
+                    namespace.replace('\\', ".")
+                },
+                method_scope: key.clone(),
+                key,
+                separator: ".",
+                file_type: Some(FileType::Php),
+            }
+        }
         Some(FileType::Go) if extracted_code => {
             let key = go_import_path(map, dir);
             ModuleInfo {

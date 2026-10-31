@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 33;
+pub const RESOLVE_VERSION: u32 = 36;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -406,7 +406,9 @@ impl<'a> Index<'a> {
             Some(FileType::Rust) => self.rust_imports(file, facts, &mut imports),
             Some(FileType::Python) => self.python_imports(file, facts, &mut imports),
             Some(FileType::Bash) => self.path_imports(file, facts, &mut imports),
-            file_type if jvm::is_jvm(file_type) => self.jvm_imports(file, facts, &mut imports),
+            file_type if jvm::is_jvm(file_type) || file_type == Some(FileType::Php) => {
+                self.jvm_imports(file, facts, &mut imports)
+            }
             Some(FileType::CSharp | FileType::VbNet) => {
                 self.dotnet_imports(file, facts, &mut imports)
             }
@@ -415,6 +417,7 @@ impl<'a> Index<'a> {
             }
             Some(FileType::Swift) => self.swift_imports(facts, &mut imports),
             Some(FileType::Terraform) => self.terraform_imports(file, facts, &mut imports),
+            Some(FileType::Ruby) => self.ruby_imports(file, facts, &mut imports),
             Some(
                 FileType::TypeScript
                 | FileType::JavaScript
@@ -425,6 +428,27 @@ impl<'a> Index<'a> {
             _ => {}
         }
         imports
+    }
+
+    /// `require` and `require_relative`: `.rb` files relative to the file, the root and `lib/`;
+    /// gems outside the root are external.
+    fn ruby_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        for import in &facts.imports {
+            let spec = import.spec.trim_end_matches(".rb");
+            let target = [format!("{spec}.rb"), format!("lib/{spec}.rb")]
+                .iter()
+                .find_map(|candidate| self.file_by_path(file, candidate));
+            match target {
+                Some(target) if target != file => imports.files.push((file, target)),
+                Some(_) => {}
+                None if !spec.starts_with('.') => {
+                    imports
+                        .externals
+                        .push(spec.split('/').next().unwrap_or(spec).to_owned());
+                }
+                None => {}
+            }
+        }
     }
 
     /// Local `module` sources: the module directory's files are imported.
@@ -998,7 +1022,7 @@ impl<'a> Index<'a> {
         name: &str,
     ) -> Option<Vec<u32>> {
         let imports = imports.or_else(|| self.file_imports.get(file as usize));
-        if self.file_type(file) == Some(FileType::Cpp)
+        if matches!(self.file_type(file), Some(FileType::Cpp | FileType::Ruby))
             && let Some(found) = self.cpp_qualified(qualifier, name)
         {
             return Some(found);
@@ -1879,7 +1903,9 @@ impl<'a> Index<'a> {
                 None => Outcome::Unresolved,
             };
         }
-        let chain: Vec<&str> = qualifier.split('.').map(str::trim).collect();
+        // `a->b` (PHP, C++) and `a?->b` chain like `a.b`.
+        let dotted = qualifier.replace("?->", ".").replace("->", ".");
+        let chain: Vec<&str> = dotted.split('.').map(str::trim).collect();
         let head = chain[0];
         // 3. Qualified name through imports and the module map; a local binding of the head
         // shadows an import of the same name.
@@ -2151,7 +2177,7 @@ impl<'a> Index<'a> {
         line: u32,
     ) -> Receiver {
         let head = chain[0];
-        let start = if matches!(head, "self" | "this" | "Self") {
+        let start = if matches!(head, "self" | "this" | "Self" | "$this") {
             match self.owner_type(file, scope) {
                 Some(types) => Some((types, Confidence::Exact)),
                 None => return Receiver::Unknown,
@@ -2706,6 +2732,7 @@ fn has_module_rules(file_type: Option<FileType>) -> bool {
                 | FileType::VbNet
                 | FileType::Swift
                 | FileType::Terraform
+                | FileType::Php
         )
     )
 }

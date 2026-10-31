@@ -1,0 +1,18 @@
+sym 3-14 class App parent=- owner= pub flags=0 sig="class App" doc=""
+sym 4-9 method run parent=App owner=App pub flags=0 sig="def run" doc=""
+sym 11-13 method report parent=App owner=App pub flags=0 sig="def report(row, url)" doc=""
+sym 16-16 const Row parent=- owner= pub flags=0 sig="Row = Struct.new(:id)" doc=""
+import 1 "store/repository" names= alias=- reexport=false
+ref 5 Type MemoryRepository qualifier=Store scope=run
+ref 5 Type Store qualifier=- scope=run
+ref 5 Call new qualifier=Store::MemoryRepository scope=run
+ref 6 Type Row qualifier=- scope=run
+ref 6 Call new qualifier=Row scope=run args=1
+ref 6 Call put qualifier=repository scope=run args=1
+ref 7 Call fetch qualifier=ENV scope=run args=1
+ref 8 Call find qualifier=repository scope=run args=1
+ref 8 Call report qualifier=- scope=run args=2
+ref 8 Value url qualifier=- scope=run
+ref 16 Call new qualifier=Struct scope=Row args=1
+bind 5 "repository": Store::MemoryRepository declared scope=run
+env 7 APP_URL scope=run

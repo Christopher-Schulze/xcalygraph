@@ -253,8 +253,10 @@ impl Index<'_> {
             .copied()
             .filter(|&candidate| {
                 let symbol = &self.symbols[candidate as usize];
-                self.file_type(symbol.file) == Some(FileType::Cpp)
-                    && has_qualified_suffix(&symbol.qualified.replace("::", "."), &written)
+                matches!(
+                    self.file_type(symbol.file),
+                    Some(FileType::Cpp | FileType::Ruby)
+                ) && has_qualified_suffix(&symbol.qualified.replace("::", "."), &written)
             })
             .collect();
         (!found.is_empty()).then_some(found)

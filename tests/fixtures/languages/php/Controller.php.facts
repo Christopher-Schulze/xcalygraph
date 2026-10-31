@@ -1,0 +1,28 @@
+package App\Http
+sym 8-24 class Controller parent=- owner= pub flags=0 sig="class Controller" doc=""
+sym 10-10 method __construct parent=Controller owner=Controller pub flags=0 sig="public function __construct(private Repo $repository)" doc=""
+sym 12-16 method show parent=Controller owner=Controller pub flags=0 sig="public function show(int $id): string" doc=""
+sym 18-23 method make parent=Controller owner=Controller pub flags=0 sig="public static function make(): self" doc=""
+sym 26-29 fn format_row parent=- owner= pub flags=0 sig="function format_row(?Row $row): string" doc=""
+import 5 "App\\Store" names=MemoryRepository alias=- reexport=false
+import 5 "App\\Store" names=Row alias=- reexport=false
+import 6 "App\\Store" names=Repository alias=Repo reexport=false
+ref 10 Type Repo qualifier=- scope=__construct
+ref 14 Value $id qualifier=- scope=show
+ref 14 Call find qualifier=$this->repository scope=show args=1
+ref 15 Value $row qualifier=- scope=show
+ref 15 Call format_row qualifier=- scope=show args=1
+ref 15 Call getenv qualifier=- scope=show args=1
+ref 20 Call MemoryRepository qualifier=- scope=make
+ref 21 Call Row qualifier=- scope=make
+ref 21 Call put qualifier=$repository scope=make args=1
+ref 22 Value $repository qualifier=- scope=make
+ref 22 Call Controller qualifier=- scope=make
+ref 26 Type Row qualifier=- scope=format_row
+bind 12 "": string declared scope=show
+bind 12 "$id": int declared scope=show
+bind 18 "": self declared scope=make
+bind 20 "$repository": MemoryRepository declared scope=make
+bind 26 "$row": Row declared scope=format_row
+fields Controller repository:Repo
+env 15 APP_URL scope=show

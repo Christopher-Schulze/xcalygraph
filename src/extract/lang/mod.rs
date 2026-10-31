@@ -19,15 +19,20 @@ pub mod groovy;
     feature = "lang-groovy",
     feature = "lang-csharp",
     feature = "lang-vbnet",
-    feature = "lang-swift"
+    feature = "lang-swift",
+    feature = "lang-php"
 ))]
 pub mod java;
 #[cfg(feature = "lang-kotlin")]
 pub mod kotlin;
 #[cfg(feature = "lang-objc")]
 pub mod objc;
+#[cfg(feature = "lang-php")]
+pub mod php;
 #[cfg(feature = "lang-python")]
 pub mod python;
+#[cfg(feature = "lang-ruby")]
+pub mod ruby;
 #[cfg(feature = "lang-rust")]
 pub mod rust;
 #[cfg(feature = "lang-scala")]
@@ -91,6 +96,10 @@ const PACKS: &[&Pack] = &[
     &objc::PACK,
     #[cfg(feature = "lang-swift")]
     &swift::PACK,
+    #[cfg(feature = "lang-ruby")]
+    &ruby::PACK,
+    #[cfg(feature = "lang-php")]
+    &php::PACK,
 ];
 
 /// One lazily compiled query per pack: a refresh compiles only the languages it extracts.
