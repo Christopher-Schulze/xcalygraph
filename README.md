@@ -7,6 +7,7 @@
 - **Fast and incremental**: parallel tree-sitter extraction, a zero-copy memory-mapped index, content hashes per file. Only changed files are re-extracted and only changed shards are rewritten.
 - **Deterministic**: the same tree always gives byte-identical output.
 - **Self-contained**: one binary with the agent skill embedded. No LLM calls, no interpreter, no service, no network except `update`.
+- **Broad**: about 60 languages and formats, from Go, Rust, TypeScript, Java and C++ to Elixir, Solidity, Verilog, COBOL and templates, plus config, SQL, Terraform, API contracts, Markdown, PDF, Office documents and assets.
 
 Clean-room Rust rewrite of a selected subset of [Graphify](https://github.com/Graphify-Labs/graphify), redesigned around one question: how much useful, verifiable context does the agent get per token?
 
@@ -18,19 +19,19 @@ Measured on public corpora on an Apple Silicon laptop with a warm cache. Reprodu
 
 | corpus | questions | xcalygraph `find` | Graphify 0.9.97 `query` | `rg` + reading the file |
 |---|---|---|---|---|
-| xcalygraph (Rust) | 32 | **81 %, 583 tokens** | 75 %, 2796 tokens | 10240 tokens |
+| xcalygraph (Rust) | 32 | **81 %, 590 tokens** | 75 %, 2796 tokens | 16408 tokens |
 | Graphify clone (Python) | 26 | **92 %, 589 tokens** | 88 %, 2254 tokens | 175310 tokens |
 
-`impact` finds 100 % of the expected dependents and tests on the xcalygraph impact set at 292 tokens per answer.
+`impact` finds 100 % of the expected dependents and tests on the xcalygraph impact set at 294 tokens per answer.
 
 **Index build** compares xcalygraph against Graphify 0.9.97 on the same tracked files (`graphify update .`):
 
 | corpus | files | full build | peak RSS | index on disk | refresh after a 1-file change |
 |---|---|---|---|---|---|
-| Graphify clone | 1111 | **0.91 s** vs 33.4 s | **87 MB** vs 684 MB | **7.5 MB** vs 61 MB | 96 ms |
-| [hono](https://github.com/honojs/hono) @17ad0e2 | 577 | **0.48 s** vs 5.0 s | **43 MB** vs 211 MB | **1.4 MB** vs 7.6 MB | 69 ms |
+| Graphify clone | 1111 | **1.01 s** vs 33.4 s | **81 MB** vs 684 MB | **7.4 MB** vs 61 MB | 105 ms |
+| [hono](https://github.com/honojs/hono) @17ad0e2 | 577 | **0.47 s** vs 5.0 s | **44 MB** vs 211 MB | **1.4 MB** vs 7.6 MB | 73 ms |
 
-Freshness check without changes: 6 to 8 ms. Every query runs it first, so answers never come from a stale index.
+Freshness check without changes: about 8 ms. Every query runs it first, so answers never come from a stale index.
 
 ## What an agent sees
 
@@ -44,8 +45,8 @@ pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError>
 > infra::lock::WriterLock::acquire src/infra/lock.rs:20
 > app::refresh::write_derived src/app/refresh.rs:137
 > app::refresh::write_shards src/app/refresh.rs:180
-t app::refresh::tests::first_refresh_builds_then_quiet_refresh_writes_nothing src/app/refresh.rs:285
-t app::refresh::tests::corrupt_shard_is_rebuilt_from_its_files src/app/refresh.rs:362
+t app::refresh::tests::first_refresh_builds_then_quiet_refresh_writes_nothing src/app/refresh.rs:282
+t app::refresh::tests::changes_rewrite_only_affected_shards_and_read_only_sees_staleness src/app/refresh.rs:311
 +9 more
 ```
 
@@ -55,9 +56,11 @@ t app::refresh::tests::corrupt_shard_is_rebuilt_from_its_files src/app/refresh.r
 ~ infra::store::derived::build src/infra/store/derived.rs:209
 < 1 app::refresh::write_derived src/app/refresh.rs:137
 < 2 app::refresh::refresh src/app/refresh.rs:40
+< 2 app::refresh::rederive src/app/refresh.rs:126
 < 3 app::run src/app/mod.rs:16
-t resolve::tests::derived_bytes_are_identical_across_thread_counts src/resolve/tests.rs:155
-r cargo test -p xcalygraph -- corrupt_shard_is_rebuilt_from_its_files derived_bytes_are_identical_across_thread_counts ...
+t app::refresh::tests::first_refresh_builds_then_quiet_refresh_writes_nothing src/app/refresh.rs:282
+t app::refresh::tests::changes_rewrite_only_affected_shards_and_read_only_sees_staleness src/app/refresh.rs:311
+r cargo test -p xcalygraph -- changes_rewrite_only_affected_shards_and_read_only_sees_staleness corrupt_file_table_triggers_full_rebuild ...
 ```
 
 `xcalygraph impact --diff` does the same for the uncommitted changes in the work tree (or against any revision), and flags exported signature changes.
@@ -82,7 +85,7 @@ src/domain/corpus.rs
 | `show NAME` | What is X? Signature, doc, members, fields, supertypes, implementations, callers, callees, tests, env reads. |
 | `impact NAME... \| --diff [REV]` | What does this change affect? Dependents, tests reaching them, test commands to run. |
 | `path FROM TO` | How does A reach B? The shortest dependency path. |
-| `audit` | What should be cleaned up? Dead code, unused exports, cycles, stale doc references, env drift, files changed together without a static link, hotspots. |
+| `audit` | What should be cleaned up? Dead code, unused exports, cycles, stale doc references, env drift, unreferenced assets, files changed together without a static link, hotspots. |
 | `index`, `install`, `update`, `version`, `help` | Index control, skill installation, self-update, versions, syntax. |
 
 Shared flags: `-p GLOB` (paths), `-l go,rust` (languages), `-k fn,struct` (kinds), `--no-tests`, `--exact` (drop inferred edges), `-b N` (token budget), `--json` (JSON Lines), `--read-only` (never write; exit 5 when stale), `-C DIR` (root).
