@@ -210,7 +210,7 @@ The [one-liner](#install) fetches `install.sh` from the latest [release](https:/
 
 ```bash
 # a specific version, or the binary without the skill
-curl -fsSL https://github.com/Christopher-Schulze/xcalygraph/releases/latest/download/install.sh | bash -s -- --version 0.1.0
+curl -fsSL https://github.com/Christopher-Schulze/xcalygraph/releases/latest/download/install.sh | bash -s -- --version 0.1.1
 curl -fsSL https://github.com/Christopher-Schulze/xcalygraph/releases/latest/download/install.sh | bash -s -- --no-skill
 ```
 
@@ -262,7 +262,7 @@ xcalygraph is a clean-room Rust rewrite of a selected subset of [Graphify](https
 
 ## Status
 
-Early release (0.1.0). Commands, output format and index format may still change between minor versions; `update` keeps binary and skill in step, and indexes rebuild themselves when their format changes.
+Early release (0.1.1). Commands, output format and index format may still change between minor versions; `update` keeps binary and skill in step, and indexes rebuild themselves when their format changes.
 
 ## License
 
