@@ -5,6 +5,8 @@ file:src/service.ts -imports-> file:src/store/repo.ts @1
 file:src/store/index.ts -imports-> file:src/store/repo.ts @1
 file:src/store/index.ts -uses-> src/store/repo.MemoryRepo @1
 file:src/ui/View.tsx -imports-> file:src/service.ts @1
+file:tools/warm.ts -imports-> file:src/cache/lru.ts @1
+src/cache/lru.Lru.set -calls-> src/cache/lru.Lru.#evict @6
 src/service.Service.constructor -uses-> src/store/repo.Repo @7
 src/service.Service.find -calls-> lib/format.format @11
 src/service.Service.find -calls-> src/store/repo.Repo.get @10
@@ -24,4 +26,7 @@ src/store/repo.openRepo -uses-> src/store/repo.Repo @17
 src/ui/View.View -calls-> src/service.makeService @8
 src/ui/View.View -calls-> src/ui/View.Badge @9
 src/ui/View.View -calls?-> src/service.Service.find @9
+tools/warm.warm -calls-> src/cache/lru.Lru @6
+tools/warm.warm -calls-> src/cache/lru.Lru.set @7
+tools/warm.warm -uses-> src/cache/lru.Lru @5
 ext src/service react 1

@@ -32,8 +32,8 @@ pub struct JsTables {
     aliases: Vec<(String, String)>,
     /// Root-relative `baseUrl` directories.
     base_dirs: Vec<String>,
-    /// (package name, root-relative entry without extension).
-    packages: Vec<(String, String)>,
+    /// (package name, root-relative entry without extension, package directory).
+    packages: Vec<(String, String, String)>,
 }
 
 pub fn tables(input: &Input) -> JsTables {
@@ -67,9 +67,11 @@ pub fn tables(input: &Input) -> JsTables {
                         || join(dir, "src/index"),
                         |main| normalize(&join(dir, main)),
                     );
-                    tables
-                        .packages
-                        .push((name.clone(), strip_extension(&entry).to_owned()));
+                    tables.packages.push((
+                        name.clone(),
+                        strip_extension(&entry).to_owned(),
+                        dir.to_owned(),
+                    ));
                 }
             }
             _ => {}
@@ -145,13 +147,18 @@ impl Index<'_> {
             for base in &tables.base_dirs {
                 bases.push(normalize(&join(base, spec)));
             }
-            for (name, entry) in &tables.packages {
+            for (name, entry, package_root) in &tables.packages {
                 if spec == name {
                     bases.push(entry.clone());
+                    bases.push(normalize(&join(package_root, "src/index")));
                 } else if let Some(rest) = spec.strip_prefix(&format!("{name}/")) {
                     let package_dir = parent_dir(entry);
                     let package_dir = package_dir.strip_suffix("/src").unwrap_or(package_dir);
                     bases.push(normalize(&join(package_dir, rest)));
+                    // Subpath exports point at build output (`dist/utils/*.js`) that the tree
+                    // does not hold; the sources live under the package's `src/`.
+                    bases.push(normalize(&join(package_root, &format!("src/{rest}"))));
+                    bases.push(normalize(&join(package_root, rest)));
                 }
             }
         }

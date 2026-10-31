@@ -11,6 +11,8 @@
 (class_declaration name: (type_identifier) @name) @definition.class
 (abstract_class_declaration name: (type_identifier) @name) @definition.class
 (method_definition name: (property_identifier) @name) @definition.method
+; ECMAScript private methods `#clone()` and their calls `this.#clone()`.
+(method_definition name: (private_property_identifier) @name) @definition.method
 (method_definition return_type: (type_annotation (_) @return.type)) @return
 (method_signature name: (property_identifier) @name) @definition.method
 (abstract_method_signature name: (property_identifier) @name) @definition.method
@@ -33,6 +35,7 @@
 
 (call_expression function: (identifier) @name) @reference.call
 (call_expression function: (member_expression object: (_) @qualifier property: (property_identifier) @name)) @reference.call
+(call_expression function: (member_expression object: (_) @qualifier property: (private_property_identifier) @name)) @reference.call
 (new_expression constructor: (identifier) @name) @reference.call
 (new_expression constructor: (member_expression object: (_) @qualifier property: (property_identifier) @name)) @reference.call
 (type_identifier) @name @reference.type

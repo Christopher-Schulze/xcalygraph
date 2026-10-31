@@ -9,6 +9,8 @@
 (program (variable_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function))
 (class_declaration name: (identifier) @name) @definition.class
 (method_definition name: (property_identifier) @name) @definition.method
+; ECMAScript private methods `#clone()` and their calls `this.#clone()`.
+(method_definition name: (private_property_identifier) @name) @definition.method
 
 (class_heritage (identifier) @name @reference.inherit)
 (class_heritage (member_expression object: (_) @qualifier property: (property_identifier) @name) @reference.inherit)
@@ -22,6 +24,7 @@
 
 (call_expression function: (identifier) @name) @reference.call
 (call_expression function: (member_expression object: (_) @qualifier property: (property_identifier) @name)) @reference.call
+(call_expression function: (member_expression object: (_) @qualifier property: (private_property_identifier) @name)) @reference.call
 (new_expression constructor: (identifier) @name) @reference.call
 (new_expression constructor: (member_expression object: (_) @qualifier property: (property_identifier) @name)) @reference.call
 
