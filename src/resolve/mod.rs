@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 28;
+pub const RESOLVE_VERSION: u32 = 30;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -81,6 +81,8 @@ struct Index<'a> {
     /// C-family include directories (root-relative) and direct includes per file.
     include_dirs: Vec<String>,
     includes: Vec<Vec<u32>>,
+    /// SQL tables and views per lowercase name (SQL identifiers ignore case).
+    tables: HashMap<String, Vec<u32>>,
 }
 
 /// Where an import or path leads.
@@ -281,6 +283,7 @@ impl<'a> Index<'a> {
             global_usings: Vec::new(),
             include_dirs: cfamily::include_dirs(input.files, input.facts),
             includes: Vec::new(),
+            tables: HashMap::default(),
         };
         index.build_tables();
         index.includes = (0..input.files.len() as u32)
@@ -317,6 +320,12 @@ impl<'a> Index<'a> {
                 let kind = symbol.kind();
                 let name = symbol.name.as_str();
                 self.by_name.entry(name).or_default().push(id);
+                if matches!(kind, SymKind::Table | SymKind::View) {
+                    self.tables
+                        .entry(name.to_ascii_lowercase())
+                        .or_default()
+                        .push(id);
+                }
                 let owner = if !symbol.owner.is_empty() {
                     Some(symbol.owner.as_str())
                 } else {
@@ -1080,6 +1089,7 @@ impl<'a> Index<'a> {
                 RefKind::Path => self.resolve_path(file, &reference.name),
                 RefKind::Mention => self.resolve_mention(file, &reference.name),
                 RefKind::Run => self.resolve_run(file, reference),
+                RefKind::Query => self.resolve_table(file, &reference.name),
                 _ => Outcome::Unresolved,
             };
             match outcome {
@@ -1093,6 +1103,7 @@ impl<'a> Index<'a> {
                         RefKind::Path => EdgeKind::References,
                         RefKind::Mention => EdgeKind::Mentions,
                         RefKind::Run => EdgeKind::Runs,
+                        RefKind::Query => EdgeKind::Queries,
                         _ => EdgeKind::Uses,
                     };
                     if kind == EdgeKind::Calls && source_is_test {
@@ -1245,6 +1256,46 @@ impl<'a> Index<'a> {
                     .unwrap_or_default();
                 pick(&local, Confidence::Exact)
             }
+        }
+    }
+
+    /// An SQL table or view named in a query: the definitions nearest to the referring file
+    /// (longest shared directory prefix); one nearest is exact, several (migrations recreating a
+    /// table) are inferred.
+    fn resolve_table(&self, file: u32, name: &str) -> Outcome {
+        let Some(tables) = self.tables.get(&name.to_ascii_lowercase()) else {
+            return Outcome::External;
+        };
+        let dir = modules::parent_dir(&self.input.files[file as usize].path);
+        let shared = |table: u32| {
+            let other = modules::parent_dir(
+                &self.input.files[self.symbols[table as usize].file as usize].path,
+            );
+            dir.split('/')
+                .zip(other.split('/'))
+                .take_while(|(a, b)| a == b)
+                .count()
+        };
+        let best = tables
+            .iter()
+            .map(|&table| shared(table))
+            .max()
+            .unwrap_or_default();
+        let nearest: Vec<u32> = tables
+            .iter()
+            .copied()
+            .filter(|&table| shared(table) == best)
+            .collect();
+        match nearest.as_slice() {
+            [only] => exact(*only),
+            several => Outcome::Targets(
+                several
+                    .iter()
+                    .take(MAX_DISPATCH)
+                    .map(|&table| (table, Confidence::Inferred))
+                    .collect(),
+                Confidence::Inferred,
+            ),
         }
     }
 

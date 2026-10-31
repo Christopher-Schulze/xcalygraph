@@ -182,6 +182,8 @@ fn unreferenced(
                     | SymKind::Macro
             )
             || index.file_of(node).role() != Role::Src
+            // SQL functions are called from SQL text, which yields no call edges.
+            || index.file_of(node).file_type() == Some(crate::domain::filetype::FileType::Sql)
             || implicit(index.string(symbol.name))
             || !filter.symbol(index, symbol)
             || implements_supertype(index, node, owners)

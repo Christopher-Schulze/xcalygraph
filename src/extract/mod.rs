@@ -9,6 +9,7 @@ pub mod lang;
 pub mod manifest;
 pub mod markdown;
 pub mod sfc;
+mod sql;
 mod tasks;
 
 use crate::domain::corpus::FileRecord;
@@ -17,7 +18,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 11;
+const EXTRACTION_VERSION: u32 = 16;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -67,6 +68,16 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
         Some(FileType::C | FileType::Cpp | FileType::ObjC)
     ) {
         lang::c::macro_references(content, &mut facts);
+    }
+    // SQL objects of `.sql` files; SQL statements in string literals of code.
+    if record.file_type == Some(FileType::Sql) {
+        sql::objects(&String::from_utf8_lossy(content), &mut facts);
+    } else if matches!(record.role, Role::Src | Role::Test | Role::Gen)
+        && record
+            .file_type
+            .is_some_and(|file_type| file_type.is_code())
+    {
+        sql::embedded_queries(&String::from_utf8_lossy(content), &mut facts);
     }
     #[cfg(feature = "lang-vbnet")]
     if record.file_type == Some(FileType::VbNet) {

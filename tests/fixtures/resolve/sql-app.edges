@@ -1,0 +1,4 @@
+db.order_counts -queries-> db.orders @12
+db.orders -queries-> db.users @8
+store.Counts -queries-> db.order_counts @13
+store.Emails -queries-> db.users @7
