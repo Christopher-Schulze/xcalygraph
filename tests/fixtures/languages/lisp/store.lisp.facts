@@ -1,0 +1,19 @@
+package :store
+sym 3-3 class repo parent=- owner= pub flags=0 sig="(defclass repo (base) ((rows :initform nil)))" doc=""
+sym 4-4 fn find-row parent=- owner= pub flags=8 sig="(defgeneric find-row (repo id))" doc=""
+sym 5-5 fn find-row parent=- owner= pub flags=0 sig="(defmethod find-row ((r repo) id) (nth id (slot-value r 'rows)))" doc=""
+sym 6-10 fn open-store parent=- owner= pub flags=0 sig="(defun open-store (path)" doc=""
+sym 11-11 macro with-store parent=- owner= pub flags=0 sig="(defmacro with-store ((var) &body body) `(let ((,var (open-store \"x\"))),@body))" doc=""
+import 1 "cl" names= alias=:store reexport=false
+import 1 "util" names= alias=:store reexport=false
+ref 3 Inherit base qualifier=- scope=repo
+ref 4 Call repo qualifier=- scope=find-row
+ref 5 Call r qualifier=- scope=find-row
+ref 6 Call path qualifier=- scope=open-store
+ref 7 Call getenv qualifier=uiop scope=open-store
+ref 7 Call url qualifier=- scope=open-store
+ref 8 Call helper qualifier=- scope=open-store
+ref 9 Call check qualifier=util scope=open-store
+ref 11 Call open-store qualifier=- scope=with-store
+ref 11 Call var qualifier=- scope=with-store
+env 7 STORE_URL scope=open-store

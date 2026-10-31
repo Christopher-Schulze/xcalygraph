@@ -1,0 +1,5 @@
+file:resources/common.resource -imports-> file:resources/StoreLibrary.py @1
+file:tests/store.robot -imports-> file:resources/common.resource @1
+resources/common.Prepare Store -calls-> resources.StoreLibrary.open_store @6
+tests/store.Store Opens -tests-> resources/common.Prepare Store @6
+tests/store.Store Opens -tests-> tests/store.Check Store @7

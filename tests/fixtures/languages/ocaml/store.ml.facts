@@ -1,0 +1,23 @@
+sym 2-5 mod Repo parent=- owner= pub flags=0 sig="module Repo = struct" doc=""
+sym 3-3 alias t parent=Repo owner= pub flags=0 sig="type t" doc=""
+sym 4-4 fn find parent=Repo owner= pub flags=0 sig="let find r id = List.nth r.rows id" doc=""
+sym 6-9 fn open_store parent=- owner= pub flags=0 sig="let open_store path" doc=""
+sym 10-10 const limit parent=- owner= pub flags=0 sig="let limit = 10" doc=""
+sym 11-11 fn apply parent=- owner= pub flags=0 sig="let apply f = f |> List.map helper" doc=""
+sym 12-12 fn c_open parent=- owner= pub flags=0 sig="external c_open : string -> int = \"c_open\"" doc=""
+import 1 "Util" names= alias=- reexport=false
+ref 3 Type int qualifier=- scope=t
+ref 3 Type list qualifier=- scope=t
+ref 4 Value id qualifier=- scope=find
+ref 4 Call nth qualifier=List scope=find
+ref 7 Call find qualifier=Repo scope=open_store
+ref 8 Call helper qualifier=- scope=open_store
+ref 8 Value r qualifier=- scope=open_store
+ref 9 Call getenv qualifier=Sys scope=open_store
+ref 11 Value helper qualifier=- scope=apply
+ref 11 Call map qualifier=List scope=apply
+ref 12 Type int qualifier=- scope=c_open
+ref 12 Type string qualifier=- scope=c_open
+ref 13 Call find qualifier=Repo scope=-
+ref 13 Value r qualifier=- scope=-
+env 9 STORE_URL scope=open_store

@@ -1,0 +1,3 @@
+import 1 "Test" names= alias=- reexport=false
+import 2 "Store" names= alias=- reexport=false
+ref 5 Call open_store qualifier=Store scope=- args=1

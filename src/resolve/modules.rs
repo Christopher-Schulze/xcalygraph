@@ -215,20 +215,42 @@ fn module_of(map: &ModuleMap, record: &FileRecord, facts: Option<&Facts>) -> Mod
                 file_type: Some(FileType::Php),
             }
         }
-        Some(FileType::Elixir | FileType::Erlang | FileType::Lua | FileType::Zig)
-            if extracted_code =>
-        {
-            // One module per file: Erlang modules are named by the file stem (`m:f()`), Elixir
-            // modules are resolved by their `defmodule` name, Lua and Zig files are tables
+        Some(
+            FileType::Elixir
+            | FileType::Erlang
+            | FileType::Lua
+            | FileType::Zig
+            | FileType::Julia
+            | FileType::OCaml
+            | FileType::Fortran
+            | FileType::Pascal
+            | FileType::Lisp
+            | FileType::Solidity
+            | FileType::PowerShell
+            | FileType::Robot,
+        ) if extracted_code => {
+            // One module per file: Erlang modules are named by the file stem (`m:f()`), OCaml
+            // by the capitalized stem (`store.ml` and `store.mli` are `Store`), Elixir and
+            // Julia modules are resolved by their `module` names, Lua and Zig files are tables
             // or structs bound by `require` and `@import`.
             let stem = record
                 .path
                 .rsplit_once('.')
                 .map_or(record.path.as_str(), |(stem, _)| stem);
+            let file_name = stem.rsplit('/').next().unwrap_or(stem);
             let key = match record.file_type {
-                Some(FileType::Erlang) => {
-                    format!("erl:{}", stem.rsplit('/').next().unwrap_or(stem))
+                Some(FileType::Erlang) => format!("erl:{file_name}"),
+                Some(FileType::OCaml) => format!("ocaml:{}", capitalize(file_name)),
+                // Units are named by their file; names are case-insensitive.
+                Some(FileType::Pascal) if is_pascal_form(&record.path) => {
+                    format!("file:{}", record.path)
                 }
+                Some(FileType::Pascal) => format!("pas:{}", file_name.to_ascii_lowercase()),
+                // Files of one `in-package` form one module.
+                Some(FileType::Lisp) => match facts.and_then(|facts| facts.package.as_deref()) {
+                    Some(package) => format!("lisp:{}", lisp_package(package)),
+                    None => format!("file:{}", record.path),
+                },
                 _ => format!("file:{}", record.path),
             };
             ModuleInfo {
@@ -377,6 +399,29 @@ pub fn python_module(path: &str) -> String {
 
 pub fn parent_dir(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(dir, _)| dir)
+}
+
+/// `store_db` -> `Store_db` (OCaml file module names).
+fn capitalize(name: &str) -> String {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
+/// `:store`, `#:store`, `"STORE"` -> `store`.
+pub(super) fn lisp_package(name: &str) -> String {
+    name.trim_start_matches('#')
+        .trim_start_matches(':')
+        .trim_matches('"')
+        .to_ascii_lowercase()
+}
+
+/// Delphi and Lazarus form files (`.dfm`, `.lfm`), which are not units.
+fn is_pascal_form(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".dfm") || lower.ends_with(".lfm")
 }
 
 #[cfg(test)]

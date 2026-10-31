@@ -14,6 +14,9 @@ pub fn parse(name: &str, text: &str) -> Option<Manifest> {
         "tsconfig.json" | "jsconfig.json" => Some(tsconfig(&json::parse(text)?)),
         "CMakeLists.txt" => Some(cmake(text)),
         "compile_commands.json" => Some(compile_commands(&json::parse(text)?)),
+        "DESCRIPTION" => Some(r_description(text)),
+        "pubspec.yaml" => Some(pubspec(text)),
+        "remappings.txt" | "foundry.toml" => Some(solidity_remappings(text)),
         _ => None,
     }
 }
@@ -75,6 +78,99 @@ fn tsconfig(value: &Value) -> Manifest {
     for (alias, _, targets) in options.get("paths").map(Value::entries).unwrap_or_default() {
         if let Some(target) = targets.strings().first() {
             manifest.include_dirs.push(format!("{alias}={target}"));
+        }
+    }
+    manifest
+}
+
+/// R `DESCRIPTION`: `Package` name, `Depends`, `Imports` and `LinkingTo` packages (`R` itself
+/// skipped), continuation lines indented.
+fn r_description(text: &str) -> Manifest {
+    let mut manifest = Manifest::default();
+    let mut field = String::new();
+    for line in text.lines() {
+        let value = if line.starts_with([' ', '\t']) {
+            line
+        } else {
+            let Some((key, value)) = line.split_once(':') else {
+                continue;
+            };
+            field = key.trim().to_owned();
+            value
+        };
+        match field.as_str() {
+            "Package" if manifest.module.is_none() => {
+                manifest.module = Some(value.trim().to_owned()).filter(|name| !name.is_empty());
+            }
+            "Depends" | "Imports" | "LinkingTo" => {
+                for entry in value.split(',') {
+                    let (name, requirement) = entry.split_once('(').unwrap_or((entry, ""));
+                    let name = name.trim();
+                    if !name.is_empty() && name != "R" {
+                        let requirement = requirement.trim().trim_end_matches(')').trim();
+                        manifest
+                            .deps
+                            .push((name.to_owned(), requirement.to_owned()));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    manifest
+}
+
+/// Solidity import remappings (`prefix=target`, `remappings.txt` lines or quoted entries of
+/// `foundry.toml`) as dependencies: name = prefix, requirement = target directory.
+fn solidity_remappings(text: &str) -> Manifest {
+    let mut manifest = Manifest::default();
+    for line in text.lines() {
+        let entries: Vec<&str> = if line.contains('"') {
+            line.split('"').skip(1).step_by(2).collect()
+        } else {
+            vec![line.trim()]
+        };
+        for entry in entries {
+            // Context-specific remappings: `context:prefix=target`.
+            let entry = entry.rsplit_once(':').map_or(entry, |(_, rest)| rest);
+            if let Some((prefix, target)) = entry.split_once('=')
+                && !prefix.trim().is_empty()
+                && !prefix.contains(' ')
+            {
+                manifest
+                    .deps
+                    .push((prefix.trim().to_owned(), target.trim().to_owned()));
+            }
+        }
+    }
+    manifest
+}
+
+/// Dart `pubspec.yaml`: package `name` and the keys of `dependencies` and `dev_dependencies`.
+fn pubspec(text: &str) -> Manifest {
+    let mut manifest = Manifest::default();
+    let mut section = "";
+    for line in text.lines() {
+        if line.trim().is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        let indented = line.starts_with(' ');
+        let Some((key, value)) = line.trim().split_once(':') else {
+            continue;
+        };
+        if !indented {
+            section = if matches!(key, "dependencies" | "dev_dependencies") {
+                key
+            } else {
+                ""
+            };
+            if key == "name" {
+                manifest.module = Some(value.trim().to_owned()).filter(|name| !name.is_empty());
+            }
+        } else if !section.is_empty() && line.starts_with("  ") && !line.starts_with("   ") {
+            manifest
+                .deps
+                .push((key.to_owned(), value.trim().to_owned()));
         }
     }
     manifest
@@ -356,6 +452,33 @@ fn strip_toml_comment(line: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r_description_and_pubspec() {
+        let description = parse(
+            "DESCRIPTION",
+            "Package: store\nVersion: 1.0\nDepends: R (>= 4.0), methods\nImports:\n    dplyr (>= 1.1),\n    rlang\n",
+        );
+        assert_eq!(
+            description.map(|m| (m.module, m.deps)),
+            Some((
+                Some("store".to_owned()),
+                vec![
+                    ("methods".to_owned(), String::new()),
+                    ("dplyr".to_owned(), ">= 1.1".to_owned()),
+                    ("rlang".to_owned(), String::new())
+                ]
+            ))
+        );
+        let pubspec = parse(
+            "pubspec.yaml",
+            "name: app\nenvironment:\n  sdk: ^3.0.0\ndependencies:\n  http: ^1.2.0\n  path:\n    git: x\ndev_dependencies:\n  test: any\n",
+        );
+        assert_eq!(
+            pubspec.map(|m| (m.module, m.deps.len())),
+            Some((Some("app".to_owned()), 3))
+        );
+    }
+
     use super::*;
 
     #[test]

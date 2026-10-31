@@ -1,0 +1,6 @@
+sym 6-10 fn Open Store Works parent=- owner= pub flags=1 sig="Open Store Works" doc=""
+sym 11-15 fn Open Store parent=- owner= pub flags=0 sig="Open Store" doc=""
+import 2 "keywords/common.resource" names= alias=- reexport=false
+import 3 "StoreLibrary.py" names= alias=- reexport=false
+ref 7 Call Open Store qualifier=- scope=Open Store Works args=1
+ref 14 Call Helper Keyword qualifier=- scope=Open Store

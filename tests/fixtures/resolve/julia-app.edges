@@ -1,0 +1,7 @@
+file:src/Store.jl -imports-> file:src/util.jl @1
+file:test/runtests.jl -imports-> file:src/Store.jl @1
+file:test/runtests.jl -tests-> src/Store.Store.open_store @5
+src/Store.Store.open_store -calls-> src/Store.Store.Repo @13
+src/Store.Store.open_store -calls-> src/util.Util.check @14
+src/Store.Store.open_store -calls-> src/util.Util.normalize @15
+ext test/runtests Test 1

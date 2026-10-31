@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 39;
+pub const RESOLVE_VERSION: u32 = 40;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -303,6 +303,7 @@ impl<'a> Index<'a> {
         let input = self.input;
         for (file, facts) in input.facts.iter().enumerate() {
             let Some(facts) = facts else { continue };
+            let record_type = input.files[file].file_type;
             if jvm::is_dotnet(input.files[file].file_type) {
                 self.global_usings.extend(
                     facts
@@ -347,7 +348,14 @@ impl<'a> Index<'a> {
                             .push(id);
                     }
                     _ => {
-                        if symbol.parent.is_none() {
+                        // A Julia `module` block wrapping the file is the module unit itself.
+                        let in_file_module = symbol.parent.is_some_and(|parent| {
+                            let parent = &facts.symbols[parent as usize];
+                            parent.kind() == SymKind::Mod
+                                && parent.parent.is_none()
+                                && matches!(record_type, Some(FileType::Julia | FileType::Fortran))
+                        });
+                        if symbol.parent.is_none() || in_file_module {
                             self.by_module.entry((module, name)).or_default().push(id);
                         }
                         if kind.is_type() {
@@ -423,6 +431,16 @@ impl<'a> Index<'a> {
             Some(FileType::Erlang) => self.erlang_imports(file, facts, &mut imports),
             Some(FileType::Lua) => self.lua_imports(file, facts, &mut imports),
             Some(FileType::Zig) => self.zig_imports(file, facts, &mut imports),
+            Some(FileType::Julia) => self.julia_imports(file, facts, &mut imports),
+            Some(FileType::R) => self.r_imports(file, facts, &mut imports),
+            Some(FileType::OCaml) => self.ocaml_imports(facts, &mut imports),
+            Some(FileType::Fortran) => self.fortran_imports(file, facts, &mut imports),
+            Some(FileType::Pascal) => self.pascal_imports(file, facts, &mut imports),
+            Some(FileType::Lisp) => self.lisp_imports(file, facts, &mut imports),
+            Some(FileType::Solidity) => self.solidity_imports(file, facts, &mut imports),
+            Some(FileType::Verilog | FileType::PowerShell | FileType::Robot | FileType::Dm) => {
+                self.script_imports(file, facts, &mut imports)
+            }
             Some(
                 FileType::TypeScript
                 | FileType::JavaScript
@@ -450,6 +468,497 @@ impl<'a> Index<'a> {
                     imports
                         .externals
                         .push(spec.split('/').next().unwrap_or(spec).to_owned());
+                }
+                None => {}
+            }
+        }
+    }
+
+    /// Names a language resolves globally: Verilog modules and functions, DM top-level procs
+    /// (exact when unique in the root), Robot keywords by normalized name (case, spaces and
+    /// underscores ignored) in the file, its resources and its Python libraries.
+    fn global_name(&self, file: u32, imports: &Imports, reference: &Ref) -> Option<Outcome> {
+        let file_type = self.file_type(file)?;
+        if reference.kind != RefKind::Call {
+            return None;
+        }
+        let candidates: Vec<u32> = match file_type {
+            FileType::Verilog | FileType::Dm => self
+                .by_name
+                .get(reference.name.as_str())
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|&symbol| {
+                    let symbol = &self.symbols[symbol as usize];
+                    self.file_type(symbol.file) == Some(file_type)
+                        && symbol.parent == NONE
+                        && (symbol.kind.is_callable() || symbol.kind == SymKind::Class)
+                })
+                .collect(),
+            FileType::Robot => {
+                let wanted = robot_key(&reference.name);
+                let visible: Vec<u32> = std::iter::once(file)
+                    .chain(
+                        imports
+                            .files
+                            .iter()
+                            .filter(|(from, _)| *from == file)
+                            .map(|(_, to)| *to),
+                    )
+                    .collect();
+                visible
+                    .iter()
+                    .flat_map(|&visible_file| {
+                        let base = self.base[visible_file as usize];
+                        let count = self
+                            .facts(visible_file)
+                            .map_or(0, |facts| facts.symbols.len());
+                        (base..base + count as u32).filter(|&symbol| {
+                            let symbol = &self.symbols[symbol as usize];
+                            symbol.kind.is_callable() && robot_key(&symbol.name) == wanted
+                        })
+                    })
+                    .collect()
+            }
+            _ => return None,
+        };
+        match candidates.as_slice() {
+            [] if file_type == FileType::Robot => Some(Outcome::Unresolved),
+            [] => None,
+            [only] => Some(exact(*only)),
+            several => Some(pick(several, Confidence::Inferred)),
+        }
+    }
+
+    /// Solidity imports: relative paths, remappings (`remappings.txt`, `foundry.toml`), then
+    /// `lib/` and `node_modules/`; the imported file's contracts become visible.
+    fn solidity_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        let remappings: Vec<(&str, String)> = self
+            .input
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(_, record)| {
+                let name = record.path.rsplit('/').next().unwrap_or(&record.path);
+                matches!(name, "remappings.txt" | "foundry.toml")
+            })
+            .filter_map(|(index, record)| {
+                let manifest = self.facts(index as u32)?.manifest.as_ref()?;
+                let dir = modules::parent_dir(&record.path);
+                Some(manifest.deps.iter().map(move |(prefix, target)| {
+                    let target = if dir.is_empty() {
+                        target.clone()
+                    } else {
+                        format!("{dir}/{target}")
+                    };
+                    (prefix.as_str(), target)
+                }))
+            })
+            .flatten()
+            .collect();
+        for import in &facts.imports {
+            let spec = import.spec.as_str();
+            let remapped = remappings
+                .iter()
+                .filter(|(prefix, _)| spec.starts_with(prefix))
+                .max_by_key(|(prefix, _)| prefix.len())
+                .map(|(prefix, target)| format!("{target}{}", &spec[prefix.len()..]));
+            let target = remapped
+                .and_then(|path| self.path_index.get(normalize_path(&path).as_str()).copied())
+                .or_else(|| self.file_by_path(file, spec))
+                .or_else(|| {
+                    ["lib/", "node_modules/"].iter().find_map(|base| {
+                        self.path_index
+                            .get(format!("{base}{spec}").as_str())
+                            .copied()
+                    })
+                })
+                .filter(|&target| target != file);
+            match target {
+                Some(target) => {
+                    imports.files.push((file, target));
+                    let module = self.module_of(target);
+                    imports.globs.push(module);
+                    imports.modules.push(module);
+                }
+                None if !spec.starts_with('.') => {
+                    imports
+                        .externals
+                        .push(spec.split('/').next().unwrap_or(spec).to_owned());
+                }
+                None => {}
+            }
+        }
+    }
+
+    /// Path imports of Verilog `include`s, PowerShell modules and dot-sourced scripts, Robot
+    /// resources and libraries, DM `#include`s: relative to the file, then the root; PowerShell
+    /// module names and Verilog packages by name anywhere in the root.
+    fn script_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        let file_type = self.file_type(file);
+        for import in &facts.imports {
+            let spec = import
+                .spec
+                .trim_matches(['"', '\'', '<', '>'])
+                .trim_start_matches("$PSScriptRoot/")
+                .trim_start_matches("$PSScriptRoot\\")
+                .replace('\\', "/");
+            let mut target = self.file_by_path(file, &spec);
+            if target.is_none() && file_type == Some(FileType::PowerShell) && !spec.contains('/') {
+                // `Import-Module Store` -> a `Store.psm1` or `Store.psd1` of the root.
+                target = self
+                    .input
+                    .files
+                    .iter()
+                    .position(|record| {
+                        let name = record.path.rsplit('/').next().unwrap_or(&record.path);
+                        name.eq_ignore_ascii_case(&format!("{spec}.psm1"))
+                            || name.eq_ignore_ascii_case(&format!("{spec}.psd1"))
+                    })
+                    .map(|index| index as u32);
+            }
+            if target.is_none() && file_type == Some(FileType::Verilog) {
+                // `import pkg::*`: the file declaring package `pkg`.
+                target = self
+                    .module_symbols(&spec, FileType::Verilog)
+                    .first()
+                    .map(|&package| self.symbols[package as usize].file);
+            }
+            match target.filter(|&target| target != file) {
+                Some(target) => {
+                    imports.files.push((file, target));
+                    let module = self.module_of(target);
+                    imports.globs.push(module);
+                    imports.modules.push(module);
+                }
+                None if !spec.contains('/') && !spec.contains('.') => imports.externals.push(spec),
+                None => {}
+            }
+        }
+    }
+
+    /// `use m` makes the procedures of module `m` visible; `include` files likewise.
+    fn fortran_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        for import in &facts.imports {
+            let spec = import.spec.trim_matches(['"', '\'']);
+            if spec.contains('.') {
+                if let Some(target) = self
+                    .file_by_path(file, spec)
+                    .filter(|&target| target != file)
+                {
+                    imports.files.push((file, target));
+                    let module = self.module_of(target);
+                    imports.globs.push(module);
+                    imports.modules.push(module);
+                }
+                continue;
+            }
+            let modules = self.module_symbols(spec, FileType::Fortran);
+            if modules.is_empty() {
+                imports.externals.push(spec.to_owned());
+                continue;
+            }
+            for &module in &modules {
+                let target = self.symbols[module as usize].file;
+                if target != file && !imports.files.contains(&(file, target)) {
+                    imports.files.push((file, target));
+                }
+                let target_module = self.module_of(target);
+                imports.globs.push(target_module);
+                imports.modules.push(target_module);
+            }
+        }
+    }
+
+    /// `uses A, B`: units of the root become visible (case-insensitive); a form imports its
+    /// unit by file name; other units are the runtime library or packages.
+    fn pascal_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        for import in &facts.imports {
+            let unit = import.spec.trim_end_matches(".pas");
+            let module = self
+                .modules
+                .get(&format!("pas:{}", unit.to_ascii_lowercase()));
+            match module {
+                Some(module) => {
+                    if let Some(target) = self.modules.file_module.iter().position(|&m| m == module)
+                    {
+                        let target = target as u32;
+                        if target != file {
+                            imports.files.push((file, target));
+                        }
+                    }
+                    imports.globs.push(module);
+                    imports.modules.push(module);
+                }
+                None => imports.externals.push(unit.to_owned()),
+            }
+        }
+    }
+
+    /// `(:use :x)` of the `defpackage` defining the file's package (in any file) makes package
+    /// `x` visible (`:cl` is the language); ASDF `(:file "x")` components import `x.lisp`
+    /// relative to the system file.
+    fn lisp_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        let package = facts.package.as_deref().map(modules::lisp_package);
+        let mut uses: Vec<&facts::Import> = Vec::new();
+        if let Some(package) = &package {
+            for (other, record) in self.input.files.iter().enumerate() {
+                if record.file_type != Some(FileType::Lisp) {
+                    continue;
+                }
+                let Some(other_facts) = self.facts(other as u32) else {
+                    continue;
+                };
+                uses.extend(other_facts.imports.iter().filter(|import| {
+                    import.alias.as_deref().map(modules::lisp_package).as_ref() == Some(package)
+                }));
+            }
+        }
+        for import in facts
+            .imports
+            .iter()
+            .filter(|import| import.alias.is_none())
+            .chain(uses)
+        {
+            let spec = import.spec.trim_matches('"');
+            if import.spec.starts_with('"')
+                || self.input.files[file as usize].path.ends_with(".asd")
+            {
+                let path = format!("{spec}.lisp");
+                if let Some(target) = self
+                    .file_by_path(file, &path)
+                    .filter(|&target| target != file)
+                {
+                    imports.files.push((file, target));
+                }
+                continue;
+            }
+            let package = modules::lisp_package(spec);
+            if matches!(package.as_str(), "cl" | "common-lisp") {
+                continue;
+            }
+            match self.modules.get(&format!("lisp:{package}")) {
+                Some(module) => {
+                    imports.globs.push(module);
+                    imports.modules.push(module);
+                }
+                None => imports.externals.push(package),
+            }
+        }
+    }
+
+    /// `module` symbols of a language named `name` (Julia, OCaml nested modules).
+    fn module_symbols(&self, name: &str, file_type: FileType) -> Vec<u32> {
+        self.by_name
+            .get(name)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&symbol| {
+                let symbol = &self.symbols[symbol as usize];
+                symbol.kind == SymKind::Mod && self.file_type(symbol.file) == Some(file_type)
+            })
+            .collect()
+    }
+
+    /// Julia `Util.check`, OCaml `Store.find` and `Repo.find` (file or nested module), R
+    /// `pkg::f`: members of the named module; modules outside the root are external.
+    fn module_qualified(
+        &self,
+        file: u32,
+        imports: &Imports,
+        reference: &Ref,
+        qualifier: &str,
+    ) -> Option<Outcome> {
+        let file_type = self.file_type(file)?;
+        if !matches!(
+            file_type,
+            FileType::Julia | FileType::OCaml | FileType::R | FileType::Pascal | FileType::Lisp
+        ) || imports.names.contains_key(qualifier)
+        {
+            return None;
+        }
+        let name = reference.name.as_str();
+        let last = qualifier.rsplit('.').next().unwrap_or(qualifier);
+        let mut found: Vec<u32> = self
+            .module_symbols(last, file_type)
+            .iter()
+            .flat_map(|&module| {
+                self.by_name
+                    .get(name)
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(move |&member| self.symbols[member as usize].parent == module)
+            })
+            .collect();
+        let module_key = match file_type {
+            FileType::OCaml => Some(format!("ocaml:{last}")),
+            FileType::Pascal => Some(format!("pas:{}", last.to_ascii_lowercase())),
+            FileType::Lisp => Some(format!("lisp:{}", modules::lisp_package(qualifier))),
+            FileType::R => self
+                .r_package_dir(qualifier)
+                .map(|dir| format!("dir:{dir}")),
+            _ => None,
+        };
+        if found.is_empty()
+            && let Some(module) = module_key.and_then(|key| self.modules.get(&key))
+        {
+            found = self.module_symbol(module, name, None);
+        }
+        if found.is_empty() {
+            // `List.map`, `Base.println`, `dplyr::filter`: outside the root; a lowercase Julia
+            // or OCaml qualifier is a value whose field is called.
+            let module_like = match file_type {
+                FileType::R | FileType::Lisp => true,
+                // `FRows.Load`: a typed receiver, resolved by the member rules.
+                FileType::Pascal => false,
+                _ => qualifier.starts_with(|ch: char| ch.is_ascii_uppercase()),
+            };
+            return module_like.then_some(Outcome::External);
+        }
+        Some(pick_members(
+            self,
+            found,
+            Confidence::Exact,
+            reference.arity,
+        ))
+    }
+
+    /// Source directory (`R/`) of the local R package named `name` (`DESCRIPTION` `Package:`).
+    fn r_package_dir(&self, name: &str) -> Option<String> {
+        self.input
+            .files
+            .iter()
+            .enumerate()
+            .find_map(|(index, record)| {
+                let is_description =
+                    record.path == "DESCRIPTION" || record.path.ends_with("/DESCRIPTION");
+                if !is_description {
+                    return None;
+                }
+                let manifest = self.facts(index as u32)?.manifest.as_ref()?;
+                (manifest.module.as_deref() == Some(name)).then(|| {
+                    let dir = modules::parent_dir(&record.path);
+                    if dir.is_empty() {
+                        "R".to_owned()
+                    } else {
+                        format!("{dir}/R")
+                    }
+                })
+            })
+    }
+
+    /// `include("x.jl")` makes the file's names visible; `using`/`import` of a module of the
+    /// root makes its names visible and binds its name; other modules are external.
+    fn julia_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        for import in &facts.imports {
+            if import.spec.ends_with(".jl") {
+                if let Some(target) = self
+                    .file_by_path(file, &import.spec)
+                    .filter(|&target| target != file)
+                {
+                    imports.files.push((file, target));
+                    let module = self.module_of(target);
+                    imports.globs.push(module);
+                    imports.modules.push(module);
+                }
+                continue;
+            }
+            let path = import.spec.trim_start_matches('.');
+            let last = path.rsplit('.').next().unwrap_or(path);
+            let modules = self.module_symbols(last, FileType::Julia);
+            if modules.is_empty() {
+                imports
+                    .externals
+                    .push(path.split('.').next().unwrap_or(path).to_owned());
+                continue;
+            }
+            for &module in &modules {
+                let target = self.symbols[module as usize].file;
+                if target != file && !imports.files.contains(&(file, target)) {
+                    imports.files.push((file, target));
+                }
+                let target_module = self.module_of(target);
+                imports.globs.push(target_module);
+                imports.modules.push(target_module);
+            }
+            imports
+                .names
+                .insert(last.to_owned(), Target::Symbols(modules));
+        }
+    }
+
+    /// `source("x.R")` relative to the file or the root; `library(pkg)` of a local package
+    /// makes its `R/` functions visible, other packages are external.
+    fn r_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        // Tests, vignettes and scripts of a package run with its namespace loaded (testthat).
+        let path = &self.input.files[file as usize].path;
+        let mut dir = modules::parent_dir(path);
+        loop {
+            let description = if dir.is_empty() {
+                "DESCRIPTION".to_owned()
+            } else {
+                format!("{dir}/DESCRIPTION")
+            };
+            if self.path_index.contains_key(description.as_str()) {
+                let source = if dir.is_empty() {
+                    "R".to_owned()
+                } else {
+                    format!("{dir}/R")
+                };
+                if let Some(module) = self.modules.get(&format!("dir:{source}"))
+                    && module != self.module_of(file)
+                {
+                    imports.globs.push(module);
+                    imports.modules.push(module);
+                }
+                break;
+            }
+            if dir.is_empty() {
+                break;
+            }
+            dir = modules::parent_dir(dir);
+        }
+        for import in &facts.imports {
+            if import.spec.to_ascii_lowercase().ends_with(".r") {
+                if let Some(target) = self
+                    .file_by_path(file, &import.spec)
+                    .filter(|&target| target != file)
+                {
+                    imports.files.push((file, target));
+                    let module = self.module_of(target);
+                    imports.globs.push(module);
+                    imports.modules.push(module);
+                }
+                continue;
+            }
+            let local = self
+                .r_package_dir(&import.spec)
+                .and_then(|dir| self.modules.get(&format!("dir:{dir}")));
+            match local {
+                Some(module) => {
+                    imports.globs.push(module);
+                    imports.modules.push(module);
+                }
+                None => imports.externals.push(import.spec.clone()),
+            }
+        }
+    }
+
+    /// `open M` / `include M`: the file module `M` of the root becomes visible; library modules
+    /// are external.
+    fn ocaml_imports(&self, facts: &Facts, imports: &mut Imports) {
+        for import in &facts.imports {
+            let head = import.spec.split('.').next().unwrap_or(&import.spec);
+            match self.modules.get(&format!("ocaml:{head}")) {
+                Some(module) => {
+                    imports.globs.push(module);
+                    imports.modules.push(module);
+                }
+                None if self.module_symbols(head, FileType::OCaml).is_empty() => {
+                    imports.externals.push(head.to_owned());
                 }
                 None => {}
             }
@@ -832,6 +1341,32 @@ impl<'a> Index<'a> {
         let target = match spec.strip_prefix("package:") {
             Some(rest) => {
                 let (package, path) = rest.split_once('/').unwrap_or((rest, ""));
+                // The package root from the `pubspec.yaml` naming it, else a unique `lib/` match.
+                let named = self
+                    .input
+                    .files
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, record)| {
+                        let is_pubspec =
+                            record.path == "pubspec.yaml" || record.path.ends_with("/pubspec.yaml");
+                        let manifest = is_pubspec
+                            .then(|| self.facts(index as u32)?.manifest.as_ref())
+                            .flatten()?;
+                        (manifest.module.as_deref() == Some(package)).then(|| {
+                            let dir = modules::parent_dir(&record.path);
+                            if dir.is_empty() {
+                                format!("lib/{path}")
+                            } else {
+                                format!("{dir}/lib/{path}")
+                            }
+                        })
+                    });
+                if let Some(found) =
+                    named.and_then(|named| self.path_index.get(named.as_str()).copied())
+                {
+                    return Some(found).filter(|&found| found != file);
+                }
                 let wanted = format!("lib/{path}");
                 let found: Vec<u32> = self
                     .input
@@ -1249,6 +1784,17 @@ impl<'a> Index<'a> {
 
     fn members_direct(&self, type_symbol: u32, name: &str) -> Vec<u32> {
         let symbol = &self.symbols[type_symbol as usize];
+        if symbol.kind == SymKind::Mod {
+            // Module blocks (Julia, OCaml): every symbol declared in the body.
+            return self
+                .by_name
+                .get(name)
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|&member| self.symbols[member as usize].parent == type_symbol)
+                .collect();
+        }
         if jvm::is_jvm(self.file_type(symbol.file)) {
             return self.declared_members(type_symbol, name);
         }
@@ -2142,10 +2688,18 @@ impl<'a> Index<'a> {
         wants_type: bool,
     ) -> Outcome {
         let name = reference.name.as_str();
+        if let Some(outcome) = self.global_name(file, imports, reference) {
+            return outcome;
+        }
+        // Lisp lists also spell lambda lists, bindings and slots: only functions are called.
+        let lisp_call =
+            reference.kind == RefKind::Call && self.file_type(file) == Some(FileType::Lisp);
         let kind_ok = |symbol: u32| {
             let kind = self.symbols[symbol as usize].kind;
             if wants_type {
                 kind.is_type()
+            } else if lisp_call {
+                kind.is_callable() || kind == SymKind::Macro
             } else {
                 kind.is_callable()
                     || kind.is_type()
@@ -2249,7 +2803,7 @@ impl<'a> Index<'a> {
                     Confidence::Exact,
                 );
             }
-            if jvm::is_class_based(self.file_type(file)) {
+            if jvm::is_class_based(self.file_type(file)) || has_declarations(self.file_type(file)) {
                 return pick_members(self, same, Confidence::Exact, reference.arity);
             }
             return pick(&same, Confidence::Exact);
@@ -2261,7 +2815,9 @@ impl<'a> Index<'a> {
                 .filter(|&s| kind_ok(s))
                 .collect();
             if !found.is_empty() {
-                if jvm::is_class_based(self.file_type(file)) {
+                if jvm::is_class_based(self.file_type(file))
+                    || has_declarations(self.file_type(file))
+                {
                     return pick_members(self, found, Confidence::Exact, reference.arity);
                 }
                 return pick(&found, Confidence::Exact);
@@ -2351,6 +2907,9 @@ impl<'a> Index<'a> {
             };
         }
         if let Some(outcome) = self.beam_qualified(file, imports, reference, qualifier) {
+            return outcome;
+        }
+        if let Some(outcome) = self.module_qualified(file, imports, reference, qualifier) {
             return outcome;
         }
         // `a->b` (PHP, C++) and `a?->b` chain like `a.b`.
@@ -3260,6 +3819,12 @@ fn pick(candidates: &[u32], confidence: Confidence) -> Outcome {
     }
 }
 
+/// Languages whose modules hold declarations next to definitions (OCaml `.mli` and `.ml`, Lisp
+/// `defgeneric` and `defmethod`).
+fn has_declarations(file_type: Option<FileType>) -> bool {
+    matches!(file_type, Some(FileType::OCaml | FileType::Lisp))
+}
+
 fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence, arity: u8) -> Outcome {
     let mut found = found;
     found.sort_unstable();
@@ -3364,7 +3929,8 @@ fn parameter_count(signature: &str, name: &str) -> Option<(usize, usize, bool)> 
                 break;
             }
             ')' | '>' | ']' | '}' => depth -= 1,
-            ',' if depth == 0 => {
+            // Pascal separates parameter groups with `;` (`A, B: Integer; C: string`).
+            ',' | ';' if depth == 0 => {
                 commas += 1;
                 in_default = false;
             }
@@ -3757,6 +4323,15 @@ fn is_common_member(name: &str) -> bool {
             | "Bool" | "Int" | "Int64" | "Uint" | "Float64" | "Duration" | "StringVar"
             | "BoolVar" | "IntVar" | "DurationVar" | "Var" | "Args" | "Arg" | "NArg"
     )
+}
+
+/// Robot Framework keyword identity: case, spaces and underscores are insignificant
+/// (`Open Store`, `open_store`).
+fn robot_key(name: &str) -> String {
+    name.chars()
+        .filter(|ch| !matches!(ch, ' ' | '_'))
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 #[cfg(test)]

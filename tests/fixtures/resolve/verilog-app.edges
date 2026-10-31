@@ -1,0 +1,3 @@
+file:rtl/top.sv -imports-> file:rtl/defs.svh @1
+rtl.counter -calls-> rtl.counter.next @3
+rtl.top -calls-> rtl.counter @3

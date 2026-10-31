@@ -19,3 +19,14 @@ http.zig	https://github.com/karlseguin/http.zig	1bb71ff128a044b1645df91046473c38
 plug	https://github.com/elixir-plug/plug	575a8454a216c47c940304d01287dcf62dfbe280	elixir
 cowboy	https://github.com/ninenines/cowboy	6475600966515a78513206d676ee13e9fe55b5e5	erlang
 shelf	https://github.com/dart-lang/shelf	62d3e4ee2503c3c497f749276e86b2331c18fd6a	dart
+datastructures.jl	https://github.com/JuliaCollections/DataStructures.jl	b9ff23435fa6a5bb86486c4ab43eda17987f729f	julia
+glue	https://github.com/tidyverse/glue	da9c73f7a3de6a27f3103cb5bb2355820a4c3a6a	r
+ocaml-uri	https://github.com/mirage/ocaml-uri	46979cf180be86b2a8bd0f55767bef9f436780ec	ocaml
+json-fortran	https://github.com/jacobwilliams/json-fortran	d9ed2e4ee53745f4ed98d7536e17bee5198aa3b0	fortran
+horse	https://github.com/HashLoad/horse	a0ac019be1d29fd9deb20f61ca779d5631718bdb	pascal
+hunchentoot	https://github.com/edicl/hunchentoot	65a3a3cca7e6e91fb068efc2ef8069b5c78ee91f	lisp
+solmate	https://github.com/transmissions11/solmate	89365b880c4f3c786bdd453d4b8e8fe410344a69	solidity
+serv	https://github.com/olofk/serv	f200eb2ed7b69ac1c6b8eddd47654522aeee5ce8	verilog
+psslack	https://github.com/RamblingCookieMonster/PSSlack	1c9d6c0b810803fbf9a1c666f299ccd90e3f5bee	powershell
+robotdemo	https://github.com/robotframework/RobotDemo	c7d226faaea06c43deb26038080a670e10afa93f	robot
+tgstation	https://github.com/tgstation/tgstation	b2b976a48044d915c0b3c16bbe97e72dad42019e	dm

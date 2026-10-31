@@ -1,0 +1,23 @@
+sym 1-17 mod Store parent=- owner= pub flags=0 sig="module Store" doc=""
+sym 6-8 struct Repo parent=Store owner= pub flags=0 sig="struct Repo <: AbstractRepo" doc=""
+sym 9-9 iface AbstractRepo parent=Store owner= pub flags=0 sig="abstract type AbstractRepo end" doc=""
+sym 10-15 fn open_store parent=Store owner= pub flags=0 sig="function open_store(path::String)" doc=""
+sym 16-16 fn size parent=Store owner= pub flags=0 sig="size(r::Repo) = length(r.rows)" doc=""
+sym 19-19 const LIMIT parent=- owner= pub flags=0 sig="const LIMIT = 10" doc=""
+sym 20-20 fn show parent=- owner= pub flags=0 sig="Base.show(io::IO, r::Repo) = print(io, r)" doc=""
+sym 24-24 macro m parent=- owner= pub flags=0 sig="macro m(x) end" doc=""
+sym 25-25 struct Node parent=- owner= pub flags=0 sig="mutable struct Node; next end" doc=""
+import 2 "Base.Threads" names= alias=- reexport=false
+import 3 "..Util" names= alias=- reexport=false
+import 4 "repo.jl" names= alias=- reexport=false
+ref 6 Inherit AbstractRepo qualifier=- scope=Repo
+ref 11 Call Repo qualifier=- scope=open_store args=1
+ref 12 Call helper qualifier=- scope=open_store args=1
+ref 13 Call check qualifier=Util scope=open_store args=1
+ref 16 Type Repo qualifier=- scope=size
+ref 20 Type IO qualifier=- scope=show
+ref 20 Type Repo qualifier=- scope=show
+ref 22 Call open_store qualifier=- scope=- args=1
+ref 26 Call helper qualifier=- scope=-
+env 14 STORE_URL scope=open_store
+env 18 STORE_URL scope=-

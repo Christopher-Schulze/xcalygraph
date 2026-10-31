@@ -6,12 +6,18 @@ pub mod bash;
 pub mod beam;
 #[cfg(any(feature = "lang-c", feature = "lang-cpp", feature = "lang-objc"))]
 pub mod c;
+#[cfg(feature = "lang-commonlisp")]
+pub mod commonlisp;
 #[cfg(feature = "lang-cpp")]
 pub mod cpp;
 #[cfg(any(feature = "lang-csharp", feature = "lang-vbnet"))]
 pub mod csharp;
 #[cfg(feature = "lang-dart")]
 pub mod dart;
+#[cfg(feature = "lang-dm")]
+pub mod dm;
+#[cfg(feature = "lang-fortran")]
+pub mod fortran;
 #[cfg(feature = "lang-go")]
 pub mod go;
 #[cfg(feature = "lang-groovy")]
@@ -27,28 +33,44 @@ pub mod groovy;
     feature = "lang-php"
 ))]
 pub mod java;
+#[cfg(feature = "lang-julia")]
+pub mod julia;
 #[cfg(feature = "lang-kotlin")]
 pub mod kotlin;
 #[cfg(feature = "lang-lua")]
 pub mod lua;
 #[cfg(feature = "lang-objc")]
 pub mod objc;
+#[cfg(feature = "lang-ocaml")]
+pub mod ocaml;
+#[cfg(feature = "lang-pascal")]
+pub mod pascal;
 #[cfg(feature = "lang-php")]
 pub mod php;
+#[cfg(feature = "lang-powershell")]
+pub mod powershell;
 #[cfg(feature = "lang-python")]
 pub mod python;
+#[cfg(feature = "lang-r")]
+pub mod r;
+#[cfg(feature = "lang-robot")]
+pub mod robot;
 #[cfg(feature = "lang-ruby")]
 pub mod ruby;
 #[cfg(feature = "lang-rust")]
 pub mod rust;
 #[cfg(feature = "lang-scala")]
 pub mod scala;
+#[cfg(feature = "lang-solidity")]
+pub mod solidity;
 #[cfg(feature = "lang-swift")]
 pub mod swift;
 #[cfg(any(feature = "lang-typescript", feature = "lang-javascript"))]
 pub mod typescript;
 #[cfg(feature = "lang-vbnet")]
 pub mod vbnet;
+#[cfg(feature = "lang-verilog")]
+pub mod verilog;
 #[cfg(feature = "lang-zig")]
 pub mod zig;
 
@@ -118,6 +140,30 @@ const PACKS: &[&Pack] = &[
     &lua::PACK,
     #[cfg(feature = "lang-zig")]
     &zig::PACK,
+    #[cfg(feature = "lang-julia")]
+    &julia::PACK,
+    #[cfg(feature = "lang-r")]
+    &r::PACK,
+    #[cfg(feature = "lang-ocaml")]
+    &ocaml::INTERFACE,
+    #[cfg(feature = "lang-ocaml")]
+    &ocaml::IMPLEMENTATION,
+    #[cfg(feature = "lang-fortran")]
+    &fortran::PACK,
+    #[cfg(feature = "lang-pascal")]
+    &pascal::PACK,
+    #[cfg(feature = "lang-commonlisp")]
+    &commonlisp::PACK,
+    #[cfg(feature = "lang-solidity")]
+    &solidity::PACK,
+    #[cfg(feature = "lang-verilog")]
+    &verilog::PACK,
+    #[cfg(feature = "lang-powershell")]
+    &powershell::PACK,
+    #[cfg(feature = "lang-robot")]
+    &robot::PACK,
+    #[cfg(feature = "lang-dm")]
+    &dm::PACK,
 ];
 
 /// One lazily compiled query per pack: a refresh compiles only the languages it extracts.

@@ -45,6 +45,10 @@ pub(super) fn has_implicit_this(file_type: Option<FileType>) -> bool {
                     | FileType::Ruby
                     | FileType::Dart
                     | FileType::Elixir
+                    | FileType::Pascal
+                    | FileType::Solidity
+                    | FileType::Dm
+                    | FileType::Verilog
             )
         )
 }

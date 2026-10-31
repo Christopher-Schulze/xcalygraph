@@ -1,0 +1,3 @@
+R.open_store -calls-> R.read_rows @2
+R.read_rows -uses-> R.normalize @8
+file:tests/testthat/test-repo.R -tests-> R.open_store @3

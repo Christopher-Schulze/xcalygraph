@@ -1,0 +1,17 @@
+sym 8-14 class TMainForm parent=- owner= pub flags=0 sig="TMainForm = class(TForm)" doc=""
+sym 12-12 method OpenButtonClick parent=TMainForm owner=TMainForm pub flags=8 sig="procedure OpenButtonClick(Sender: TObject)" doc=""
+sym 13-13 method Refresh parent=TMainForm owner=TMainForm pub flags=8 sig="procedure Refresh" doc=""
+sym 18-22 method OpenButtonClick parent=- owner=TMainForm pub flags=0 sig="procedure TMainForm.OpenButtonClick(Sender: TObject)" doc=""
+sym 24-27 method Refresh parent=- owner=TMainForm pub flags=0 sig="procedure TMainForm.Refresh" doc=""
+import 5 "Forms" names= alias=- reexport=false
+import 5 "Repo" names= alias=- reexport=false
+ref 8 Inherit TForm qualifier=- scope=TMainForm
+ref 10 Type TRepo qualifier=- scope=TMainForm
+ref 12 Type TObject qualifier=- scope=OpenButtonClick
+ref 18 Type TObject qualifier=- scope=OpenButtonClick
+ref 20 Call Load qualifier=FRows scope=OpenButtonClick args=1
+ref 21 Call Refresh qualifier=- scope=OpenButtonClick
+ref 26 Call Count qualifier=FRows scope=Refresh
+bind 12 "Sender": TObject declared scope=OpenButtonClick
+bind 18 "Sender": TObject declared scope=OpenButtonClick
+fields TMainForm FRows:TRepo

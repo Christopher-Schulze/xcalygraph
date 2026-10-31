@@ -1,0 +1,7 @@
+sym 1-1 fn find parent=- owner= pub flags=8 sig="val find : t -> int -> int" doc=""
+sym 2-2 mod M parent=- owner= pub flags=8 sig="module M : sig val x : int end" doc=""
+sym 2-2 fn x parent=M owner= pub flags=8 sig="val x : int" doc=""
+ref 1 Type int qualifier=- scope=find
+ref 1 Type int qualifier=- scope=find
+ref 1 Type t qualifier=- scope=find
+ref 2 Type int qualifier=- scope=x

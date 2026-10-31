@@ -1,0 +1,14 @@
+sym 1-20 mod store_mod parent=- owner= pub flags=0 sig="module store_mod" doc=""
+sym 4-7 struct repo_t parent=store_mod owner= pub flags=0 sig="type :: repo_t" doc=""
+sym 8-15 fn open_store parent=store_mod owner= pub flags=0 sig="subroutine open_store(r)" doc=""
+sym 15-19 fn count_rows parent=store_mod owner= pub flags=0 sig="integer function count_rows(r)" doc=""
+sym 20-25 mod main parent=- owner= pub flags=0 sig="program main" doc=""
+import 2 "util_mod" names= alias=- reexport=false
+import 21 "store_mod" names= alias=- reexport=false
+import 22 "consts.inc" names= alias=- reexport=false
+ref 9 Type repo_t qualifier=- scope=open_store
+ref 11 Call helper qualifier=- scope=open_store args=1
+ref 13 Call count_rows qualifier=- scope=open_store args=1
+ref 16 Type repo_t qualifier=- scope=count_rows
+ref 23 Call open_store qualifier=- scope=main args=1
+env 12 STORE_URL scope=open_store

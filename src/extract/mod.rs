@@ -23,7 +23,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 25;
+const EXTRACTION_VERSION: u32 = 26;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -54,6 +54,7 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
         | FileType::Tex
         | FileType::Html),
     ) = record.file_type
+        && record.role == Role::Doc
     {
         let mut facts = prose::extract(file_type, &String::from_utf8_lossy(content));
         facts.lines = count_lines(content);
@@ -89,6 +90,22 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
     } else {
         content
     };
+    // Delphi and Lazarus forms are component trees, Lazarus packages XML: no Pascal source.
+    #[cfg(feature = "lang-pascal")]
+    if record.file_type == Some(FileType::Pascal) {
+        let lower = record.path.to_ascii_lowercase();
+        if lower.ends_with(".dfm") || lower.ends_with(".lfm") {
+            let mut facts = lang::pascal::form(&record.path, &String::from_utf8_lossy(content));
+            facts.lines = count_lines(content);
+            return facts;
+        }
+        if lower.ends_with(".lpk") {
+            return Facts {
+                lines: count_lines(content),
+                ..Facts::default()
+            };
+        }
+    }
     // World of Warcraft `.toc` files list the addon's files; they are no Lua source.
     let toc = record.path.ends_with(".toc");
     let mut facts = record
@@ -138,6 +155,18 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
                     .chars()
                     .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
         });
+    }
+    #[cfg(feature = "lang-dm")]
+    if record.file_type == Some(FileType::Dm) {
+        lang::dm::type_paths(&mut facts);
+    }
+    // PowerShell `$env:NAME` reads are captured as the whole variable.
+    if record.file_type == Some(FileType::PowerShell) {
+        for env in &mut facts.envs {
+            if let Some((_, name)) = env.name.split_once(':') {
+                env.name = name.trim_matches(['{', '}']).to_owned();
+            }
+        }
     }
     if matches!(record.role, Role::Config | Role::Manifest)
         && let Some(file_type) = record.file_type
@@ -198,5 +227,32 @@ mod tests {
         assert_eq!(count_lines(b"a"), 1);
         assert_eq!(count_lines(b"a\n"), 1);
         assert_eq!(count_lines(b"a\nb"), 2);
+    }
+
+    #[test]
+    fn text_manifests_are_parsed_not_read_as_prose() {
+        let record = |path: &str, role: Role| FileRecord {
+            path: path.to_owned(),
+            size: 0,
+            mtime_ns: 0,
+            hash: 0,
+            role,
+            file_type: Some(FileType::Text),
+        };
+        let cmake = extract(
+            &record("CMakeLists.txt", Role::Manifest),
+            b"include_directories(include)\n",
+        );
+        assert_eq!(
+            cmake.manifest.map(|manifest| manifest.include_dirs),
+            Some(vec!["include".to_owned()])
+        );
+        let remappings = extract(&record("remappings.txt", Role::Manifest), b"@oz/=lib/oz/\n");
+        assert_eq!(
+            remappings.manifest.map(|manifest| manifest.deps),
+            Some(vec![("@oz/".to_owned(), "lib/oz/".to_owned())])
+        );
+        let notes = extract(&record("docs/notes.txt", Role::Doc), b"First line.\n");
+        assert_eq!(notes.doc, "First line.");
     }
 }

@@ -56,6 +56,8 @@ pub struct Definition<'a> {
     pub in_trait_impl: bool,
     /// Wrapped by an `export` statement (TypeScript, JavaScript).
     pub export_wrapper: bool,
+    /// Grammar node kind of the definition (`test_case_definition`).
+    pub node_kind: &'a str,
 }
 
 pub struct FileContext<'a> {
@@ -147,6 +149,9 @@ pub fn extract(
 
 fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) -> Facts {
     let elixir = path.ends_with(".ex") || path.ends_with(".exs");
+    let lisp = [".lisp", ".lsp", ".cl", ".asd"]
+        .iter()
+        .any(|suffix| path.ends_with(suffix));
     let names = query.capture_names();
     let text = |node: Node| node.utf8_text(source).unwrap_or_default();
     let mut defs: HashMap<usize, RawDef> = HashMap::new();
@@ -203,6 +208,9 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
         } else if let Some(kind) = primary.strip_prefix("reference.") {
             let Some(name) = get("name") else { continue };
             if elixir && kind == "call" && in_type_specification(name, source) {
+                continue;
+            }
+            if lisp && kind == "call" && is_slot_specification(name, source) {
                 continue;
             }
             let reference = refs.entry(name.id()).or_default();
@@ -430,6 +438,7 @@ fn assemble(assembly: Assembly) -> Facts {
         let node_text = text(node);
         let inherited = parent.map_or(0, |p| symbols[p].flags & facts::FLAG_TEST);
         let definition = Definition {
+            node_kind: node.kind(),
             kind,
             name: &def.name,
             text: node_text,
@@ -704,6 +713,26 @@ fn in_type_specification(name: Node, source: &[u8]) -> bool {
     false
 }
 
+/// Common Lisp slot specification `(rows :initarg :rows :accessor rows)`: the list head names a
+/// slot, not a called function.
+fn is_slot_specification(name: Node, source: &[u8]) -> bool {
+    name.next_named_sibling()
+        .filter(|next| next.kind() == "kwd_lit")
+        .and_then(|next| next.utf8_text(source).ok())
+        .is_some_and(|keyword| {
+            matches!(
+                keyword.to_ascii_lowercase().as_str(),
+                ":initarg"
+                    | ":initform"
+                    | ":accessor"
+                    | ":reader"
+                    | ":writer"
+                    | ":allocation"
+                    | ":documentation"
+            )
+        })
+}
+
 /// Consecutive sibling clauses of one function with the same name and parameter count (Elixir
 /// `def`/`defp` calls, Erlang `fun_decl`s) become one definition spanning all clauses.
 fn merge_clauses(defs: Vec<RawDef<'_>>) -> Vec<RawDef<'_>> {
@@ -785,6 +814,7 @@ fn arity(call: Node) -> u8 {
                         | "argument_list"
                         | "arguments"
                         | "expr_args"
+                        | "exprArgs"
                         | "annotated_lambda"
                         | "lambda_literal"
                 )

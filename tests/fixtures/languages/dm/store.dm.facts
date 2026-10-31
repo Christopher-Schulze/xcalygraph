@@ -1,0 +1,11 @@
+sym 2-8 class /obj/item/store parent=- owner= pub flags=0 sig="store" doc=""
+sym 4-6 method open parent=/obj/item/store owner=/obj/item/store pub flags=0 sig="proc/open(path)" doc=""
+sym 7-8 method count parent=/obj/item/store owner=/obj/item/store pub flags=0 sig="proc/count()" doc=""
+sym 9-10 class /obj/item/store/big parent=- owner= pub flags=0 sig="big/open(path)" doc=""
+sym 9-10 method open parent=/obj/item/store/big owner=/obj/item/store/big pub flags=0 sig="open(path)" doc=""
+sym 11-12 fn helper parent=- owner= pub flags=0 sig="proc/helper(x)" doc=""
+import 1 "code/util.dm" names= alias=- reexport=false
+ref 5 Call helper qualifier=- scope=open args=1
+ref 6 Call count qualifier=- scope=open args=0
+ref 2 Inherit /obj/item qualifier=- scope=/obj/item/store
+ref 9 Inherit /obj/item/store qualifier=- scope=/obj/item/store/big

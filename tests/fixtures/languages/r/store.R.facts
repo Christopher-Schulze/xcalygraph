@@ -1,0 +1,11 @@
+sym 3-7 fn open_store parent=- owner= pub flags=0 sig="open_store <- function(path)" doc=""
+import 1 "R/util.R" names= alias=- reexport=false
+import 2 "dplyr" names= alias=- reexport=false
+ref 2 Value dplyr qualifier=- scope=-
+ref 4 Call Sys.getenv qualifier=- scope=open_store args=1
+ref 5 Call helper qualifier=- scope=open_store args=1
+ref 5 Value path qualifier=- scope=open_store
+ref 6 Call filter qualifier=dplyr scope=open_store args=3
+ref 6 Value rows qualifier=- scope=open_store
+ref 8 Call open_store qualifier=- scope=- args=1
+env 4 STORE_URL scope=open_store

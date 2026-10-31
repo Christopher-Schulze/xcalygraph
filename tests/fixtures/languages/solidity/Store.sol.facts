@@ -1,0 +1,18 @@
+sym 4-4 class Math parent=- owner= pub flags=0 sig="library Math" doc=""
+sym 4-4 method add parent=Math owner=Math priv flags=0 sig="function add(uint a, uint b) internal pure returns (uint)" doc=""
+sym 5-17 class Store parent=- owner= pub flags=0 sig="contract Store is Base, IStore" doc=""
+sym 7-7 var rows parent=Store owner= pub flags=0 sig="mapping(uint => uint) rows" doc=""
+sym 8-8 alias Opened parent=Store owner= pub flags=0 sig="event Opened(uint id)" doc=""
+sym 9-9 method onlyOwner parent=Store owner=Store pub flags=0 sig="modifier onlyOwner()" doc=""
+sym 10-15 method open parent=Store owner=Store pub flags=0 sig="function open(uint id) external onlyOwner returns (uint)" doc=""
+sym 16-16 method helper parent=Store owner=Store priv flags=0 sig="function helper(uint x) internal" doc=""
+import 2 "./Base.sol" names= alias=- reexport=false
+import 3 "@oz/contracts/IStore.sol" names= alias=- reexport=false
+ref 5 Inherit Base qualifier=- scope=Store
+ref 5 Inherit IStore qualifier=- scope=Store
+ref 10 Call onlyOwner qualifier=- scope=open
+ref 11 Call add qualifier=Math scope=open
+ref 12 Call Opened qualifier=- scope=open
+ref 13 Call helper qualifier=- scope=open
+ref 14 Call add qualifier=rows[id] scope=open
+fields Store rows:mapping

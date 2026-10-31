@@ -1,0 +1,14 @@
+sym 3-3 class Repo parent=- owner= pub flags=0 sig="class Repo : Base" doc=""
+sym 3-3 method Count parent=Repo owner=Repo pub flags=0 sig="[int] Count()" doc=""
+sym 4-10 fn Open-Store parent=- owner= pub flags=0 sig="function Open-Store" doc=""
+import 1 "./Util.psm1" names= alias=- reexport=false
+import 2 "$PSScriptRoot/helpers.ps1" names= alias=- reexport=false
+ref 3 Inherit Base qualifier=- scope=Repo
+ref 3 Type int qualifier=- scope=Count
+ref 5 Type string qualifier=- scope=Open-Store
+ref 7 Call Invoke-Helper qualifier=- scope=Open-Store
+ref 8 Call Repo qualifier=- scope=Open-Store args=0
+ref 8 Call new qualifier=Repo scope=Open-Store args=0
+ref 9 Call Count qualifier=$r scope=Open-Store args=0
+ref 11 Call Open-Store qualifier=- scope=-
+env 6 STORE_URL scope=Open-Store

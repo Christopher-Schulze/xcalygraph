@@ -108,6 +108,10 @@ NAME accepts `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get
 | Lua, Zig | `require` bindings and `.toc` manifests; Zig `@import` bindings, `build.zig` named modules, `test` blocks |
 | Elixir, Erlang | modules by full name, `alias`/`import`/`use`, remote and piped calls, multi-clause functions, OTP callbacks; `m:f()` remote calls, `-include`, `mix test` paths |
 | Dart | `package:` imports, `export` and `part` libraries, constructor and call-result typing, `dart test` paths |
+| Julia, R, OCaml | Julia modules, `using`/`include`; R packages from `DESCRIPTION`, `pkg::f`, testthat namespaces; OCaml file modules, `.mli` declarations, `open` |
+| Fortran, Pascal and Delphi, Common Lisp | Fortran modules and `use`; Pascal units, class methods, DFM/LFM form event handlers; Lisp packages, `defpackage` uses, ASDF systems, generic functions |
+| Solidity, Verilog and SystemVerilog | Solidity contracts, remappings, modifiers, events, Foundry tests; Verilog module instantiations resolved across the design |
+| PowerShell, Robot Framework, DM | PowerShell modules and dot-sourcing; Robot keywords resolved to resources and Python libraries; DM type paths with inheritance |
 | Bash | functions, commands as calls, sourced files, env reads |
 | OpenAPI, Protobuf, GraphQL | operations, rpcs and fields matched to the code handlers that implement them |
 | Terraform | resources, data sources, variables, locals, outputs and modules by address, with references and local module imports |
@@ -117,7 +121,7 @@ NAME accepts `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get
 | PDF, DOCX, XLSX | outlines, heading styles and sheets as headings; text layer, paragraphs and cell strings searchable through `find` |
 | Images, SVG, audio, video | dimensions and durations from headers, SVG ids; literal paths in code, templates and config become `references`, so `audit` lists unreferenced assets |
 
-Next on the roadmap: specialized languages (Julia, R, OCaml, Fortran, Solidity and more), then structural languages and incremental refresh.
+Next on the roadmap: structural languages (Apex, Razor, Blade, EJS, Jinja, COBOL, XAML), then incremental refresh.
 
 ## Install
 

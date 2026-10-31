@@ -1,0 +1,17 @@
+sym 8-14 class TStore parent=- owner= pub flags=0 sig="TStore = class(TBase, IStore)" doc=""
+sym 12-12 method Open parent=TStore owner=TStore pub flags=8 sig="procedure Open(const Path: string)" doc=""
+sym 13-13 method Count parent=TStore owner=TStore pub flags=8 sig="function Count: Integer" doc=""
+sym 18-24 method Open parent=- owner=TStore pub flags=0 sig="procedure TStore.Open(const Path: string); var Url: string" doc=""
+sym 26-29 method Count parent=- owner=TStore pub flags=0 sig="function TStore.Count: Integer" doc=""
+import 5 "Repo" names= alias=- reexport=false
+import 5 "SysUtils" names= alias=- reexport=false
+ref 8 Inherit IStore qualifier=- scope=TStore
+ref 8 Inherit TBase qualifier=- scope=TStore
+ref 10 Type TRepo qualifier=- scope=TStore
+ref 22 Call Load qualifier=FRows scope=Open args=1
+ref 23 Call Helper qualifier=- scope=Open args=1
+bind 12 "Path": string declared scope=Open
+bind 18 "Path": string declared scope=Open
+bind 19 "Url": string declared scope=Open
+fields TStore FRows:TRepo
+env 21 STORE_URL scope=Open
