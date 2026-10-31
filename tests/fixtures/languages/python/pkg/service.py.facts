@@ -10,6 +10,8 @@ import 2 "." names=util alias=- reexport=false
 import 3 "app.store.db" names= alias=dbmod reexport=false
 ref 11 Inherit Base qualifier=- scope=Service args=0
 ref 13 Call Database qualifier=- scope=__init__ args=1
+ref 13 Value db qualifier=self scope=__init__
+ref 16 Value db qualifier=self scope=run
 ref 16 Call query qualifier=self.db scope=run args=1
 ref 17 Call log qualifier=util scope=run args=1
 ref 17 Value name qualifier=- scope=run

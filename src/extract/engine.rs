@@ -402,10 +402,12 @@ fn assemble(assembly: Assembly) -> Facts {
         .iter()
         .filter_map(|def| {
             def.node.map(|node| {
-                (
-                    node.start_byte(),
-                    def.last_clause.unwrap_or(node).end_byte(),
-                )
+                // Python decorators belong to the decorated definition's scope.
+                let start = node
+                    .parent()
+                    .filter(|parent| parent.kind() == "decorated_definition")
+                    .map_or(node.start_byte(), |parent| parent.start_byte());
+                (start, def.last_clause.unwrap_or(node).end_byte())
             })
         })
         .collect();

@@ -1,3 +1,6 @@
+app.models.describe -calls-> app.models.logged @20
+app.models.describe -uses-> app.models.Account @21
+app.models.describe -uses-> app.models.Account.label @22
 app.report.report -calls-> app.store.db.connect @5
 app.report.report -calls?-> app.store.db.Database.query @5
 app.service.Service -inherits-> app.service.Base @11

@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 53;
+pub const RESOLVE_VERSION: u32 = 54;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -3177,6 +3177,28 @@ impl<'a> Index<'a> {
             Some(qualifier) => {
                 match self.qualified_symbols(file, Some(imports), qualifier, &reference.name) {
                     Some(found) => pick_members(self, found, Confidence::Exact, reference.arity),
+                    // `user.display` with `user: User` known: the member of that type.
+                    None if self.file_type(file) == Some(FileType::Python)
+                        && qualifier.split('.').all(is_identifier) =>
+                    {
+                        let chain: Vec<&str> = qualifier.split('.').collect();
+                        match self.receiver_type(
+                            file,
+                            imports,
+                            reference.scope,
+                            &chain,
+                            reference.line,
+                        ) {
+                            Receiver::Known(types, Confidence::Exact) => {
+                                let found: Vec<u32> = types
+                                    .iter()
+                                    .flat_map(|&t| self.members(t, &reference.name))
+                                    .collect();
+                                pick_members(self, found, Confidence::Exact, reference.arity)
+                            }
+                            _ => Outcome::Unresolved,
+                        }
+                    }
                     // `Type.MEMBER` whose member is no symbol (a field, an enum entry outside
                     // the root): the type itself is used.
                     None if is_identifier(qualifier)

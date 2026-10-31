@@ -7,12 +7,21 @@
 (class_definition
   superclasses: (argument_list (attribute object: (_) @qualifier attribute: (identifier) @name)) @reference.inherit)
 (module (expression_statement (assignment left: (identifier) @name)) @definition.variable)
+; Annotated class attributes (dataclasses, attrs, pydantic, typed classes) are fields.
+(class_definition
+  body: (block (expression_statement (assignment left: (identifier) @field.name type: (type) @field.type) @field)))
 
 (import_statement) @import.tree @import
 (import_from_statement) @import.tree @import
 
 (call function: (identifier) @name) @reference.call
 (call function: (attribute object: (_) @qualifier attribute: (identifier) @name)) @reference.call
+; Decorators apply a callable to the decorated definition.
+(decorator (identifier) @name @reference.call)
+(decorator (attribute object: (_) @qualifier attribute: (identifier) @name) @reference.call)
+; Attribute reads (`user.display`): properties and methods passed as values; a value reference
+; only counts when the receiver's type is known and has the member.
+(attribute object: (_) @qualifier attribute: (identifier) @name) @reference.value
 (type (identifier) @name) @reference.type
 (type (attribute object: (_) @qualifier attribute: (identifier) @name)) @reference.type
 
