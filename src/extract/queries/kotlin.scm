@@ -23,6 +23,8 @@
 
 (delegation_specifier (constructor_invocation (user_type . (identifier) @name))) @reference.inherit
 (delegation_specifier (user_type . (identifier) @name)) @reference.implement
+; `Taggable by tagMap`: the class implements the interface through a delegate.
+(delegation_specifier (explicit_delegation (user_type . (identifier) @name))) @reference.implement
 
 (call_expression . (identifier) @name (value_arguments)) @reference.call
 (call_expression . (identifier) @name (annotated_lambda)) @reference.call

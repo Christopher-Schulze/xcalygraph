@@ -340,6 +340,13 @@ fn parameter_counts_come_from_the_declaration_list() {
     );
     assert_eq!(
         count(
+            "internal inline fun build(action: Writer.() -> Unit): String",
+            "build"
+        ),
+        Some((1, 1, false))
+    );
+    assert_eq!(
+        count(
             "Task Send(object request, CancellationToken ct = default)",
             "Send"
         ),

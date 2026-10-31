@@ -45,7 +45,7 @@ Implemented commands; the full target surface is `docs/spec.md` section 2. `xcal
 
 ## Languages
 
-Every language drops unqualified references to its builtins and prelude names, unless the file defines a top-level function of that name (a local definition shadows the builtin). Base lists record their type argument count, so a base type named like a generic overload (`IRequest` and `IRequest<T>`, `Base` and `Base<T>`) resolves to the overload with that many type parameters.
+Every language drops unqualified references to its builtins and prelude names, unless the file defines a top-level function of that name (a local definition shadows the builtin). Overloads of one owner, including top-level functions of one module (Kotlin, C++, Swift), are told apart by argument count (trailing lambdas count as one argument). Base lists record their type argument count, so a base type named like a generic overload (`IRequest` and `IRequest<T>`, `Base` and `Base<T>`) resolves to the overload with that many type parameters.
 
 | language | extraction | module unit and imports |
 |----------|-----------|-------------------------|

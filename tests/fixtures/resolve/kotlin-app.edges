@@ -8,6 +8,8 @@ com.example.app.main -calls-> com.example.app.Service @17
 com.example.app.main -calls-> com.example.app.Service.name @19
 com.example.app.main -calls-> com.example.store.MemoryRepository.empty @17
 com.example.store.BaseRepository.check -uses-> com.example.store.MAX_ID @14
+com.example.store.Labeled -implements-> com.example.store.Tagged @12
+com.example.store.Labeled -uses-> com.example.store.Tags @12
 com.example.store.MemoryRepository -implements-> com.example.store.Repository @18
 com.example.store.MemoryRepository -inherits-> com.example.store.BaseRepository @18
 com.example.store.MemoryRepository -uses-> com.example.store.Row @19
@@ -22,5 +24,8 @@ com.example.store.MemoryRepositoryTest.findsStoredRow -tests-> com.example.store
 com.example.store.MemoryRepositoryTest.findsStoredRow -tests-> com.example.store.MemoryRepository.put @9
 com.example.store.MemoryRepositoryTest.findsStoredRow -tests-> com.example.store.Row @9
 com.example.store.Repository.find -uses-> com.example.store.Row @5
+com.example.store.Tags -implements-> com.example.store.Tagged @7
+com.example.store.encode -calls-> com.example.store.encode @17
+com.example.store.label -calls-> com.example.store.encode @19
 file:src/main/kotlin/com/example/app/Service.kt -imports-> file:src/main/kotlin/com/example/store/Store.kt @1
 ext com.example.store org.junit 1

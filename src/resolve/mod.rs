@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 42;
+pub const RESOLVE_VERSION: u32 = 43;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -4103,13 +4103,19 @@ fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence, arity: u
         }
         // Overloads of one owner (parent type, or the `Type::`/extension owner of top-level
         // members): the one taking the argument count, else every candidate inferred.
+        // Top-level overloads of one module (Kotlin, C++ and Swift free functions) count as
+        // one owner too.
         let first = &index.symbols[found[0] as usize];
-        let owner = |s: u32| (index.symbols[s as usize].parent, index.owner_name(s));
+        let owner = |s: u32| {
+            let symbol = &index.symbols[s as usize];
+            let module = (symbol.parent == NONE && index.owner_name(s).is_empty())
+                .then(|| index.module_of(symbol.file));
+            (symbol.parent, index.owner_name(s), module)
+        };
         let first_owner = owner(found[0]);
-        if (first.parent != NONE || !first_owner.1.is_empty())
-            && found
-                .iter()
-                .all(|&s| index.symbols[s as usize].name == first.name && owner(s) == first_owner)
+        if found
+            .iter()
+            .all(|&s| index.symbols[s as usize].name == first.name && owner(s) == first_owner)
         {
             let (targets, overload) = index.overloads(&found, arity);
             return Outcome::Targets(
@@ -4124,9 +4130,6 @@ fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence, arity: u
     pick(&found, confidence)
 }
 
-/// Parameter counts of the declaration `name(...)` in a signature: required (without default
-/// values), total, and whether it is variadic; `None` when the list cannot be found (clipped or
-/// no parentheses).
 /// Type parameters declared right after `name` in a signature: `interface IRequest<out T>` has
 /// one, `class Store` none.
 fn type_parameter_count(signature: &str, name: &str) -> usize {
@@ -4160,6 +4163,9 @@ fn type_parameter_count(signature: &str, name: &str) -> usize {
     count
 }
 
+/// Parameter counts of the declaration `name(...)` in a signature: required (without default
+/// values), total, and whether it is variadic; `None` when the list cannot be found (clipped or
+/// no parentheses).
 fn parameter_count(signature: &str, name: &str) -> Option<(usize, usize, bool)> {
     // Objective-C `- (T)name:(A)a with:(B)b`: one parameter per selector colon.
     if let Some(rest) = signature
