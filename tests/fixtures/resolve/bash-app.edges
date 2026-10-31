@@ -1,0 +1,7 @@
+file:test/version_test -calls-> lib.sh.tool_version @7
+file:test/version_test -calls-> test/version_test.die @7
+file:test/version_test -imports-> file:lib.sh @1
+lib.sh.tool_version -calls-> lib.sh.tool_echo @12
+lib.sh.tool_version -calls-> lib.sh.tool_parse @12
+entry lib.sh
+entry test/version_test

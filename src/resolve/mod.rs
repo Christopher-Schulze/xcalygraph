@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 57;
+pub const RESOLVE_VERSION: u32 = 59;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1512,12 +1512,12 @@ impl<'a> Index<'a> {
         for import in &facts.imports {
             let spec = import.spec.trim_start_matches("./");
             let candidates = [
-                if dir.is_empty() {
+                normalize_path(&if dir.is_empty() {
                     spec.to_owned()
                 } else {
                     format!("{dir}/{spec}")
-                },
-                spec.to_owned(),
+                }),
+                normalize_path(spec),
             ];
             let Some(target) = candidates
                 .iter()
@@ -2881,7 +2881,11 @@ impl<'a> Index<'a> {
     fn is_trivial(&self, source: u32, target: u32, kind: EdgeKind) -> bool {
         let symbols = self.symbols.len() as u32;
         if source >= symbols {
-            return target < symbols && self.symbols[target as usize].file == source - symbols;
+            // Top-level script code calling its own functions is real control flow (Bash test
+            // scripts, `if __name__ == "__main__": run()`); a file using its own types is not.
+            return !matches!(kind, EdgeKind::Calls | EdgeKind::Tests)
+                && target < symbols
+                && self.symbols[target as usize].file == source - symbols;
         }
         if kind != EdgeKind::Uses {
             return false;

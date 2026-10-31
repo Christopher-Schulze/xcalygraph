@@ -5,7 +5,7 @@
 (command
   name: (command_name (word) @_source)
   argument: [(word) (string) (raw_string)] @import.tree
-  (#any-of? @_source "source" ".")) @import
+  (#any-of? @_source "source" "." "\\.")) @import
 
 (command name: (command_name (word) @name)) @reference.call
 

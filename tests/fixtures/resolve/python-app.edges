@@ -16,6 +16,7 @@ app.store.db.connect -uses-> app.store.db.Database @15
 file:app/facade.py -imports-> file:app/store/__init__.py @1
 file:app/facade.py -imports-> file:app/store/db.py @1
 file:app/report.py -imports-> file:app/facade.py @1
+file:app/service.py -calls-> app.service.main @29
 file:app/service.py -imports-> file:app/store/db.py @1
 file:app/service.py -imports-> file:app/util.py @1
 file:app/store/__init__.py -imports-> file:app/store/db.py @1
