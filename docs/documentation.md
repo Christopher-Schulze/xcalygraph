@@ -16,7 +16,7 @@ xcalygraph is a single-binary CLI for AI agents. It turns any directory (code re
 
 It is a clean-room rewrite of a selected subset of Graphify, without LLM calls, without visualization, without runtime dependencies and optimized for build speed, incremental updates and token efficiency of its output. Target blueprint: `docs/spec.md`; deferred features: `docs/deferred.md`.
 
-License: MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`).
+License: MIT (`LICENSE`).
 
 ## Command line
 
@@ -104,7 +104,7 @@ Resolution order for all of them is `docs/spec.md` section 6: lexical scope, imp
 ## Installation and releases
 
 - Install script: `scripts/utils/install.sh` downloads the latest release archive for the platform, verifies it against `SHA256SUMS`, places the binary in `~/.local/bin` and runs `xcalygraph install` (with `--link claude` when `~/.claude` exists).
-- Release archives: `scripts/build/build-release.sh [TARGET...]` builds `dist/xcalygraph-<version>-<os>-<arch>.tar.gz` (binary, `LICENSE-MIT`, `LICENSE-APACHE`, `THIRD-PARTY-LICENSES.txt` with the license files of every dependency from `cargo metadata`) and `dist/SHA256SUMS`.
+- Release archives: `scripts/build/build-release.sh [TARGET...]` builds `dist/xcalygraph-<version>-<os>-<arch>.tar.gz` (binary, `LICENSE`, `THIRD-PARTY-LICENSES.txt` with the license files of every dependency from `cargo metadata`) and `dist/SHA256SUMS`.
 - `.github/workflows/release.yml` builds darwin-arm64, darwin-amd64, linux-amd64 and linux-arm64 (static musl) on a `v*` tag and publishes them with `SHA256SUMS` as the release of that tag.
 
 ## Output format

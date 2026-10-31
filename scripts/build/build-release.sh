@@ -62,7 +62,7 @@ for target in "${targets[@]}"; do
   stage="${DIST}/${name}"
   mkdir -p "${stage}"
   cp "target/${target}/release/xcalygraph" "${stage}/xcalygraph"
-  cp LICENSE-MIT LICENSE-APACHE "${DIST}/THIRD-PARTY-LICENSES.txt" "${stage}/"
+  cp LICENSE "${DIST}/THIRD-PARTY-LICENSES.txt" "${stage}/"
   tar -C "${DIST}" -czf "${DIST}/${name}.tar.gz" "${name}"
   rm -rf "${stage}"
 done

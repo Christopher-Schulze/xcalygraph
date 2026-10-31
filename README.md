@@ -1,42 +1,65 @@
 # xcalygraph
 
-**A code graph built for AI agents, not for humans.** One static binary turns a repository into a dense, verifiable knowledge graph: symbols, calls, type uses, imports, implementations, tests, env reads, plus precomputed analyses (impact, dead code, cycles, stale docs, hidden coupling). Every answer is a few hundred tokens of `path:line` facts that the agent can check, instead of thousands of tokens of grep output and whole-file reads.
+**The code graph built for AI agents.** One static binary turns any repository into a precise, verifiable map of symbols, calls, imports, implementations and tests, and answers an agent's structural questions in a few hundred tokens.
 
-- **Agent-first output**: line-oriented, no decoration, stable vocabulary, token budgets on every query, the most relevant facts first.
-- **Verifiable**: every fact carries file and line, and inferred edges are marked `?`.
-- **Fast and incremental**: parallel tree-sitter extraction, a zero-copy memory-mapped index, content hashes per file. Only changed files are re-extracted and only changed shards are rewritten.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Rust](https://img.shields.io/badge/rust-stable-orange.svg)
+![Languages](https://img.shields.io/badge/languages-~60-green.svg)
+![Status](https://img.shields.io/badge/status-pre--release-lightgrey.svg)
+
+Coding agents spend most of their tokens finding things: grepping, opening whole files, and following calls by hand. xcalygraph does that work up front and hands the agent exactly the facts it needs, each with `path:line` so it can verify instead of trust.
+
+| | xcalygraph | Graphify | `rg` + reading files |
+|---|---|---|---|
+| tokens per answer | **~590** | ~2,200 to 2,800 | 16,000 to 175,000 |
+| full index build | **0.4 to 1.2 s** | 3 to 29 s | n/a |
+| update after editing one file | **50 to 110 ms** | 2 to 13 s | n/a |
+
+<sub>Measured on three public corpora; details and method in [Benchmarks](#benchmarks).</sub>
+
+## Contents
+
+- [Why](#why)
+- [Quick start](#quick-start)
+- [What an agent sees](#what-an-agent-sees)
+- [Commands](#commands)
+- [Benchmarks](#benchmarks)
+- [Languages](#languages)
+- [How it works](#how-it-works)
+- [Status](#status)
+- [License](#license)
+
+## Why
+
+- **Built for agents**: dense, line-oriented output with a stable vocabulary, a token budget on every query, and the most relevant facts first. No decoration, no prose.
+- **Verifiable**: every fact carries file and line. Inferred edges are marked `?`, and ambiguous names stay ambiguous instead of being guessed.
+- **Precomputed analyses**: change impact with the exact test command to run, dead code, unused exports, cycles, layers, stale doc references, env drift and hidden coupling from git history.
+- **Always fresh**: every query checks for changes first (about 8 ms when nothing changed) and re-extracts only the files that did.
+- **Fast and lean**: parallel tree-sitter extraction, a zero-copy memory-mapped index, content hashes per file, atomic shard rewrites.
 - **Deterministic**: the same tree always gives byte-identical output.
 - **Self-contained**: one binary with the agent skill embedded. No LLM calls, no interpreter, no service, no network except `update`.
-- **Broad**: about 60 languages and formats, from Go, Rust, TypeScript, Java and C++ to Elixir, Solidity, Verilog, COBOL and templates, plus config, SQL, Terraform, API contracts, Markdown, PDF, Office documents and assets.
 
-Clean-room Rust rewrite of a selected subset of [Graphify](https://github.com/Graphify-Labs/graphify), redesigned around one question: how much useful, verifiable context does the agent get per token?
+## Quick start
 
-## Numbers
+Build from source with the pinned stable toolchain (`rust-toolchain.toml`):
 
-Three public corpora, the same for every measurement: [hono](https://github.com/honojs/hono) @17ad0e2 (TypeScript web framework, home ground for neither tool), Graphify's own source (Python, Graphify's home ground) and xcalygraph's own source (Rust). Apple Silicon laptop, warm cache, Graphify 0.9.97. Reproduce with `scripts/benchmarks/run-evaluation.sh` and `scripts/benchmarks/run-benchmarks.sh --upstream`.
+```sh
+git clone https://github.com/Christopher-Schulze/xcalygraph
+cd xcalygraph
+cargo build --release
+install -m 755 target/release/xcalygraph ~/.local/bin/xcalygraph
+xcalygraph install --link claude
+```
 
-**Finding code from a question.** Each question describes code in plain words ("compare two secrets in constant time"), never by its name. A hit means the file with the expected definition is among the first five results; tokens are what the agent reads per answer. The `rg` column greps the two longest question words; a hit means the expected file shows up, and its tokens include reading that file.
+`install` writes the embedded skill to `~/.agents/skills/xcalygraph/`. `--link claude` links it into `~/.claude/skills/` for Claude Code; any other agent host can read the same directory. From then on the agent uses xcalygraph on its own. No index command is needed, because the first query builds the index.
 
-| corpus | questions | xcalygraph `find` | Graphify `query` | `rg` + read |
-|---|---|---|---|---|
-| hono | 32 | 71 % in 589 tokens | 75 % in 2200 tokens | 75 % in 33693 tokens |
-| Graphify source | 26 | 92 % in 589 tokens | 88 % in 2254 tokens | 100 % in 175310 tokens |
-| xcalygraph source | 32 | 81 % in 590 tokens | 75 % in 2796 tokens | 100 % in 16427 tokens |
+Try it yourself in any repository:
 
-xcalygraph answers with about a quarter of Graphify's tokens and 1/30 to 1/300 of `rg` plus reading, at a similar hit rate. `impact` finds 100 % of the expected dependents and tests on the xcalygraph impact set in 294 tokens per answer.
-
-**Building and updating the index** on the same files (`graphify update .` for Graphify; its numbers are the faster of two runs):
-
-| corpus | files | tool | full build | peak memory | index on disk | update after editing one file |
-|---|---|---|---|---|---|---|
-| hono | 577 | xcalygraph | 0.48 s | 44 MB | 1.4 MB | 73 ms |
-| | | Graphify | 5.6 s | 192 MB | 7.5 MB | 4.5 s |
-| Graphify source | 1111 | xcalygraph | 1.2 s | 90 MB | 7.4 MB | 110 ms |
-| | | Graphify | 29 s | 718 MB | 60 MB | 13 s |
-| xcalygraph source | 481 | xcalygraph | 0.36 s | 29 MB | 1.0 MB | 49 ms |
-| | | Graphify | 2.9 s | 99 MB | 8.4 MB | 1.9 s |
-
-xcalygraph builds 8 to 24 times faster, needs 3 to 8 times less memory and disk, and updates after an edit 40 to 120 times faster. Without changes the freshness check takes about 8 ms; every query runs it first, so answers never come from a stale index.
+```sh
+xcalygraph map                      # layout, entrypoints, tasks, hubs
+xcalygraph find "where are requests authenticated"
+xcalygraph impact --diff            # what your uncommitted changes affect
+```
 
 ## What an agent sees
 
@@ -68,7 +91,7 @@ t app::refresh::tests::changes_rewrite_only_affected_shards_and_read_only_sees_s
 r cargo test -p xcalygraph -- changes_rewrite_only_affected_shards_and_read_only_sees_staleness corrupt_file_table_triggers_full_rebuild ...
 ```
 
-`xcalygraph impact --diff` does the same for the uncommitted changes in the work tree (or against any revision), and flags exported signature changes.
+`xcalygraph impact --diff` does the same for the uncommitted changes in the work tree (or against any revision) and flags exported signature changes.
 
 `xcalygraph find "where is the index refreshed after a change"` returns ranked hits grouped by file:
 
@@ -85,7 +108,7 @@ src/domain/corpus.rs
 | command | answers |
 |---|---|
 | `map` | How is this repository laid out and run? Languages, largest modules with their top symbols, entrypoints, tasks (Makefile, scripts, CI jobs, services) with what they run, hubs, API operations with their handlers, cycles, layers, external dependencies, env vars. |
-| `find TERMS...` | Where is X? Ranked symbols and files (BM25F over names, parents, paths, signatures, docs, combined with graph rank). |
+| `find TERMS...` | Where is X? Ranked symbols and files (BM25F over names, parents, paths, signatures and docs, combined with graph rank). |
 | `ctx TERMS...` | What do I need to read for X? The best seeds with their doc sentence plus related symbols by personalized PageRank. |
 | `show NAME` | What is X? Signature, doc, members, fields, supertypes, implementations, callers, callees, tests, env reads. |
 | `impact NAME... \| --diff [REV]` | What does this change affect? Dependents, tests reaching them, test commands to run. |
@@ -95,9 +118,53 @@ src/domain/corpus.rs
 
 Shared flags: `-p GLOB` (paths), `-l go,rust` (languages), `-k fn,struct` (kinds), `--no-tests`, `--exact` (drop inferred edges), `-b N` (token budget), `--json` (JSON Lines), `--read-only` (never write; exit 5 when stale), `-C DIR` (root).
 
-NAME accepts `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get`), `path:line`, `path::name`, a file path, or a unique bare name. An ambiguous NAME exits with code 3 and prints the candidates.
+NAME accepts `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get`), `path:line`, `path::name`, a file path or a unique bare name. An ambiguous NAME exits with code 3 and prints the candidates.
+
+## Benchmarks
+
+All measurements use the same three public corpora:
+
+| corpus | language | files | why |
+|---|---|---|---|
+| [hono](https://github.com/honojs/hono) @17ad0e2 | TypeScript | 577 | home ground for neither tool |
+| [Graphify](https://github.com/Graphify-Labs/graphify) source | Python | 1,111 | Graphify's home ground |
+| xcalygraph source | Rust | 481 | xcalygraph's home ground |
+
+Apple Silicon laptop, warm cache, Graphify 0.9.97. Reproduce with `scripts/benchmarks/run-evaluation.sh` and `scripts/benchmarks/run-benchmarks.sh --upstream`.
+
+### Finding code from a question
+
+Each question describes code in plain words ("compare two secrets in constant time"), never by its name. A hit means the file with the expected definition is among the first five results. Tokens are what the agent reads per answer. The `rg` baseline greps the two longest question words; its hit means the expected file shows up, and its tokens include reading that file.
+
+| corpus | questions | xcalygraph `find` | Graphify `query` | `rg` + read |
+|---|---|---|---|---|
+| hono | 32 | 71 %, 589 tokens | 75 %, 2,200 tokens | 75 %, 33,693 tokens |
+| Graphify source | 26 | 92 %, 589 tokens | 88 %, 2,254 tokens | 100 %, 175,310 tokens |
+| xcalygraph source | 32 | 81 %, 590 tokens | 75 %, 2,796 tokens | 100 %, 16,427 tokens |
+
+At a similar hit rate, xcalygraph answers with about a quarter of Graphify's tokens and 1/30 to 1/300 of what `rg` plus reading costs. `impact` finds 100 % of the expected dependents and tests on the xcalygraph impact set, at 294 tokens per answer.
+
+### Building and updating the index
+
+Same files for both tools; Graphify runs `graphify update .`, and its numbers are the faster of two runs.
+
+| corpus | tool | full build | peak memory | index on disk | update after editing one file |
+|---|---|---|---|---|---|
+| hono | xcalygraph | **0.48 s** | **44 MB** | **1.4 MB** | **73 ms** |
+| | Graphify | 5.6 s | 192 MB | 7.5 MB | 4.5 s |
+| Graphify source | xcalygraph | **1.2 s** | **90 MB** | **7.4 MB** | **110 ms** |
+| | Graphify | 29 s | 718 MB | 60 MB | 13 s |
+| xcalygraph source | xcalygraph | **0.36 s** | **29 MB** | **1.0 MB** | **49 ms** |
+| | Graphify | 2.9 s | 99 MB | 8.4 MB | 1.9 s |
+
+Compared with Graphify, xcalygraph builds 8 to 24 times faster, needs 3 to 8 times less memory and disk, and updates after an edit 40 to 120 times faster.
 
 ## Languages
+
+About 60 languages and formats, each resolved by its own module rules rather than by name matching alone.
+
+<details>
+<summary>Depth per language</summary>
 
 | language | depth |
 |---|---|
@@ -130,21 +197,7 @@ NAME accepts `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get
 | PDF, DOCX, XLSX | outlines, heading styles and sheets as headings; text layer, paragraphs and cell strings searchable through `find` |
 | Images, SVG, audio, video | dimensions and durations from headers, SVG ids; literal paths in code, templates and config become `references`, so `audit` lists unreferenced assets |
 
-Next on the roadmap: incremental refresh (re-derive only what a change touches).
-
-## Install
-
-Build from source with the pinned stable toolchain (`rust-toolchain.toml`):
-
-```sh
-git clone https://github.com/Christopher-Schulze/xcalygraph
-cd xcalygraph
-cargo build --release
-install -m 755 target/release/xcalygraph ~/.local/bin/xcalygraph
-xcalygraph install --link claude
-```
-
-`install` writes the embedded skill to `~/.agents/skills/xcalygraph/`. `--link claude` links it into `~/.claude/skills/` for Claude Code, and any other agent host can read the same directory. Once GitHub Releases are published, `scripts/utils/install.sh` installs a verified prebuilt binary, and `xcalygraph update` replaces the binary and refreshes the skill in one step.
+</details>
 
 ## How it works
 
@@ -155,23 +208,16 @@ walk (gitignore aware, parallel) -> stat diff -> hash candidates -> extract chan
 ```
 
 - **Extraction** runs one generic tree-sitter query engine. Each language is a query file plus small hooks.
-- **Resolution** follows each language's module rules: lexical scope, imports, the same module, receiver typing through bindings, call results and field chains, then interface and trait dispatch. A name that is only inferred keeps the `?` mark, and an ambiguous name stays ambiguous instead of being guessed.
-- **Storage**:
-  - 64 deflated fact shards keyed by path hash;
-  - one checksummed `derived` file with string tables, CSR adjacency, ranks, modules and delta-coded search postings;
-  - a git history cache keyed by HEAD.
+- **Resolution** follows each language's module rules: lexical scope, imports, the same module, receiver typing through bindings, call results and field chains, then interface and trait dispatch.
+- **Storage**: 64 deflated fact shards keyed by path hash; one checksummed `derived` file with string tables, CSR adjacency, ranks, modules and delta-coded search postings; a git history cache keyed by HEAD. Every write goes to a temp file that is then renamed into place, and unchanged files are never rewritten.
+- **Correctness gates**: golden fact and edge fixtures per language, byte-identical output across thread counts, edge precision sampled against source, and a retrieval evaluation against Graphify and `rg`.
 
-  Every write goes to a temp file and is then renamed into place, and unchanged files are never rewritten.
-- **Correctness gates**:
-  - golden fact and edge fixtures per language;
-  - byte-identical output across thread counts;
-  - edge precision sampled against source;
-  - a retrieval evaluation against Graphify and `rg`.
+xcalygraph is a clean-room Rust rewrite of a selected subset of [Graphify](https://github.com/Graphify-Labs/graphify), redesigned around one question: how much useful, verifiable context does the agent get per token?
 
 ## Status
 
-Pre-release (0.1.0). The commands, output format and index format may still change until the first tagged release.
+Pre-release (0.1.0). Commands, output format and index format may still change until the first tagged release. Once GitHub Releases are published, `scripts/utils/install.sh` installs a verified prebuilt binary, and `xcalygraph update` replaces the binary and refreshes the skill in one step.
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option.
+[MIT](LICENSE)

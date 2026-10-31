@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Check commits before a push: no local-only files, no private names, no absolute home paths.
+# Check commits before a push: no local-only files, no private names, no absolute home paths,
+# no co-author trailers.
 # Usage: scripts/audits/check-publication.sh [RANGE]
 #   RANGE defaults to the commits not yet on origin/main; HEAD alone when there are none.
 #   Private patterns (extended regex, one per line, # comments) live in the gitignored
 #   scripts/audits/private-patterns.txt; a missing file fails the check.
-#   LICENSE-APACHE is excluded from the pattern search because the canonical license text uses
-#   common words; instead it must match the canonical Apache-2.0 text byte for byte (SHA-256).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -13,7 +12,6 @@ readonly REPO_ROOT
 readonly PATTERN_FILE="${REPO_ROOT}/scripts/audits/private-patterns.txt"
 readonly LOCAL_ONLY_PATTERN='^(AGENTS\.md|CLAUDE\.md|docs/decisions\.md|docs/tasks\.md|docs/tasks/|research/|scripts/benchmarks/questions/private/|scripts/audits/private-patterns\.txt)'
 readonly HOME_PATH_PATTERNS=('/Users/[A-Za-z0-9._-]+' '/home/[A-Za-z0-9._-]+/')
-readonly APACHE_LICENSE_SHA256='cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30'
 
 cd "${REPO_ROOT}"
 
@@ -50,13 +48,12 @@ for commit in "${commits[@]}"; do
     echo "${short}: local-only file tracked" >&2
     findings=1
   fi
-  if git grep -n -I -i -E -f "${patterns}" "${commit}" -- . ':(exclude)LICENSE-APACHE'; then
+  if git grep -n -I -i -E -f "${patterns}" "${commit}" -- .; then
     echo "${short}: private pattern in tree" >&2
     findings=1
   fi
-  if git cat-file -e "${commit}:LICENSE-APACHE" 2>/dev/null \
-    && [[ "$(git show "${commit}:LICENSE-APACHE" | shasum -a 256 | cut -d' ' -f1)" != "${APACHE_LICENSE_SHA256}" ]]; then
-    echo "${short}: LICENSE-APACHE differs from the canonical Apache-2.0 text" >&2
+  if git log -1 --format=%B "${commit}" | grep -n -i '^co-authored-by:'; then
+    echo "${short}: co-author trailer in commit message" >&2
     findings=1
   fi
   if git log -1 --format=%B "${commit}" | grep -n -i -E -f "${patterns}"; then
