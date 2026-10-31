@@ -15,3 +15,5 @@ Considered and deliberately not in `docs/spec.md`. Each entry names the evidence
 | Google Workspace and MCP server ingest | an owner workflow that needs them |
 | Framework entrypoints (HTTP routes, CLI frameworks, job handlers) | evaluation questions about service entrypoints that `map` and `find` miss |
 | Typo-tolerant search | evaluation misses caused by misspelled terms |
+| Search text for text-format documents (Markdown, text, reStructuredText, Org, AsciiDoc, LaTeX, HTML) | evaluation questions about documentation content that `rg` answers worse; indexing it exceeded the index size target and slowed single-file refresh with no gain on code questions |
+| Media durations of WebM, Matroska, MP3 and Ogg | agent questions that need these durations (format is reported) |

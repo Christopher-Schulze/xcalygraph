@@ -113,9 +113,11 @@ NAME accepts `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get
 | Terraform | resources, data sources, variables, locals, outputs and modules by address, with references and local module imports |
 | SQL | tables, views and functions from DDL; `queries` edges from code that names them in SQL strings |
 | Config and env | key paths of JSON, YAML, TOML, XML, INI and properties files; env definitions from `.env.example`, Dockerfiles, compose, GitHub Actions and Kubernetes against code reads (values never stored) |
-| Markdown | headings, links and backticked mentions resolved to files and symbols (the basis of stale doc detection) |
+| Markdown, reStructuredText, Org, AsciiDoc, LaTeX, HTML, text | headings, links, includes and inline-code mentions resolved to files and symbols (the basis of stale doc detection) |
+| PDF, DOCX, XLSX | outlines, heading styles and sheets as headings; text layer, paragraphs and cell strings searchable through `find` |
+| Images, SVG, audio, video | dimensions and durations from headers, SVG ids; literal paths in code, templates and config become `references`, so `audit` lists unreferenced assets |
 
-Next on the roadmap: documents and assets (PDF, Office, notebooks, images), then specialized and structural languages.
+Next on the roadmap: specialized languages (Julia, R, OCaml, Fortran, Solidity and more), then structural languages and incremental refresh.
 
 ## Install
 

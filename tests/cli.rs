@@ -113,6 +113,14 @@ impl TempDir {
         Ok(Self(path.canonicalize()?))
     }
 
+    fn write_bytes(&self, relative: &str, content: &[u8]) -> io::Result<()> {
+        let path = self.0.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, content)
+    }
+
     fn write(&self, relative: &str, content: &str) -> io::Result<()> {
         let path = self.0.join(relative);
         if let Some(parent) = path.parent() {
@@ -474,6 +482,78 @@ fn impact_on_script_language_tests_prints_their_runners() -> TestResult {
         php.contains("r vendor/bin/phpunit --filter 'testOpen'\n"),
         "{php}"
     );
+    Ok(())
+}
+
+/// A minimal DOCX: one `Heading1` paragraph and one body paragraph.
+fn docx(heading: &str, body: &str) -> Vec<u8> {
+    use std::io::Write;
+    let document = format!(
+        "<w:document xmlns:w=\"w\"><w:body><w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t>{heading}</w:t></w:r></w:p><w:p><w:r><w:t>{body}</w:t></w:r></w:p></w:body></w:document>"
+    );
+    let mut buffer = io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut buffer);
+        let written = writer
+            .start_file(
+                "word/document.xml",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .is_ok()
+            && writer.write_all(document.as_bytes()).is_ok()
+            && writer.finish().is_ok();
+        assert!(written);
+    }
+    buffer.into_inner()
+}
+
+#[test]
+fn documents_and_assets_feed_search_references_and_audit() -> TestResult {
+    let dir = TempDir::new("documents")?;
+    let root = dir.0.join("repo");
+    dir.write(
+        "repo/docs/guide.rst",
+        "Guide\n=====\n\nThe ingestion pipeline throttles ``Store.open``.\n\n.. image:: ../assets/diagram.png\n.. include:: missing.rst\n",
+    )?;
+    dir.write(
+        "repo/site/index.html",
+        "<html><body><h1>Welcome</h1><p>Quarterly rollout checklist.</p><img src=\"/img/hero.svg\"></body></html>\n",
+    )?;
+    dir.write(
+        "repo/public/img/hero.svg",
+        "<svg viewBox=\"0 0 48 24\"><title>Hero</title></svg>\n",
+    )?;
+    dir.write("repo/assets/diagram.png", "\u{89}PNG")?;
+    dir.write(
+        "repo/assets/logo.svg",
+        "<svg viewBox=\"0 0 16 16\"></svg>\n",
+    )?;
+    dir.write(
+        "repo/assets/unused.svg",
+        "<svg viewBox=\"0 0 8 8\"></svg>\n",
+    )?;
+    dir.write(
+        "repo/src/app.ts",
+        "export function header(): string {\n  return `<img src=\"assets/logo.svg\">`;\n}\n",
+    )?;
+    dir.write_bytes(
+        "repo/docs/plan.docx",
+        &docx("Rollout", "Quarterly rollout checklist."),
+    )?;
+    let index = dir.0.join("index");
+    let find =
+        String::from_utf8(run_in(&root, &index, &["find", "quarterly rollout checklist"])?.stdout)?;
+    assert!(find.contains("docs/plan.docx"), "{find}");
+    let heading = String::from_utf8(run_in(&root, &index, &["find", "Welcome"])?.stdout)?;
+    assert!(heading.contains("site/index.html"), "{heading}");
+    let audit = String::from_utf8(run_in(&root, &index, &["audit"])?.stdout)?;
+    assert!(audit.contains("assets\nassets/unused.svg\n"), "{audit}");
+    assert!(!audit.contains("assets/logo.svg\n"), "{audit}");
+    assert!(!audit.contains("hero.svg"), "{audit}");
+    assert!(!audit.contains("assets/diagram.png\n"), "{audit}");
+    assert!(audit.contains("missing.rst docs/guide.rst:7"), "{audit}");
+    let show = String::from_utf8(run_in(&root, &index, &["show", "public/img/hero.svg"])?.stdout)?;
+    assert!(show.contains("svg 48x24 Hero"), "{show}");
     Ok(())
 }
 

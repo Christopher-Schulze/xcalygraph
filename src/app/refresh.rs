@@ -247,10 +247,14 @@ fn write_shards(
 }
 
 fn extract_file(workspace: &Workspace, record: &FileRecord) -> Facts {
-    match std::fs::read(workspace.root.join(&record.path)) {
-        Ok(content) => extract::extract(record, &content),
-        Err(_) => Facts::default(),
-    }
+    let Ok(content) = std::fs::read(workspace.root.join(&record.path)) else {
+        return Facts::default();
+    };
+    // A parser fault on one malformed file costs that file's facts, never the index.
+    std::panic::catch_unwind(|| extract::extract(record, &content)).unwrap_or_else(|_| Facts {
+        doc: "! extraction failed".to_owned(),
+        ..Facts::default()
+    })
 }
 
 fn now_ns() -> i64 {

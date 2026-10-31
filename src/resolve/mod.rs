@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 38;
+pub const RESOLVE_VERSION: u32 = 39;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1597,7 +1597,10 @@ impl<'a> Index<'a> {
                     resolved.ambiguous_names.push(reference.name.clone());
                 }
                 Outcome::Unresolved => {
-                    if self.is_stale(reference) {
+                    // Literal paths in code may name generated or remote files; only documents
+                    // promise that their references exist.
+                    let from_doc = self.input.files[file as usize].role == Role::Doc;
+                    if (from_doc || reference.kind != RefKind::Path) && self.is_stale(reference) {
                         resolved
                             .stale
                             .push((source, reference.line, reference.name.clone()));
@@ -1838,7 +1841,23 @@ impl<'a> Index<'a> {
 
     fn resolve_path(&self, file: u32, target: &str) -> Outcome {
         let target = strip_line_suffix(target);
-        match self.file_by_path(file, target) {
+        let found = self.file_by_path(file, target).or_else(|| {
+            // Web roots (`/img/a.png` served from `public/`) and the `@/` source alias.
+            let (bases, rest): (&[&str], &str) = if let Some(rest) = target.strip_prefix("@/") {
+                (&["src/"], rest)
+            } else {
+                (
+                    &["public/", "static/", "assets/", ""],
+                    target.strip_prefix('/')?,
+                )
+            };
+            bases.iter().find_map(|base| {
+                self.path_index
+                    .get(format!("{base}{rest}").as_str())
+                    .copied()
+            })
+        });
+        match found {
             Some(found) if found != file => exact(self.symbols.len() as u32 + found),
             _ => Outcome::Unresolved,
         }
@@ -3011,7 +3030,8 @@ impl<'a> Index<'a> {
                     .map(|facts| {
                         let keys = facts.config_keys.iter().map(|key| key.path.as_str());
                         let envs = facts.env_defs.iter().map(|def| def.name.as_str());
-                        keys.chain(envs).collect::<Vec<_>>().join(" ")
+                        let texts = facts.texts.iter().map(|segment| segment.text.as_str());
+                        keys.chain(envs).chain(texts).collect::<Vec<_>>().join(" ")
                     })
                     .unwrap_or_default(),
             });

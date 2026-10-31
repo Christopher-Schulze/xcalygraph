@@ -83,6 +83,7 @@ pub fn render(
     section(&mut writer, "cycles", cycles(index));
     section(&mut writer, "stale", stale(index, filter, root));
     section(&mut writer, "drift", drift(index, root));
+    section(&mut writer, "assets", unreferenced_assets(index, filter));
     match history {
         Some(history) => {
             section(&mut writer, "coupling", coupling(index, filter, history));
@@ -343,6 +344,31 @@ fn stale(index: &Index, filter: &Filter, root: &std::path::Path) -> Vec<String> 
     lines
         .into_iter()
         .map(|(path, line, text)| format!("{text} {path}:{line}"))
+        .collect()
+}
+
+/// Asset files that no code, document, template or config references or imports.
+fn unreferenced_assets(index: &Index, filter: &Filter) -> Vec<String> {
+    let symbols = index.symbol_count();
+    index
+        .derived
+        .files()
+        .iter()
+        .enumerate()
+        .filter(|(_, file)| file.role() == Role::Asset && filter.file(index, file))
+        .filter(|(position, _)| {
+            index
+                .derived
+                .incoming(symbols + *position as u32)
+                .iter()
+                .all(|edge| {
+                    !matches!(
+                        EdgeKind::from_u8(edge.kind),
+                        Some(EdgeKind::References | EdgeKind::Imports)
+                    )
+                })
+        })
+        .map(|(_, file)| index.string(file.path).to_owned())
         .collect()
 }
 

@@ -1,7 +1,9 @@
 //! Fact extraction: content bytes to per-file facts (`docs/spec.md` section 5). Pure; no IO.
 
+mod assets;
 mod config;
 mod contracts;
+mod documents;
 pub mod engine;
 #[cfg(test)]
 mod golden;
@@ -10,6 +12,7 @@ pub mod json;
 pub mod lang;
 pub mod manifest;
 pub mod markdown;
+mod prose;
 pub mod sfc;
 mod sql;
 mod tasks;
@@ -20,7 +23,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 21;
+const EXTRACTION_VERSION: u32 = 25;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -41,6 +44,35 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
     ) {
         let mut facts = sfc::extract(record, content);
         facts.lines = count_lines(content);
+        return facts;
+    }
+    if let Some(
+        file_type @ (FileType::Text
+        | FileType::Rst
+        | FileType::Org
+        | FileType::AsciiDoc
+        | FileType::Tex
+        | FileType::Html),
+    ) = record.file_type
+    {
+        let mut facts = prose::extract(file_type, &String::from_utf8_lossy(content));
+        facts.lines = count_lines(content);
+        return facts;
+    }
+    let document = match record.file_type {
+        Some(FileType::Pdf) => Some(documents::pdf(content)),
+        Some(FileType::Docx) => Some(documents::docx(content)),
+        Some(FileType::Xlsx) => Some(documents::xlsx(content)),
+        Some(FileType::Image | FileType::Svg | FileType::Video | FileType::Audio) => {
+            let mut facts = assets::extract(&record.path, content);
+            if record.file_type == Some(FileType::Svg) {
+                facts.lines = count_lines(content);
+            }
+            Some(facts)
+        }
+        _ => None,
+    };
+    if let Some(facts) = document {
         return facts;
     }
     if record.file_type == Some(FileType::Markdown) {
@@ -134,6 +166,12 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
             }
             _ => {}
         }
+    }
+    if matches!(
+        record.role,
+        Role::Src | Role::Test | Role::Gen | Role::Config
+    ) {
+        assets::literal_paths(&String::from_utf8_lossy(content), &mut facts);
     }
     facts.lines = count_lines(content);
     if record.role == Role::Manifest {
