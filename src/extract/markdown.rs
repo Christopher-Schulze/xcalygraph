@@ -11,9 +11,27 @@ pub fn extract(text: &str) -> Facts {
     let mut first_paragraph: Vec<&str> = Vec::new();
     let mut paragraph_done = false;
     let line_count = text.lines().count() as u32;
+    // YAML (`---`) or TOML (`+++`) front matter: metadata, not prose; `title:` describes the file.
+    let mut front_matter: Option<&str> = text
+        .lines()
+        .next()
+        .map(str::trim_end)
+        .filter(|first| matches!(*first, "---" | "+++"));
+    let mut title: Option<String> = None;
     for (index, line) in text.lines().enumerate() {
         let number = index as u32 + 1;
         let trimmed = line.trim_start();
+        if let Some(marker) = front_matter {
+            if index > 0 && line.trim_end() == marker {
+                front_matter = None;
+            } else if let Some(value) = line
+                .strip_prefix("title:")
+                .or_else(|| line.strip_prefix("title ="))
+            {
+                title = Some(value.trim().trim_matches(['"', '\'']).to_owned());
+            }
+            continue;
+        }
         if let Some(marker) = fence {
             if trimmed.starts_with(marker) {
                 fence = None;
@@ -81,7 +99,12 @@ pub fn extract(text: &str) -> Facts {
             });
         }
     }
-    facts.doc = facts::clip(&facts::normalize_space(&first_paragraph.join(" ")), 400);
+    let doc = match title.filter(|title| !title.is_empty()) {
+        Some(title) if first_paragraph.is_empty() => title,
+        Some(title) => format!("{title}: {}", first_paragraph.join(" ")),
+        None => first_paragraph.join(" "),
+    };
+    facts.doc = facts::clip(&facts::normalize_space(&doc), 400);
     facts
 }
 
@@ -90,10 +113,30 @@ fn heading_level(line: &str) -> Option<usize> {
     ((1..=6).contains(&level) && line.as_bytes().get(level) == Some(&b' ')).then_some(level)
 }
 
-/// Relative targets of `[text](target)` and `![alt](target)`; URLs, anchors and mail links
-/// are skipped, `#fragment` and query parts are cut.
+/// Relative targets of `[text](target)`, `![alt](target)` and reference definitions
+/// `[name]: target`; URLs and mail links are skipped, query parts are cut, a `#fragment` stays
+/// (`setup.md#install`, `#usage`) so it can name a heading.
 fn links(line: &str) -> Vec<String> {
     let mut targets = Vec::new();
+    let trimmed = line.trim_start();
+    if trimmed.starts_with('[')
+        && let Some((label, rest)) = trimmed[1..].split_once("]:")
+        && !label.is_empty()
+        && !label.contains(']')
+    {
+        let raw = rest.split_whitespace().next().unwrap_or_default();
+        let target = raw
+            .trim_matches(['<', '>'])
+            .split('?')
+            .next()
+            .unwrap_or_default();
+        let external =
+            target.contains("://") || target.starts_with("mailto:") || target.starts_with("tel:");
+        if !target.is_empty() && !external {
+            targets.push(target.to_owned());
+        }
+        return targets;
+    }
     let mut rest = line;
     while let Some(start) = rest.find("](") {
         rest = &rest[start + 2..];
@@ -102,7 +145,7 @@ fn links(line: &str) -> Vec<String> {
         rest = &rest[end..];
         let target = raw
             .trim_matches(['<', '>'])
-            .split(['#', '?'])
+            .split('?')
             .next()
             .unwrap_or_default();
         let external =
@@ -137,6 +180,21 @@ fn mentions(line: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn front_matter_anchors_and_reference_definitions() {
+        let facts =
+            extract("---\ntitle: Guide\n---\n\n# Guide\n\nSee [a](b.md#c).\n\n[ref]: ./d.md\n");
+        assert_eq!(facts.doc, "Guide: See [a](b.md#c).");
+        let paths: Vec<&str> = facts
+            .refs
+            .iter()
+            .filter(|reference| reference.kind == RefKind::Path)
+            .map(|reference| reference.name.as_str())
+            .collect();
+        assert_eq!(paths, ["b.md#c", "./d.md"]);
+        assert_eq!(facts.symbols.len(), 1);
+    }
+
     use super::*;
 
     #[test]
@@ -173,7 +231,7 @@ mod tests {
             refs,
             [
                 (RefKind::Mention, "Store", Some(0)),
-                (RefKind::Path, "docs/api.md", Some(0)),
+                (RefKind::Path, "docs/api.md#x", Some(0)),
                 (RefKind::Mention, "store.Get", Some(1)),
                 (RefKind::Mention, "src/store.go", Some(1)),
                 (RefKind::Path, "assets/logo.png", Some(2)),

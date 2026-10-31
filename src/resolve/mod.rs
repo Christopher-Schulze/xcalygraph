@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 59;
+pub const RESOLVE_VERSION: u32 = 60;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -2066,6 +2066,50 @@ impl<'a> Index<'a> {
             })
     }
 
+    /// `setup.md#install`, `#usage`: the heading whose GitHub-style slug equals the fragment;
+    /// a document without that heading leaves the link unresolved (a stale anchor); other files
+    /// (`main.rs#L10`) stand for themselves.
+    fn resolve_anchor(&self, file: u32, path: &str, fragment: &str) -> Outcome {
+        let target_file = if path.is_empty() {
+            file
+        } else {
+            match self.resolve_path(file, path) {
+                Outcome::Targets(targets, _) => match targets.first() {
+                    Some(&(node, _)) if node >= self.symbols.len() as u32 => {
+                        node - self.symbols.len() as u32
+                    }
+                    _ => return Outcome::Targets(targets, Confidence::Exact),
+                },
+                other => return other,
+            }
+        };
+        let file_node = self.symbols.len() as u32 + target_file;
+        let start = self.base[target_file as usize];
+        let end = self
+            .base
+            .get(target_file as usize + 1)
+            .copied()
+            .unwrap_or(self.symbols.len() as u32);
+        let headings: Vec<u32> = (start..end)
+            .filter(|&symbol| self.symbols[symbol as usize].kind == SymKind::Heading)
+            .collect();
+        if fragment.is_empty() || headings.is_empty() {
+            return if target_file == file {
+                Outcome::Unresolved
+            } else {
+                exact(file_node)
+            };
+        }
+        let wanted = fragment.to_lowercase();
+        match headings
+            .iter()
+            .find(|&&heading| heading_slug(&self.symbols[heading as usize].name) == wanted)
+        {
+            Some(&heading) => exact(heading),
+            None => Outcome::Unresolved,
+        }
+    }
+
     /// Members `name` of the inline module path `qualifier` declared in `file`.
     fn rust_inline_module(&self, file: u32, qualifier: &str, name: &str) -> Option<Vec<u32>> {
         let facts = self.facts(file)?;
@@ -2620,6 +2664,9 @@ impl<'a> Index<'a> {
     }
 
     fn resolve_path(&self, file: u32, target: &str) -> Outcome {
+        if let Some((path, fragment)) = target.split_once('#') {
+            return self.resolve_anchor(file, path, fragment);
+        }
         let target = strip_line_suffix(target);
         let found = self.file_by_path(file, target).or_else(|| {
             // Web roots (`/img/a.png` served from `public/`) and the `@/` source alias.
@@ -4372,6 +4419,20 @@ fn js_owner<'s>(signature: &'s str, name: &str) -> Option<(&'s str, char)> {
     let table = table.strip_suffix(".prototype").unwrap_or(table);
     let table = table.rsplit('.').next().unwrap_or(table);
     (is_identifier(table) && table != left).then_some((table, '.'))
+}
+
+/// GitHub heading anchor: lowercase, spaces to `-`, letters, digits, `-` and `_` kept.
+fn heading_slug(title: &str) -> String {
+    title
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter_map(|ch| match ch {
+            ' ' => Some('-'),
+            ch if ch.is_alphanumeric() || ch == '-' || ch == '_' => Some(ch),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Type parameters declared right after `name` in a signature: `interface IRequest<out T>` has
