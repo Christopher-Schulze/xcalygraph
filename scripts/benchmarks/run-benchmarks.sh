@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Measure index build, freshness, single-file refresh and footprint on the reference corpora.
-# Usage: scripts/benchmarks/run-benchmarks.sh [CORPUS...]
+# Usage: scripts/benchmarks/run-benchmarks.sh [--upstream] [CORPUS...]
 #   Corpora: this repository, the upstream clone (research/upstream/graphify), pinned public
 #   corpora under research/corpora/ and private corpora listed as "name<TAB>path" in the
 #   gitignored scripts/benchmarks/questions/private/corpora.tsv. CORPUS names restrict the run.
 #   Corpora are read-only: the single-file refresh runs on a copy below .cache/.
-# Requires: hyperfine, jq, rsync; the release build is made here.
+#   --upstream adds the Graphify baseline on the same copy: graphify update . for the full build,
+#   peak RSS and graphify-out size, then again after the same single-file change.
+# Requires: hyperfine, jq, rsync; graphify for --upstream; the release build is made here.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -15,7 +17,14 @@ readonly BINARY="${REPO_ROOT}/target/release/xcalygraph"
 readonly PRIVATE_LIST="${REPO_ROOT}/scripts/benchmarks/questions/private/corpora.tsv"
 readonly COPY_LIMIT=20000
 
-for tool in hyperfine jq rsync; do
+upstream=0
+if [[ "${1:-}" == "--upstream" ]]; then
+  upstream=1
+  shift
+fi
+tools=(hyperfine jq rsync)
+(( upstream )) && tools+=(graphify)
+for tool in "${tools[@]}"; do
   command -v "${tool}" >/dev/null || { echo "run-benchmarks.sh: ${tool} missing" >&2; exit 1; }
 done
 
@@ -81,7 +90,24 @@ bytes_rewritten() {
   comm -13 "${snapshot}" "${snapshot}.after" | awk '{ s += $2 } END { print s + 0 }'
 }
 
-printf '%-14s %8s %9s %9s %10s %10s %9s %9s\n' corpus files build_ms rss_mb fresh_ms change_ms index_kb write_kb
+# Graphify full build and single-file update on the copy, appended to the result line as
+# "up_build_ms up_rss_mb up_out_kb up_change_ms"; runs before the copy gets xcalygraph changes.
+upstream_columns() {
+  local copy="$1" target="$2" edit="$3" build change
+  build="$( { cd "${copy}" && /usr/bin/time -l graphify update . >/dev/null ; } 2>&1 )"
+  printf ' %12s %9s %9s' \
+    "$(awk '/ real / { printf "%.0f", $1 * 1000 }' <<<"${build}")" \
+    "$(awk '/maximum resident set size/ { printf "%.0f", $1 / 1048576 }' <<<"${build}")" \
+    "$(du -sk "${copy}/graphify-out" | awk '{ print $1 }')"
+  printf '%s' "${edit}" >> "${target}"
+  change="$( { cd "${copy}" && /usr/bin/time -l graphify update . >/dev/null ; } 2>&1 )"
+  printf ' %12s' "$(awk '/ real / { printf "%.0f", $1 * 1000 }' <<<"${change}")"
+  rm -rf "${copy}/graphify-out"
+}
+
+header="$(printf '%-14s %8s %9s %9s %10s %10s %9s %9s' corpus files build_ms rss_mb fresh_ms change_ms index_kb write_kb)"
+(( upstream )) && header+="$(printf ' %12s %9s %9s %12s' up_build_ms up_rss_mb up_out_kb up_change_ms)"
+echo "${header}"
 for entry in "${corpora[@]}"; do
   name="${entry%%	*}"
   path="${entry#*	}"
@@ -97,6 +123,7 @@ for entry in "${corpora[@]}"; do
   index_kb="$(du -sk "${index}" | awk '{ print $1 }')"
   change_ms="-"
   write_kb="-"
+  upstream_line=""
   if (( files <= COPY_LIMIT )); then
     copy="${WORK}/copy-${name}"
     copy_index="${WORK}/index-copy-${name}"
@@ -111,17 +138,21 @@ for entry in "${corpora[@]}"; do
       target="$(find "${copy}" -type f \( -name '*.go' -o -name '*.rs' -o -name '*.py' -o -name '*.ts' -o -name '*.java' -o -name '*.kt' -o -name '*.cs' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.m' -o -name '*.swift' \) -print -quit)"
     fi
     if [[ -n "${target}" ]]; then
+      # A comment line valid in the file's language, so both tools see a parseable change.
+      edit=$'\n// bench\n'
+      [[ "${target}" == *.py ]] && edit=$'\n# bench\n'
+      (( upstream )) && upstream_line="$(upstream_columns "${copy}" "${target}" "${edit}")"
       sleep 2
       find "${copy_index}" -type f -exec stat -f '%i %z %N' {} + | sort > "${WORK}/snapshot"
-      change_ms="$(mean_ms --prepare "printf '\n// bench\n' >> '${target}'" "${BINARY} index -C ${copy} --index-dir ${copy_index}")"
-      printf '\n// bench\n' >> "${target}"
+      change_ms="$(mean_ms --prepare "printf '%s' '${edit}' >> '${target}'" "${BINARY} index -C ${copy} --index-dir ${copy_index}")"
+      printf '%s' "${edit}" >> "${target}"
       find "${copy_index}" -type f -exec stat -f '%i %z %N' {} + | sort > "${WORK}/snapshot"
-      printf '\n// bench\n' >> "${target}"
+      printf '%s' "${edit}" >> "${target}"
       "${BINARY}" index -C "${copy}" --index-dir "${copy_index}" >/dev/null
       write_kb="$(( $(bytes_rewritten "${copy_index}" "${WORK}/snapshot") / 1024 ))"
     fi
     rm -rf "${copy}" "${copy_index}"
   fi
-  printf '%-14s %8s %9s %9s %10s %10s %9s %9s\n' \
-    "${name}" "${files}" "${build_ms}" "${rss_mb}" "${fresh_ms}" "${change_ms}" "${index_kb}" "${write_kb}"
+  printf '%-14s %8s %9s %9s %10s %10s %9s %9s%s\n' \
+    "${name}" "${files}" "${build_ms}" "${rss_mb}" "${fresh_ms}" "${change_ms}" "${index_kb}" "${write_kb}" "${upstream_line}"
 done

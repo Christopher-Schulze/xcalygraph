@@ -1,0 +1,33 @@
+question	expected
+run the middleware chain and call the next handler in order	src/compose.ts::compose
+compare two secrets in constant time to avoid timing attacks	src/utils/buffer.ts::timingSafeEqual
+expand a shortened ipv6 address to its full form	src/utils/ipaddr.ts::expandIPv6
+tell whether a remote address is ipv4 or ipv6	src/utils/ipaddr.ts::distinctRemoteAddr
+turn a route with an optional trailing parameter into two paths	src/utils/url.ts::checkOptionalParameter
+extract the path part of the request url	src/utils/url.ts::getPath
+split a route pattern into its segments for routing	src/utils/url.ts::splitRoutingPath
+parse a multipart or urlencoded form body	src/utils/body.ts::parseBody
+parse the cookie header into name value pairs	src/utils/cookie.ts::parse
+parse an accept header with quality values	src/utils/accept.ts::parseAccept
+unwrap a composed handler to find the original handler function	src/utils/handler.ts::findTargetHandler
+detect which javascript runtime the app runs on	src/helper/adapter/index.ts::getRuntimeKey
+limit how many async tasks run at the same time	src/utils/concurrent.ts::createPool
+compute the hash used for the etag header	src/middleware/etag/digest.ts::generateDigest
+map a request path to a file path with a default index document	src/utils/filepath.ts::getFilePath
+router that tries several routers and keeps the first one that supports all routes	src/router/smart-router/router.ts::SmartRouter
+router that matches routes by walking a trie of path segments	src/router/trie-router/router.ts::TrieRouter
+escape html special characters into a string buffer	src/utils/html.ts::escapeToBuffer
+parse the accept-language header into languages with weights	src/middleware/language/language.ts::parseAcceptLanguage
+look up the content type for a file extension	src/utils/mime.ts::getMimeType
+choose the event processor for api gateway, alb or lattice lambda events	src/adapter/aws-lambda/handler.ts::getProcessor
+fill path parameters into a url in the typed client	src/client/utils.ts::replaceUrlParam
+list all registered routes with their methods for debugging	src/helper/dev/index.ts::inspectRoutes
+verify a jwt using keys fetched from a jwks endpoint	src/utils/jwt/jwt.ts::verifyWithJwks
+apply a middleware to every route except matching ones	src/middleware/combine/index.ts::except
+send server-sent events as a streaming response	src/helper/streaming/sse.ts::streamSSE
+precompile regexp router matchers for a fixed set of paths	src/router/reg-exp-router/prepared-router.ts::buildInitParams
+clone the raw request even after its body was consumed	src/request.ts::cloneRawRequest
+measure how long an async function takes for the server-timing header	src/middleware/timing/timing.ts::wrapTime
+reject requests whose body exceeds a size limit	src/middleware/body-limit/index.ts::bodyLimit
+allow or deny clients by ip address ranges	src/middleware/ip-restriction/index.ts::ipRestriction
+protect against cross-site request forgery by checking origin	src/middleware/csrf/index.ts::csrf

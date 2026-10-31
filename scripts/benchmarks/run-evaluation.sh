@@ -5,7 +5,8 @@
 #   Question sets: scripts/benchmarks/questions/<corpus>.tsv and, for private corpora,
 #   scripts/benchmarks/questions/private/<corpus>.tsv; columns question, expected location as
 #   path::name (or path). Corpus roots: this repository (xcalygraph), the upstream clone
-#   (graphify) and private corpora from scripts/benchmarks/questions/private/corpora.tsv.
+#   (graphify), pinned public corpora under research/corpora/ (hono) and private corpora from
+#   scripts/benchmarks/questions/private/corpora.tsv.
 #   Per corpus: hit@5 of find and ctx, mean tokens per answer (bytes / 3), the rg baseline
 #   (output of rg for the two longest question words plus a full read of the expected file
 #   when rg shows it) and the upstream baseline (graphify query on a graph of a copy below
@@ -64,7 +65,11 @@ corpus_root() {
     xcalygraph) echo "${REPO_ROOT}" ;;
     graphify) echo "${REPO_ROOT}/research/upstream/graphify" ;;
     *)
-      [[ -f "${PRIVATE_LIST}" ]] && awk -F'\t' -v name="$1" '$1 == name { print $2 }' "${PRIVATE_LIST}"
+      if [[ -d "${REPO_ROOT}/research/corpora/$1" ]]; then
+        echo "${REPO_ROOT}/research/corpora/$1"
+      elif [[ -f "${PRIVATE_LIST}" ]]; then
+        awk -F'\t' -v name="$1" '$1 == name { print $2 }' "${PRIVATE_LIST}"
+      fi
       ;;
   esac
 }
@@ -117,7 +122,7 @@ printf '%-12s %4s %7s %6s %7s %8s %8s %6s %8s %6s %8s\n' \
   corpus n find@5 sym@5 ctx@5 find_tok ctx_tok rg_hit rg_tok gfy@5 gfy_tok
 corpora=("$@")
 if (( ${#corpora[@]} == 0 )); then
-  corpora=(xcalygraph graphify)
+  corpora=(xcalygraph graphify hono)
   if [[ -f "${PRIVATE_LIST}" ]]; then
     while IFS=$'\t' read -r name _; do
       [[ -n "${name}" && "${name}" != \#* ]] && corpora+=("${name}")

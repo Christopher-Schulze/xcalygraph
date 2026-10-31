@@ -13,25 +13,30 @@ Clean-room Rust rewrite of a selected subset of [Graphify](https://github.com/Gr
 
 ## Numbers
 
-Measured on public corpora on an Apple Silicon laptop with a warm cache. Reproduce them with `scripts/benchmarks/run-benchmarks.sh` and `scripts/benchmarks/run-evaluation.sh`.
+Three public corpora, the same for every measurement: [hono](https://github.com/honojs/hono) @17ad0e2 (TypeScript web framework, home ground for neither tool), Graphify's own source (Python, Graphify's home ground) and xcalygraph's own source (Rust). Apple Silicon laptop, warm cache, Graphify 0.9.97. Reproduce with `scripts/benchmarks/run-evaluation.sh` and `scripts/benchmarks/run-benchmarks.sh --upstream`.
 
-**Retrieval** compares hit@5 and tokens per answer for natural-language questions (`scripts/benchmarks/questions/`):
+**Finding code from a question.** Each question describes code in plain words ("compare two secrets in constant time"), never by its name. A hit means the file with the expected definition is among the first five results; tokens are what the agent reads per answer. The `rg` column greps the two longest question words; a hit means the expected file shows up, and its tokens include reading that file.
 
-| corpus | questions | xcalygraph `find` | Graphify 0.9.97 `query` | `rg` + reading the file |
+| corpus | questions | xcalygraph `find` | Graphify `query` | `rg` + read |
 |---|---|---|---|---|
-| xcalygraph (Rust) | 32 | **81 %, 590 tokens** | 75 %, 2796 tokens | 16408 tokens |
-| Graphify clone (Python) | 26 | **92 %, 589 tokens** | 88 %, 2254 tokens | 175310 tokens |
+| hono | 32 | 71 % in 589 tokens | 75 % in 2200 tokens | 75 % in 33693 tokens |
+| Graphify source | 26 | 92 % in 589 tokens | 88 % in 2254 tokens | 100 % in 175310 tokens |
+| xcalygraph source | 32 | 81 % in 590 tokens | 75 % in 2796 tokens | 100 % in 16427 tokens |
 
-`impact` finds 100 % of the expected dependents and tests on the xcalygraph impact set at 294 tokens per answer.
+xcalygraph answers with about a quarter of Graphify's tokens and 1/30 to 1/300 of `rg` plus reading, at a similar hit rate. `impact` finds 100 % of the expected dependents and tests on the xcalygraph impact set in 294 tokens per answer.
 
-**Index build** compares xcalygraph against Graphify 0.9.97 on the same tracked files (`graphify update .`):
+**Building and updating the index** on the same files (`graphify update .` for Graphify; its numbers are the faster of two runs):
 
-| corpus | files | full build | peak RSS | index on disk | refresh after a 1-file change |
-|---|---|---|---|---|---|
-| Graphify clone | 1111 | **1.01 s** vs 33.4 s | **81 MB** vs 684 MB | **7.4 MB** vs 61 MB | 105 ms |
-| [hono](https://github.com/honojs/hono) @17ad0e2 | 577 | **0.47 s** vs 5.0 s | **44 MB** vs 211 MB | **1.4 MB** vs 7.6 MB | 73 ms |
+| corpus | files | tool | full build | peak memory | index on disk | update after editing one file |
+|---|---|---|---|---|---|---|
+| hono | 577 | xcalygraph | 0.48 s | 44 MB | 1.4 MB | 73 ms |
+| | | Graphify | 5.6 s | 192 MB | 7.5 MB | 4.5 s |
+| Graphify source | 1111 | xcalygraph | 1.2 s | 90 MB | 7.4 MB | 110 ms |
+| | | Graphify | 29 s | 718 MB | 60 MB | 13 s |
+| xcalygraph source | 481 | xcalygraph | 0.36 s | 29 MB | 1.0 MB | 49 ms |
+| | | Graphify | 2.9 s | 99 MB | 8.4 MB | 1.9 s |
 
-Freshness check without changes: about 8 ms. Every query runs it first, so answers never come from a stale index.
+xcalygraph builds 8 to 24 times faster, needs 3 to 8 times less memory and disk, and updates after an edit 40 to 120 times faster. Without changes the freshness check takes about 8 ms; every query runs it first, so answers never come from a stale index.
 
 ## What an agent sees
 
