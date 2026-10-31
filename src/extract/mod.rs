@@ -9,6 +9,7 @@ pub mod lang;
 pub mod manifest;
 pub mod markdown;
 pub mod sfc;
+mod tasks;
 
 use crate::domain::corpus::FileRecord;
 use crate::domain::facts::Facts;
@@ -16,7 +17,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 9;
+const EXTRACTION_VERSION: u32 = 11;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -83,15 +84,22 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
                     .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
         });
     }
-    if record.role == Role::Config
+    if matches!(record.role, Role::Config | Role::Manifest)
         && let Some(file_type) = record.file_type
     {
-        config::extract(
-            &record.path,
-            file_type,
-            &String::from_utf8_lossy(content),
-            &mut facts,
-        );
+        let text = String::from_utf8_lossy(content);
+        if record.role == Role::Config {
+            config::extract(&record.path, file_type, &text, &mut facts);
+        }
+        match file_type {
+            FileType::Make => tasks::makefile(&text, &mut facts),
+            FileType::Dockerfile => tasks::dockerfile(&text, &mut facts),
+            FileType::Yaml => tasks::yaml(&record.path, &text, &mut facts),
+            FileType::Json if role::file_name(&record.path) == "package.json" => {
+                tasks::package_scripts(&text, &mut facts);
+            }
+            _ => {}
+        }
     }
     facts.lines = count_lines(content);
     if record.role == Role::Manifest {

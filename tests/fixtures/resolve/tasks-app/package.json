@@ -1,0 +1,7 @@
+{
+  "name": "web",
+  "scripts": {
+    "lint": "sh scripts/check.sh",
+    "ci": "npm run lint && make build"
+  }
+}

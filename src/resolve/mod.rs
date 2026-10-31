@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 27;
+pub const RESOLVE_VERSION: u32 = 28;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1079,6 +1079,7 @@ impl<'a> Index<'a> {
                 RefKind::Inherit => self.resolve_supertype(file, imports, reference),
                 RefKind::Path => self.resolve_path(file, &reference.name),
                 RefKind::Mention => self.resolve_mention(file, &reference.name),
+                RefKind::Run => self.resolve_run(file, reference),
                 _ => Outcome::Unresolved,
             };
             match outcome {
@@ -1091,6 +1092,7 @@ impl<'a> Index<'a> {
                         RefKind::Inherit => EdgeKind::Inherits,
                         RefKind::Path => EdgeKind::References,
                         RefKind::Mention => EdgeKind::Mentions,
+                        RefKind::Run => EdgeKind::Runs,
                         _ => EdgeKind::Uses,
                     };
                     if kind == EdgeKind::Calls && source_is_test {
@@ -1152,6 +1154,100 @@ impl<'a> Index<'a> {
     }
 
     /// A literal relative path: relative to the referring file, then to the root.
+    /// What a task runs: a script path (a directory means its `main.go`, `main.rs`, `__main__.py`
+    /// or `index` file), a task of the same file (`needs`, prerequisites, `depends_on`), or a
+    /// Makefile target (`make t`) or package script (`npm run t`) elsewhere, nearest first.
+    fn resolve_run(&self, file: u32, reference: &Ref) -> Outcome {
+        let name = reference.name.as_str();
+        let task_kind = |symbol: u32| {
+            matches!(
+                self.symbols[symbol as usize].kind,
+                SymKind::Task | SymKind::Svc
+            )
+        };
+        match reference.qualifier.as_deref() {
+            Some(runner @ ("make" | "npm")) => {
+                let manifest = if runner == "make" {
+                    "Makefile"
+                } else {
+                    "package.json"
+                };
+                let candidates: Vec<u32> = self
+                    .by_name
+                    .get(name)
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|&symbol| {
+                        task_kind(symbol)
+                            && self.input.files[self.symbols[symbol as usize].file as usize]
+                                .path
+                                .rsplit('/')
+                                .next()
+                                .is_some_and(|file_name| {
+                                    file_name == manifest
+                                        || (runner == "make" && file_name.ends_with(".mk"))
+                                })
+                    })
+                    .collect();
+                let dir = modules::parent_dir(&self.input.files[file as usize].path);
+                let nearest = candidates.iter().copied().max_by_key(|&symbol| {
+                    let other = modules::parent_dir(
+                        &self.input.files[self.symbols[symbol as usize].file as usize].path,
+                    );
+                    let shared = dir
+                        .split('/')
+                        .zip(other.split('/'))
+                        .take_while(|(a, b)| a == b)
+                        .count();
+                    (shared, std::cmp::Reverse(other.len()))
+                });
+                match nearest {
+                    Some(symbol) if candidates.len() == 1 => exact(symbol),
+                    Some(symbol) => {
+                        Outcome::Targets(vec![(symbol, Confidence::Inferred)], Confidence::Inferred)
+                    }
+                    None => Outcome::External,
+                }
+            }
+            _ if name.contains('/') || name.contains('.') => {
+                let path = name.trim_start_matches("./");
+                for candidate in [
+                    path.to_owned(),
+                    format!("{path}/main.go"),
+                    format!("{path}/main.rs"),
+                    format!("{path}/__main__.py"),
+                    format!("{path}/index.ts"),
+                    format!("{path}/index.js"),
+                ] {
+                    if let Some(found) = self.file_by_path(file, &candidate)
+                        && found != file
+                    {
+                        return exact(self.symbols.len() as u32 + found);
+                    }
+                }
+                Outcome::Unresolved
+            }
+            _ => {
+                let base = self.base[file as usize];
+                let local: Vec<u32> = self
+                    .facts(file)
+                    .map(|facts| {
+                        facts
+                            .symbols
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, symbol)| symbol.name == name)
+                            .map(|(position, _)| base + position as u32)
+                            .filter(|&symbol| task_kind(symbol))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                pick(&local, Confidence::Exact)
+            }
+        }
+    }
+
     fn resolve_path(&self, file: u32, target: &str) -> Outcome {
         let target = strip_line_suffix(target);
         match self.file_by_path(file, target) {

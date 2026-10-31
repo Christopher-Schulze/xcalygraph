@@ -230,7 +230,7 @@ fn parent_is_env(stack: &[(usize, String)]) -> bool {
 }
 
 /// `key: value` with a plain or quoted key.
-fn split_yaml_key(body: &str) -> Option<(&str, &str)> {
+pub(super) fn split_yaml_key(body: &str) -> Option<(&str, &str)> {
     let (key, value) = if let Some(rest) = body.strip_prefix('"') {
         let end = rest.find('"')?;
         (&rest[..end], rest[end + 1..].strip_prefix(':')?)

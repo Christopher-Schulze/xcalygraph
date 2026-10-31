@@ -4,7 +4,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use super::output::{Value, Writer, json_object};
 use super::{Filter, Index, Node};
-use crate::domain::facts::{EnvSource, FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST};
+use crate::domain::facts::{EnvSource, FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST, SymKind};
+use crate::domain::graph::EdgeKind;
 use crate::domain::role::Role;
 
 const MODULE_LINES: usize = 40;
@@ -33,6 +34,7 @@ pub fn render(
         },
         section("modules", modules(index, filter), MODULE_LINES),
         section("entry", entrypoints(index, filter), SECTION_LINES),
+        section("tasks", tasks(index, filter), SECTION_LINES),
         section("hubs", hubs(index, filter), SECTION_LINES),
         section("cycles", cycles(index), SECTION_LINES),
         section("layers", layers(index), SECTION_LINES),
@@ -249,7 +251,8 @@ fn symbol_line(index: &Index, node: u32, rel: &str) -> (String, String) {
 fn entrypoints(index: &Index, filter: &Filter) -> Vec<(String, String)> {
     let mut lines: Vec<(String, String)> = Vec::new();
     for (id, symbol) in index.derived.symbols().iter().enumerate() {
-        if symbol.flags & FLAG_ENTRY != 0 && filter.symbol(index, symbol) {
+        let task = matches!(symbol.kind(), SymKind::Task | SymKind::Svc);
+        if symbol.flags & FLAG_ENTRY != 0 && !task && filter.symbol(index, symbol) {
             lines.push(symbol_line(index, id as u32, "entry"));
         }
     }
@@ -263,6 +266,36 @@ fn entrypoints(index: &Index, filter: &Filter) -> Vec<(String, String)> {
         }
     }
     lines
+}
+
+/// Makefile targets, package scripts, CI jobs and services with what they run:
+/// `<name> <path>:<line> > <target>, ...`; tasks running most first.
+fn tasks(index: &Index, filter: &Filter) -> Vec<(String, String)> {
+    let mut found: Vec<(usize, String, String)> = Vec::new();
+    for (id, symbol) in index.derived.symbols().iter().enumerate() {
+        if !matches!(symbol.kind(), SymKind::Task | SymKind::Svc) || !filter.symbol(index, symbol) {
+            continue;
+        }
+        let node = id as u32;
+        let runs: Vec<&str> = index
+            .derived
+            .outgoing(node)
+            .iter()
+            .filter(|edge| edge.kind() == EdgeKind::Runs)
+            .map(|edge| index.label(edge.node))
+            .collect();
+        let (mut text, record) = symbol_line(index, node, "task");
+        if !runs.is_empty() {
+            text.push_str(" > ");
+            text.push_str(&runs.join(", "));
+        }
+        found.push((runs.len(), text, record));
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    found
+        .into_iter()
+        .map(|(_, text, record)| (text, record))
+        .collect()
 }
 
 fn hubs(index: &Index, filter: &Filter) -> Vec<(String, String)> {

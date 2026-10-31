@@ -1,0 +1,8 @@
+services:
+  api:
+    build: .
+    command: ./scripts/check.sh
+    depends_on:
+      - cache
+  cache:
+    image: redis

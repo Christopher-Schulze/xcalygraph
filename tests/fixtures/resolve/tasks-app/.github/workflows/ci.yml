@@ -1,0 +1,10 @@
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: make run
+  deploy:
+    needs: [test]
+    steps:
+      - run: ./scripts/check.sh
