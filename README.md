@@ -112,6 +112,7 @@ NAME accepts `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get
 | Fortran, Pascal and Delphi, Common Lisp | Fortran modules and `use`; Pascal units, class methods, DFM/LFM form event handlers; Lisp packages, `defpackage` uses, ASDF systems, generic functions |
 | Solidity, Verilog and SystemVerilog | Solidity contracts, remappings, modifiers, events, Foundry tests; Verilog module instantiations resolved across the design |
 | PowerShell, Robot Framework, DM | PowerShell modules and dot-sourcing; Robot keywords resolved to resources and Python libraries; DM type paths with inheritance |
+| Apex, Razor, Blade, EJS, Jinja, COBOL, XAML, DM resources | structural depth: classes, methods, triggers, components, views, template includes and blocks, COBOL paragraphs and copybooks, XAML handlers to code-behind |
 | Bash | functions, commands as calls, sourced files, env reads |
 | OpenAPI, Protobuf, GraphQL | operations, rpcs and fields matched to the code handlers that implement them |
 | Terraform | resources, data sources, variables, locals, outputs and modules by address, with references and local module imports |
@@ -121,7 +122,7 @@ NAME accepts `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get
 | PDF, DOCX, XLSX | outlines, heading styles and sheets as headings; text layer, paragraphs and cell strings searchable through `find` |
 | Images, SVG, audio, video | dimensions and durations from headers, SVG ids; literal paths in code, templates and config become `references`, so `audit` lists unreferenced assets |
 
-Next on the roadmap: structural languages (Apex, Razor, Blade, EJS, Jinja, COBOL, XAML), then incremental refresh.
+Next on the roadmap: incremental refresh (re-derive only what a change touches).
 
 ## Install
 

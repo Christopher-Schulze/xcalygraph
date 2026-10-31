@@ -1,0 +1,3 @@
+<Window x:Class="App.MainWindow">
+  <Button x:Name="SaveButton" Click="OnSave"/>
+</Window>

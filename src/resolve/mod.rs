@@ -27,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 40;
+pub const RESOLVE_VERSION: u32 = 41;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -2403,10 +2403,37 @@ impl<'a> Index<'a> {
                     .copied()
             })
         });
-        match found {
-            Some(found) if found != file => exact(self.symbols.len() as u32 + found),
-            _ => Outcome::Unresolved,
+        if let Some(found) = found.filter(|&found| found != file) {
+            return exact(self.symbols.len() as u32 + found);
         }
+        // Structural languages name copybooks, partials and includes by file name from search
+        // paths the tree does not declare: a unique file of that name, inferred.
+        let structural = self.file_type(file).is_some_and(|file_type| {
+            file_type.class() == crate::domain::filetype::Class::Structural
+        });
+        if structural && !target.contains("://") {
+            let name = target.rsplit('/').next().unwrap_or(target);
+            // COBOL copybooks differ in case between `COPY` and the file name.
+            let mut matches: Vec<u32> = [name.to_owned(), name.to_lowercase(), name.to_uppercase()]
+                .iter()
+                .flat_map(|candidate| {
+                    self.name_index
+                        .get(candidate.as_str())
+                        .into_iter()
+                        .flatten()
+                })
+                .copied()
+                .collect();
+            matches.sort_unstable();
+            matches.dedup();
+            if let [only] = matches.as_slice()
+                && *only != file
+            {
+                let node = self.symbols.len() as u32 + only;
+                return Outcome::Targets(vec![(node, Confidence::Inferred)], Confidence::Inferred);
+            }
+        }
+        Outcome::Unresolved
     }
 
     fn file_by_path(&self, file: u32, target: &str) -> Option<u32> {
@@ -2836,8 +2863,12 @@ impl<'a> Index<'a> {
             Reach::Root
         };
         let caller_is_test = self.caller_is_test(file, reference.scope);
+        // Structural templates and markup call methods of their code-behind (XAML handlers).
+        let structural = self.file_type(file).is_some_and(|file_type| {
+            file_type.class() == crate::domain::filetype::Class::Structural
+        });
         self.unique_fallback(imports, name, reach, caller_is_test, |s| {
-            kind_ok(s) && self.symbols[s as usize].kind != SymKind::Method
+            kind_ok(s) && (structural || self.symbols[s as usize].kind != SymKind::Method)
         })
     }
 

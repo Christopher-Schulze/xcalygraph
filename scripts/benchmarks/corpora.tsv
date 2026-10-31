@@ -30,3 +30,9 @@ serv	https://github.com/olofk/serv	f200eb2ed7b69ac1c6b8eddd47654522aeee5ce8	veri
 psslack	https://github.com/RamblingCookieMonster/PSSlack	1c9d6c0b810803fbf9a1c666f299ccd90e3f5bee	powershell
 robotdemo	https://github.com/robotframework/RobotDemo	c7d226faaea06c43deb26038080a670e10afa93f	robot
 tgstation	https://github.com/tgstation/tgstation	b2b976a48044d915c0b3c16bbe97e72dad42019e	dm
+apex-recipes	https://github.com/trailheadapps/apex-recipes	c162dc7ba543a32b5c8bce3d3a34249b239fa0ec	apex
+laravel.io	https://github.com/laravelio/laravel.io	55be0d802236041c24147dc350a485c36227dcd1	php,blade
+ansible-role-nginx	https://github.com/geerlingguy/ansible-role-nginx	5ff0b235006390a0d5666fd4cce7477410982cdf	jinja,yaml
+cobol-programming-course	https://github.com/openmainframeproject/cobol-programming-course	780b1c9624e066b9d784a738896e493282c5fbf4	cobol
+eshoponweb	https://github.com/dotnet-architecture/eShopOnWeb	4da8212117e87d808d4bbc7da6286fd2147ce606	csharp,razor
+windows-appsample-customers-orders-database	https://github.com/microsoft/Windows-appsample-customers-orders-database	247226c93728c5a2a0601575ed732206ca6949e7	csharp,xaml

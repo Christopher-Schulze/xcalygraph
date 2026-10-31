@@ -1546,6 +1546,7 @@ dependencies = [
  "memmap2",
  "quick-xml",
  "rayon",
+ "regex",
  "sha2",
  "tar",
  "tree-sitter",

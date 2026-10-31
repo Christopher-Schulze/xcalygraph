@@ -1,0 +1,11 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. STORE.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+           COPY ROWDEF.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           PERFORM LOAD-ROWS
+           STOP RUN.
+       LOAD-ROWS.
+           DISPLAY WS-ROW.

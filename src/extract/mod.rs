@@ -15,6 +15,7 @@ pub mod markdown;
 mod prose;
 pub mod sfc;
 mod sql;
+mod structural;
 mod tasks;
 
 use crate::domain::corpus::FileRecord;
@@ -23,7 +24,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 26;
+const EXTRACTION_VERSION: u32 = 27;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -58,6 +59,16 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
     {
         let mut facts = prose::extract(file_type, &String::from_utf8_lossy(content));
         facts.lines = count_lines(content);
+        return facts;
+    }
+    if let Some(file_type) = record
+        .file_type
+        .filter(|file_type| file_type.class() == crate::domain::filetype::Class::Structural)
+    {
+        let mut facts = structural::extract(file_type, &record.path, content);
+        if file_type != FileType::DmResource {
+            assets::literal_paths(&String::from_utf8_lossy(content), &mut facts);
+        }
         return facts;
     }
     let document = match record.file_type {
