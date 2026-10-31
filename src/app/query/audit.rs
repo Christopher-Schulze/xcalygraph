@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::output::{Value, Writer};
 use super::{Filter, Index};
-use crate::domain::facts::{FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST, SymKind};
+use crate::domain::facts::{FLAG_DECLARATION, FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST, SymKind};
 use crate::domain::graph::EdgeKind;
 use crate::domain::history::History;
 use crate::domain::role::Role;
@@ -165,7 +165,8 @@ fn unreferenced(
     for (id, symbol) in symbols.iter().enumerate() {
         let node = id as u32;
         let kind = symbol.kind();
-        if symbol.flags & (FLAG_TEST | FLAG_ENTRY | FLAG_GENERATED) != 0
+        // Declarations (C prototypes, in-class C++ declarations) hand their uses to the definition.
+        if symbol.flags & (FLAG_TEST | FLAG_ENTRY | FLAG_GENERATED | FLAG_DECLARATION) != 0
             || !matches!(
                 kind,
                 SymKind::Fn

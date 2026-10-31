@@ -2,6 +2,10 @@
 
 #[cfg(feature = "lang-bash")]
 pub mod bash;
+#[cfg(any(feature = "lang-c", feature = "lang-cpp", feature = "lang-objc"))]
+pub mod c;
+#[cfg(feature = "lang-cpp")]
+pub mod cpp;
 #[cfg(any(feature = "lang-csharp", feature = "lang-vbnet"))]
 pub mod csharp;
 #[cfg(feature = "lang-go")]
@@ -14,17 +18,22 @@ pub mod groovy;
     feature = "lang-scala",
     feature = "lang-groovy",
     feature = "lang-csharp",
-    feature = "lang-vbnet"
+    feature = "lang-vbnet",
+    feature = "lang-swift"
 ))]
 pub mod java;
 #[cfg(feature = "lang-kotlin")]
 pub mod kotlin;
+#[cfg(feature = "lang-objc")]
+pub mod objc;
 #[cfg(feature = "lang-python")]
 pub mod python;
 #[cfg(feature = "lang-rust")]
 pub mod rust;
 #[cfg(feature = "lang-scala")]
 pub mod scala;
+#[cfg(feature = "lang-swift")]
+pub mod swift;
 #[cfg(any(feature = "lang-typescript", feature = "lang-javascript"))]
 pub mod typescript;
 #[cfg(feature = "lang-vbnet")]
@@ -74,6 +83,14 @@ const PACKS: &[&Pack] = &[
     &csharp::PACK,
     #[cfg(feature = "lang-vbnet")]
     &vbnet::PACK,
+    #[cfg(feature = "lang-c")]
+    &c::PACK,
+    #[cfg(feature = "lang-cpp")]
+    &cpp::PACK,
+    #[cfg(feature = "lang-objc")]
+    &objc::PACK,
+    #[cfg(feature = "lang-swift")]
+    &swift::PACK,
 ];
 
 /// One lazily compiled query per pack: a refresh compiles only the languages it extracts.

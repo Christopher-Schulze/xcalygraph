@@ -1,0 +1,16 @@
+sym 3-14 struct App parent=- owner= priv flags=2 sig="@main struct App" doc=""
+sym 5-9 method main parent=App owner=App priv flags=0 sig="static func main()" doc=""
+sym 11-13 method label parent=App owner=App priv flags=0 sig="static func label(_ repository: Repository, _ id: Int) -> String" doc=""
+import 1 "Store" names= alias=- reexport=false
+ref 3 Type main qualifier=- scope=App
+ref 6 Call MemoryRepository qualifier=- scope=main args=0
+ref 7 Call put qualifier=repository scope=main args=2
+ref 8 Call label qualifier=- scope=main args=2
+ref 8 Value repository qualifier=- scope=main
+ref 11 Type Repository qualifier=- scope=label
+ref 12 Call find qualifier=repository scope=label args=1
+ref 12 Value id qualifier=- scope=label
+bind 6 "repository": MemoryRepository declared scope=main
+bind 11 "": String declared scope=label
+bind 11 "id": Int declared scope=label
+bind 11 "repository": Repository declared scope=label

@@ -98,6 +98,9 @@ impl SymKind {
 pub const FLAG_TEST: u8 = 1;
 pub const FLAG_ENTRY: u8 = 2;
 pub const FLAG_GENERATED: u8 = 4;
+/// A declaration without body (C prototype, C++ in-class method declaration): references prefer
+/// the definition.
+pub const FLAG_DECLARATION: u8 = 8;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Symbol {

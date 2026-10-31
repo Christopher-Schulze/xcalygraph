@@ -102,10 +102,12 @@ NAME accepts `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get
 | Kotlin | as Java, plus extension functions narrowed by receiver type, objects and companions, trailing lambdas |
 | Scala, Groovy | packages and imports as Java; Scala objects, traits and package-qualified calls; Groovy scripts and Spock specifications |
 | C#, Visual Basic .NET | namespaces, `using`/`Imports` (aliases, global usings), partial types, extension methods, overloads with optional parameters, xUnit/NUnit/MSTest tests, `dotnet test` filters, framework entrypoints |
+| C, C++, CUDA, Metal | include resolution with CMake and `compile_commands.json` include directories, declarations mapped to definitions, namespaces, out-of-line members, virtual dispatch, function pointers and macro bodies |
+| Objective-C, Swift | classes, protocols, messages and selectors; SwiftPM modules, extensions, XCTest and `@Test`, `swift test` filters |
 | Bash | functions, commands as calls, sourced files, env reads |
 | Markdown | headings, links and backticked mentions resolved to files and symbols (the basis of stale doc detection) |
 
-Next on the roadmap: the C family and Swift, config and infrastructure files (env definitions, task runners, SQL), Ruby, PHP, Lua, Zig, Elixir, Erlang and Dart, then documents and assets.
+Next on the roadmap: config and infrastructure files (env definitions, task runners, SQL), Ruby, PHP, Lua, Zig, Elixir, Erlang and Dart, then documents and assets.
 
 ## Install
 

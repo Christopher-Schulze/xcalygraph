@@ -1,0 +1,24 @@
+sym 4-30 mod store parent=- owner= pub flags=0 sig="namespace store" doc=""
+sym 7-10 struct Row parent=store owner= pub flags=0 sig="struct Row" doc="A stored row."
+sym 13-17 class Repository parent=store owner= pub flags=0 sig="class Repository" doc="Reads rows by id."
+sym 16-16 method find parent=Repository owner=Repository pub flags=8 sig="virtual const Row* find(int id) const = 0" doc=""
+sym 19-28 class MemoryRepository parent=store owner= pub flags=0 sig="class MemoryRepository : public Repository" doc=""
+sym 21-21 method find parent=MemoryRepository owner=MemoryRepository pub flags=8 sig="const Row* find(int id) const override" doc=""
+sym 22-22 method put parent=MemoryRepository owner=MemoryRepository pub flags=8 sig="void put(const Row& row)" doc=""
+sym 23-23 method put parent=MemoryRepository owner=MemoryRepository pub flags=8 sig="void put(int id, const std::string& name)" doc=""
+sym 26-26 method valid parent=MemoryRepository owner=MemoryRepository pub flags=8 sig="bool valid(int id) const" doc=""
+import 2 "sys:string" names= alias=- reexport=false
+ref 9 Type string qualifier=std scope=Row
+ref 16 Type Row qualifier=- scope=find
+ref 19 Inherit Repository qualifier=- scope=MemoryRepository
+ref 21 Type Row qualifier=- scope=find
+ref 22 Type Row qualifier=- scope=put
+ref 23 Type string qualifier=std scope=put
+ref 27 Type Row qualifier=- scope=MemoryRepository
+bind 16 "id": int declared scope=find
+bind 21 "id": int declared scope=find
+bind 22 "row": Row declared scope=put
+bind 23 "id": int declared scope=put
+bind 23 "name": std::string declared scope=put
+bind 26 "id": int declared scope=valid
+fields Row id:int name:std::string

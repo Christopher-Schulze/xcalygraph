@@ -1,0 +1,28 @@
+sym 7-10 fn apply parent=- owner= priv flags=0 sig="static int apply(putter put, store_t *store)" doc=""
+sym 12-18 fn main parent=- owner= pub flags=2 sig="int main(void)" doc=""
+import 1 "sys:stdio.h" names= alias=- reexport=false
+import 2 "sys:stdlib.h" names= alias=- reexport=false
+import 3 "store/store.h" names= alias=- reexport=false
+ref 5 Type putter qualifier=- scope=-
+ref 5 Type row qualifier=- scope=-
+ref 5 Type store_t qualifier=- scope=-
+ref 7 Type putter qualifier=- scope=apply
+ref 7 Type store_t qualifier=- scope=apply
+ref 8 Type row qualifier=- scope=apply
+ref 9 Call put qualifier=- scope=apply args=2
+ref 9 Value row qualifier=- scope=apply
+ref 9 Value store qualifier=- scope=apply
+ref 13 Call getenv qualifier=- scope=main args=1
+ref 14 Call store_open qualifier=- scope=main args=0
+ref 14 Type store_t qualifier=- scope=main
+ref 15 Call apply qualifier=- scope=main args=2
+ref 15 Value store qualifier=- scope=main
+ref 15 Value store_put qualifier=- scope=main
+ref 16 Value path qualifier=- scope=main
+ref 16 Call store_get qualifier=- scope=main args=2
+bind 7 "put": putter declared scope=apply
+bind 7 "store": store_t declared scope=apply
+bind 8 "row": row declared scope=apply
+bind 13 "path": char declared scope=main
+bind 14 "store": store_t declared scope=main
+env 13 STORE_PATH scope=main

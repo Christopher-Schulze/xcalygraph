@@ -1,0 +1,13 @@
+sym 3-4 class Row parent=- owner= pub flags=0 sig="@implementation Row" doc=""
+sym 6-25 class MemoryRepository parent=- owner= pub flags=0 sig="@implementation MemoryRepository" doc=""
+sym 10-12 method valid parent=MemoryRepository owner=MemoryRepository pub flags=0 sig="- (BOOL)valid:(int)rowId" doc=""
+sym 14-19 method find parent=MemoryRepository owner=MemoryRepository pub flags=0 sig="- (Row *)find:(int)rowId" doc=""
+sym 21-23 method put parent=MemoryRepository owner=MemoryRepository pub flags=0 sig="- (void)put:(Row *)row" doc=""
+import 1 "Repository.h" names= alias=- reexport=false
+ref 11 Value rowId qualifier=- scope=valid
+ref 14 Type Row qualifier=- scope=find
+ref 15 Call valid qualifier=self scope=find
+ref 16 Value nil qualifier=- scope=find
+ref 21 Type Row qualifier=- scope=put
+ref 22 Value row qualifier=- scope=put
+bind 14 "": Row declared scope=find

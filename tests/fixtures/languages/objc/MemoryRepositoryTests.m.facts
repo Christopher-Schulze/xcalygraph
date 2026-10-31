@@ -1,0 +1,17 @@
+sym 4-5 class MemoryRepositoryTests parent=- owner= pub flags=1 sig="@interface MemoryRepositoryTests : XCTestCase" doc=""
+sym 7-16 class MemoryRepositoryTests parent=- owner= pub flags=0 sig="@implementation MemoryRepositoryTests" doc=""
+sym 9-14 method testFindsStoredRow parent=MemoryRepositoryTests owner=MemoryRepositoryTests pub flags=1 sig="- (void)testFindsStoredRow" doc=""
+import 1 "sys:XCTest/XCTest.h" names= alias=- reexport=false
+import 2 "../Store/Repository.h" names= alias=- reexport=false
+ref 4 Inherit XCTestCase qualifier=- scope=MemoryRepositoryTests
+ref 10 Type MemoryRepository qualifier=- scope=testFindsStoredRow
+ref 10 Call alloc qualifier=MemoryRepository scope=testFindsStoredRow
+ref 10 Call init qualifier=[MemoryRepository alloc] scope=testFindsStoredRow
+ref 11 Type Row qualifier=- scope=testFindsStoredRow
+ref 11 Call alloc qualifier=Row scope=testFindsStoredRow
+ref 11 Call init qualifier=[Row alloc] scope=testFindsStoredRow
+ref 12 Call put qualifier=repository scope=testFindsStoredRow
+ref 13 Call XCTAssertNotNil qualifier=- scope=testFindsStoredRow args=1
+ref 13 Call find qualifier=repository scope=testFindsStoredRow
+bind 10 "repository": MemoryRepository declared scope=testFindsStoredRow
+bind 11 "row": Row declared scope=testFindsStoredRow

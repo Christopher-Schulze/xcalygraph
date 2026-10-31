@@ -1,0 +1,20 @@
+sym 2-3 macro STORE_H parent=- owner= pub flags=0 sig="#define STORE_H" doc=""
+sym 4-5 macro MAX_ROWS parent=- owner= pub flags=0 sig="#define MAX_ROWS 64" doc=""
+sym 7-10 struct row parent=- owner= pub flags=0 sig="struct row" doc="A stored row."
+sym 12-15 alias store_t parent=- owner= pub flags=0 sig="typedef struct store" doc=""
+sym 12-15 struct store parent=store_t owner= pub flags=0 sig="struct store" doc=""
+sym 18-18 fn store_open parent=- owner= pub flags=8 sig="store_t *store_open(void)" doc="Opens an empty store."
+sym 19-19 fn store_put parent=- owner= pub flags=8 sig="int store_put(store_t *store, struct row row)" doc=""
+sym 20-20 fn store_get parent=- owner= pub flags=8 sig="const struct row *store_get(const store_t *store, int id)" doc=""
+ref 13 Type row qualifier=- scope=store
+ref 18 Type store_t qualifier=- scope=store_open
+ref 19 Type row qualifier=- scope=store_put
+ref 19 Type store_t qualifier=- scope=store_put
+ref 20 Type row qualifier=- scope=store_get
+ref 20 Type store_t qualifier=- scope=store_get
+bind 19 "row": row declared scope=store_put
+bind 19 "store": store_t declared scope=store_put
+bind 20 "id": int declared scope=store_get
+bind 20 "store": store_t declared scope=store_get
+fields row id:int name:char
+fields store count:int

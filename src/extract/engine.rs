@@ -193,6 +193,10 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
             if let Some(owner) = get("owner") {
                 entry.owner = Some(type_name(text(owner)));
             }
+            // A result type captured with the definition (one pattern instead of two).
+            if let Some(node) = get("return.type") {
+                returns.push((primary_node.start_byte(), result_type(text(node))));
+            }
         } else if let Some(kind) = primary.strip_prefix("reference.") {
             let Some(name) = get("name") else { continue };
             let reference = refs.entry(name.id()).or_default();
@@ -664,10 +668,19 @@ fn arity(call: Node) -> u8 {
         Some(arguments) => vec![arguments],
         None => call
             .named_children(&mut walker)
+            .flat_map(|child| {
+                // Swift wraps arguments and trailing closures in a `call_suffix`.
+                if child.kind() == "call_suffix" {
+                    let mut inner = child.walk();
+                    child.named_children(&mut inner).collect::<Vec<_>>()
+                } else {
+                    vec![child]
+                }
+            })
             .filter(|child| {
                 matches!(
                     child.kind(),
-                    "value_arguments" | "argument_list" | "annotated_lambda"
+                    "value_arguments" | "argument_list" | "annotated_lambda" | "lambda_literal"
                 )
             })
             .collect(),
@@ -678,7 +691,7 @@ fn arity(call: Node) -> u8 {
     let count: usize = lists
         .iter()
         .map(|list| {
-            if list.kind() == "annotated_lambda" {
+            if matches!(list.kind(), "annotated_lambda" | "lambda_literal") {
                 return 1;
             }
             let mut inner = list.walk();
@@ -728,7 +741,24 @@ pub fn type_name(text: &str) -> String {
     loop {
         let before = rest;
         for prefix in [
-            "*", "&", "[]", "mut ", "dyn ", "impl ", "const ", "...", "?", "'static ",
+            "*",
+            "&",
+            "[]",
+            "mut ",
+            "dyn ",
+            "impl ",
+            "const ",
+            "...",
+            "?",
+            "'static ",
+            // C and C++ elaborated and qualified types.
+            "struct ",
+            "union ",
+            "enum ",
+            "class ",
+            "volatile ",
+            "unsigned ",
+            "static ",
         ] {
             rest = rest.trim_start_matches(prefix).trim_start();
         }

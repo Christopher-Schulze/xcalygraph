@@ -12,6 +12,8 @@ pub fn parse(name: &str, text: &str) -> Option<Manifest> {
         "Cargo.toml" => Some(cargo_toml(text)),
         "package.json" => Some(package_json(&json::parse(text)?)),
         "tsconfig.json" | "jsconfig.json" => Some(tsconfig(&json::parse(text)?)),
+        "CMakeLists.txt" => Some(cmake(text)),
+        "compile_commands.json" => Some(compile_commands(&json::parse(text)?)),
         _ => None,
     }
 }
@@ -187,6 +189,111 @@ fn cargo_toml(text: &str) -> Manifest {
     manifest
 }
 
+/// `include_directories(...)` and `target_include_directories(target [SYSTEM] [BEFORE] PUBLIC
+/// dir ...)` arguments relative to the `CMakeLists.txt`; source-dir variables stripped, other
+/// variables skipped. `project(name)` names the module.
+fn cmake(text: &str) -> Manifest {
+    let mut manifest = Manifest::default();
+    let flat: String = text
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let lower = flat.to_ascii_lowercase();
+    for command in [
+        "include_directories",
+        "target_include_directories",
+        "project",
+    ] {
+        let mut from = 0;
+        while let Some(found) = lower[from..].find(&format!("{command}(")) {
+            let start = from + found + command.len() + 1;
+            let Some(length) = flat[start..].find(')') else {
+                break;
+            };
+            let args: Vec<&str> = flat[start..start + length].split_whitespace().collect();
+            let boundary = lower[..from + found]
+                .chars()
+                .next_back()
+                .is_none_or(|before| !(before.is_alphanumeric() || before == '_'));
+            from = start + length;
+            if !boundary {
+                continue;
+            }
+            if command == "project" {
+                manifest.module = manifest
+                    .module
+                    .take()
+                    .or_else(|| args.first().map(|name| (*name).to_owned()));
+                continue;
+            }
+            let skip = usize::from(command == "target_include_directories");
+            for arg in args.into_iter().skip(skip) {
+                if matches!(
+                    arg,
+                    "PUBLIC" | "PRIVATE" | "INTERFACE" | "SYSTEM" | "BEFORE" | "AFTER"
+                ) {
+                    continue;
+                }
+                let arg = arg.trim_matches('"');
+                let arg = [
+                    "${CMAKE_CURRENT_SOURCE_DIR}",
+                    "${PROJECT_SOURCE_DIR}",
+                    "${CMAKE_SOURCE_DIR}",
+                ]
+                .iter()
+                .find_map(|prefix| arg.strip_prefix(prefix))
+                .map_or(arg, |rest| rest.trim_start_matches('/'));
+                if arg.contains("${") || arg.contains("$<") {
+                    continue;
+                }
+                let dir = if arg.is_empty() { "." } else { arg };
+                if !manifest.include_dirs.iter().any(|existing| existing == dir) {
+                    manifest.include_dirs.push(dir.to_owned());
+                }
+            }
+        }
+    }
+    manifest
+}
+
+/// `-I` and `-isystem` directories of every compile command, as written (usually absolute; the
+/// resolver maps them onto root directories by suffix).
+fn compile_commands(value: &Value) -> Manifest {
+    let mut manifest = Manifest::default();
+    let Value::Array(entries) = value else {
+        return manifest;
+    };
+    for entry in entries {
+        let arguments: Vec<String> = match entry.get("arguments") {
+            Some(arguments) => arguments.strings(),
+            None => entry
+                .get("command")
+                .and_then(Value::as_str)
+                .map(|command| command.split_whitespace().map(str::to_owned).collect())
+                .unwrap_or_default(),
+        };
+        let mut words = arguments.iter().peekable();
+        while let Some(word) = words.next() {
+            let dir = if let Some(dir) = word.strip_prefix("-I").filter(|dir| !dir.is_empty()) {
+                Some(dir.to_owned())
+            } else if word == "-I" || word == "-isystem" {
+                words.next().cloned()
+            } else {
+                word.strip_prefix("-isystem")
+                    .filter(|dir| !dir.is_empty())
+                    .map(str::to_owned)
+            };
+            if let Some(dir) = dir
+                && !manifest.include_dirs.contains(&dir)
+            {
+                manifest.include_dirs.push(dir);
+            }
+        }
+    }
+    manifest
+}
+
 fn assign(manifest: &mut Manifest, section: &str, key: &str, value: &str) {
     match (section, key) {
         ("package", "name") => manifest.module = Some(unquote(value)),
@@ -250,6 +357,39 @@ fn strip_toml_comment(line: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cmake_and_compile_commands_list_include_directories() {
+        let cmake = parse(
+            "CMakeLists.txt",
+            "project(demo C)\ninclude_directories(include ${CMAKE_CURRENT_SOURCE_DIR}/third_party)\ntarget_include_directories(app PUBLIC src ${GEN_DIR}) # generated\n",
+        );
+        assert_eq!(
+            cmake
+                .as_ref()
+                .map(|manifest| (manifest.module.clone(), manifest.include_dirs.clone())),
+            Some((
+                Some("demo".to_owned()),
+                vec![
+                    "include".to_owned(),
+                    "third_party".to_owned(),
+                    "src".to_owned()
+                ]
+            ))
+        );
+        let commands = parse(
+            "compile_commands.json",
+            r#"[{"directory": "/b", "command": "cc -Iinclude -I /w/lib/inc -c a.c", "file": "a.c"}, {"arguments": ["cc", "-isystem/w/sys"]}]"#,
+        );
+        assert_eq!(
+            commands.map(|manifest| manifest.include_dirs),
+            Some(vec![
+                "include".to_owned(),
+                "/w/lib/inc".to_owned(),
+                "/w/sys".to_owned()
+            ])
+        );
+    }
 
     #[test]
     fn package_json_and_tsconfig() {

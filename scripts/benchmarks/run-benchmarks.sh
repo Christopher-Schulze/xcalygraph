@@ -104,11 +104,11 @@ for entry in "${corpora[@]}"; do
     copy_corpus "${path}" "${copy}" || continue
     "${BINARY}" index -C "${copy}" --index-dir "${copy_index}" >/dev/null
     # A tracked source file, so ignore rules cannot hide the change.
-    tracked="$(git -C "${path}" ls-files -- '*.go' '*.rs' '*.py' '*.ts' '*.java' '*.kt' '*.cs' 2>/dev/null | awk 'NR == 1')"
+    tracked="$(git -C "${path}" ls-files -- '*.go' '*.rs' '*.py' '*.ts' '*.java' '*.kt' '*.cs' '*.c' '*.cc' '*.cpp' '*.m' '*.swift' 2>/dev/null | awk 'NR == 1')"
     if [[ -n "${tracked}" ]]; then
       target="${copy}/${tracked}"
     else
-      target="$(find "${copy}" -type f \( -name '*.go' -o -name '*.rs' -o -name '*.py' -o -name '*.ts' -o -name '*.java' -o -name '*.kt' -o -name '*.cs' \) -print -quit)"
+      target="$(find "${copy}" -type f \( -name '*.go' -o -name '*.rs' -o -name '*.py' -o -name '*.ts' -o -name '*.java' -o -name '*.kt' -o -name '*.cs' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.m' -o -name '*.swift' \) -print -quit)"
     fi
     if [[ -n "${target}" ]]; then
       sleep 2

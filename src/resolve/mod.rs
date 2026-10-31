@@ -1,6 +1,7 @@
 //! Global resolution: facts of all files to the symbol graph (`docs/spec.md` section 6,
 //! resolution order steps 1 to 8). Pure; recomputed from cached facts on every change (D6).
 
+mod cfamily;
 pub mod derive;
 mod dotnet;
 mod js;
@@ -16,7 +17,7 @@ use crate::domain::hash::FastSet as HashSet;
 use rayon::prelude::*;
 
 use crate::domain::corpus::FileRecord;
-use crate::domain::facts::{self, Binding, Facts, Ref, RefKind, SymKind};
+use crate::domain::facts::{self, Binding, FLAG_DECLARATION, Facts, Ref, RefKind, SymKind};
 use crate::domain::filetype::FileType;
 use crate::domain::graph::{
     self, Confidence, Edge, EdgeKind, EnvSite, External, FieldList, Graph, GraphFile, GraphSymbol,
@@ -26,7 +27,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 21;
+pub const RESOLVE_VERSION: u32 = 26;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -77,6 +78,9 @@ struct Index<'a> {
     supertypes: HashMap<u32, Vec<u32>>,
     /// .NET `global using` directives with their file: visible in every file of the language.
     global_usings: Vec<(u32, &'a facts::Import)>,
+    /// C-family include directories (root-relative) and direct includes per file.
+    include_dirs: Vec<String>,
+    includes: Vec<Vec<u32>>,
 }
 
 /// Where an import or path leads.
@@ -145,8 +149,10 @@ impl<'a> Index<'a> {
                     path.push(enclosing.name.as_str());
                     current = enclosing.parent;
                 }
-                if path.is_empty() && !symbol.owner.is_empty() {
-                    path.push(symbol.owner.as_str());
+                // The owner of an out-of-line member (`Type::name` inside a namespace) is its
+                // innermost qualifier.
+                if !symbol.owner.is_empty() && path.first() != Some(&symbol.owner.as_str()) {
+                    path.insert(0, symbol.owner.as_str());
                 }
                 path.reverse();
                 // Headings are found by title; their file path locates them.
@@ -273,8 +279,20 @@ impl<'a> Index<'a> {
             implementations: HashMap::default(),
             supertypes: HashMap::default(),
             global_usings: Vec::new(),
+            include_dirs: cfamily::include_dirs(input.files, input.facts),
+            includes: Vec::new(),
         };
         index.build_tables();
+        index.includes = (0..input.files.len() as u32)
+            .map(|file| match index.facts(file) {
+                Some(facts) if cfamily::is_cfamily(index.file_type(file)) => facts
+                    .imports
+                    .iter()
+                    .filter_map(|import| index.include_target(file, &import.spec))
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect();
         index
     }
 
@@ -383,6 +401,10 @@ impl<'a> Index<'a> {
             Some(FileType::CSharp | FileType::VbNet) => {
                 self.dotnet_imports(file, facts, &mut imports)
             }
+            file_type if cfamily::is_cfamily(file_type) => {
+                self.cfamily_imports(file, facts, &mut imports)
+            }
+            Some(FileType::Swift) => self.swift_imports(facts, &mut imports),
             Some(
                 FileType::TypeScript
                 | FileType::JavaScript
@@ -393,6 +415,40 @@ impl<'a> Index<'a> {
             _ => {}
         }
         imports
+    }
+
+    /// `import Module`: a SwiftPM target of the root becomes visible; platform modules are
+    /// dropped, other modules are external dependencies.
+    fn swift_imports(&self, facts: &Facts, imports: &mut Imports) {
+        for import in &facts.imports {
+            match self.modules.get(&format!("swift:{}", import.spec)) {
+                Some(module) => {
+                    imports.globs.push(module);
+                    imports.modules.push(module);
+                }
+                None if !matches!(
+                    import.spec.as_str(),
+                    "Foundation"
+                        | "UIKit"
+                        | "AppKit"
+                        | "SwiftUI"
+                        | "Combine"
+                        | "XCTest"
+                        | "Testing"
+                        | "os"
+                        | "Darwin"
+                        | "Dispatch"
+                        | "CoreData"
+                        | "CoreGraphics"
+                        | "Observation"
+                        | "PackageDescription"
+                ) =>
+                {
+                    imports.externals.push(import.spec.clone());
+                }
+                None => {}
+            }
+        }
     }
 
     fn go_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
@@ -911,6 +967,11 @@ impl<'a> Index<'a> {
         name: &str,
     ) -> Option<Vec<u32>> {
         let imports = imports.or_else(|| self.file_imports.get(file as usize));
+        if self.file_type(file) == Some(FileType::Cpp)
+            && let Some(found) = self.cpp_qualified(qualifier, name)
+        {
+            return Some(found);
+        }
         if self.file_type(file) == Some(FileType::Python)
             && let Some(found) =
                 imports.and_then(|imports| self.python_qualified(imports, qualifier, name))
@@ -1035,6 +1096,16 @@ impl<'a> Index<'a> {
                     if kind == EdgeKind::Calls && source_is_test {
                         kind = EdgeKind::Tests;
                     }
+                    // C-family declarations stand for their definitions.
+                    let targets: Vec<(u32, Confidence)> = targets
+                        .into_iter()
+                        .map(|(target, target_confidence)| {
+                            (
+                                self.definition_of(target).unwrap_or(target),
+                                target_confidence,
+                            )
+                        })
+                        .collect();
                     for (target, target_confidence) in targets {
                         if target == source || self.is_trivial(source, target, kind) {
                             continue;
@@ -1366,7 +1437,7 @@ impl<'a> Index<'a> {
         };
         // 0. JVM and .NET class bodies: methods and constants of the enclosing class and its
         // supertypes need no `this`.
-        if !wants_type && jvm::is_class_based(self.file_type(file)) {
+        if !wants_type && jvm::has_implicit_this(self.file_type(file)) {
             let members: Vec<u32> = self
                 .enclosing_members(file, reference.scope, name)
                 .into_iter()
@@ -1574,6 +1645,31 @@ impl<'a> Index<'a> {
         {
             return Outcome::External;
         }
+        // Objective-C `[[Type alloc] init...]` and `[Type new]`: the receiver is an instance of
+        // `Type`; a type outside the root ends resolution.
+        if self.file_type(file) == Some(FileType::ObjC)
+            && let Some(class) = qualifier
+                .strip_prefix('[')
+                .and_then(|inner| {
+                    inner
+                        .strip_suffix(" alloc]")
+                        .or_else(|| inner.strip_suffix(" new]"))
+                })
+                .filter(|class| is_identifier(class))
+        {
+            return match self.resolve_type(file, Some(imports), reference.scope, class) {
+                Some((types, _)) => {
+                    let members: Vec<u32> =
+                        types.iter().flat_map(|&t| self.members(t, name)).collect();
+                    if members.is_empty() {
+                        Outcome::External
+                    } else {
+                        pick_members(self, members, Confidence::Exact, reference.arity)
+                    }
+                }
+                None => Outcome::External,
+            };
+        }
         // 5a. Receiver that is itself a call (`Service().run()`, `open(x).read()`): the result
         // type of the call, inferred.
         if let Some(callee) = call_receiver(qualifier) {
@@ -1621,8 +1717,13 @@ impl<'a> Index<'a> {
                     let (direct, overload) =
                         self.overloads(&self.members(type_symbol, name), reference.arity);
                     targets.extend(direct.iter().map(|&member| (member, overload)));
-                    // 6. Abstract receiver: every implementation, inferred.
-                    if self.symbols[type_symbol as usize].kind.is_abstract() {
+                    // 6. Abstract receiver or C++ virtual member: every implementation, inferred.
+                    let virtual_member = self.file_type(self.symbols[type_symbol as usize].file)
+                        == Some(FileType::Cpp)
+                        && self.members(type_symbol, name).iter().any(|&member| {
+                            self.symbols[member as usize].signature.contains("virtual")
+                        });
+                    if self.symbols[type_symbol as usize].kind.is_abstract() || virtual_member {
                         let implementations = self
                             .implementations
                             .get(&type_symbol)
@@ -1699,6 +1800,20 @@ impl<'a> Index<'a> {
     /// otherwise the accepting candidates (all when none accepts) are inferred, since argument
     /// types decide, which names alone cannot.
     fn overloads(&self, candidates: &[u32], arity: u8) -> (Vec<u32>, Confidence) {
+        // C-family declarations next to their definitions: the definitions count.
+        let declaration = |s: &u32| self.symbols[*s as usize].flags & FLAG_DECLARATION != 0;
+        let defined: Vec<u32>;
+        let candidates =
+            if candidates.iter().any(declaration) && !candidates.iter().all(declaration) {
+                defined = candidates
+                    .iter()
+                    .copied()
+                    .filter(|s| !declaration(s))
+                    .collect();
+                defined.as_slice()
+            } else {
+                candidates
+            };
         if candidates.len() <= 1 {
             return (candidates.to_vec(), Confidence::Exact);
         }
@@ -1794,7 +1909,7 @@ impl<'a> Index<'a> {
                 None if binding.type_name.ends_with("()") => return Receiver::Unknown,
                 None => return Receiver::External,
             }
-        } else if let Some(field) = jvm::is_class_based(self.file_type(file))
+        } else if let Some(field) = jvm::has_implicit_this(self.file_type(file))
             .then(|| self.enclosing_field_type(file, scope, head))
             .flatten()
         {
@@ -2326,6 +2441,7 @@ fn has_module_rules(file_type: Option<FileType>) -> bool {
                 | FileType::Groovy
                 | FileType::CSharp
                 | FileType::VbNet
+                | FileType::Swift
         )
     )
 }
@@ -2398,6 +2514,13 @@ fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence, arity: u
     let mut found = found;
     found.sort_unstable();
     found.dedup();
+    // C-family: a declaration next to its definition (in-class prototype and out-of-line body).
+    if found.len() > 1 {
+        let declaration = |s: &u32| index.symbols[*s as usize].flags & FLAG_DECLARATION != 0;
+        if found.iter().any(declaration) && !found.iter().all(declaration) {
+            found.retain(|s| !declaration(s));
+        }
+    }
     // .NET partial types: the parts of one type collapse to its first part.
     if found.len() > 1 {
         let first = &index.symbols[found[0] as usize];
@@ -2422,14 +2545,15 @@ fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence, arity: u
         if non_test.len() == 1 {
             return Outcome::Targets(vec![(non_test[0], confidence)], confidence);
         }
-        // Overloads of one owner: the one taking the argument count, else every candidate
-        // inferred.
+        // Overloads of one owner (parent type, or the `Type::`/extension owner of top-level
+        // members): the one taking the argument count, else every candidate inferred.
         let first = &index.symbols[found[0] as usize];
-        if first.parent != NONE
-            && found.iter().all(|&s| {
-                let symbol = &index.symbols[s as usize];
-                symbol.parent == first.parent && symbol.name == first.name
-            })
+        let owner = |s: u32| (index.symbols[s as usize].parent, index.owner_name(s));
+        let first_owner = owner(found[0]);
+        if (first.parent != NONE || !first_owner.1.is_empty())
+            && found
+                .iter()
+                .all(|&s| index.symbols[s as usize].name == first.name && owner(s) == first_owner)
         {
             let (targets, overload) = index.overloads(&found, arity);
             return Outcome::Targets(

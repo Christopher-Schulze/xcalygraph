@@ -33,6 +33,11 @@ pub(super) fn is_class_based(file_type: Option<FileType>) -> bool {
     is_jvm(file_type) || is_dotnet(file_type)
 }
 
+/// Class bodies where members need no `this`: JVM, .NET and C++.
+pub(super) fn has_implicit_this(file_type: Option<FileType>) -> bool {
+    is_class_based(file_type) || matches!(file_type, Some(FileType::Cpp | FileType::Swift))
+}
+
 /// Module key of a JVM package or .NET namespace.
 pub(super) fn namespace_key(file_type: Option<FileType>, name: &str) -> String {
     if is_dotnet(file_type) {

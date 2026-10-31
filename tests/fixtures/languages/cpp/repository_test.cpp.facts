@@ -1,0 +1,11 @@
+sym 4-8 fn TEST parent=- owner= pub flags=1 sig="TEST(MemoryRepository, FindsStoredRow)" doc=""
+import 1 "sys:gtest/gtest.h" names= alias=- reexport=false
+import 2 "store/repository.hpp" names= alias=- reexport=false
+ref 4 Type FindsStoredRow qualifier=- scope=TEST
+ref 4 Type MemoryRepository qualifier=- scope=TEST
+ref 5 Type MemoryRepository qualifier=store scope=TEST
+ref 6 Type Row qualifier=store scope=TEST
+ref 6 Call put qualifier=repository scope=TEST args=1
+ref 7 Call EXPECT_NE qualifier=- scope=TEST args=2
+ref 7 Call find qualifier=repository scope=TEST args=1
+bind 5 "repository": store::MemoryRepository declared scope=TEST

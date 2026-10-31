@@ -59,6 +59,13 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
             engine::extract(&language, query, &pack.hooks, &record.path, content)
         })
         .unwrap_or_default();
+    #[cfg(any(feature = "lang-c", feature = "lang-cpp", feature = "lang-objc"))]
+    if matches!(
+        record.file_type,
+        Some(FileType::C | FileType::Cpp | FileType::ObjC)
+    ) {
+        lang::c::macro_references(content, &mut facts);
+    }
     #[cfg(feature = "lang-vbnet")]
     if record.file_type == Some(FileType::VbNet) {
         lang::vbnet::scan_lines(content, &mut facts);

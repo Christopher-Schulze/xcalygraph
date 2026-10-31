@@ -410,6 +410,8 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
     let mut jvm: BTreeMap<(JvmBuild, String), BTreeSet<String>> = BTreeMap::new();
     // .NET project directory -> fully qualified test names.
     let mut dotnet: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    // SwiftPM package directory -> test classes.
+    let mut swift: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut files: BTreeSet<String> = BTreeSet::new();
     let paths: Vec<&str> = index
         .derived
@@ -466,6 +468,19 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
                 match build {
                     Some(key) => {
                         jvm.entry(key).or_default().insert(class.to_owned());
+                    }
+                    None => {
+                        files.insert(path.to_owned());
+                    }
+                }
+            }
+            Some(FileType::Swift) if symbol.parent != u32::MAX => {
+                let class = index
+                    .string(index.derived.symbols()[symbol.parent as usize].name)
+                    .to_owned();
+                match nearest(&paths, parent(path), "Package.swift") {
+                    Some(package) => {
+                        swift.entry(package).or_default().insert(class);
                     }
                     None => {
                         files.insert(path.to_owned());
@@ -548,6 +563,18 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
                 format!("mvn{project} test -Dtest={}", classes.join(","))
             }
         });
+    }
+    for (package, classes) in swift {
+        let package = if package.is_empty() {
+            String::new()
+        } else {
+            format!(" --package-path {package}")
+        };
+        let classes: Vec<String> = classes.into_iter().collect();
+        lines.push(format!(
+            "swift test{package} --filter '{}'",
+            classes.join("|")
+        ));
     }
     for (project, names) in dotnet {
         let project = if project.is_empty() {

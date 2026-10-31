@@ -159,6 +159,44 @@ fn module_of(map: &ModuleMap, record: &FileRecord, facts: Option<&Facts>) -> Mod
                 file_type: record.file_type,
             }
         }
+        Some(FileType::C | FileType::Cpp | FileType::ObjC) if extracted_code => {
+            // Every file is a module; methods of a class may be defined in another file (`.h`
+            // and `.cpp`), so method lookup spans the root.
+            let key = super::cfamily::file_key(&record.path);
+            ModuleInfo {
+                name: record
+                    .path
+                    .rsplit_once('.')
+                    .map_or(record.path.as_str(), |(stem, _)| stem)
+                    .to_owned(),
+                method_scope: "cfamily".to_owned(),
+                key,
+                separator: if record.file_type == Some(FileType::Cpp) {
+                    "::"
+                } else {
+                    "."
+                },
+                file_type: record.file_type,
+            }
+        }
+        Some(FileType::Swift) if extracted_code => {
+            // SwiftPM target (`Sources/<T>/`, `Tests/<T>/`), else the top-level directory.
+            let segments: Vec<&str> = record.path.split('/').collect();
+            let target = segments
+                .windows(2)
+                .find(|pair| matches!(pair[0], "Sources" | "Tests") && segments.len() > 2)
+                .map(|pair| pair[1])
+                .or_else(|| (segments.len() > 1).then(|| segments[0]))
+                .unwrap_or(".");
+            let key = format!("swift:{target}");
+            ModuleInfo {
+                name: target.to_owned(),
+                method_scope: key.clone(),
+                key,
+                separator: ".",
+                file_type: Some(FileType::Swift),
+            }
+        }
         Some(FileType::Go) if extracted_code => {
             let key = go_import_path(map, dir);
             ModuleInfo {
