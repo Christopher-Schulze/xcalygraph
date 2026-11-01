@@ -79,6 +79,20 @@ scan() {
     return 1
   fi
 }
+
+scan_blob() {
+  local oid="$1" pattern_file="$2" insensitive="$3"
+  local -a arguments=(-a -E -f "${pattern_file}") result
+  if [[ "${insensitive}" == 1 ]]; then arguments+=(-i); fi
+  if git cat-file blob "${oid}" | grep "${arguments[@]}" >/dev/null; then
+    result=("${PIPESTATUS[@]}")
+  else
+    result=("${PIPESTATUS[@]}")
+  fi
+  if (( result[0] != 0 || result[1] > 1 )); then return 2; fi
+  return "${result[1]}"
+}
+
 scan 'private pattern validation' grep -q -i -E -f "${patterns}" /dev/null || exit 1
 # Home paths match case-sensitively: `/users/` in `app/api/users/route.ts` is no home path.
 printf '%s\n' "${HOME_PATH_PATTERNS[@]}" > "${home_patterns}"
@@ -100,10 +114,29 @@ for commit in "${commits[@]}"; do
     echo "${short}: local-only file tracked" >&2
     findings=1
   fi
-  scan "${short}: private content scan" git grep -q -I -i -E -f "${patterns}" "${commit}" -- ':(top)' || exit 1
+  scan "${short}: private content scan" git grep -q -a -i -E -f "${patterns}" "${commit}" -- ':(top)' || exit 1
   private_match="${scan_status}"
-  scan "${short}: home path content scan" git grep -q -I -E -f "${home_patterns}" "${commit}" -- ':(top)' || exit 1
+  scan "${short}: home path content scan" git grep -q -a -E -f "${home_patterns}" "${commit}" -- ':(top)' || exit 1
+  tree_match=0
   if (( private_match == 0 || scan_status == 0 )); then
+    tree_match=1
+  fi
+  if ! symlink_ids="$(git ls-tree -r --full-tree -z "${commit}" | while IFS= read -r -d '' entry; do
+    metadata="${entry%%$'\t'*}"
+    if [[ "${metadata}" == '120000 blob '* ]]; then printf '%s\n' "${metadata##* }"; fi
+  done)"; then
+    echo "${short}: cannot enumerate symlink blobs" >&2
+    exit 1
+  fi
+  if [[ -n "${symlink_ids}" ]]; then
+    while IFS= read -r oid; do
+      scan "${short}: private symlink scan" scan_blob "${oid}" "${patterns}" 1 || exit 1
+      private_match="${scan_status}"
+      scan "${short}: home path symlink scan" scan_blob "${oid}" "${home_patterns}" 0 || exit 1
+      if (( private_match == 0 || scan_status == 0 )); then tree_match=1; fi
+    done <<< "${symlink_ids}"
+  fi
+  if (( tree_match )); then
     echo "${short}: private pattern in tree" >&2
     findings=1
   fi
