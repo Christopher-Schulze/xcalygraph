@@ -259,10 +259,13 @@ impl Index {
 pub fn open(store: &crate::infra::store::Store) -> Result<Index, AppError> {
     let container = store
         .read_container("derived", crate::infra::store::container::Kind::Derived)
-        .map_err(|error| {
-            AppError::Invalid(format!(
+        .map_err(|error| match error {
+            crate::infra::store::container::OpenError::Io(error) => {
+                AppError::IndexIo("index unreadable".to_owned(), error)
+            }
+            error => AppError::Invalid(format!(
                 "index unreadable ({error}); run 'xcalygraph index'"
-            ))
+            )),
         })?;
     let derived = Derived::open(container)
         .ok_or_else(|| AppError::Invalid("index corrupt; run 'xcalygraph index'".to_owned()))?;

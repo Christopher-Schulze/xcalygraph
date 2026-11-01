@@ -570,3 +570,145 @@ fn failed_update_cannot_leave_new_facts_behind_an_old_file_table() -> TestResult
     );
     Ok(())
 }
+
+#[test]
+fn default_index_reuse_does_not_create_or_remove_probe_entries() -> TestResult {
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.run(&["index"], None)?);
+    let base = fixture.temp.join("xcalygraph-xcalygraph-recovery-test");
+    let before = snapshot(&base)?;
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let output = fixture.run(&["find", "recoverable_marker"], None)?;
+    assert_success(&output);
+    assert!(output.stderr.is_empty());
+    assert!(snapshot(&base)? == before, "shared base was modified");
+    Ok(())
+}
+
+#[test]
+fn concurrent_default_index_users_share_one_valid_index() -> TestResult {
+    let fixture = Fixture::new()?;
+    let results = std::thread::scope(|scope| {
+        let handles = (0..8)
+            .map(|_| scope.spawn(|| fixture.run(&["find", "recoverable_marker"], None)))
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .map_err(|_| io::Error::other("query thread panicked"))?
+            })
+            .collect::<io::Result<Vec<_>>>()
+    })?;
+    for output in results {
+        assert_success(&output);
+        assert!(output.stderr.is_empty());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("recoverable_marker"));
+    }
+    assert!(!fixture.root.join(".xcalygraph").exists());
+    Ok(())
+}
+
+#[test]
+fn existing_shared_index_is_reused_when_the_base_cannot_create_entries() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.run(&["index"], None)?);
+    let base = fixture.temp.join("xcalygraph-xcalygraph-recovery-test");
+    let permissions = fs::metadata(&base)?.permissions();
+    fs::set_permissions(&base, fs::Permissions::from_mode(0o500))?;
+    let result = fixture.run(&["find", "recoverable_marker"], None);
+    fs::set_permissions(&base, permissions)?;
+    let output = result?;
+    assert_success(&output);
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!fixture.root.join(".xcalygraph").exists());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("recoverable_marker"));
+    Ok(())
+}
+
+#[test]
+fn shared_write_failure_falls_back_without_publishing_partial_state() -> TestResult {
+    let fixture = Fixture::new()?;
+    let marker_shard = xxhash_rust::xxh3::xxh3_64(b"lib.rs") % 64;
+    let changed = (0..100)
+        .map(|number| format!("changed_{number}.rs"))
+        .find(|name| xxhash_rust::xxh3::xxh3_64(name.as_bytes()) % 64 != marker_shard)
+        .ok_or("missing second shard")?;
+    fs::write(fixture.root.join(&changed), "pub fn original_marker() {}\n")?;
+    assert_success(&fixture.run(&["index"], None)?);
+    let base = fixture.temp.join("xcalygraph-xcalygraph-recovery-test");
+    let shared_derived = derived(&base)?;
+    let blocked_shard = fact_shard(&shared_derived, "lib.rs")?;
+    fs::remove_file(&blocked_shard)?;
+    fs::create_dir(&blocked_shard)?;
+    fs::write(fixture.root.join(&changed), "pub fn updated_marker() {}\n")?;
+
+    let explicit = fixture.run(&["index"], Some(&base))?;
+    assert!(
+        !explicit.status.success(),
+        "explicit locations must not fall back"
+    );
+    assert!(!fixture.root.join(".xcalygraph").exists());
+    let environment_override = Command::new(env!("CARGO_BIN_EXE_xcalygraph"))
+        .args(["index", "-C"])
+        .arg(&fixture.root)
+        .env("HOME", &fixture.home)
+        .env("TMPDIR", &fixture.temp)
+        .env("XDG_CONFIG_HOME", fixture.home.join("config"))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("XCALYGRAPH_INDEX_DIR", &base)
+        .output()?;
+    assert!(
+        !environment_override.status.success(),
+        "environment overrides must not fall back"
+    );
+    assert!(!fixture.root.join(".xcalygraph").exists());
+    let shared_read_only =
+        fixture.run(&["find", "recoverable_marker", "--read-only"], Some(&base))?;
+    assert_eq!(shared_read_only.status.code(), Some(5));
+
+    let local = fixture.run(&["find", "updated_marker"], None)?;
+    assert_success(&local);
+    assert!(String::from_utf8_lossy(&local.stderr).contains(".xcalygraph"));
+    assert!(String::from_utf8_lossy(&local.stdout).contains("updated_marker"));
+    let before = snapshot(&fixture.work.0)?;
+    for marker in ["recoverable_marker", "updated_marker"] {
+        let output = fixture.run(&["find", marker, "--read-only"], None)?;
+        assert_success(&output);
+        assert!(String::from_utf8_lossy(&output.stdout).contains(marker));
+    }
+    assert!(
+        snapshot(&fixture.work.0)? == before,
+        "read-only fallback wrote files"
+    );
+    Ok(())
+}
+
+#[test]
+fn source_read_failure_does_not_fall_back_to_a_local_index() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.run(&["index"], None)?);
+    let source = fixture.root.join("lib.rs");
+    fs::write(&source, "pub fn changed_source_marker() {}\n")?;
+    let permissions = fs::metadata(&source)?.permissions();
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o000))?;
+    let result = fixture.run(&["find", "changed_source_marker"], None);
+    fs::set_permissions(&source, permissions)?;
+    let output = result?;
+    assert!(
+        !output.status.success(),
+        "unreadable source must be reported"
+    );
+    assert!(!fixture.root.join(".xcalygraph").exists());
+    Ok(())
+}

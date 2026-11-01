@@ -16,7 +16,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | `-b, --budget N` | per command | output budget in tokens; estimate = ceil(bytes / 3) |
 | `--json` | off | JSON Lines instead of text (section 8) |
 | `--read-only` | off | never create or refresh the index; exit 5 if missing or stale |
-| `--index-dir PATH` | `$XCALYGRAPH_INDEX_DIR`, else `<system temp directory>/xcalygraph-<user>` (created mode 0700); when that is not writable, `<root>/.xcalygraph/` with a one-line notice | index base directory |
+| `--index-dir PATH` | nonempty `$XCALYGRAPH_INDEX_DIR`, else `<system temp directory>/xcalygraph-<user>` (created mode at most 0700); on actual shared-index location failure, `<root>/.xcalygraph/` with a one-line notice | index base directory; explicit paths never fall back |
 | `-p, --path GLOB` | whole root | keep results whose root-relative path matches GLOB (gitignore glob syntax); repeatable |
 | `-l, --lang LIST` | all | comma-separated language ids (section 3) |
 | `-k, --kind LIST` | all | comma-separated symbol kinds (section 5) |

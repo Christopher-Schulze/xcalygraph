@@ -41,6 +41,9 @@ pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError> {
     let store = &workspace.store;
     if mode == Mode::ReadOnly {
         let (stored, meta) = stored_state(workspace).ok_or(AppError::Stale("index missing"))?;
+        if meta.binary_version != derive_version() {
+            return Err(AppError::Stale("index stale"));
+        }
         let changes = scan::scan(
             &workspace.root,
             &workspace.excluded(),
@@ -56,11 +59,12 @@ pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError> {
             ..Report::default()
         });
     }
-    store.create_dirs().map_err(AppError::io(format!(
+    store.create_dirs().map_err(AppError::index_io(format!(
         "create index {}",
         store.dir.display()
     )))?;
-    let _lock = WriterLock::acquire(&store.dir, lock::WAIT).map_err(AppError::io("lock index"))?;
+    let _lock =
+        WriterLock::acquire(&store.dir, lock::WAIT).map_err(AppError::index_io("lock index"))?;
     let previous = stored_state(workspace);
     let rebuilt = previous.is_none();
     let (stored, write_time_ns) = previous.map_or((Vec::new(), 0), |(stored, meta)| {
@@ -100,10 +104,10 @@ pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError> {
     }
     report.bytes_written += store
         .write_files(&changes.records)
-        .map_err(AppError::io("write file table"))?;
+        .map_err(AppError::index_io("write file table"))?;
     report.bytes_written += store
         .write_meta(&meta)
-        .map_err(AppError::io("write meta"))?;
+        .map_err(AppError::index_io("write meta"))?;
     Ok(report)
 }
 
@@ -130,7 +134,7 @@ fn derived_is_valid(workspace: &Workspace) -> bool {
 /// Rebuilds `derived` from the stored facts, under the writer lock.
 pub fn rederive(workspace: &Workspace) -> Result<(), AppError> {
     let _lock = WriterLock::acquire(&workspace.store.dir, lock::WAIT)
-        .map_err(AppError::io("lock index"))?;
+        .map_err(AppError::index_io("lock index"))?;
     let (records, meta) = stored_state(workspace)
         .ok_or_else(|| AppError::Invalid("index changed during recovery; retry".to_owned()))?;
     invalidate_meta(workspace, &meta)?;
@@ -138,7 +142,7 @@ pub fn rederive(workspace: &Workspace) -> Result<(), AppError> {
     workspace
         .store
         .write_meta(&meta)
-        .map_err(AppError::io("finish index recovery"))?;
+        .map_err(AppError::index_io("finish index recovery"))?;
     Ok(())
 }
 
@@ -150,7 +154,7 @@ fn invalidate_meta(workspace: &Workspace, meta: &Meta) -> Result<u64, AppError> 
     workspace
         .store
         .write_meta(&pending)
-        .map_err(AppError::io("begin index update"))
+        .map_err(AppError::index_io("begin index update"))
 }
 
 /// Resolves the facts of every file and writes the `derived` file.
@@ -187,7 +191,7 @@ fn write_derived(workspace: &Workspace, records: &[FileRecord]) -> Result<u64, A
             let written = workspace
                 .store
                 .write_shard(shard, &entries)
-                .map_err(AppError::io(format!("recover fact shard {shard:02}")))?;
+                .map_err(AppError::index_io(format!("recover fact shard {shard:02}")))?;
             Ok((
                 files
                     .into_iter()
@@ -234,7 +238,7 @@ fn write_derived(workspace: &Workspace, records: &[FileRecord]) -> Result<u64, A
     );
     written
         .map(|bytes| bytes + recovered_bytes)
-        .map_err(AppError::io("write derived data"))
+        .map_err(AppError::index_io("write derived data"))
 }
 
 /// Stored file table and meta when both are valid and current; `None` forces a full rebuild.
@@ -319,7 +323,7 @@ fn write_shards(
                 .collect();
             store
                 .write_shard(shard, &entries)
-                .map_err(AppError::io(format!("write fact shard {shard:02}")))
+                .map_err(AppError::index_io(format!("write fact shard {shard:02}")))
         })
         .collect();
     written.into_iter().sum()
@@ -361,6 +365,7 @@ mod tests {
         Workspace {
             root: dir.path().join("root"),
             store: Store::new(dir.path().join("index")),
+            default_base: None,
         }
     }
 
@@ -390,6 +395,26 @@ mod tests {
                 .iter()
                 .any(|(path, facts)| path == "a.go" && facts.lines == 1)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn read_only_rejects_a_different_binary_or_resolver_version()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = TestDir::new("refresh-read-only-version")?;
+        dir.write("root/a.go", "package a\n")?;
+        let workspace = workspace(&dir);
+        refresh(&workspace, Mode::Write)?;
+        let mut meta = workspace
+            .store
+            .read_meta()
+            .map_err(|error| error.to_string())?;
+        meta.binary_version.push_str("-different");
+        workspace.store.write_meta(&meta)?;
+        assert!(matches!(
+            refresh(&workspace, Mode::ReadOnly),
+            Err(AppError::Stale("index stale"))
+        ));
         Ok(())
     }
 

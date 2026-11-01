@@ -55,8 +55,20 @@ pub fn run(invocation: &Invocation) -> Result<String, AppError> {
         _ => {}
     }
     let workspace = Workspace::resolve(&invocation.options)?;
+    let mode = if options.read_only && invocation.command != CommandName::Index {
+        Mode::ReadOnly
+    } else {
+        Mode::Write
+    };
+    let (workspace, report, index) = prepare_workspace(workspace, mode)?;
+    if mode == Mode::Write {
+        workspace.store.mark_used();
+    }
     match invocation.command {
-        CommandName::Index => index(&workspace),
+        CommandName::Index => Ok(format!(
+            "files {} changed {} deleted {}\n",
+            report.files, report.changed, report.deleted
+        )),
         CommandName::Help
         | CommandName::Version
         | CommandName::Install
@@ -64,16 +76,6 @@ pub fn run(invocation: &Invocation) -> Result<String, AppError> {
         | CommandName::Ls
         | CommandName::Clean => Ok(String::new()),
         command => {
-            let mode = if options.read_only {
-                Mode::ReadOnly
-            } else {
-                Mode::Write
-            };
-            refresh::refresh(&workspace, mode)?;
-            if mode == Mode::Write {
-                workspace.store.mark_used();
-            }
-            let index = open_index(&workspace, mode)?;
             let filter = query::Filter::new(options)?;
             run_query(
                 &index,
@@ -87,11 +89,68 @@ pub fn run(invocation: &Invocation) -> Result<String, AppError> {
     }
 }
 
+/// Selects a local index only when an implicit shared index is actually unusable.
+fn prepare_workspace(
+    workspace: Workspace,
+    mode: Mode,
+) -> Result<(Workspace, refresh::Report, query::Index), AppError> {
+    match prepare_index(&workspace, mode) {
+        Ok((report, index)) => Ok((workspace, report, index)),
+        Err(error) => {
+            let retry = if mode == Mode::Write {
+                error.is_index_location_failure()
+            } else {
+                matches!(
+                    error,
+                    AppError::Stale(_) | AppError::Invalid(_) | AppError::IndexIo(..)
+                )
+            };
+            let Some(local) = workspace.local_fallback().filter(|_| retry) else {
+                return Err(error);
+            };
+            match prepare_index(&local, mode) {
+                Ok((report, index)) => {
+                    if mode == Mode::Write {
+                        eprintln!(
+                            "xcalygraph: index in {} (shared index unavailable); add {}/ to .gitignore",
+                            local.root.join(workspace::LOCAL_DIR).display(),
+                            workspace::LOCAL_DIR
+                        );
+                    }
+                    Ok((local, report, index))
+                }
+                Err(local_error)
+                    if mode == Mode::ReadOnly
+                        && matches!(
+                            local_error,
+                            AppError::Stale(_) | AppError::Invalid(_) | AppError::IndexIo(..)
+                        ) =>
+                {
+                    Err(error)
+                }
+                Err(local_error) => Err(local_error),
+            }
+        }
+    }
+}
+
+fn prepare_index(
+    workspace: &Workspace,
+    mode: Mode,
+) -> Result<(refresh::Report, query::Index), AppError> {
+    if mode == Mode::Write {
+        workspace.prepare_base()?;
+    }
+    let report = refresh::refresh(workspace, mode)?;
+    let index = open_index(workspace, mode)?;
+    Ok((report, index))
+}
+
 /// Opens the derived image and, only for writable operations, repairs it once from facts.
 fn open_index(workspace: &Workspace, mode: Mode) -> Result<query::Index, AppError> {
     match query::open(&workspace.store) {
         Ok(index) => Ok(index),
-        Err(_) if mode == Mode::Write => {
+        Err(AppError::Invalid(_)) if mode == Mode::Write => {
             refresh::rederive(workspace)?;
             query::open(&workspace.store)
         }
@@ -233,14 +292,4 @@ fn version() -> String {
         out.push_str(&install::mismatch_line(&home));
     }
     out
-}
-
-fn index(workspace: &Workspace) -> Result<String, AppError> {
-    let report = refresh::refresh(workspace, Mode::Write)?;
-    open_index(workspace, Mode::Write)?;
-    workspace.store.mark_used();
-    Ok(format!(
-        "files {} changed {} deleted {}\n",
-        report.files, report.changed, report.deleted
-    ))
 }
