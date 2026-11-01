@@ -38,6 +38,7 @@ Flags: `-p GLOB` (paths, gitignore syntax, repeatable), `-l go,rust` (languages)
 - `<line> <signature>` lines are grouped under their file path.
 - Card markers: `m` member, `f` fields, `^` supertype, `v` implementation, `<` incoming (caller site), `>` outgoing (definition), `t` test, `t2` test through one caller, `e` env read, `!` notice.
 - A trailing `?` marks an inferred edge (name-based or dispatch), also on `path` hops and `impact` dependents reached through one; verify before relying on it.
+- `impact --diff` cites REV paths and lines for removals; `moved?` cites both REV and current locations, and `uncertain?` marks ambiguous identity. Inspect changed declarations: `sig` can miss types omitted from long signatures.
 - `+N more` means the budget cut N items: narrow with `-p`, `-k`, `-l` or raise `-b`.
 - A shared-index failure can use `.xcalygraph/` locally; the stderr notice asks to ignore it in git.
 

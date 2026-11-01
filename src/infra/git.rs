@@ -84,6 +84,48 @@ pub fn diff(root: &Path, rev: &str) -> Option<Vec<FileDiff>> {
     Some(diffs)
 }
 
+/// Git's similarity-based file rename candidates, restricted to the queried root.
+pub fn renames(root: &Path, rev: &str) -> Option<Vec<(String, String)>> {
+    let prefix = prefix(root)?;
+    let output = git(
+        root,
+        &[
+            "diff",
+            "--name-status",
+            "-z",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--find-renames",
+            "--no-relative",
+            rev,
+            "--",
+            ".",
+        ],
+    )?;
+    let mut fields = output.split(|&byte| byte == 0);
+    let mut renames = Vec::new();
+    while let Some(status) = fields.next() {
+        if status.is_empty() {
+            break;
+        }
+        let old = fields.next()?;
+        if status.first() == Some(&b'R') {
+            let new = fields.next()?;
+            if let (Some(old), Some(new)) = (
+                old.strip_prefix(prefix.as_bytes()),
+                new.strip_prefix(prefix.as_bytes()),
+            ) && let (Ok(old), Ok(new)) = (std::str::from_utf8(old), std::str::from_utf8(new))
+            {
+                renames.push((old.to_owned(), new.to_owned()));
+            }
+        } else if !matches!(status, b"A" | b"M" | b"D" | b"T") {
+            return None;
+        }
+    }
+    Some(renames)
+}
+
 /// Read NUL-delimited raw paths and associate patch hunks by their decoded Git path.
 fn parse_diff(output: &[u8], prefix: &str) -> Option<Vec<FileDiff>> {
     if output.is_empty() {

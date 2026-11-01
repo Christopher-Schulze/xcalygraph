@@ -1676,6 +1676,7 @@ fn git_diff_handles_special_paths_from_a_subdirectory() -> TestResult {
         text.contains("GoneType") && text.contains("GoneBinary"),
         "{text}"
     );
+    assert_eq!(text.matches("\"name\":\"GoneType\"").count(), 1, "{text}");
     assert!(text.contains("First") && text.contains("Later"), "{text}");
     assert!(
         !text.contains("\"name\":\"Moved\",\"path\":\"before ü.go\",\"kind\":\"removed\""),
@@ -1733,6 +1734,269 @@ fn git_history_handles_special_paths_from_a_subdirectory() -> TestResult {
 }
 
 #[test]
+fn impact_diff_does_not_confuse_other_modules_with_real_moves() -> TestResult {
+    let dir = TempDir::new("impact-identity-modules")?;
+    let root = dir.0.join("repo");
+    dir.write("repo/go.mod", "module example.com/app\n\ngo 1.23\n")?;
+    dir.write(
+        "repo/a/old.go",
+        "package a\n\nfunc Shared() {}\n\nfunc Moved() {}\n",
+    )?;
+    dir.write("repo/a/current.go", "package a\n\nfunc Keep() {}\n")?;
+    dir.write(
+        "repo/b/current.go",
+        "package b\n\nfunc Shared() {}\n\nfunc Other() int { return 1 }\n",
+    )?;
+    dir.write(
+        "repo/module-one/src/Example.java",
+        "package shared;\nclass Example {\n  void relocate() {}\n}\n",
+    )?;
+    dir.write(
+        "repo/module-two/src/Example.java",
+        "package shared;\nclass Example {\n  void keep() {}\n}\n",
+    )?;
+    git(&root, &["init", "-q"])?;
+    git(&root, &["add", "."])?;
+    git(&root, &["commit", "-q", "-m", "initial"])?;
+    git(&root, &["commit", "-q", "--allow-empty", "-m", "empty"])?;
+    fs::remove_file(root.join("a/old.go"))?;
+    fs::remove_file(root.join("module-one/src/Example.java"))?;
+    fs::write(
+        root.join("a/current.go"),
+        "package a\n\nfunc Keep() {}\n\nfunc Moved() {}\n",
+    )?;
+    fs::write(
+        root.join("b/current.go"),
+        "package b\n\nfunc Shared() {}\n\nfunc Other() int { return 2 }\n",
+    )?;
+    fs::write(
+        root.join("module-two/src/Example.java"),
+        "package shared;\nclass Example {\n  void keep() {}\n  void relocate() {}\n}\n",
+    )?;
+    let index = dir.0.join("index");
+    for rev in ["HEAD", "HEAD~1"] {
+        let output = run_in(&root, &index, &["impact", "--diff", rev, "--json"])?;
+        assert_eq!(output.status.code(), Some(0));
+        let text = String::from_utf8(output.stdout)?;
+        assert!(
+            text.contains(
+                "\"name\":\"Shared\",\"path\":\"a/old.go\",\"line\":3,\"kind\":\"removed\""
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("\"name\":\"Moved\",\"path\":\"a/old.go\",\"line\":5,\"kind\":\"moved\""),
+            "{text}"
+        );
+        assert!(
+            !text.contains(
+                "\"name\":\"Shared\",\"path\":\"b/current.go\",\"line\":3,\"kind\":\"removed\""
+            ),
+            "{text}"
+        );
+        assert!(text.contains("\"name\":\"Example.relocate\",\"path\":\"module-one/src/Example.java\",\"line\":3,\"kind\":\"uncertain\",\"conf\":\"inferred\""), "{text}");
+    }
+    Ok(())
+}
+
+#[test]
+fn impact_diff_distinguishes_method_owners_and_symbol_kinds() -> TestResult {
+    let dir = TempDir::new("impact-identity-owners")?;
+    let root = dir.0.join("repo");
+    dir.write("repo/service.go", "package service\ntype First struct{}\ntype Second struct{}\nfunc (First) Run() int { return 1 }\nfunc (Second) Run() int { return 1 }\n")?;
+    dir.write("repo/switch.ts", "export class Switch {}\n")?;
+    dir.write("repo/guide.md", "# Overview\n\n## Details\nOld text.\n")?;
+    dir.write("repo/app/page.tsx", "import { NextRequest } from 'next/server';\nexport default function Page() { return <main>Old</main>; }\n")?;
+    git(&root, &["init", "-q"])?;
+    git(&root, &["add", "."])?;
+    git(&root, &["commit", "-q", "-m", "initial"])?;
+    fs::write(
+        root.join("service.go"),
+        "package service\ntype First struct{}\ntype Second struct{}\nfunc (Second) Run() int { return 2 }\n",
+    )?;
+    fs::write(root.join("switch.ts"), "export function Switch() {}\n")?;
+    fs::write(
+        root.join("guide.md"),
+        "# Overview\n\n## Details\nNew text.\n",
+    )?;
+    fs::write(
+        root.join("app/page.tsx"),
+        "import { NextRequest } from 'next/server';\nexport default function Page() { return <main>New</main>; }\n",
+    )?;
+    let output = run_in(&root, &dir.0.join("index"), &["impact", "--diff", "--json"])?;
+    assert_eq!(output.status.code(), Some(0));
+    let text = String::from_utf8(output.stdout)?;
+    assert!(
+        text.contains(
+            "\"name\":\"First.Run\",\"path\":\"service.go\",\"line\":4,\"kind\":\"removed\""
+        ),
+        "{text}"
+    );
+    assert!(
+        !text.contains(
+            "\"name\":\"Second.Run\",\"path\":\"service.go\",\"line\":5,\"kind\":\"removed\""
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("\"name\":\"Switch\",\"path\":\"switch.ts\",\"line\":1,\"kind\":\"removed\""),
+        "{text}"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn impact_diff_never_reads_deleted_sensitive_revision_content() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new("impact-sensitive-revision")?;
+    let root = dir.0.join("repo");
+    dir.write("repo/.env", "DUMMY=fixture\n")?;
+    dir.write("repo/safe.go", "package sample\nfunc Safe() {}\n")?;
+    git(&root, &["init", "-q"])?;
+    git(&root, &["add", "-f", ".env", "safe.go"])?;
+    git(&root, &["commit", "-q", "-m", "initial"])?;
+    git(&root, &["rm", "-q", ".env", "safe.go"])?;
+    let path = std::env::var_os("PATH").ok_or("PATH unavailable")?;
+    let real_git = std::env::split_paths(&path)
+        .map(|directory| directory.join("git"))
+        .find(|candidate| candidate.is_file())
+        .ok_or("git unavailable")?;
+    let shim = dir
+        .write(
+            "bin/git",
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TRACE_PATH\"\nexec \"$REAL_GIT\" \"$@\"\n",
+        )
+        .map(|_| dir.0.join("bin/git"))?;
+    fs::set_permissions(shim, fs::Permissions::from_mode(0o755))?;
+    let search_path = std::env::join_paths(
+        std::iter::once(dir.0.join("bin")).chain(std::env::split_paths(&path)),
+    )?;
+    let trace = dir.0.join("git-invocations");
+    let output = Command::new(BINARY)
+        .args(["impact", "--diff", "--json", "-C"])
+        .arg(&root)
+        .arg("--index-dir")
+        .arg(dir.0.join("index"))
+        .env("HOME", dir.0.join("home"))
+        .env("PATH", search_path)
+        .env("REAL_GIT", real_git)
+        .env("TRACE_PATH", &trace)
+        .output()?;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let calls = fs::read_to_string(trace)?;
+    assert!(calls.contains("HEAD:safe.go"), "{calls}");
+    assert!(!calls.contains("HEAD:.env"), "{calls}");
+    assert!(String::from_utf8(output.stdout)?.contains("\"name\":\"Safe\""));
+    Ok(())
+}
+
+#[test]
+fn impact_diff_identifies_a_renamed_file_with_edits() -> TestResult {
+    let dir = TempDir::new("impact-edited-rename")?;
+    let root = dir.0.join("repo");
+    let initial = "def moved(value):\n    first = value + 10\n    second = first * 2\n    third = second - 4\n    fourth = third * 3\n    return fourth\n";
+    dir.write("repo/old.py", initial)?;
+    git(&root, &["init", "-q"])?;
+    git(&root, &["add", "."])?;
+    git(&root, &["commit", "-q", "-m", "initial"])?;
+    git(&root, &["mv", "old.py", "new.py"])?;
+    let edited = initial.replace("second - 4", "second - 5");
+    assert_ne!(edited, initial);
+    fs::write(root.join("new.py"), edited)?;
+    git(&root, &["add", "new.py"])?;
+    let output = run_in(&root, &dir.0.join("index"), &["impact", "--diff", "--json"])?;
+    assert_eq!(output.status.code(), Some(0));
+    let text = String::from_utf8(output.stdout)?;
+    assert!(text.contains("\"name\":\"moved\",\"path\":\"old.py\",\"line\":1,\"kind\":\"moved\",\"new_path\":\"new.py\",\"new_line\":1,\"conf\":\"inferred\""), "{text}");
+    let exact = run_in(
+        &root,
+        &dir.0.join("index"),
+        &["impact", "--diff", "--json", "--exact"],
+    )?;
+    assert_eq!(exact.status.code(), Some(0));
+    assert!(!String::from_utf8(exact.stdout)?.contains("\"kind\":\"moved\""));
+
+    let loose = TempDir::new("impact-untracked-rename")?;
+    let loose_root = loose.0.join("repo");
+    loose.write("repo/old.py", initial)?;
+    git(&loose_root, &["init", "-q"])?;
+    git(&loose_root, &["add", "."])?;
+    git(&loose_root, &["commit", "-q", "-m", "initial"])?;
+    fs::rename(loose_root.join("old.py"), loose_root.join("new.py"))?;
+    fs::write(
+        loose_root.join("new.py"),
+        initial.replace("second - 4", "second - 5"),
+    )?;
+    let untracked = run_in(
+        &loose_root,
+        &loose.0.join("index"),
+        &["impact", "--diff", "--json"],
+    )?;
+    assert_eq!(untracked.status.code(), Some(0));
+    assert!(String::from_utf8(untracked.stdout)?.contains("\"name\":\"moved\",\"path\":\"old.py\",\"line\":1,\"kind\":\"moved\",\"new_path\":\"new.py\""));
+    fs::write(
+        loose_root.join("new.py"),
+        "def moved(value):\n    return value\n",
+    )?;
+    let uncertain = run_in(
+        &loose_root,
+        &loose.0.join("index"),
+        &["impact", "--diff", "--json"],
+    )?;
+    assert_eq!(uncertain.status.code(), Some(0));
+    let uncertain = String::from_utf8(uncertain.stdout)?;
+    assert!(uncertain.contains("\"name\":\"moved\",\"path\":\"old.py\",\"line\":1,\"kind\":\"uncertain\",\"conf\":\"inferred\""), "{uncertain}");
+    Ok(())
+}
+
+#[test]
+fn impact_diff_distinguishes_overloads_and_reports_ambiguous_changes() -> TestResult {
+    let dir = TempDir::new("impact-overloads")?;
+    let root = dir.0.join("repo");
+    let initial = "class Example {\n  void call(int value) {}\n  void call(String value) {}\n}\n";
+    dir.write("repo/Example.java", initial)?;
+    git(&root, &["init", "-q"])?;
+    git(&root, &["add", "."])?;
+    git(&root, &["commit", "-q", "-m", "initial"])?;
+    let index = dir.0.join("index");
+    fs::write(
+        root.join("Example.java"),
+        "class Example {\n  void call(String value) {}\n}\n",
+    )?;
+    let removed = run_in(&root, &index, &["impact", "--diff", "--json"])?;
+    assert_eq!(removed.status.code(), Some(0));
+    let removed = String::from_utf8(removed.stdout)?;
+    assert!(
+        removed.contains(
+            "\"name\":\"Example.call\",\"path\":\"Example.java\",\"line\":2,\"kind\":\"removed\""
+        ),
+        "{removed}"
+    );
+    assert!(
+        !removed.contains("\"line\":3,\"kind\":\"removed\""),
+        "{removed}"
+    );
+    fs::write(
+        root.join("Example.java"),
+        "class Example {\n  void call(boolean value) {}\n  void call(double value) {}\n}\n",
+    )?;
+    let ambiguous = run_in(&root, &index, &["impact", "--diff", "--json"])?;
+    assert_eq!(ambiguous.status.code(), Some(0));
+    let ambiguous = String::from_utf8(ambiguous.stdout)?;
+    assert!(ambiguous.contains("\"name\":\"Example.call\",\"path\":\"Example.java\",\"line\":2,\"kind\":\"uncertain\",\"conf\":\"inferred\""), "{ambiguous}");
+    assert!(ambiguous.contains("\"name\":\"Example.call\",\"path\":\"Example.java\",\"line\":3,\"kind\":\"uncertain\",\"conf\":\"inferred\""), "{ambiguous}");
+    assert!(!ambiguous.contains("\"kind\":\"removed\""), "{ambiguous}");
+    Ok(())
+}
+
+#[test]
 fn impact_of_removed_files_and_symbols_names_their_surviving_dependents() -> TestResult {
     const OPEN: &str =
         "package store\n\nfunc Open(path string) int {\n\treturn len(path)\n}\n\nfunc Close() {}\n";
@@ -1763,11 +2027,11 @@ fn impact_of_removed_files_and_symbols_names_their_surviving_dependents() -> Tes
     let text = impact(&["impact", "--diff"])?;
     assert_eq!(
         text,
-        "~ Close store/open.go removed\n~ Open store/open.go removed\n< 1 store.Warm store/use.go:3?\n< 1 store.Stop store/use.go:7?\nt store.TestOpen store/open_test.go:5\nr go test ./store -run '^(TestOpen)$'\n"
+        "~ Close store/open.go:7 removed\n~ Open store/open.go:3 removed\n< 1 store.Warm store/use.go:3?\n< 1 store.Stop store/use.go:7?\nt store.TestOpen store/open_test.go:5\nr go test ./store -run '^(TestOpen)$'\n"
     );
     let json = impact(&["impact", "--diff", "--json"])?;
     assert!(
-        json.contains("{\"t\":\"sym\",\"rel\":\"chg\",\"name\":\"Open\",\"path\":\"store/open.go\",\"kind\":\"removed\"}"),
+        json.contains("{\"t\":\"sym\",\"rel\":\"chg\",\"name\":\"Open\",\"path\":\"store/open.go\",\"line\":3,\"kind\":\"removed\"}"),
         "{json}"
     );
     assert!(json.contains("\"name\":\"store.Warm\",\"path\":\"store/use.go\",\"line\":3,\"n\":1,\"conf\":\"inferred\""), "{json}");
@@ -1789,9 +2053,9 @@ fn impact_of_removed_files_and_symbols_names_their_surviving_dependents() -> Tes
         "package store\n\nfunc Open(path string) int {\n\treturn len(path)\n}\n",
     )?;
     let text = impact(&["impact", "--diff"])?;
-    assert!(text.contains("~ Close store/open.go removed\n"), "{text}");
+    assert!(text.contains("~ Close store/open.go:7 removed\n"), "{text}");
     assert!(text.contains("< 1 store.Stop store/use.go:8?\n"), "{text}");
-    assert!(!text.contains("Open store/open.go removed"), "{text}");
+    assert!(!text.contains("Open store/open.go:3 removed"), "{text}");
     git(&root, &["checkout", "-q", "HEAD", "--", "store/use.go"])?;
     restore()?;
     // Rename: definitions moved, nothing removed, dependents stay exact.
@@ -1801,13 +2065,17 @@ fn impact_of_removed_files_and_symbols_names_their_surviving_dependents() -> Tes
         text.contains("~ store/opening.go store/opening.go:1 new 2\n"),
         "{text}"
     );
-    assert!(!text.contains("removed") && !text.contains('?'), "{text}");
+    assert!(
+        !text.contains("removed") && text.contains("moved?"),
+        "{text}"
+    );
+    assert!(text.contains("< 1 store.Warm store/use.go:3\n"), "{text}");
     git(&root, &["mv", "store/opening.go", "store/open.go"])?;
     // Non-HEAD revision.
     git(&root, &["commit", "-q", "--allow-empty", "-m", "empty"])?;
     fs::remove_file(root.join("store/open.go"))?;
     let text = impact(&["impact", "--diff", "HEAD~1"])?;
-    assert!(text.contains("~ Open store/open.go removed\n"), "{text}");
+    assert!(text.contains("~ Open store/open.go:3 removed\n"), "{text}");
     restore()?;
     // Unchanged tree: no false changes.
     assert_eq!(impact(&["impact", "--diff"])?, "");

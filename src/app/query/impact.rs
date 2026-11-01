@@ -42,9 +42,60 @@ struct Target {
     seeds: Vec<u32>,
 }
 
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct DefinitionKey {
+    kind: SymKind,
+    parts: Vec<String>,
+}
+
+struct Definition {
+    key: DefinitionKey,
+    signature: String,
+    line: u32,
+    matched: bool,
+    ambiguous: bool,
+    local: bool,
+    signature_changed: bool,
+}
+
+struct RevisionFile {
+    path: String,
+    file_type: Option<FileType>,
+    package: Option<String>,
+    content: Vec<u8>,
+    symbols: Vec<Definition>,
+}
+
+struct CurrentFile {
+    file: u32,
+    path: String,
+    file_type: Option<FileType>,
+    package: Option<String>,
+    symbols: Vec<Definition>,
+}
+
+struct Change {
+    diff: git::FileDiff,
+    previous: Option<RevisionFile>,
+    current: Option<CurrentFile>,
+}
+
+struct RevisionLocation<'a> {
+    name: String,
+    path: &'a str,
+    line: u32,
+    ambiguous: bool,
+}
+
+struct Move<'a> {
+    previous: RevisionLocation<'a>,
+    path: &'a str,
+    line: u32,
+}
+
 pub struct ImpactOptions<'a> {
     pub root: &'a Path,
-    /// Fact shards, read only to find surviving references to removed definitions.
+    /// Fact shards for current definitions and surviving references.
     pub store: &'a crate::infra::store::Store,
     pub depth: usize,
     pub json: bool,
@@ -79,7 +130,7 @@ pub fn render_names(
             seeds: Vec::new(),
         })
         .collect();
-    render(index, filter, &targets, &[], &[], options)
+    render(index, filter, &targets, &[], &[], &[], options)
 }
 
 /// Targets from `git diff REV` (work tree included) with exported signature changes.
@@ -91,94 +142,83 @@ pub fn render_diff(
 ) -> Result<String, AppError> {
     let diffs = git::diff(options.root, rev)
         .ok_or_else(|| AppError::Invalid(format!("git diff against '{rev}' unavailable")))?;
-    let mut targets: Vec<Target> = Vec::new();
-    // Definitions at REV per path, and the keys that still exist in a changed current file;
-    // a key present at REV but in no current changed file was removed (not moved).
-    let mut old_by_path: Vec<(&str, BTreeMap<String, String>)> = Vec::new();
-    let mut current_keys: BTreeSet<String> = BTreeSet::new();
-    for diff in &diffs {
-        if diff.deleted {
-            if filter.removed_path(&diff.path)
-                && let Some(old) = old_signatures(options.root, rev, &diff.path, None)
-            {
-                old_by_path.push((&diff.path, old));
-            }
-            continue;
-        }
-        let Some(file) = index
-            .derived
-            .files()
-            .iter()
-            .position(|file| index.string(file.path) == diff.path)
-            .map(|position| position as u32)
-        else {
-            continue;
-        };
-        let record = &index.derived.files()[file as usize];
-        if !filter.file(index, record) {
-            continue;
-        }
-        let symbols: Vec<u32> =
-            (record.first_symbol..record.first_symbol + record.symbol_count).collect();
-        current_keys.extend(symbols.iter().map(|&node| symbol_key(index, node)));
-        let file_node = index.symbol_count() + file;
-        let old = (!diff.untracked)
-            .then(|| old_signatures(options.root, rev, &diff.path, record.file_type()))
-            .flatten();
-        if diff.untracked || old.is_none() {
-            // A file absent at the revision is one line; its symbols still seed the
-            // dependents search.
-            targets.push(Target {
-                node: file_node,
-                note: format!("new {}", symbols.len()),
-                seeds: symbols,
-            });
-            continue;
-        }
-        let hit = innermost_hits(index, &symbols, &diff.ranges);
-        for &node in &hit {
-            let note = match (&old, index.node(node)) {
-                (Some(old), Node::Symbol(symbol)) => match old.get(&symbol_key(index, node)) {
-                    None => "new",
-                    Some(signature)
-                        if symbol.exported != 0 && signature != index.string(symbol.signature) =>
-                    {
-                        "sig"
-                    }
-                    Some(_) => "",
-                },
-                _ => "",
-            };
-            targets.push(Target {
-                node,
-                note: note.to_owned(),
-                seeds: Vec::new(),
-            });
-        }
-        if hit.is_empty() {
-            targets.push(Target {
-                node: file_node,
-                note: String::new(),
-                seeds: Vec::new(),
-            });
-        }
-        if let Some(old) = old {
-            old_by_path.push((&diff.path, old));
+    let mut changes = collect_changes(index, options.store, options.root, rev, diffs)?;
+    for change in &mut changes {
+        if let (Some(previous), Some(current)) = (&mut change.previous, &mut change.current)
+            && previous.package == current.package
+        {
+            match_local(&mut previous.symbols, &mut current.symbols);
         }
     }
-    let mut removed: Vec<(String, &str)> = Vec::new();
+    let moves = match_moves(&mut changes, options.root, rev)?;
+    let targets = changed_targets(index, filter, &changes);
+    let mut removed = Vec::new();
     let mut removed_names: BTreeSet<String> = BTreeSet::new();
-    for (path, old) in &old_by_path {
-        for key in old.keys().filter(|key| !current_keys.contains(*key)) {
-            removed.push((key.replace('\u{0}', "."), path));
-            if let Some(name) = key.rsplit('\u{0}').next() {
+    for change in &changes {
+        let Some(previous) = &change.previous else {
+            continue;
+        };
+        if !filter.removed_path(&previous.path) {
+            continue;
+        }
+        for symbol in previous.symbols.iter().filter(|symbol| !symbol.matched) {
+            if symbol.ambiguous && filter.exact {
+                continue;
+            }
+            removed.push(RevisionLocation {
+                name: symbol.key.parts.join("."),
+                path: &previous.path,
+                line: symbol.line,
+                ambiguous: symbol.ambiguous,
+            });
+            if !symbol.ambiguous
+                && let Some(name) = symbol.key.parts.last()
+            {
                 removed_names.insert(name.to_owned());
             }
         }
     }
+    removed.sort_by(|a, b| {
+        a.path
+            .cmp(b.path)
+            .then(a.name.cmp(&b.name))
+            .then(a.line.cmp(&b.line))
+    });
+    let mut moved = Vec::new();
+    for &(old_file, old_symbol, new_file, new_symbol) in &moves {
+        let (Some(previous), Some(current)) =
+            (&changes[old_file].previous, &changes[new_file].current)
+        else {
+            continue;
+        };
+        if !filter.removed_path(&previous.path) {
+            continue;
+        }
+        let old = &previous.symbols[old_symbol];
+        let new = &current.symbols[new_symbol];
+        if !filter.exact
+            && !same_scope(previous, current)
+            && let Some(name) = old.key.parts.last()
+        {
+            removed_names.insert(name.to_owned());
+        }
+        if filter.exact {
+            continue;
+        }
+        moved.push(Move {
+            previous: RevisionLocation {
+                name: old.key.parts.join("."),
+                path: &previous.path,
+                line: old.line,
+                ambiguous: false,
+            },
+            path: &current.path,
+            line: new.line,
+        });
+    }
     let survivors = surviving_references(index, filter, options.store, &removed_names);
     Ok(render(
-        index, filter, &targets, &removed, &survivors, options,
+        index, filter, &targets, &removed, &moved, &survivors, options,
     ))
 }
 
@@ -267,30 +307,51 @@ fn innermost_hits(index: &Index, symbols: &[u32], ranges: &[(u32, u32)]) -> Vec<
         .collect()
 }
 
-/// Name path of a symbol inside its file, for matching with the revision's facts.
-fn symbol_key(index: &Index, node: u32) -> String {
-    let symbols = index.derived.symbols();
-    let mut parts = Vec::new();
-    let mut current = node;
-    loop {
-        let symbol = &symbols[current as usize];
-        parts.push(index.string(symbol.name).to_owned());
-        if symbol.parent == u32::MAX {
-            break;
-        }
-        current = symbol.parent;
-    }
-    parts.reverse();
-    parts.join("\u{0}")
+fn definitions(facts: &Facts) -> Option<Vec<Definition>> {
+    facts
+        .symbols
+        .iter()
+        .map(|symbol| {
+            let mut parents = Vec::new();
+            let mut current = symbol.parent;
+            let mut remaining = facts.symbols.len();
+            while let Some(parent) = current {
+                if remaining == 0 {
+                    return None;
+                }
+                remaining -= 1;
+                let enclosing = facts.symbols.get(parent as usize)?;
+                parents.push(enclosing.name.as_str());
+                current = enclosing.parent;
+            }
+            if !symbol.owner.is_empty() && parents.first() != Some(&symbol.owner.as_str()) {
+                parents.insert(0, &symbol.owner);
+            }
+            parents.reverse();
+            parents.push(&symbol.name);
+            Some(Definition {
+                key: DefinitionKey {
+                    kind: symbol.kind(),
+                    parts: parents.into_iter().map(str::to_owned).collect(),
+                },
+                signature: symbol.signature.clone(),
+                line: symbol.line,
+                matched: false,
+                ambiguous: false,
+                local: false,
+                signature_changed: false,
+            })
+        })
+        .collect()
 }
 
-/// Signatures of every symbol of the file at `rev`, keyed like [`symbol_key`].
-fn old_signatures(
+fn revision_file(
     root: &Path,
     rev: &str,
     path: &str,
     file_type: Option<FileType>,
-) -> Option<BTreeMap<String, String>> {
+    keep_content: bool,
+) -> Option<RevisionFile> {
     let content = git::show(root, rev, path)?;
     // A file deleted since REV has no current record; classify it from its REV content.
     let file_type = file_type.or_else(|| {
@@ -312,26 +373,500 @@ fn old_signatures(
         file_type,
     };
     let facts: Facts = extract::extract(&record, &content);
-    let mut map = BTreeMap::new();
-    for symbol in &facts.symbols {
-        let mut parts = vec![symbol.name.clone()];
-        let mut current = symbol.parent;
-        while let Some(parent) = current {
-            let enclosing = &facts.symbols[parent as usize];
-            parts.push(enclosing.name.clone());
-            current = enclosing.parent;
+    Some(RevisionFile {
+        path: path.to_owned(),
+        file_type,
+        package: facts.package.clone(),
+        symbols: definitions(&facts)?,
+        content: if keep_content { content } else { Vec::new() },
+    })
+}
+
+fn collect_changes(
+    index: &Index,
+    store: &crate::infra::store::Store,
+    root: &Path,
+    rev: &str,
+    diffs: Vec<git::FileDiff>,
+) -> Result<Vec<Change>, AppError> {
+    let mut shards = HashMap::new();
+    let mut changes = Vec::new();
+    for diff in diffs {
+        let file = (!diff.deleted)
+            .then(|| {
+                index
+                    .derived
+                    .files()
+                    .iter()
+                    .position(|file| index.string(file.path) == diff.path)
+            })
+            .flatten();
+        if !diff.deleted && file.is_none() {
+            continue;
         }
-        parts.reverse();
-        map.insert(parts.join("\u{0}"), symbol.signature.clone());
+        let current = if let Some(file) = file {
+            let record = &index.derived.files()[file];
+            let facts = if record.symbol_count == 0 {
+                None
+            } else {
+                let shard = crate::infra::store::shard_of(&diff.path);
+                if let std::collections::hash_map::Entry::Vacant(entry) = shards.entry(shard) {
+                    let entries = store.read_shard(shard).map_err(|error| {
+                        AppError::Invalid(format!(
+                            "cannot read index facts for '{}': {error}; run 'xcalygraph index'",
+                            diff.path
+                        ))
+                    })?;
+                    entry.insert(entries);
+                }
+                Some(
+                    shards
+                        .get(&shard)
+                        .and_then(|entries: &Vec<(String, Facts)>| {
+                            entries.iter().find(|(path, _)| path == &diff.path)
+                        })
+                        .map(|(_, facts)| facts)
+                        .ok_or_else(|| {
+                            AppError::Invalid(format!(
+                                "index facts missing for '{}'; run 'xcalygraph index'",
+                                diff.path
+                            ))
+                        })?,
+                )
+            };
+            let symbols = match facts {
+                Some(facts) => definitions(facts).ok_or_else(|| {
+                    AppError::Invalid(format!(
+                        "index facts disagree for '{}'; run 'xcalygraph index'",
+                        diff.path
+                    ))
+                })?,
+                None => Vec::new(),
+            };
+            if symbols.len() != record.symbol_count as usize {
+                return Err(AppError::Invalid(format!(
+                    "index facts disagree for '{}'; run 'xcalygraph index'",
+                    diff.path
+                )));
+            }
+            if let Some(facts) = facts {
+                for (offset, symbol) in facts.symbols.iter().enumerate() {
+                    let derived = index
+                        .derived
+                        .symbols()
+                        .get(record.first_symbol as usize + offset)
+                        .ok_or_else(|| {
+                            AppError::Invalid(format!(
+                                "index facts disagree for '{}'; run 'xcalygraph index'",
+                                diff.path
+                            ))
+                        })?;
+                    let parent = match symbol.parent {
+                        Some(parent) if (parent as usize) < facts.symbols.len() => {
+                            record.first_symbol.checked_add(parent)
+                        }
+                        Some(_) => None,
+                        None => Some(u32::MAX),
+                    };
+                    let special = symbol.kind() == SymKind::Heading
+                        || (symbol.kind() == SymKind::Op && symbol.name.contains(' '));
+                    if index.string(derived.name) != symbol.name
+                        || derived.kind() != symbol.kind()
+                        || derived.line != symbol.line
+                        || derived.end_line != symbol.end_line
+                        || (!special && index.string(derived.signature) != symbol.signature)
+                        || Some(derived.parent) != parent
+                    {
+                        return Err(AppError::Invalid(format!(
+                            "index facts disagree for '{}'; run 'xcalygraph index'",
+                            diff.path
+                        )));
+                    }
+                }
+            }
+            Some(CurrentFile {
+                file: file as u32,
+                path: diff.path.clone(),
+                file_type: record.file_type(),
+                package: facts.and_then(|facts| facts.package.clone()),
+                symbols,
+            })
+        } else {
+            None
+        };
+        let previous = if diff.untracked || crate::domain::role::is_sensitive(&diff.path) {
+            None
+        } else {
+            revision_file(
+                root,
+                rev,
+                &diff.path,
+                current.as_ref().and_then(|file| file.file_type),
+                diff.deleted,
+            )
+        };
+        if previous.is_some() || current.is_some() {
+            changes.push(Change {
+                diff,
+                previous,
+                current,
+            });
+        }
     }
-    Some(map)
+    Ok(changes)
+}
+
+fn match_local(previous: &mut [Definition], current: &mut [Definition]) {
+    let mut groups: BTreeMap<DefinitionKey, (Vec<usize>, Vec<usize>)> = BTreeMap::new();
+    for (index, old) in previous.iter().enumerate() {
+        groups.entry(old.key.clone()).or_default().0.push(index);
+    }
+    for (index, new) in current.iter().enumerate() {
+        groups.entry(new.key.clone()).or_default().1.push(index);
+    }
+    for (old_indices, new_indices) in groups.values() {
+        for &old_index in old_indices {
+            if let Some(&new_index) = new_indices.iter().find(|&&index| {
+                !current[index].matched && current[index].signature == previous[old_index].signature
+            }) {
+                previous[old_index].matched = true;
+                current[new_index].matched = true;
+                current[new_index].local = true;
+            }
+        }
+        let old_left: Vec<usize> = old_indices
+            .iter()
+            .copied()
+            .filter(|&index| !previous[index].matched)
+            .collect();
+        let new_left: Vec<usize> = new_indices
+            .iter()
+            .copied()
+            .filter(|&index| !current[index].matched)
+            .collect();
+        if old_left.len() == 1 && new_left.len() == 1 {
+            previous[old_left[0]].matched = true;
+            let new = &mut current[new_left[0]];
+            new.matched = true;
+            new.local = true;
+            new.signature_changed = true;
+        } else if !old_left.is_empty() && !new_left.is_empty() {
+            for index in old_left {
+                previous[index].ambiguous = true;
+            }
+            for index in new_left {
+                current[index].ambiguous = true;
+            }
+        }
+    }
+}
+
+fn same_scope(previous: &RevisionFile, current: &CurrentFile) -> bool {
+    if previous.file_type != current.file_type
+        || previous.package.is_none()
+        || previous.package != current.package
+    {
+        return false;
+    }
+    matches!(
+        previous.file_type,
+        Some(
+            FileType::Go
+                | FileType::Java
+                | FileType::Kotlin
+                | FileType::Scala
+                | FileType::Groovy
+                | FileType::CSharp
+                | FileType::VbNet
+                | FileType::Php
+        )
+    ) && crate::resolve::modules::parent_dir(&previous.path)
+        == crate::resolve::modules::parent_dir(&current.path)
+}
+
+fn uncertain_scope(previous: &RevisionFile, current: &CurrentFile) -> bool {
+    previous.file_type == current.file_type
+        && previous.package.is_some()
+        && previous.package == current.package
+        && matches!(
+            previous.file_type,
+            Some(
+                FileType::Java
+                    | FileType::Kotlin
+                    | FileType::Scala
+                    | FileType::Groovy
+                    | FileType::CSharp
+                    | FileType::VbNet
+                    | FileType::Php
+            )
+        )
+        && crate::resolve::modules::parent_dir(&previous.path)
+            != crate::resolve::modules::parent_dir(&current.path)
+}
+
+fn similar_content(previous: &[u8], current: &[u8]) -> bool {
+    let largest = previous.len().max(current.len());
+    if largest < 32 {
+        return false;
+    }
+    let shared = previous
+        .split(|&byte| byte == b'\n')
+        .zip(current.split(|&byte| byte == b'\n'))
+        .filter(|(old, new)| old.len() > 2 && old == new)
+        .fold(0usize, |sum, (line, _)| sum.saturating_add(line.len() + 1));
+    shared.saturating_mul(4) >= largest.saturating_mul(3)
+}
+
+fn file_scoped(file_type: Option<FileType>) -> bool {
+    matches!(
+        file_type,
+        Some(
+            FileType::TypeScript
+                | FileType::JavaScript
+                | FileType::Vue
+                | FileType::Svelte
+                | FileType::Astro
+                | FileType::Python
+                | FileType::Rust
+                | FileType::Bash
+                | FileType::C
+                | FileType::Cpp
+                | FileType::ObjC
+                | FileType::Elixir
+                | FileType::Erlang
+                | FileType::Lua
+                | FileType::Zig
+                | FileType::Julia
+                | FileType::OCaml
+                | FileType::Fortran
+                | FileType::Pascal
+                | FileType::Lisp
+                | FileType::Solidity
+                | FileType::PowerShell
+                | FileType::Robot
+                | FileType::Dart
+        )
+    )
+}
+
+fn match_moves(
+    changes: &mut [Change],
+    root: &Path,
+    rev: &str,
+) -> Result<Vec<(usize, usize, usize, usize)>, AppError> {
+    let mut candidates = Vec::new();
+    let mut uncertain = Vec::new();
+    let mut content = HashMap::new();
+    let mut comparisons = HashMap::new();
+    let has_deletion = changes
+        .iter()
+        .any(|change| change.diff.deleted && change.previous.is_some());
+    let has_addition = changes
+        .iter()
+        .any(|change| change.previous.is_none() && change.current.is_some());
+    let renames = if has_deletion && has_addition {
+        git::renames(root, rev).ok_or_else(|| {
+            AppError::Invalid(format!("git rename detection against '{rev}' unavailable"))
+        })?
+    } else {
+        Vec::new()
+    };
+    let rename_pairs: std::collections::HashSet<(&str, &str)> = renames
+        .iter()
+        .map(|(old, new)| (old.as_str(), new.as_str()))
+        .collect();
+    let mut by_key: BTreeMap<DefinitionKey, Vec<(usize, usize)>> = BTreeMap::new();
+    for (file, change) in changes.iter().enumerate() {
+        if let Some(current) = &change.current {
+            for (symbol, definition) in current
+                .symbols
+                .iter()
+                .enumerate()
+                .filter(|(_, definition)| !definition.matched && !definition.ambiguous)
+            {
+                by_key
+                    .entry(definition.key.clone())
+                    .or_default()
+                    .push((file, symbol));
+            }
+        }
+    }
+    for (old_file, change) in changes.iter().enumerate() {
+        let Some(previous) = &change.previous else {
+            continue;
+        };
+        for (old_symbol, old) in previous
+            .symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, symbol)| !symbol.matched && !symbol.ambiguous)
+        {
+            let Some(matches) = by_key.get(&old.key) else {
+                continue;
+            };
+            for &(new_file, new_symbol) in matches {
+                let next = &changes[new_file];
+                let Some(current) = &next.current else {
+                    continue;
+                };
+                if previous.path == current.path || previous.file_type != current.file_type {
+                    continue;
+                }
+                let new = &current.symbols[new_symbol];
+                let renamed =
+                    rename_pairs.contains(&(previous.path.as_str(), current.path.as_str()));
+                let possible = file_scoped(previous.file_type)
+                    && change.diff.deleted
+                    && next.previous.is_none()
+                    && !old.signature.is_empty()
+                    && old.signature == new.signature;
+                let (identical, similar) = if !renamed
+                    && !same_scope(previous, current)
+                    && change.diff.deleted
+                    && next.previous.is_none()
+                {
+                    let pair = (old_file, new_file);
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        comparisons.entry(pair)
+                    {
+                        let bytes = match content.entry(current.path.clone()) {
+                            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                            std::collections::hash_map::Entry::Vacant(entry) => {
+                                let bytes = std::fs::read(root.join(&current.path)).map_err(
+                                    AppError::io(format!("cannot read '{}'", current.path)),
+                                )?;
+                                entry.insert(bytes)
+                            }
+                        };
+                        let equal = *bytes == previous.content;
+                        entry.insert((equal, !equal && similar_content(&previous.content, bytes)));
+                    }
+                    comparisons
+                        .get(&pair)
+                        .map_or((false, false), |&(equal, similar)| {
+                            (equal, possible && similar)
+                        })
+                } else {
+                    (false, false)
+                };
+                if same_scope(previous, current) || renamed || identical || similar {
+                    candidates.push((old_file, old_symbol, new_file, new_symbol));
+                } else if uncertain_scope(previous, current) || possible {
+                    uncertain.push((old_file, old_symbol, new_file, new_symbol));
+                }
+            }
+        }
+    }
+    let mut old_counts = HashMap::new();
+    let mut new_counts = HashMap::new();
+    for &(old_file, old_symbol, new_file, new_symbol) in &candidates {
+        *old_counts.entry((old_file, old_symbol)).or_insert(0usize) += 1;
+        *new_counts.entry((new_file, new_symbol)).or_insert(0usize) += 1;
+    }
+    let mut moves = Vec::new();
+    for &(old_file, old_symbol, new_file, new_symbol) in &candidates {
+        let unique_old = old_counts.get(&(old_file, old_symbol)) == Some(&1);
+        let unique_new = new_counts.get(&(new_file, new_symbol)) == Some(&1);
+        if let Some(previous) = &mut changes[old_file].previous {
+            if unique_old && unique_new {
+                previous.symbols[old_symbol].matched = true;
+            } else {
+                previous.symbols[old_symbol].ambiguous = true;
+            }
+        }
+        if let Some(current) = &mut changes[new_file].current {
+            if unique_old && unique_new {
+                current.symbols[new_symbol].matched = true;
+            } else {
+                current.symbols[new_symbol].ambiguous = true;
+            }
+        }
+        if unique_old && unique_new {
+            moves.push((old_file, old_symbol, new_file, new_symbol));
+        }
+    }
+    for (old_file, old_symbol, new_file, new_symbol) in uncertain {
+        let old_matched = changes[old_file]
+            .previous
+            .as_ref()
+            .is_some_and(|file| file.symbols[old_symbol].matched);
+        let new_matched = changes[new_file]
+            .current
+            .as_ref()
+            .is_some_and(|file| file.symbols[new_symbol].matched);
+        if old_matched || new_matched {
+            continue;
+        }
+        if let Some(previous) = &mut changes[old_file].previous {
+            previous.symbols[old_symbol].ambiguous = true;
+        }
+        if let Some(current) = &mut changes[new_file].current {
+            current.symbols[new_symbol].ambiguous = true;
+        }
+    }
+    Ok(moves)
+}
+
+fn changed_targets(index: &Index, filter: &Filter, changes: &[Change]) -> Vec<Target> {
+    let mut targets = Vec::new();
+    for change in changes {
+        let Some(current) = &change.current else {
+            continue;
+        };
+        let record = &index.derived.files()[current.file as usize];
+        if !filter.file(index, record) {
+            continue;
+        }
+        let symbols: Vec<u32> =
+            (record.first_symbol..record.first_symbol + record.symbol_count).collect();
+        let file_node = index.symbol_count() + current.file;
+        if change.previous.is_none() {
+            targets.push(Target {
+                node: file_node,
+                note: format!("new {}", symbols.len()),
+                seeds: symbols,
+            });
+            continue;
+        }
+        let hit = innermost_hits(index, &symbols, &change.diff.ranges);
+        for &node in &hit {
+            let definition = &current.symbols[(node - record.first_symbol) as usize];
+            let note = if definition.ambiguous && filter.exact {
+                ""
+            } else if definition.ambiguous {
+                "uncertain"
+            } else if !definition.local {
+                "new"
+            } else if definition.signature_changed
+                && matches!(index.node(node), Node::Symbol(symbol) if symbol.exported != 0)
+            {
+                "sig"
+            } else {
+                ""
+            };
+            targets.push(Target {
+                node,
+                note: note.to_owned(),
+                seeds: Vec::new(),
+            });
+        }
+        if hit.is_empty() {
+            targets.push(Target {
+                node: file_node,
+                note: String::new(),
+                seeds: Vec::new(),
+            });
+        }
+    }
+    targets
 }
 
 fn render(
     index: &Index,
     filter: &Filter,
     targets: &[Target],
-    removed: &[(String, &str)],
+    removed: &[RevisionLocation<'_>],
+    moved: &[Move<'_>],
     survivors: &[u32],
     options: &ImpactOptions,
 ) -> String {
@@ -355,6 +890,9 @@ fn render(
         if !target.note.is_empty() {
             text.push(' ');
             text.push_str(&target.note);
+            if target.note == "uncertain" {
+                text.push('?');
+            }
         }
         writer.line(
             &text,
@@ -365,18 +903,60 @@ fn render(
                 ("path", Value::Str(path)),
                 ("line", Value::Int(u64::from(line))),
                 ("kind", Value::Str(&target.note)),
+                (
+                    "conf",
+                    Value::Str(if target.note == "uncertain" {
+                        "inferred"
+                    } else {
+                        ""
+                    }),
+                ),
             ],
         );
     }
-    for (name, path) in removed {
+    for previous in removed {
+        let kind = if previous.ambiguous {
+            "uncertain"
+        } else {
+            "removed"
+        };
+        let marker = if previous.ambiguous { "?" } else { "" };
         writer.line(
-            &format!("~ {name} {path} removed"),
+            &format!(
+                "~ {} {}:{} {kind}{marker}",
+                previous.name, previous.path, previous.line
+            ),
             &[
                 ("t", Value::Str("sym")),
                 ("rel", Value::Str("chg")),
-                ("name", Value::Str(name)),
-                ("path", Value::Str(path)),
-                ("kind", Value::Str("removed")),
+                ("name", Value::Str(&previous.name)),
+                ("path", Value::Str(previous.path)),
+                ("line", Value::Int(u64::from(previous.line))),
+                ("kind", Value::Str(kind)),
+                (
+                    "conf",
+                    Value::Str(if previous.ambiguous { "inferred" } else { "" }),
+                ),
+            ],
+        );
+    }
+    for movement in moved {
+        let previous = &movement.previous;
+        writer.line(
+            &format!(
+                "~ {} {}:{} -> {}:{} moved?",
+                previous.name, previous.path, previous.line, movement.path, movement.line
+            ),
+            &[
+                ("t", Value::Str("sym")),
+                ("rel", Value::Str("chg")),
+                ("name", Value::Str(&previous.name)),
+                ("path", Value::Str(previous.path)),
+                ("line", Value::Int(u64::from(previous.line))),
+                ("kind", Value::Str("moved")),
+                ("new_path", Value::Str(movement.path)),
+                ("new_line", Value::Int(u64::from(movement.line))),
+                ("conf", Value::Str("inferred")),
             ],
         );
     }
@@ -880,5 +1460,27 @@ fn nearest(paths: &[&str], dir: &str, manifest: &str) -> Option<String> {
             return None;
         }
         current = parent(&current).to_owned();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::definitions;
+    use crate::domain::facts::{Facts, SymKind, Symbol};
+
+    #[test]
+    fn corrupt_symbol_parents_are_rejected_without_panicking_or_looping() {
+        for parent in [0, 1, u32::MAX] {
+            let facts = Facts {
+                symbols: vec![Symbol {
+                    kind: Some(SymKind::Fn),
+                    name: "item".to_owned(),
+                    parent: Some(parent),
+                    ..Symbol::default()
+                }],
+                ..Facts::default()
+            };
+            assert!(definitions(&facts).is_none(), "parent {parent}");
+        }
     }
 }
