@@ -29,17 +29,44 @@ platform() {
 # License notices of every bundled dependency: name, version, license, then its license files.
 third_party() {
   cargo metadata --locked --format-version 1 \
-    | jq -r '.packages[] | select(.name != "xcalygraph") | [.name, .version, (.license // "see files"), (.manifest_path | sub("/Cargo.toml$"; ""))] | @tsv' \
-    | sort -u \
-    | while IFS=$'\t' read -r name crate_version license dir; do
-        printf '==== %s %s (%s)\n' "${name}" "${crate_version}" "${license}" || return 1
-        find "${dir}" -maxdepth 1 -type f \( -iname 'LICENSE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' \) -print \
-          | sort | while IFS= read -r file; do
-              printf -- '---- %s\n' "$(basename "${file}")" || return 1
-              cat "${file}" || return 1
-              printf '\n' || return 1
-            done || return 1
-      done
+    | python3 -I -c '
+import json
+import os
+import shutil
+import stat
+import sys
+
+packages = set()
+for package in json.load(sys.stdin)["packages"]:
+    if package["name"] == "xcalygraph":
+        continue
+    manifest = package["manifest_path"]
+    if os.path.basename(manifest) != "Cargo.toml":
+        raise ValueError("unexpected Cargo manifest path")
+    license_name = package["license"] if package["license"] is not None else "see files"
+    packages.add((package["name"], package["version"], license_name, os.path.dirname(manifest)))
+
+output = sys.stdout.buffer
+for name, version, license_name, directory in sorted(packages, key=lambda row: tuple(map(os.fsencode, row))):
+    if not stat.S_ISDIR(os.stat(directory, follow_symlinks=False).st_mode):
+        raise OSError("dependency directory is not a regular directory")
+    output.write(b"==== " + os.fsencode(name) + b" " + os.fsencode(version)
+                 + b" (" + os.fsencode(license_name) + b")\n")
+    with os.scandir(directory) as entries:
+        files = sorted((entry for entry in entries
+                        if os.fsencode(entry.name).lower().startswith((b"license", b"copying", b"notice"))),
+                       key=lambda entry: os.fsencode(entry.name))
+    for entry in files:
+        if not stat.S_ISREG(entry.stat(follow_symlinks=False).st_mode):
+            continue
+        descriptor = os.open(entry.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as source:
+            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                raise OSError("license entry is no longer a regular file")
+            output.write(b"---- " + os.fsencode(entry.name) + b"\n")
+            shutil.copyfileobj(source, output)
+            output.write(b"\n")
+'
 }
 
 checksum() {
@@ -112,7 +139,7 @@ stage_releases() {
   for target in "$@"; do
     name="xcalygraph-${version}-$(platform "${target}")" || return 1
     bash "${REPO_ROOT}/scripts/utils/check-build-space.sh" || return 1
-    binary="$(cargo build "${build_args[@]}" --locked --bin xcalygraph --target "${target}" --message-format=json \
+    binary="$(cargo build ${build_args[@]+"${build_args[@]}"} --locked --bin xcalygraph --target "${target}" --message-format=json \
       | bash "${REPO_ROOT}/scripts/utils/cargo-artifact.sh")" || return 1
     package_release "${stage}" "${name}" "${binary}" || return 1
   done
