@@ -266,16 +266,16 @@ Sections in priority order: root line (name, files per language, symbol count) -
 
 ### 7.2 find
 
-1. Tokenize the query; look up exact names for the raw query and each term.
+1. Tokenize the query; look up exact names for the raw query and each term. Query-only expansions: `-ization` -> `-iz`, `-ation` -> `-at`, `retriev`/`retrieval` -> `get`, other ASCII terms of at least 4 bytes -> the term plus `iz`; retain the original term.
 2. Candidates = union of the postings.
-3. Score = BM25F (k1 1.2, b 0.75; field weights name 3, body 1.8, parent 1.5, path 1, doc 1, signature 0.5, used by 0.5; tokens stemmed, code abbreviations and synonyms canonicalized: `remove` and `delete`, `sign in` and `login`, `invalidate` and `refresh`) times the share of query terms the node matches, + exact-name bonus 5 when the whole query names the symbol, multiplied by the role weight (src 1, test 0.3, gen 0.2, doc 0.5, config 0.5, manifest 0.5, asset 0.3), + 2 x normalized log rank.
-4. Order: score descending, then path, then line; files matched by path tokens appear as file lines, unless one of their symbols ranks higher; each further hit of a file counts 0.4 times the one before (diversity); output keeps the score order, adjacent hits of one file share its path line.
+3. Score = BM25F (k1 1.2, b 0.75; field weights name 3, body 1.8, parent 1.5, path 1, doc 1, signature 0.5, used by 0.5; tokens stemmed, code abbreviations and synonyms canonicalized: `remove` and `delete`, `sign in` and `login`, `invalidate` and `refresh`; per term use the higher score of its original and 0.5 x its expansion) times the share of query terms the node matches, + exact-name bonus 5 when the whole query names the symbol, multiplied by the role weight (src 1, test 0.3, gen 0.2, doc 0.5, config 0.5, manifest 0.5, asset 0.3), + 2 x normalized log rank.
+4. Order: score descending, then path, line and node ID; files matched by path tokens appear as file lines, unless one of their symbols ranks higher; each further symbol of a file matching the same set of query terms counts 0.4 times the one before (diversity); queries over 64 distinct terms use file-wide diversity including file hits; output keeps the score order, adjacent hits of one file share its path line.
 
 ### 7.3 ctx
 
 1. Seeds = top 5 `find` results with score >= 0.25 x top score.
 2. Personalized PageRank from the seeds over the symbol graph in both directions, restart probability 0.3, 15 iterations.
-3. Order: seeds first, then PPR score x role weight.
+3. Order: seeds first, then the highest-ranked result whose symbol name covers a query term absent from the seed names, then PPR score x role weight; queries over 64 distinct terms omit the extra result.
 4. Packing: group by file in first-appearance order; seeds with signature and doc, others with signature; stop at the budget.
 
 ### 7.4 show

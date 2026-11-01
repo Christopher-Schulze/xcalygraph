@@ -122,7 +122,11 @@ pub fn resolve_one(
         many => {
             let hits: Vec<super::find::Hit> = many
                 .iter()
-                .map(|&node| super::find::Hit { node, score: 0.0 })
+                .map(|&node| super::find::Hit {
+                    node,
+                    score: 0.0,
+                    name_evidence: 0,
+                })
                 .collect();
             Err(AppError::Ambiguous(super::find::render(
                 index, &hits, json, 600,

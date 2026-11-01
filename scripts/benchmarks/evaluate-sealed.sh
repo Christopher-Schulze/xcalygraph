@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Internal JSONL evaluation runner used by run-evaluation.sh --set sealed.
-# Usage: evaluate-sealed.sh MANIFEST final|development|validate BINARY [CORPUS...]
+# Usage: evaluate-sealed.sh MANIFEST final|development|validate BINARY [--budget N] [--reuse-graphify RUN] [CORPUS...]
 # All tools run on verified frozen sources with an isolated HOME and explicit index path.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -184,6 +184,8 @@ def aggregate(rows):
             "covered": sum(row["covered"] for row in positive), "required": sum(row["required"] for row in positive),
             "multi_complete": sum(row["complete"] for row in positive if row["family"] == "multi"),
             "multi_total": sum(row["family"] == "multi" for row in positive),
+            "multi_location_complete": sum(row["complete"] for row in positive if row["required"] > 1),
+            "multi_location_total": sum(row["required"] > 1 for row in positive),
             "negative_false_positive": sum(row["false_positive"] for row in negative), "negative_total": len(negative),
             "mean_positive_tokens": round(sum(row["tokens"] for row in positive) / max(1, len(positive)), 1),
             "over_budget": sum(row["over_budget"] for row in rows)}
@@ -201,7 +203,34 @@ def observe(command, root, environment, destination, accepted):
     return result.stdout, result.returncode
 
 
-def evaluate(repo, work, corpus, cases, source, binary, environment, budgets):
+def observe_graphify(command, root, environment, destination, baseline, case, budget, score_file):
+    if baseline is None:
+        return observe(command, root, environment, destination, (0, 3, 4))
+    previous = baseline / destination.relative_to(destination.parents[2])
+    if json.loads((previous.parent / "case.json").read_text()) != case:
+        raise ValueError("baseline case mismatch: " + case["id"])
+    metadata = json.loads(previous.with_suffix(".json").read_text())
+    output = previous.with_suffix(".stdout").read_bytes()
+    stderr = previous.with_suffix(".stderr").read_bytes()
+    status = metadata["exit"]
+    if metadata["command"] != command or status not in (0, 3, 4):
+        raise ValueError("baseline command or exit mismatch: " + case["id"])
+    if "stdout_sha256" in metadata and metadata["stdout_sha256"] != sha(output):
+        raise ValueError("baseline output checksum mismatch: " + case["id"])
+    found = records(output.decode(), "graphify") if status == 0 else []
+    stored = [json.loads(line) for line in score_file.read_text().splitlines()]
+    matching = [row for row in stored if row["id"] == case["id"]]
+    if len(matching) != 1 or matching[0] != score(case, found, output, budget):
+        raise ValueError("baseline score mismatch: " + case["id"])
+    metadata["reused_from"] = str(previous)
+    metadata["stdout_sha256"] = sha(output)
+    write_new(destination.with_suffix(".stdout"), output)
+    write_new(destination.with_suffix(".stderr"), stderr)
+    write_new(destination.with_suffix(".json"), json_bytes(metadata))
+    return output, status
+
+
+def evaluate(repo, work, corpus, cases, source, binary, environment, budgets, baseline):
     slug = corpus["name"].replace("/", "-")
     index = work / ("index-" + slug)
     common = ["-C", str(source), "--index-dir", str(index)]
@@ -222,13 +251,17 @@ def evaluate(repo, work, corpus, cases, source, binary, environment, budgets):
                     outcomes[(arm, budget)].append(score(case, found, output, budget))
             command = ["graphify", "query", case["question"], "--budget", str(budget),
                        "--graph", str(source / "graphify-out/graph.json")]
-            output, status = observe(command, source, environment, directory / ("graphify-" + str(budget)), (0, 3, 4))
+            score_file = baseline / slug / ("graphify-" + str(budget) + ".scores.jsonl") if baseline else None
+            output, status = observe_graphify(command, source, environment, directory / ("graphify-" + str(budget)),
+                                               baseline, case, budget, score_file)
             found = records(output.decode(), "graphify") if status == 0 else []
             outcomes[("graphify", budget)].append(score(case, found, output, budget))
         # Keep TASK 025's asymmetric legacy comparison visible, separate from equal-budget curves.
-        output, status = observe(["graphify", "query", case["question"], "--budget", "2000",
-                                  "--graph", str(source / "graphify-out/graph.json")],
-                                 source, environment, directory / "graphify-legacy", (0, 3, 4))
+        command = ["graphify", "query", case["question"], "--budget", "2000",
+                   "--graph", str(source / "graphify-out/graph.json")]
+        score_file = baseline / slug / "graphify-legacy-2000.scores.jsonl" if baseline else None
+        output, status = observe_graphify(command, source, environment, directory / "graphify-legacy",
+                                           baseline, case, 2000, score_file)
         found = records(output.decode(), "graphify") if status == 0 else []
         outcomes[("graphify-legacy", 2000)].append(score(case, found, output, 2000))
         if number % 5 == 0:
@@ -240,11 +273,26 @@ def evaluate(repo, work, corpus, cases, source, binary, environment, budgets):
 
 def main():
     if len(sys.argv) < 5:
-        raise ValueError("usage: evaluate-sealed.sh MANIFEST final|development|validate BINARY [CORPUS...]")
+        raise ValueError("usage: evaluate-sealed.sh MANIFEST final|development|validate BINARY [--budget N] [--reuse-graphify RUN] [CORPUS...]")
     repo, manifest_path, phase, binary = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]).resolve()
-    selected = set(sys.argv[5:])
+    arguments = sys.argv[5:]
+    budget = None
+    baseline = None
+    while arguments and arguments[0].startswith("--"):
+        if len(arguments) < 2:
+            raise ValueError(arguments[0] + " needs a value")
+        if arguments[0] == "--budget" and budget is None:
+            budget = int(arguments[1])
+        elif arguments[0] == "--reuse-graphify" and baseline is None:
+            baseline = Path(arguments[1]).resolve()
+        else:
+            raise ValueError("unknown or repeated option " + arguments[0])
+        arguments = arguments[2:]
+    selected = set(arguments)
     if phase not in ("final", "development", "validate"):
         raise ValueError("phase must be final, development or validate")
+    if (budget is not None or baseline is not None) and phase != "development":
+        raise ValueError("--budget and --reuse-graphify are restricted to development")
     manifest_data = manifest_path.read_bytes()
     manifest = json.loads(manifest_data)
     if manifest["schema"] != 1:
@@ -254,9 +302,20 @@ def main():
     if (not manifest["budgets"] or any(type(b) is not int or b < 1 for b in manifest["budgets"])
             or len(set(manifest["budgets"])) != len(manifest["budgets"])):
         raise ValueError("budgets must be distinct positive integers")
+    if budget is not None and budget not in manifest["budgets"]:
+        raise ValueError("--budget must be one of the frozen manifest budgets")
+    budgets = [budget] if budget is not None else manifest["budgets"]
     corpora = [c for c in manifest["corpora"] if not selected or c["name"] in selected]
     if not corpora or selected - {c["name"] for c in corpora}:
         raise ValueError("unknown or empty corpus selection")
+    if baseline is not None:
+        identity = json.loads((baseline / "identity.json").read_text())
+        if (identity["manifest_sha256"] != sha(manifest_data)
+                or sha((baseline / "manifest.json").read_bytes()) != sha(manifest_data)):
+            raise ValueError("baseline manifest mismatch")
+        report = json.loads((baseline / "report.json").read_text())
+        if any(c["name"] not in report["corpora"] for c in corpora):
+            raise ValueError("baseline lacks a completed selected corpus")
     base = repo / ".cache/evaluation"
     base.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="sealed.", dir=base))
@@ -264,8 +323,10 @@ def main():
     home.mkdir()
     environment = dict(os.environ, HOME=str(home), PYTHONHASHSEED="0", PYTHONSAFEPATH="1", PYTHONDONTWRITEBYTECODE="1")
     write_new(work / "manifest.json", manifest_data)
-    write_new(work / "identity.json", json_bytes({"manifest_sha256": sha(manifest_data), "binary_sha256": sha(binary.read_bytes()) if phase != "validate" else None,
-                                                  "phase": phase, "corpora": [c["name"] for c in corpora]}))
+    binary_sha256 = sha(binary.read_bytes()) if phase != "validate" else None
+    write_new(work / "identity.json", json_bytes({"manifest_sha256": sha(manifest_data), "binary_sha256": binary_sha256,
+                                                  "phase": phase, "budgets": budgets, "corpora": [c["name"] for c in corpora],
+                                                  "graphify_baseline": str(baseline) if baseline else None}))
     validated = [(c, *validate_corpus(repo, work, manifest_path.parent, c, environment)) for c in corpora]
     print("validated:", len(corpora), "corpora; evidence:", work, flush=True)
     if phase == "validate":
@@ -286,17 +347,38 @@ def main():
             write_new(previous, json_bytes({"run": str(work), "phase": phase}))
     report = {"phase": phase, "limitations": manifest.get("exposure"), "exposure": exposure, "corpora": {}}
     for corpus, source, cases in validated:
-        outcomes = evaluate(repo, work, corpus, cases, source, binary, environment, manifest["budgets"])
+        outcomes = evaluate(repo, work, corpus, cases, source, binary, environment, budgets, baseline)
         aggregates = {arm + "-" + str(budget): aggregate(rows) for (arm, budget), rows in outcomes.items()}
         paired = {}
-        for budget in manifest["budgets"]:
+        for budget in budgets:
             for arm in ("find-text", "find-json", "ctx-text", "ctx-json"):
                 counts = collections.Counter((a["complete"], b["complete"])
                                              for a, b in zip(outcomes[(arm, budget)], outcomes[("graphify", budget)])
                                              if a["required"])
                 paired[arm + "-" + str(budget)] = {str(a) + "/" + str(b): count for (a, b), count in sorted(counts.items())}
+            for form in ("text", "json"):
+                finds = outcomes[("find-" + form, budget)]
+                contexts = outcomes[("ctx-" + form, budget)]
+                workflow = [context if find["required"] > 1 else find
+                            for find, context in zip(finds, contexts)]
+                name = "workflow-" + form + "-" + str(budget)
+                aggregates[name] = aggregate(workflow)
+                counts = collections.Counter((a["complete"], b["complete"])
+                                             for a, b in zip(workflow, outcomes[("graphify-legacy", 2000)])
+                                             if a["required"])
+                paired[name + "-vs-graphify-legacy-2000"] = {
+                    str(a) + "/" + str(b): count for (a, b), count in sorted(counts.items())}
+                slug = corpus["name"].replace("/", "-")
+                write_new(work / slug / (name + ".scores.jsonl"), b"".join(json_bytes(row) for row in workflow))
         report["corpora"][corpus["name"]] = {"metrics": aggregates, "paired_complete": paired}
     write_new(work / "report.json", json_bytes(report))
+    public = {"schema": 1, "phase": phase, "manifest_sha256": sha(manifest_data),
+              "binary_sha256": binary_sha256,
+              "evaluator_sha256": sha((repo / "scripts/benchmarks/evaluate-sealed.sh").read_bytes()),
+              "budgets": budgets, "prior_exposure": {name: not item["first_evaluation"] for name, item in exposure.items()},
+              "graphify_baseline_reused": baseline is not None, "limitations": manifest.get("exposure"),
+              "corpora": report["corpora"]}
+    write_new(work / "public-report.json", json_bytes(public))
     print(json.dumps(report, sort_keys=True), flush=True)
     print("evidence:", work, flush=True)
 

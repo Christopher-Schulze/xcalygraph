@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
         shutil.copyfile(repo / relative, path)
         path.chmod(0o755)
     (root / ".gitignore").write_text(".cache/\n")
-    (root / "main.go").write_text('package sample\nfunc Create() string { return "star" }\n\nfunc Other() {}\n')
+    (root / "main.go").write_text('package sample\n// Create returns a sample star.\nfunc Create() string { return "star" }\n\nfunc Other() {}\n')
     (root / "right.go").write_text("package sample\nfunc Delete() {}\n")
     for command in (["git", "init", "-q", "-b", "main", str(root)],
                     ["git", "-C", str(root), "add", "."],
@@ -52,8 +52,8 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
                 "file_sha256": hashlib.sha256(data).hexdigest(), "evidence_end": end,
                 "evidence_sha256": hashlib.sha256("".join(lines[line-1:end]).encode()).hexdigest()}
 
-    create = locator("main.go", 2, "Create")
-    other = locator("main.go", 4, "Other")
+    create = locator("main.go", 3, "Create")
+    other = locator("main.go", 5, "Other")
     delete = locator("right.go", 2, "Delete")
     group = lambda loc: {"alternatives": [loc]}
     # Real answers to Create must not earn a definition hit for Other in the same file,
@@ -62,6 +62,7 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
         {"id": "correct", "family": "symbol", "question": "Create", "requires": [group(create)]},
         {"id": "wrong-definition", "family": "behavior", "question": "Create", "requires": [group(other)]},
         {"id": "partial", "family": "multi", "question": "Create", "requires": [group(create), group(delete)]},
+        {"id": "relationship", "family": "relationship", "question": "Create", "requires": [group(create), group(delete)]},
         {"id": "negative", "family": "negative", "question": "CreateAbsent", "requires": [],
          "absence": {"identifier": "CreateAbsent", "source_sha256": metadata["source_sha256"]}},
     ]
@@ -69,11 +70,11 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
     (cases_dir / "fixture.jsonl").write_bytes(case_data)
     commit = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], env=environment,
                             capture_output=True, text=True, check=True).stdout.strip()
-    manifest = {"schema": 1, "budgets": [600], "exposure": "isolated real-tool regression",
+    manifest = {"schema": 1, "budgets": [200, 600], "exposure": "isolated real-tool regression",
                 "corpora": [{"name": "xcalygraph", "commit": commit,
                              "snapshot": str(frozen.relative_to(root)),
                              "source_sha256": metadata["source_sha256"], "upstream": metadata["upstream"],
-                             "cases": "fixture.jsonl", "cases_sha256": hashlib.sha256(case_data).hexdigest(), "count": 4}]}
+                             "cases": "fixture.jsonl", "cases_sha256": hashlib.sha256(case_data).hexdigest(), "count": 5}]}
     manifest_path = cases_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest))
     runner = root / "scripts/benchmarks/evaluate-sealed.sh"
@@ -82,16 +83,72 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
     assert run.returncode == 0, run.stderr + run.stdout
     evidence = Path(run.stdout.splitlines()[-1].removeprefix("evidence: "))
     report = json.loads((evidence / "report.json").read_text())
+    public = json.loads((evidence / "public-report.json").read_text())
+    assert public["manifest_sha256"] == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    assert public["binary_sha256"] == hashlib.sha256((repo / "target/debug/xcalygraph").read_bytes()).hexdigest()
+    assert public["corpora"] == report["corpora"] and str(root) not in json.dumps(public)
     assert report["exposure"]["xcalygraph"]["first_evaluation"]
     for arm in ("find-text", "find-json"):
         scores = [json.loads(line) for line in (evidence / "xcalygraph" / (arm + "-600.scores.jsonl")).read_text().splitlines()]
-        correct, wrong, partial, negative = scores
+        correct, wrong, partial, relationship, negative = scores
         assert correct["complete"] and correct["complete5"], scores
         assert wrong["file5"] and not wrong["complete"], scores
         assert partial["covered"] == 1 and partial["required"] == 2 and not partial["complete"], scores
+        assert relationship["required"] == 2 and not relationship["complete"], scores
         assert negative["false_positive"], scores
+    metrics = report["corpora"]["xcalygraph"]["metrics"]
+    assert metrics["find-text-600"]["multi_total"] == 1
+    assert metrics["find-text-600"]["multi_location_total"] == 2
+    finds = [json.loads(line) for line in (evidence / "xcalygraph/find-text-600.scores.jsonl").read_text().splitlines()]
+    contexts = [json.loads(line) for line in (evidence / "xcalygraph/ctx-text-600.scores.jsonl").read_text().splitlines()]
+    workflow = [json.loads(line) for line in (evidence / "xcalygraph/workflow-text-600.scores.jsonl").read_text().splitlines()]
+    assert finds[0] != contexts[0] and finds[2] != contexts[2]
+    assert workflow == [context if find["required"] > 1 else find for find, context in zip(finds, contexts)]
+    assert metrics["workflow-text-600"]["multi_location_total"] == 2
+    paired = report["corpora"]["xcalygraph"]["paired_complete"]["workflow-text-600-vs-graphify-legacy-2000"]
+    assert sum(paired.values()) == 4
     repeat = subprocess.run(arguments, env=environment, capture_output=True, text=True)
     assert repeat.returncode != 0 and "already evaluated" in repeat.stderr
     assert len(list((root / ".cache/evaluation").glob("sealed.*/report.json"))) == 1
-    print("PASS: pinned restore, text/JSON scoring, wrong-definition rejection, partial coverage, negative penalty and final exposure refusal")
+    focused = subprocess.run(arguments[:3] + ["development", arguments[4], "--budget", "600",
+                                              "--reuse-graphify", str(evidence)],
+                             env=environment, capture_output=True, text=True)
+    assert focused.returncode == 0, focused.stderr + focused.stdout
+    focused_evidence = Path(focused.stdout.splitlines()[-1].removeprefix("evidence: "))
+    identity = json.loads((focused_evidence / "identity.json").read_text())
+    focused_report = json.loads((focused_evidence / "report.json").read_text())
+    focused_public = json.loads((focused_evidence / "public-report.json").read_text())
+    assert identity["budgets"] == [600]
+    assert identity["manifest_sha256"] == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    assert not focused_report["exposure"]["xcalygraph"]["first_evaluation"]
+    assert focused_public["prior_exposure"]["xcalygraph"] and focused_public["graphify_baseline_reused"]
+    metrics = focused_report["corpora"]["xcalygraph"]["metrics"]
+    assert "find-text-600" in metrics and "find-text-200" not in metrics
+    assert "graphify-legacy-2000" in metrics
+    baseline = evidence / "xcalygraph/correct/graphify-legacy.stdout"
+    reused = focused_evidence / "xcalygraph/correct/graphify-legacy.stdout"
+    observation = json.loads(reused.with_suffix(".json").read_text())
+    assert reused.read_bytes() == baseline.read_bytes()
+    assert observation["reused_from"] == str(baseline.with_suffix(""))
+    assert observation["stdout_sha256"] == hashlib.sha256(reused.read_bytes()).hexdigest()
+    invalid = subprocess.run(arguments[:3] + ["development", arguments[4], "--budget", "300"],
+                             env=environment, capture_output=True, text=True)
+    assert invalid.returncode != 0 and "budget" in invalid.stderr
+    bad_baseline = work / "bad-baseline"
+    bad_baseline.mkdir()
+    (bad_baseline / "identity.json").write_text(json.dumps({"manifest_sha256": "wrong"}))
+    bad_reuse = subprocess.run(arguments[:3] + ["development", arguments[4], "--reuse-graphify", str(bad_baseline)],
+                               env=environment, capture_output=True, text=True)
+    assert bad_reuse.returncode != 0 and "manifest" in bad_reuse.stderr
+    final_subset = subprocess.run(arguments + ["--budget", "600"],
+                                  env=environment, capture_output=True, text=True)
+    assert final_subset.returncode != 0 and "development" in final_subset.stderr
+    original_output = reused.read_bytes()
+    assert original_output
+    reused.write_bytes(bytes([original_output[0] ^ 1]) + original_output[1:])
+    corrupted = subprocess.run(arguments[:3] + ["development", arguments[4], "--budget", "600",
+                                                "--reuse-graphify", str(focused_evidence)],
+                               env=environment, capture_output=True, text=True)
+    assert corrupted.returncode != 0 and "checksum mismatch" in corrupted.stderr
+    print("PASS: pinned restore, text/JSON scoring, wrong-definition rejection, partial coverage, negative penalty, exposure refusal, focused budgets and verified baseline reuse")
 PYTHON

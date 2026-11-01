@@ -1,11 +1,10 @@
 //! `ctx`: context bundle of seeds plus related symbols by personalized PageRank
 //! (`docs/spec.md` section 7.3).
 
-use std::collections::HashMap;
-
 use super::find::{self, Hit};
 use super::{Filter, Index, Node};
 use crate::domain::graph::EdgeKind;
+use crate::domain::hash::FastMap;
 
 const SEEDS: usize = 5;
 const SEED_FLOOR: f32 = 0.25;
@@ -26,13 +25,18 @@ pub fn render(
     let seeds: Vec<Hit> = hits
         .iter()
         .copied()
-        .filter(|hit| hit.score >= top * SEED_FLOOR)
+        .take_while(|hit| hit.score >= top * SEED_FLOOR)
         .take(SEEDS)
         .collect();
+    let covered = seeds.iter().fold(0, |mask, hit| mask | hit.name_evidence);
+    let extra = hits.iter().find(|hit| {
+        hit.name_evidence & !covered != 0 && !seeds.iter().any(|seed| seed.node == hit.node)
+    });
     let scores = personalized_rank(index, filter, &seeds);
     let mut related: Vec<(u32, f32)> = scores
         .into_iter()
         .filter(|(node, _)| !seeds.iter().any(|seed| seed.node == *node))
+        .filter(|(node, _)| !extra.is_some_and(|hit| hit.node == *node))
         .filter(|(node, _)| {
             matches!(index.node(*node), Node::Symbol(_)) && filter.node(index, *node)
         })
@@ -43,6 +47,9 @@ pub fn render(
         .iter()
         .map(|seed| (seed.node, true, seed.score))
         .collect();
+    if let Some(hit) = extra {
+        order.push((hit.node, false, hit.score));
+    }
     order.extend(
         related
             .into_iter()
@@ -56,8 +63,10 @@ pub fn render(
 }
 
 /// Sparse personalized PageRank over the symbol graph in both directions.
-fn personalized_rank(index: &Index, filter: &Filter, seeds: &[Hit]) -> HashMap<u32, f32> {
-    let mut restart: HashMap<u32, f32> = HashMap::new();
+fn personalized_rank(index: &Index, filter: &Filter, seeds: &[Hit]) -> FastMap<u32, f32> {
+    // Node IDs and insertion order are deterministic; the fixed hasher keeps accumulation order
+    // stable without sorting every iteration or depending on per-process random hash seeds.
+    let mut restart: FastMap<u32, f32> = FastMap::default();
     let total: f32 = seeds
         .iter()
         .map(|seed| seed.score)
@@ -68,7 +77,7 @@ fn personalized_rank(index: &Index, filter: &Filter, seeds: &[Hit]) -> HashMap<u
     }
     let mut scores = restart.clone();
     for _ in 0..ITERATIONS {
-        let mut next: HashMap<u32, f32> = restart
+        let mut next: FastMap<u32, f32> = restart
             .iter()
             .map(|(&node, &mass)| (node, RESTART * mass))
             .collect();

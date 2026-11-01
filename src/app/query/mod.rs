@@ -10,6 +10,9 @@ pub mod output;
 pub mod path;
 pub mod show;
 
+#[cfg(test)]
+mod benchmark;
+
 use std::borrow::Cow;
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
