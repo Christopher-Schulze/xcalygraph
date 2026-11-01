@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
 # Exercise real benchmark planning and setup without invoking an agent.
-# Usage: scripts/tests/test-agent-benchmark-safety.sh
+# Usage: scripts/tests/test-agent-benchmark-safety.sh [BINARY]
 set -euo pipefail
-(( $# == 0 )) || { echo "usage: test-agent-benchmark-safety.sh" >&2; exit 2; }
+(( $# <= 1 )) || { echo "usage: test-agent-benchmark-safety.sh [BINARY]" >&2; exit 2; }
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 [[ ! -L "${REPO_ROOT}/.cache" ]] || { echo "test cache must not be a symlink" >&2; exit 1; }
 mkdir -p "${REPO_ROOT}/.cache"
-python3 -I - "${REPO_ROOT}" <<'PYTHON'
+python3 -I - "${REPO_ROOT}" "${1:-}" <<'PYTHON'
+import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 
 repo = Path(sys.argv[1])
+target = Path(os.environ.get("CARGO_TARGET_DIR", repo / "target"))
+if not target.is_absolute():
+    target = repo / target
+binary = Path(sys.argv[2]).resolve(strict=True) if sys.argv[2] else (target / "debug/xcalygraph").resolve(strict=True)
 with tempfile.TemporaryDirectory(prefix="agent-benchmark-safety.", dir=repo / ".cache") as temporary:
     work = Path(temporary)
     home, tmp = work / "home", work / "tmp"
@@ -40,6 +47,10 @@ with tempfile.TemporaryDirectory(prefix="agent-benchmark-safety.", dir=repo / ".
                           env=environment, capture_output=True, text=True)
     assert plan.returncode == 0 and "claude -p" in plan.stdout, plan.stderr
     assert not (root / ".cache").exists(), "planning wrote a cache"
+    selection = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; select_corpora missing',
+                                "selection", str(runner)], env=environment, capture_output=True, text=True)
+    assert selection.returncode != 0 and "no runnable corpora" in selection.stderr
+    assert not (root / ".cache").exists(), "invalid selection wrote a cache"
 
     root, runner = project("preserve")
     base = root / ".cache/agent-benchmark"
@@ -69,6 +80,124 @@ printf '%s\n' "$first" "$second" "$home1" "$home2"
     assert (second / "results.tsv").read_text().startswith("corpus\tarm\trun\t")
     assert sentinel.read_text() == "keep prior home\n" and old_results.read_text() == "keep prior results\n"
 
+    root, runner = project("binding")
+    run_dir, binary_dir, foreign = (work / name for name in ("binding-run", "binding-bin", "foreign-bin"))
+    for directory in (run_dir, binary_dir, foreign):
+        directory.mkdir()
+    captured = binary_dir / "xcalygraph"
+    shutil.copyfile(binary, captured)
+    captured.chmod(0o500)
+    foreign_binary = shutil.which("false")
+    assert foreign_binary is not None
+    (foreign / "xcalygraph").symlink_to(foreign_binary)
+    info = captured.lstat()
+    identity = work / "binding-identity.json"
+    identity.write_text(json.dumps({"binary_sha256": hashlib.sha256(captured.read_bytes()).hexdigest(),
+                                    "skill_sha256": hashlib.sha256((repo / "skills/xcalygraph/SKILL.md").read_bytes()).hexdigest(),
+                                    "binary_stat": [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
+                                                    info.st_ctime_ns, stat.S_IMODE(info.st_mode), info.st_nlink]}))
+    foreign_config = work / "foreign-config"
+    foreign_config.mkdir()
+    startup = work / "shell-startup"
+    startup.write_text('xcalygraph() { return 77; }\n')
+    bind = r'''
+set -euo pipefail
+source "$1" xcalygraph >/dev/null
+home="$(prepare_home xcalygraph "$2" "$3")"
+verify_arm "$home" "$3" "$4" --content
+xcalygraph() { return 77; }
+export -f xcalygraph
+export BASH_ENV="$5"
+invoke_agent xcalygraph "$home" "$3" bash -c 'printf "CONFIG\t%s\n" "$CLAUDE_CONFIG_DIR"; command -v xcalygraph; xcalygraph version'
+printf 'HOME\t%s\n' "$home"
+'''
+    bound_env = dict(environment, PATH=str(foreign) + os.pathsep + environment["PATH"],
+                     CLAUDE_CONFIG_DIR=str(foreign_config))
+    bound = subprocess.run(["bash", "-c", bind, "binding", str(runner), str(run_dir), str(captured),
+                            str(identity), str(startup)], env=bound_env, capture_output=True, text=True)
+    assert bound.returncode == 0, bound.stderr
+    lines = bound.stdout.splitlines()
+    assert lines[1] == str(captured) and any(line.startswith("xcalygraph ") for line in lines), bound.stdout
+    installed_home = Path(next(line.removeprefix("HOME\t") for line in lines if line.startswith("HOME\t")))
+    assert lines[0] == "CONFIG\t" + str(installed_home / ".claude")
+    failed = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; invoke_agent xcalygraph "$2" "$3" false',
+                             "failed", str(runner), str(installed_home), str(captured)],
+                            env=bound_env, capture_output=True, text=True)
+    assert failed.returncode != 0
+    graphify = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; prepare_home graphify "$2"',
+                               "graphify", str(runner), str(run_dir)], env=bound_env, capture_output=True, text=True)
+    assert graphify.returncode == 0, graphify.stderr
+    graphify_home = Path(graphify.stdout.strip())
+    assert (graphify_home / ".claude/skills/graphify/SKILL.md").is_file() and not list(foreign_config.iterdir())
+    refused = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; invoke_agent xcalygraph "$2" "$3" true',
+                              "refuse", str(runner), str(installed_home), str(work / "bad:path/xcalygraph")],
+                             env=environment, capture_output=True, text=True)
+    assert refused.returncode != 0 and "cannot be represented in PATH" in refused.stderr
+    skill = installed_home / ".agents/skills/xcalygraph/SKILL.md"
+    assert skill.read_bytes() == (repo / "skills/xcalygraph/SKILL.md").read_bytes()
+    verify = 'source "$1" xcalygraph >/dev/null; verify_arm "$2" "$3" "$4"'
+    skill.write_text("changed skill\n")
+    altered = subprocess.run(["bash", "-c", verify, "verify", str(runner), str(installed_home), str(captured),
+                              str(identity)], env=environment, capture_output=True, text=True)
+    assert altered.returncode != 0 and "installed skill changed" in altered.stderr
+    skill.write_bytes((repo / "skills/xcalygraph/SKILL.md").read_bytes())
+    captured.chmod(0o700)
+    with captured.open("ab") as stream:
+        stream.write(b"changed")
+    altered = subprocess.run(["bash", "-c", verify, "verify", str(runner), str(installed_home), str(captured),
+                              str(identity)], env=environment, capture_output=True, text=True)
+    assert altered.returncode != 0 and "captured binary changed" in altered.stderr
+
+    root, _ = project("capture")
+    (root / "src").mkdir()
+    (root / "skills/xcalygraph").mkdir(parents=True)
+    (root / "skills/xcalygraph/SKILL.md").write_text("fixture skill\n")
+    (root / "Cargo.toml").write_text('[package]\nname="xcalygraph"\nversion="0.0.0"\nedition="2024"\n')
+    (root / "Cargo.lock").write_text('version = 4\n\n[[package]]\nname = "xcalygraph"\nversion = "0.0.0"\n')
+    source = root / "src/main.rs"
+    source.write_text('const SKILL: &str = include_str!("../skills/xcalygraph/SKILL.md");\n'
+                      'fn main() { println!("FIRST {}", SKILL.len()); }\n')
+    for item in ("verification-target.sh", "verification-source.sh", "verification-lock.sh", "guard-benchmark.sh",
+                 "check-build-space.sh", "cargo-artifact.sh", "capture-benchmark-binary.sh"):
+        dest = root / "scripts/utils" / item
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(repo / "scripts/utils" / item, dest)
+    capture_env = dict(environment, CARGO_TARGET_DIR=str(work / "capture-target"), CARGO_NET_OFFLINE="true",
+                       RUSTUP_HOME=os.environ.get("RUSTUP_HOME", str(Path.home() / ".rustup")),
+                       CARGO_HOME=os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")),
+                       GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    subprocess.run(["git", "init", "-q", str(root)], env=capture_env, check=True)
+    guard = root / "scripts/utils/guard-benchmark.sh"
+    capture = root / "scripts/utils/capture-benchmark-binary.sh"
+
+    def capture_binary(destination):
+        subprocess.run(["df", "-h", "/"], check=True, stdout=subprocess.DEVNULL)
+        assert shutil.disk_usage(work).free > 2 * 1024**3 + 128 * 1024**2
+        return subprocess.run(["bash", str(guard), "bash", str(capture), "--debug", str(destination)],
+                              cwd=root, env=capture_env, capture_output=True, text=True)
+
+    first_binary, second_binary = work / "first-binary", work / "second-binary"
+    first = capture_binary(first_binary)
+    assert first.returncode == 0, first.stderr
+    first_identity = json.loads(first.stdout)
+    assert first_identity["binary_sha256"] == hashlib.sha256(first_binary.read_bytes()).hexdigest()
+    assert first_identity["skill_sha256"] == hashlib.sha256((root / "skills/xcalygraph/SKILL.md").read_bytes()).hexdigest()
+    assert first_identity["profile"] == "debug" and len(first_identity["source"]["source"]) == 64
+    assert subprocess.check_output([str(first_binary)], text=True).startswith("FIRST ")
+    before = source.stat()
+    source.write_text(source.read_text().replace('"FIRST ', '"OTHER '))
+    os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+    second = capture_binary(second_binary)
+    assert second.returncode == 0, second.stderr
+    assert subprocess.check_output([str(second_binary)], text=True).startswith("OTHER ")
+    assert json.loads(second.stdout)["source"]["source"] != first_identity["source"]["source"]
+    preserved = hashlib.sha256(first_binary.read_bytes()).digest()
+    conflict = capture_binary(first_binary)
+    assert conflict.returncode != 0 and hashlib.sha256(first_binary.read_bytes()).digest() == preserved
+    unguarded = subprocess.run(["bash", str(capture), "--debug", str(work / "unguarded")], cwd=root,
+                               env=capture_env, capture_output=True, text=True)
+    assert unguarded.returncode != 0 and "verification lock is required" in unguarded.stderr
+
     for linked_part in ("cache", "category"):
         root, runner = project("linked-" + linked_part)
         foreign = work / ("foreign-" + linked_part)
@@ -82,5 +211,5 @@ printf '%s\n' "$first" "$second" "$home1" "$home2"
                                    "setup", str(runner)], env=environment, capture_output=True, text=True)
         assert rejected.returncode != 0 and "symlink" in rejected.stderr
         assert not list(foreign.iterdir())
-    print("PASS: read-only planning, exclusive run and home setup, previous evidence and linked-cache refusal")
+    print("PASS: planning, guarded debug capture, binary/skill binding, shell overrides, previous evidence and linked-cache refusal")
 PYTHON
