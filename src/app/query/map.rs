@@ -45,10 +45,11 @@ pub fn render(
     ];
     sections.retain(|section| !section.lines.is_empty());
     // The budget cuts from the lowest-priority section upward.
-    // Same bound as every writer: the truncation line is reserved, so the output never exceeds
-    // the budget; when not even the root line fits, the answer is the truncation line alone.
-    let limit =
-        (budget * super::output::BYTES_PER_TOKEN).saturating_sub(super::output::footer_len(json));
+    // Reserve truncation space under the same bound as every other writer. Tiny budgets can
+    // return a compact notice or empty JSON when no complete record fits.
+    let limit = budget
+        .saturating_mul(super::output::BYTES_PER_TOKEN)
+        .saturating_sub(super::output::footer_len(json));
     let keyword_size = |keyword: &str| -> usize {
         match (keyword.is_empty(), json) {
             (true, _) => 0,
@@ -92,7 +93,7 @@ pub fn render(
             }
         }
     }
-    let mut writer = Writer::new(json, usize::MAX / 4);
+    let mut writer = Writer::new(json, budget);
     let mut cut = 0;
     for section in &sections {
         if !section.keyword.is_empty() {

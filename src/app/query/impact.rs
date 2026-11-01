@@ -1044,9 +1044,206 @@ fn render(
         .iter()
         .filter_map(|(path, side)| (*side == "current").then_some(*path))
         .collect();
+    let target_nodes: BTreeSet<u32> = targets
+        .iter()
+        .flat_map(|target| std::iter::once(target.node).chain(target.seeds.iter().copied()))
+        .collect();
+    // Reverse BFS over dependent edges, ordered by depth, then rank. A dependent is exact only
+    // when some shortest chain to a target consists of exact edges; within one depth an exact
+    // chain wins over an inferred one found earlier.
+    let mut depth_of: HashMap<u32, usize> = target_nodes.iter().map(|&node| (node, 0)).collect();
+    let mut exact_of: HashMap<u32, bool> = target_nodes.iter().map(|&node| (node, true)).collect();
+    let mut frontier: Vec<u32> = target_nodes.iter().copied().collect();
+    let mut affected: Vec<(usize, u32, bool)> = Vec::new();
+    let mut tests: BTreeSet<u32> = BTreeSet::new();
+    for depth in 1..=options.depth.max(1) {
+        let mut layer = Vec::new();
+        // Surviving references to removed definitions are inferred direct dependents.
+        if depth == 1 {
+            for &node in survivors {
+                if incomplete_current.contains(index.path_of(node)) {
+                    continue;
+                }
+                if let std::collections::hash_map::Entry::Vacant(slot) = depth_of.entry(node) {
+                    slot.insert(1);
+                    exact_of.insert(node, false);
+                    layer.push(node);
+                }
+            }
+        }
+        for &node in &frontier {
+            let chain_exact = exact_of[&node];
+            for edge in index.derived.incoming(node) {
+                if incomplete_current.contains(index.path_of(edge.node)) {
+                    continue;
+                }
+                if edge.kind() == EdgeKind::Tests {
+                    if filter.edge(edge) && filter.includes(index, edge.node) {
+                        tests.insert(edge.node);
+                    }
+                    continue;
+                }
+                if !AFFECTING.contains(&edge.kind()) || !filter.edge(edge) {
+                    continue;
+                }
+                let exact = chain_exact && edge.is_exact();
+                match depth_of.get(&edge.node) {
+                    Some(&seen) if seen < depth => {}
+                    Some(_) => {
+                        if exact {
+                            exact_of.insert(edge.node, true);
+                        }
+                    }
+                    None => {
+                        depth_of.insert(edge.node, depth);
+                        exact_of.insert(edge.node, exact);
+                        layer.push(edge.node);
+                    }
+                }
+            }
+        }
+        let mut next = Vec::new();
+        for node in layer {
+            if is_test(index, node) {
+                if filter.includes(index, node) {
+                    tests.insert(node);
+                }
+                continue;
+            }
+            if filter.node(index, node) {
+                affected.push((depth, node, exact_of[&node]));
+            }
+            next.push(node);
+        }
+        frontier = next;
+    }
+    let rank = |node: u32| match index.node(node) {
+        Node::Symbol(symbol) => symbol.rank,
+        Node::File(_) => 0.0,
+    };
+    affected.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(rank(b.1).total_cmp(&rank(a.1)))
+            .then(a.1.cmp(&b.1))
+    });
+    // Reserve package-level commands before any notices, targets, dependents or tests.
+    let commands = run_lines(index, options.root, &tests);
+    let run_record = |command: &str| -> (String, String) {
+        let text = format!("r {command}");
+        let record = super::output::json_object(&[
+            ("t", Value::Str("edge")),
+            ("rel", Value::Str("run")),
+            ("name", Value::Str(command)),
+        ]);
+        (text, record)
+    };
+    let run_size = |command: &str| -> usize {
+        let (text, record) = run_record(command);
+        if options.json {
+            record.len()
+        } else {
+            text.len() + 1
+        }
+    };
+    let wanted: usize = commands
+        .iter()
+        .take(RUN_LINES)
+        .map(|(_, compact)| run_size(compact))
+        .sum();
+    let reserved = writer.reserve(
+        wanted.min(
+            options
+                .budget
+                .saturating_mul(super::output::BYTES_PER_TOKEN)
+                / 2,
+        ),
+    );
+    write_changes(index, &mut writer, targets, removed, moved, incomplete);
+    for (shown, (depth, node, exact)) in affected.iter().enumerate() {
+        if shown >= AFFECTED_LINES {
+            more(&mut writer, affected.len() - shown, "affected");
+            break;
+        }
+        let label = index.label(*node);
+        let path = index.path_of(*node);
+        let line = index.line_of(*node);
+        let mark = if *exact { "" } else { "?" };
+        writer.line(
+            &format!("< {depth} {label} {path}:{line}{mark}"),
+            &[
+                ("t", Value::Str("edge")),
+                ("rel", Value::Str("in")),
+                ("name", Value::Str(&label)),
+                ("path", Value::Str(path)),
+                ("line", Value::Int(u64::from(line))),
+                ("n", Value::Int(*depth as u64)),
+                (
+                    "conf",
+                    Value::Str(if *exact { "exact" } else { "inferred" }),
+                ),
+            ],
+        );
+    }
+    for (shown, &test) in tests.iter().enumerate() {
+        if shown >= TEST_LINES {
+            more(&mut writer, tests.len() - shown, "tests");
+            break;
+        }
+        let label = index.label(test);
+        let path = index.path_of(test);
+        let line = index.line_of(test);
+        writer.line(
+            &format!("t {label} {path}:{line}"),
+            &[
+                ("t", Value::Str("edge")),
+                ("rel", Value::Str("test")),
+                ("name", Value::Str(&label)),
+                ("path", Value::Str(path)),
+                ("line", Value::Int(u64::from(line))),
+            ],
+        );
+    }
+    writer.release(reserved);
+    let shown_commands = commands.len().min(RUN_LINES);
+    for (shown, (precise, compact)) in commands.iter().enumerate() {
+        if shown >= RUN_LINES {
+            more(&mut writer, commands.len() - shown, "run commands");
+            break;
+        }
+        // The precise command only while every later command still fits in its short form;
+        // otherwise the package-level one; a command that fits in neither form is counted.
+        let later: usize = commands[shown + 1..shown_commands]
+            .iter()
+            .map(|(_, compact)| run_size(compact))
+            .sum();
+        let command = if run_size(precise) + later <= writer.remaining() {
+            precise
+        } else {
+            compact
+        };
+        writer.line(
+            &format!("r {command}"),
+            &[
+                ("t", Value::Str("edge")),
+                ("rel", Value::Str("run")),
+                ("name", Value::Str(command)),
+            ],
+        );
+    }
+    writer.finish()
+}
+
+fn write_changes(
+    index: &Index,
+    writer: &mut Writer,
+    targets: &[Target],
+    removed: &[RevisionLocation<'_>],
+    moved: &[Move<'_>],
+    incomplete: &[(&str, &str)],
+) {
     for (shown, &(path, side)) in incomplete.iter().enumerate() {
         if shown >= CHANGED_LINES {
-            more(&mut writer, incomplete.len() - shown, "incomplete files");
+            more(writer, incomplete.len() - shown, "incomplete files");
             break;
         }
         let message = format!("incomplete {side}");
@@ -1059,16 +1256,12 @@ fn render(
             ],
         );
     }
-    let target_nodes: BTreeSet<u32> = targets
-        .iter()
-        .flat_map(|target| std::iter::once(target.node).chain(target.seeds.iter().copied()))
-        .collect();
     // Code changes first; config, docs and other files after.
     let mut ordered: Vec<&Target> = targets.iter().collect();
     ordered.sort_by_key(|target| !matches!(index.node(target.node), Node::Symbol(_)));
     for (shown, target) in ordered.iter().enumerate() {
         if shown >= CHANGED_LINES {
-            more(&mut writer, ordered.len() - shown, "changed");
+            more(writer, ordered.len() - shown, "changed");
             break;
         }
         let label = index.label(target.node);
@@ -1161,193 +1354,19 @@ fn render(
             ],
         );
     }
-    // Reverse BFS over dependent edges, ordered by depth, then rank. A dependent is exact only
-    // when some shortest chain to a target consists of exact edges; within one depth an exact
-    // chain wins over an inferred one found earlier.
-    let mut depth_of: HashMap<u32, usize> = target_nodes.iter().map(|&node| (node, 0)).collect();
-    let mut exact_of: HashMap<u32, bool> = target_nodes.iter().map(|&node| (node, true)).collect();
-    let mut frontier: Vec<u32> = target_nodes.iter().copied().collect();
-    let mut affected: Vec<(usize, u32, bool)> = Vec::new();
-    let mut tests: BTreeSet<u32> = BTreeSet::new();
-    for depth in 1..=options.depth.max(1) {
-        let mut layer = Vec::new();
-        // Surviving references to removed definitions are inferred direct dependents.
-        if depth == 1 {
-            for &node in survivors {
-                if incomplete_current.contains(index.path_of(node)) {
-                    continue;
-                }
-                if let std::collections::hash_map::Entry::Vacant(slot) = depth_of.entry(node) {
-                    slot.insert(1);
-                    exact_of.insert(node, false);
-                    layer.push(node);
-                }
-            }
-        }
-        for &node in &frontier {
-            let chain_exact = exact_of[&node];
-            for edge in index.derived.incoming(node) {
-                if incomplete_current.contains(index.path_of(edge.node)) {
-                    continue;
-                }
-                if edge.kind() == EdgeKind::Tests {
-                    if filter.edge(edge) && filter.includes(index, edge.node) {
-                        tests.insert(edge.node);
-                    }
-                    continue;
-                }
-                if !AFFECTING.contains(&edge.kind()) || !filter.edge(edge) {
-                    continue;
-                }
-                let exact = chain_exact && edge.is_exact();
-                match depth_of.get(&edge.node) {
-                    Some(&seen) if seen < depth => {}
-                    Some(_) => {
-                        if exact {
-                            exact_of.insert(edge.node, true);
-                        }
-                    }
-                    None => {
-                        depth_of.insert(edge.node, depth);
-                        exact_of.insert(edge.node, exact);
-                        layer.push(edge.node);
-                    }
-                }
-            }
-        }
-        let mut next = Vec::new();
-        for node in layer {
-            if is_test(index, node) {
-                if filter.includes(index, node) {
-                    tests.insert(node);
-                }
-                continue;
-            }
-            if filter.node(index, node) {
-                affected.push((depth, node, exact_of[&node]));
-            }
-            next.push(node);
-        }
-        frontier = next;
-    }
-    let rank = |node: u32| match index.node(node) {
-        Node::Symbol(symbol) => symbol.rank,
-        Node::File(_) => 0.0,
-    };
-    affected.sort_by(|a, b| {
-        a.0.cmp(&b.0)
-            .then(rank(b.1).total_cmp(&rank(a.1)))
-            .then(a.1.cmp(&b.1))
-    });
-    // Run commands are the actionable result: their package-level form is reserved before the
-    // dependents and tests fill the budget.
-    let commands = run_lines(index, options.root, &tests);
-    let run_record = |command: &str| -> (String, String) {
-        let text = format!("r {command}");
-        let record = super::output::json_object(&[
-            ("t", Value::Str("edge")),
-            ("rel", Value::Str("run")),
-            ("name", Value::Str(command)),
-        ]);
-        (text, record)
-    };
-    let run_size = |command: &str| -> usize {
-        let (text, record) = run_record(command);
-        if options.json {
-            record.len()
-        } else {
-            text.len() + 1
-        }
-    };
-    let wanted: usize = commands
-        .iter()
-        .take(RUN_LINES)
-        .map(|(_, compact)| run_size(compact))
-        .sum();
-    let reserved = writer.reserve(wanted.min(options.budget * super::output::BYTES_PER_TOKEN / 2));
-    for (shown, (depth, node, exact)) in affected.iter().enumerate() {
-        if shown >= AFFECTED_LINES {
-            more(&mut writer, affected.len() - shown, "affected");
-            break;
-        }
-        let label = index.label(*node);
-        let path = index.path_of(*node);
-        let line = index.line_of(*node);
-        let mark = if *exact { "" } else { "?" };
-        writer.line(
-            &format!("< {depth} {label} {path}:{line}{mark}"),
-            &[
-                ("t", Value::Str("edge")),
-                ("rel", Value::Str("in")),
-                ("name", Value::Str(&label)),
-                ("path", Value::Str(path)),
-                ("line", Value::Int(u64::from(line))),
-                ("n", Value::Int(*depth as u64)),
-                (
-                    "conf",
-                    Value::Str(if *exact { "exact" } else { "inferred" }),
-                ),
-            ],
-        );
-    }
-    for (shown, &test) in tests.iter().enumerate() {
-        if shown >= TEST_LINES {
-            more(&mut writer, tests.len() - shown, "tests");
-            break;
-        }
-        let label = index.label(test);
-        let path = index.path_of(test);
-        let line = index.line_of(test);
-        writer.line(
-            &format!("t {label} {path}:{line}"),
-            &[
-                ("t", Value::Str("edge")),
-                ("rel", Value::Str("test")),
-                ("name", Value::Str(&label)),
-                ("path", Value::Str(path)),
-                ("line", Value::Int(u64::from(line))),
-            ],
-        );
-    }
-    writer.release(reserved);
-    let shown_commands = commands.len().min(RUN_LINES);
-    for (shown, (precise, compact)) in commands.iter().enumerate() {
-        if shown >= RUN_LINES {
-            more(&mut writer, commands.len() - shown, "run commands");
-            break;
-        }
-        // The precise command only while every later command still fits in its short form;
-        // otherwise the package-level one; a command that fits in neither form is counted.
-        let later: usize = commands[shown + 1..shown_commands]
-            .iter()
-            .map(|(_, compact)| run_size(compact))
-            .sum();
-        let command = if run_size(precise) + later <= writer.remaining() {
-            precise
-        } else {
-            compact
-        };
-        writer.line(
-            &format!("r {command}"),
-            &[
-                ("t", Value::Str("edge")),
-                ("rel", Value::Str("run")),
-                ("name", Value::Str(command)),
-            ],
-        );
-    }
-    writer.finish()
 }
 
 fn more(writer: &mut Writer, count: usize, what: &str) {
-    writer.line(
+    if !writer.line(
         &format!("+{count} more {what}"),
         &[
             ("t", Value::Str("more")),
             ("name", Value::Str(what)),
             ("n", Value::Int(count as u64)),
         ],
-    );
+    ) {
+        writer.skip(count.saturating_sub(1));
+    }
 }
 
 fn is_test(index: &Index, node: u32) -> bool {

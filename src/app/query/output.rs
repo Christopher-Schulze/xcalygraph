@@ -24,6 +24,7 @@ pub enum Value<'a> {
 
 pub struct Writer {
     json: bool,
+    capacity: usize,
     limit: usize,
     out: String,
     /// Items that did not fit the budget.
@@ -34,15 +35,14 @@ pub struct Writer {
 }
 
 impl Writer {
-    /// The output stays within `budget_tokens * BYTES_PER_TOKEN` bytes; when not even one item
-    /// fits, it is the truncation line alone.
+    /// The output stays within `budget_tokens * BYTES_PER_TOKEN` bytes, including truncation.
     pub fn new(json: bool, budget_tokens: usize) -> Self {
         let footer = if json { JSON_FOOTER } else { TEXT_FOOTER };
+        let capacity = budget_tokens.saturating_mul(BYTES_PER_TOKEN);
         Self {
             json,
-            limit: budget_tokens
-                .saturating_mul(BYTES_PER_TOKEN)
-                .saturating_sub(footer),
+            capacity,
+            limit: capacity.saturating_sub(footer),
             out: String::new(),
             cut: 0,
             full: false,
@@ -60,14 +60,14 @@ impl Writer {
 
     /// Counts an item that was not written because the budget is exhausted.
     pub fn skip(&mut self, items: usize) {
-        self.cut += items;
+        self.cut = self.cut.saturating_add(items);
     }
 
     /// Writes one item: in text form under its file line (when `file` is given), in JSON form
     /// as one object. Returns false and counts the item as cut when it does not fit.
     pub fn item(&mut self, file: Option<&str>, text: &str, record: &[(&str, Value)]) -> bool {
         if self.full {
-            self.cut += 1;
+            self.cut = self.cut.saturating_add(1);
             return false;
         }
         let mut chunk = String::new();
@@ -86,9 +86,9 @@ impl Writer {
             chunk.push_str(text);
             chunk.push('\n');
         }
-        if self.out.len() + chunk.len() > self.limit {
+        if chunk.len() > self.remaining() {
             self.full = true;
-            self.cut += 1;
+            self.cut = self.cut.saturating_add(1);
             return false;
         }
         self.out.push_str(&chunk);
@@ -132,6 +132,11 @@ impl Writer {
 
     /// A pre-rendered JSON Lines record.
     pub fn raw(&mut self, record: &str) {
+        if self.full || record.len() > self.remaining() {
+            self.full = true;
+            self.cut = self.cut.saturating_add(1);
+            return;
+        }
         self.out.push_str(record);
     }
 
@@ -146,13 +151,26 @@ impl Writer {
 
     pub fn finish(mut self) -> String {
         if self.cut > 0 {
-            if self.json {
-                self.out.push_str(&json_object(&[
+            let available = self.capacity.saturating_sub(self.out.len());
+            let full = if self.json {
+                json_object(&[
                     ("t", Value::Str("more")),
                     ("n", Value::Int(self.cut as u64)),
-                ]));
+                ])
             } else {
-                let _ = writeln!(self.out, "+{} more", self.cut);
+                format!("+{} more\n", self.cut)
+            };
+            let compact = if self.json {
+                "{\"t\":\"more\"}\n".to_owned()
+            } else {
+                format!("+{}\n", self.cut)
+            };
+            if full.len() <= available {
+                self.out.push_str(&full);
+            } else if compact.len() <= available {
+                self.out.push_str(&compact);
+            } else if !self.json && available >= 2 {
+                self.out.push_str("+\n");
             }
         }
         self.out
@@ -224,6 +242,29 @@ mod tests {
     }
 
     #[test]
+    fn tiny_budgets_use_only_complete_truthful_truncation_indicators() {
+        for (json, budget, expected) in [
+            (false, 1, "+\n"),
+            (false, 2, "+20\n"),
+            (false, 3, "+20 more\n"),
+            (true, 1, ""),
+            (true, 5, "{\"t\":\"more\"}\n"),
+            (true, 7, "{\"t\":\"more\",\"n\":20}\n"),
+        ] {
+            let mut writer = Writer::new(json, budget);
+            writer.skip(20);
+            assert_eq!(writer.finish(), expected, "budget {budget}, json {json}");
+        }
+        let mut writer = Writer::new(true, 12);
+        writer.line("", &[("t", Value::Str("a"))]);
+        writer.skip(usize::MAX);
+        writer.skip(1);
+        let output = writer.finish();
+        assert_eq!(output, "{\"t\":\"a\"}\n{\"t\":\"more\"}\n");
+        assert!(output.len() <= 36);
+    }
+
+    #[test]
     fn no_budget_is_exceeded_and_a_tiny_one_yields_the_truncation_line() {
         for json in [false, true] {
             for budget in 0..60 {
@@ -237,12 +278,14 @@ mod tests {
                     );
                 }
                 let out = writer.finish();
-                let footer = if json { JSON_FOOTER } else { TEXT_FOOTER };
                 assert!(
-                    out.len() <= (budget * BYTES_PER_TOKEN).max(footer),
+                    out.len() <= budget * BYTES_PER_TOKEN,
                     "{budget} {json}\n{out}"
                 );
-                assert!(out.ends_with(" more\n") || out.ends_with("}\n"), "{out}");
+                if out.is_empty() {
+                    assert!(budget * BYTES_PER_TOKEN < if json { 13 } else { 2 });
+                    continue;
+                }
                 if json {
                     assert!(
                         out.lines()
@@ -253,6 +296,10 @@ mod tests {
                     .lines()
                     .filter(|line| line.contains("fn ") || line.contains("sym"))
                     .count();
+                if out == "+\n" || out == "{\"t\":\"more\"}\n" {
+                    assert_eq!(shown, 0);
+                    continue;
+                }
                 let cut: usize = out
                     .lines()
                     .last()

@@ -39,7 +39,7 @@ Flags: `-p GLOB` (paths, gitignore syntax, repeatable), `-l go,rust` (languages)
 - Card markers: `m` member, `f` fields, `^` supertype, `v` implementation, `<` incoming (caller site), `>` outgoing (definition), `t` test, `t2` test through one caller, `e` env read, `!` notice.
 - A trailing `?` marks an inferred edge (name-based or dispatch), also on `path` hops and `impact` dependents reached through one; verify before relying on it.
 - `impact --diff` cites REV paths and lines for removals; `moved?` cites both locations, `sig?` an inferred moved signature change, and `uncertain?` an ambiguous or unavailable identity. Inspect paths in incomplete-extraction notices, including outside filters.
-- `+N more` means the budget cut N items: narrow with `-p`, `-k`, `-l` or raise `-b`.
+- `+N more`, `+N` or `+` marks truncated output; a tiny JSON budget can yield no record. Narrow with `-p`, `-k`, `-l` or raise `-b`.
 - A shared-index failure can use `.xcalygraph/` locally; the stderr notice asks to ignore it in git.
 
 ## Exit codes
