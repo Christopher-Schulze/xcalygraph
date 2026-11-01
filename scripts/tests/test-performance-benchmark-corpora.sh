@@ -173,5 +173,13 @@ with tempfile.TemporaryDirectory(prefix="performance-corpora.", dir=repo / ".cac
         assert input_root == invocation / directory
         assert (snapshot / "main.rs").read_text() == content
     assert len(list(identity.parent.glob("*.full.time"))) == 4
+    upstream = subprocess.run(["bash", str(measured_runner), "--upstream", "alpha"], cwd=invocation,
+                              env=environment, capture_output=True, timeout=180)
+    assert upstream.returncode == 0, upstream.stderr + upstream.stdout
+    rows = [line.split() for line in upstream.stdout.splitlines() if line.startswith(b"alpha ")]
+    assert len(rows) == 1 and len(rows[0]) == 12, upstream.stdout
+    assert all(float(value) >= 0 for value in rows[0][1:]), rows
+    assert (victim / "sentinel").read_text() == "preserve\n"
+    assert (invocation / "alpha/main.rs").read_text() == "pub fn alpha() {}\n"
     print("PASS: real corpus preflight, guard re-entry and debug-binary measurements preserve selection and evidence")
 PYTHON

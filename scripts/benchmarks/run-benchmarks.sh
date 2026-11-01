@@ -28,6 +28,59 @@ hyperfine_append_command() {
   printf '%s >> %s\n' "${command}" "${target}"
 }
 
+directory_kb() {
+  local output value
+  output="$(du -sk -- "$1")" || return 1
+  value="${output%%[[:space:]]*}"
+  [[ "${value}" =~ ^[0-9]+$ ]] || { echo "run-benchmarks.sh: invalid du output" >&2; return 1; }
+  printf '%s\n' "${value}"
+}
+
+# Snapshot regular-file identities, then sum the logical size of new or changed identities.
+measure_index_files() {
+  python3 -I - "$@" <<'PYTHON'
+import json
+import os
+import stat
+import sys
+
+action, directory, snapshot = sys.argv[1:]
+if action not in ("snapshot", "bytes"):
+    raise ValueError("invalid index measurement action")
+root = os.path.abspath(directory)
+if not stat.S_ISDIR(os.lstat(root).st_mode):
+    raise ValueError("index root is not a directory")
+previous = None
+if action == "bytes":
+    with open(snapshot, encoding="utf-8") as stream:
+        previous = json.load(stream)
+    if (not isinstance(previous, dict) or set(previous) != {"root", "files"} or previous["root"] != root
+            or not isinstance(previous["files"], dict)):
+        raise ValueError("invalid index snapshot")
+    for path, identity in previous["files"].items():
+        if (not isinstance(path, str) or not path or os.path.isabs(path) or ".." in path.split(os.sep)
+                or not isinstance(identity, list) or len(identity) != 3
+                or any(type(value) is not int or value < 0 for value in identity)):
+            raise ValueError("invalid index snapshot record")
+
+def walk_error(error):
+    raise error
+
+files = {}
+for parent, _, names in os.walk(root, onerror=walk_error, followlinks=False):
+    for name in names:
+        path = os.path.join(parent, name)
+        info = os.lstat(path)
+        if stat.S_ISREG(info.st_mode):
+            files[os.path.relpath(path, root)] = [info.st_dev, info.st_ino, info.st_size]
+output = snapshot if action == "snapshot" else snapshot + ".after"
+with open(output, "x", encoding="utf-8") as stream:
+    json.dump({"root": root, "files": files}, stream, ensure_ascii=True, sort_keys=True)
+if previous is not None:
+    print(sum(identity[2] for path, identity in files.items() if previous["files"].get(path) != identity))
+PYTHON
+}
+
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
   return 0
 fi
@@ -150,27 +203,21 @@ mean_ms() {
   jq -er '.results[0].summary.time_wall_clock.mean * 10000 | round / 10' "${json}"
 }
 
-# Sum of sizes of index files whose inode changed since the snapshot (atomic rename = rewrite).
-bytes_rewritten() {
-  local index="$1" snapshot="$2"
-  find "${index}" -type f -exec stat -f '%i %z %N' {} + | sort > "${snapshot}.after"
-  comm -13 "${snapshot}" "${snapshot}.after" | awk '{ s += $2 } END { print s + 0 }'
-}
-
 # Graphify full build and single-file update on the copy, appended to the result line as
 # "up_build_ms up_rss_mb up_out_kb up_change_ms"; runs before the copy gets xcalygraph changes.
 upstream_columns() {
-  local copy="$1" target="$2" edit="$3" build change
+  local copy="$1" target="$2" edit="$3" build change upstream_kb
   if ! build="$( { cd "${copy}" && /usr/bin/time -l env HOME="${BENCHMARK_HOME}" PYTHONHASHSEED=0 PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 graphify update . >/dev/null ; } 2>&1 )"; then
     printf '%s\n' "${build}" > "${copy}.upstream-full.time"
     echo "run-benchmarks.sh: upstream extraction failed; inspect ${copy}.upstream-full.time" >&2
     return 1
   fi
   printf '%s\n' "${build}" > "${copy}.upstream-full.time"
+  upstream_kb="$(directory_kb "${copy}/graphify-out")" || return 1
   printf ' %12s %9s %9s' \
     "$(awk '/ real / { printf "%.0f", $1 * 1000 }' <<<"${build}")" \
     "$(awk '/maximum resident set size/ { printf "%.0f", $1 / 1048576 }' <<<"${build}")" \
-    "$(du -sk "${copy}/graphify-out" | awk '{ print $1 }')"
+    "${upstream_kb}"
   printf '%s' "${edit}" >> "${target}"
   if ! change="$( { cd "${copy}" && /usr/bin/time -l env HOME="${BENCHMARK_HOME}" PYTHONHASHSEED=0 PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 graphify update . >/dev/null ; } 2>&1 )"; then
     printf '%s\n' "${change}" > "${copy}.upstream-change.time"
@@ -207,7 +254,7 @@ PYTHON
   rss_mb="$(awk '/maximum resident set size/ { printf "%.0f", $1 / 1048576 }' <<<"${build}")"
   fresh_command="$(hyperfine_command "${BINARY}" index -C "${path}" --index-dir "${index}")"
   fresh_ms="$(mean_ms "${fresh_command}")"
-  index_kb="$(du -sk "${index}" | awk '{ print $1 }')"
+  index_kb="$(directory_kb "${index}")"
   change_ms="-"
   write_kb="-"
   upstream_line=""
@@ -231,17 +278,18 @@ PYTHON
       # A comment line valid in the file's language, so both tools see a parseable change.
       edit=$'\n// bench\n'
       [[ "${target}" == *.py ]] && edit=$'\n# bench\n'
-      (( upstream )) && upstream_line="$(upstream_columns "${copy}" "${target}" "${edit}")"
+      if (( upstream )); then upstream_line="$(upstream_columns "${copy}" "${target}" "${edit}")" || exit 1; fi
       sleep 2
-      find "${copy_index}" -type f -exec stat -f '%i %z %N' {} + | sort > "${WORK}/snapshot"
       prepare_command="$(hyperfine_append_command "${edit}" "${target}")"
       change_command="$(hyperfine_command "${BINARY}" index -C "${copy}" --index-dir "${copy_index}")"
       change_ms="$(mean_ms --prepare "${prepare_command}" "${change_command}")"
       printf '%s' "${edit}" >> "${target}"
-      find "${copy_index}" -type f -exec stat -f '%i %z %N' {} + | sort > "${WORK}/snapshot"
+      snapshot="${WORK}/snapshot-${corpus_number}.json"
+      measure_index_files snapshot "${copy_index}" "${snapshot}"
       printf '%s' "${edit}" >> "${target}"
       "${BINARY}" index -C "${copy}" --index-dir "${copy_index}" >/dev/null
-      write_kb="$(( $(bytes_rewritten "${copy_index}" "${WORK}/snapshot") / 1024 ))"
+      rewritten_bytes="$(measure_index_files bytes "${copy_index}" "${snapshot}")"
+      write_kb="$((rewritten_bytes / 1024))"
     fi
     rm -rf "${copy}" "${copy_index}"
   fi
