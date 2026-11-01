@@ -13,7 +13,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | flag | default | description |
 |------|---------|-------------|
 | `-C, --root PATH` | nearest ancestor of cwd containing `.git`, else cwd | index root |
-| `-b, --budget N` | per command | output budget in tokens; estimate = ceil(bytes / 3); stdout of every query, truncation line, ambiguity candidates and `impact` run commands included, is at most 3N bytes; tiny budgets use a compact or count-free truncation marker, or empty JSON Lines when no complete marker fits |
+| `-b, --budget N` | per command | output budget in tokens; estimate = ceil(bytes / 3); stdout of every query, truncation line, ambiguity candidates and `impact` run commands included, is at most 3N bytes; tiny budgets use a compact or count-free truncation marker, including `{}` for the smallest JSON budgets |
 | `--json` | off | JSON Lines instead of text (section 8) |
 | `--read-only` | off | never create or refresh the index; exit 5 if missing or stale |
 | `--index-dir PATH` | nonempty `$XCALYGRAPH_INDEX_DIR`, else `<system temp directory>/xcalygraph-<user>` (created mode at most 0700); on actual shared-index location failure, `<root>/.xcalygraph/` with a one-line notice | index base directory; explicit paths never fall back |
@@ -302,7 +302,7 @@ Sections: dead candidates -> unused exports -> cycles -> stale doc references ->
 Text:
 
 - Paths are root-relative with `/`. Symbol lines are grouped under their file line and indented two spaces: `<line> <signature>`, or `<line> <kind> <name>` when a symbol has no signature.
-- No headers, banners or empty fields. Truncation emits one final line `+<n> more` (JSON `{"t":"more","n":<n>}`), whose space is reserved in the budget; when the full footer cannot fit, text uses `+<n>` or `+`, JSON uses `{"t":"more"}`, and JSON is empty when even that record cannot fit. Only complete lines and complete JSON records are emitted.
+- No headers, banners or empty fields. Truncation emits one final line `+<n> more` (JSON `{"t":"more","n":<n>}`), whose space is reserved in the budget; when the full footer cannot fit, text uses `+<n>` or `+`, JSON uses `{"t":"more"}` or `{}`. An empty JSON object is exclusively a truncation marker. Only complete lines and complete JSON records are emitted.
 - `map` and `audit` open each section with one keyword line: `modules`, `entry`, `tasks`, `hubs`, `api`, `cycles`, `layers`, `ext`, `env`, `dead`, `unused`, `stale`, `drift`, `assets`, `coupling`, `hotspots`.
 
 | marker | meaning |

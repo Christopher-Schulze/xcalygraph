@@ -169,6 +169,8 @@ impl Writer {
                 self.out.push_str(&full);
             } else if compact.len() <= available {
                 self.out.push_str(&compact);
+            } else if self.json && available >= 3 {
+                self.out.push_str("{}\n");
             } else if !self.json && available >= 2 {
                 self.out.push_str("+\n");
             }
@@ -247,7 +249,7 @@ mod tests {
             (false, 1, "+\n"),
             (false, 2, "+20\n"),
             (false, 3, "+20 more\n"),
-            (true, 1, ""),
+            (true, 1, "{}\n"),
             (true, 5, "{\"t\":\"more\"}\n"),
             (true, 7, "{\"t\":\"more\",\"n\":20}\n"),
         ] {
@@ -283,7 +285,7 @@ mod tests {
                     "{budget} {json}\n{out}"
                 );
                 if out.is_empty() {
-                    assert!(budget * BYTES_PER_TOKEN < if json { 13 } else { 2 });
+                    assert_eq!(budget, 0);
                     continue;
                 }
                 if json {
@@ -296,7 +298,7 @@ mod tests {
                     .lines()
                     .filter(|line| line.contains("fn ") || line.contains("sym"))
                     .count();
-                if out == "+\n" || out == "{\"t\":\"more\"}\n" {
+                if out == "+\n" || out == "{}\n" || out == "{\"t\":\"more\"}\n" {
                     assert_eq!(shown, 0);
                     continue;
                 }

@@ -46,7 +46,7 @@ pub fn render(
     sections.retain(|section| !section.lines.is_empty());
     // The budget cuts from the lowest-priority section upward.
     // Reserve truncation space under the same bound as every other writer. Tiny budgets can
-    // return a compact notice or empty JSON when no complete record fits.
+    // return a compact notice or the minimal JSON truncation object when needed.
     let limit = budget
         .saturating_mul(super::output::BYTES_PER_TOKEN)
         .saturating_sub(super::output::footer_len(json));

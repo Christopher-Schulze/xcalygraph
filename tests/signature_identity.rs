@@ -581,3 +581,16 @@ fn an_incomplete_revision_does_not_fabricate_new_definitions() -> TestResult {
     assert!(go.contains("\"kind\":\"sig\""), "{output}");
     Ok(())
 }
+
+#[test]
+fn tiny_json_distinguishes_truncated_coverage_from_an_empty_diff() -> TestResult {
+    let fixture = Fixture::new()?;
+    let complete = "def greet(value):\n    return value\n";
+    fixture.write("probe.py", complete)?;
+    fixture.commit()?;
+    fixture.write("probe.py", "def greet(\n")?;
+    assert_eq!(answer(fixture.impact(&["-b", "1"])?)?, "{}\n");
+    fixture.write("probe.py", complete)?;
+    assert_eq!(answer(fixture.impact(&["-b", "1"])?)?, "");
+    Ok(())
+}
