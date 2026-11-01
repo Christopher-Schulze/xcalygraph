@@ -285,13 +285,13 @@ Card order: header (path:start-end, kind, qualified name) -> signature -> doc ->
 ### 7.5 impact
 
 1. Targets: NAME symbols, or symbols whose line ranges intersect the `--diff` ranges. Exported signature changes: extract the REV version of each changed file (`git show REV:path`) and compare signatures.
-2. Affected: reverse BFS over `calls`, `uses`, `inherits`, `implements`, `references`, `queries` up to `--depth`, ordered by depth, then rank.
+2. Affected: reverse BFS over `calls`, `uses`, `inherits`, `implements`, `references`, `queries` up to `--depth`, ordered by depth, then rank. A dependent is exact only when a shortest chain to a target consists of exact edges; otherwise it is inferred, also on every later hop.
 3. Tests: tests reaching any target or affected symbol (test map).
 4. Run lines: Go `go test ./<pkg> -run '^(<names>)$'` per package; Rust `cargo test -p <crate> -- <names>` per crate; Python `pytest <path>::<name> ...`; Java, Kotlin, Scala, Groovy with Gradle `./gradlew test --tests <class>`, with Maven `mvn test -Dtest=<class>`; C#, VB.NET `dotnet test --filter FullyQualifiedName~<name>`; Ruby `bundle exec rspec <path>` or `bundle exec ruby -Itest <path>`; PHP `vendor/bin/phpunit --filter <name>`; Swift `swift test --filter <name>`; Elixir `mix test <path>`; Dart `dart test <path>`; Zig `zig build test`; other languages list test files only.
 
 ### 7.6 path
 
-Shortest path by BFS over forward `calls`, `uses`, `inherits`, `implements`, `imports` edges; without a directed path it falls back to undirected search and marks the result inferred. One line per hop.
+Shortest path by layered BFS over forward `calls`, `uses`, `inherits`, `implements`, `imports` edges; among equally short paths the one with the fewest inferred hops wins, ties by adjacency order. Without a directed path it falls back to undirected search (not under `--exact`). One line per hop; a hop is inferred when its edge is inferred or taken against edge direction.
 
 ### 7.7 audit
 

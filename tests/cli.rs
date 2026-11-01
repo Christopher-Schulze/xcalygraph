@@ -356,6 +356,133 @@ fn git(root: &Path, args: &[&str]) -> io::Result<()> {
     }
 }
 
+const DISPATCH_GO: &str = "package app
+
+type Store interface {
+	Write(data string) error
+}
+
+type FileStore struct{}
+
+func (f *FileStore) Write(data string) error {
+	return nil
+}
+
+func Send(s Store) error {
+	return s.Write(\"x\")
+}
+
+func Direct() error {
+	f := &FileStore{}
+	return f.Write(\"y\")
+}
+
+func Both() error {
+	_ = Send(&FileStore{})
+	return Direct()
+}
+
+func Run() error {
+	return Send(&FileStore{})
+}
+
+func Top() error {
+	return Run()
+}
+
+func Ping() error {
+	return Pong()
+}
+
+func Pong() error {
+	return Ping()
+}
+";
+
+#[test]
+fn path_and_impact_keep_inferred_dispatch_inferred_on_every_hop() -> TestResult {
+    let dir = TempDir::new("confidence")?;
+    let root = dir.0.join("repo");
+    dir.write("repo/go.mod", "module example.com/app\n\ngo 1.23\n")?;
+    dir.write("repo/app.go", DISPATCH_GO)?;
+    let index = dir.0.join("index");
+    let query = |args: &[&str]| -> Result<(Option<i32>, String), Box<dyn Error>> {
+        let output = run_in(&root, &index, args)?;
+        Ok((output.status.code(), String::from_utf8(output.stdout)?))
+    };
+    let (_, show) = query(&["show", "Send"])?;
+    assert!(show.contains("> FileStore.Write app.go:9?\n"), "{show}");
+    // Directed path through interface dispatch: the dispatch hop is inferred in text and JSON.
+    let (_, text) = query(&["path", "Send", "FileStore.Write"])?;
+    assert_eq!(text, ". Send app.go:13\n> FileStore.Write app.go:9?\n");
+    let (_, json) = query(&["path", "Send", "FileStore.Write", "--json"])?;
+    assert!(
+        json.contains(
+            "\"name\":\"FileStore.Write\",\"path\":\"app.go\",\"line\":9,\"conf\":\"inferred\""
+        ),
+        "{json}"
+    );
+    // Only the last hop is inferred; earlier exact calls stay exact.
+    let (_, text) = query(&["path", "Top", "FileStore.Write"])?;
+    assert_eq!(
+        text,
+        ". Top app.go:31\n> Run app.go:27\n> Send app.go:13\n> FileStore.Write app.go:9?\n"
+    );
+    // An equally short all-exact route wins over an inferred one listed first in source.
+    let (_, text) = query(&["path", "Both", "FileStore.Write"])?;
+    assert_eq!(
+        text,
+        ". Both app.go:22\n> Direct app.go:17\n> FileStore.Write app.go:9\n"
+    );
+    // --exact drops the inferred dispatch and never falls back to an undirected path.
+    let (code, text) = query(&["path", "Send", "FileStore.Write", "--exact"])?;
+    assert_eq!((code, text.as_str()), (Some(4), ""));
+    // Undirected fallback: the reversed hop is inferred.
+    let (_, text) = query(&["path", "FileStore.Write", "Direct"])?;
+    assert_eq!(text, ". FileStore.Write app.go:9\n< Direct app.go:17?\n");
+    // Cycles terminate and stay exact.
+    let (_, text) = query(&["path", "Ping", "Pong"])?;
+    assert_eq!(text, ". Ping app.go:35\n> Pong app.go:39\n");
+    // Impact: uncertainty propagates downstream; an exact chain at the same depth wins.
+    let (_, text) = query(&["impact", "FileStore.Write"])?;
+    for line in [
+        "< 1 Send app.go:13?\n",
+        "< 1 Direct app.go:17\n",
+        "< 2 Both app.go:22\n",
+        "< 2 Run app.go:27?\n",
+        "< 3 Top app.go:31?\n",
+    ] {
+        assert!(text.contains(line), "{line}{text}");
+    }
+    let (_, json) = query(&["impact", "FileStore.Write", "--json"])?;
+    assert!(
+        json.contains(
+            "\"name\":\"Top\",\"path\":\"app.go\",\"line\":31,\"n\":3,\"conf\":\"inferred\""
+        ),
+        "{json}"
+    );
+    let (_, exact) = query(&["impact", "FileStore.Write", "--exact"])?;
+    assert!(
+        !exact.contains('?') && !exact.contains("Run") && exact.contains("< 2 Both"),
+        "{exact}"
+    );
+    // Several targets: dependents of exact targets are exact.
+    let (_, text) = query(&["impact", "Send", "Direct"])?;
+    for line in [
+        "< 1 Both app.go:22\n",
+        "< 1 Run app.go:27\n",
+        "< 2 Top app.go:31\n",
+    ] {
+        assert!(text.contains(line), "{line}{text}");
+    }
+    // Deterministic across runs.
+    assert_eq!(
+        query(&["impact", "FileStore.Write"])?.1,
+        query(&["impact", "FileStore.Write"])?.1
+    );
+    Ok(())
+}
+
 #[test]
 fn impact_of_a_diff_lists_changes_dependents_tests_and_run_lines() -> TestResult {
     let dir = TempDir::new("impact")?;

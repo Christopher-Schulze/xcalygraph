@@ -280,35 +280,52 @@ fn render(
             ],
         );
     }
-    // Reverse BFS over dependent edges, ordered by depth, then rank.
+    // Reverse BFS over dependent edges, ordered by depth, then rank. A dependent is exact only
+    // when some shortest chain to a target consists of exact edges; within one depth an exact
+    // chain wins over an inferred one found earlier.
     let mut depth_of: HashMap<u32, usize> = target_nodes.iter().map(|&node| (node, 0)).collect();
+    let mut exact_of: HashMap<u32, bool> = target_nodes.iter().map(|&node| (node, true)).collect();
     let mut frontier: Vec<u32> = target_nodes.iter().copied().collect();
     let mut affected: Vec<(usize, u32, bool)> = Vec::new();
     let mut tests: BTreeSet<u32> = BTreeSet::new();
     for depth in 1..=options.depth.max(1) {
-        let mut next = Vec::new();
+        let mut layer = Vec::new();
         for &node in &frontier {
+            let chain_exact = exact_of[&node];
             for edge in index.derived.incoming(node) {
                 if edge.kind() == EdgeKind::Tests && filter.edge(edge) {
                     tests.insert(edge.node);
                     continue;
                 }
-                if !AFFECTING.contains(&edge.kind())
-                    || !filter.edge(edge)
-                    || depth_of.contains_key(&edge.node)
-                {
+                if !AFFECTING.contains(&edge.kind()) || !filter.edge(edge) {
                     continue;
                 }
-                depth_of.insert(edge.node, depth);
-                if is_test(index, edge.node) {
-                    tests.insert(edge.node);
-                    continue;
+                let exact = chain_exact && edge.is_exact();
+                match depth_of.get(&edge.node) {
+                    Some(&seen) if seen < depth => {}
+                    Some(_) => {
+                        if exact {
+                            exact_of.insert(edge.node, true);
+                        }
+                    }
+                    None => {
+                        depth_of.insert(edge.node, depth);
+                        exact_of.insert(edge.node, exact);
+                        layer.push(edge.node);
+                    }
                 }
-                if filter.node(index, edge.node) {
-                    affected.push((depth, edge.node, edge.is_exact()));
-                }
-                next.push(edge.node);
             }
+        }
+        let mut next = Vec::new();
+        for node in layer {
+            if is_test(index, node) {
+                tests.insert(node);
+                continue;
+            }
+            if filter.node(index, node) {
+                affected.push((depth, node, exact_of[&node]));
+            }
+            next.push(node);
         }
         frontier = next;
     }

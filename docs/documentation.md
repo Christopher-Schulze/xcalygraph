@@ -117,7 +117,7 @@ Resolution order for all of them is `docs/spec.md` section 6: lexical scope, imp
 ## Output format
 
 - Symbol lines are grouped under their file line and indented two spaces: `<line> <signature>`, or `<line> <kind> <name>` for symbols without a signature; `ctx` seeds append ` // <doc sentence>`.
-- Relation lines: `<marker> <qualified name> <path>:<line>`; incoming edges cite the reference line, outgoing ones the target definition; edge kinds other than calls and type hierarchy are appended (`uses`, `imports`); a trailing `?` marks an inferred edge.
+- Relation lines: `<marker> <qualified name> <path>:<line>`; incoming edges cite the reference line, outgoing ones the target definition; edge kinds other than calls and type hierarchy are appended (`uses`, `imports`); a trailing `?` marks an inferred edge. `path` marks each inferred hop (inferred edge or reversed direction) and prefers the equally short path with fewer inferred hops; `impact` marks a dependent inferred unless a shortest chain to a target is all exact, so uncertainty carries to every later depth; `--exact` drops both, and `path` then never falls back to an undirected route.
 - Truncation by budget ends the output with `+<n> more`. Grouping never lets a lower-ranked hit displace a higher-ranked one: the best hits that fit are chosen first, then grouped.
 - `--json` writes JSON Lines with the fields of `docs/spec.md` section 8; empty fields are omitted.
 
