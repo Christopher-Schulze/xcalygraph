@@ -34,6 +34,8 @@ with tempfile.TemporaryDirectory(prefix="cache-producers.", dir=repo / ".cache")
                        CARGO_HOME=os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")),
                        CARGO_TARGET_DIR=str(work / "target"), CARGO_NET_OFFLINE="true")
     for relative in ("scripts/utils/prepare-corpus.sh", "scripts/utils/prune-cache.sh", "scripts/utils/check-build-space.sh",
+                     "scripts/utils/verification-target.sh", "scripts/utils/verification-source.sh",
+                     "scripts/utils/verification-lock.sh", "scripts/utils/guard-benchmark.sh",
                      "scripts/benchmarks/measure-index-validation.sh", "scripts/benchmarks/measure-query-compute.sh",
                      "scripts/benchmarks/measure-shard-recovery.sh"):
         path = root / relative
@@ -74,9 +76,14 @@ with tempfile.TemporaryDirectory(prefix="cache-producers.", dir=repo / ".cache")
     questions = work / "questions.tsv"
     questions.write_text("Create\tmain.go::Create\n")
     (root / "Cargo.toml").write_text('[package]\nname = "no-target"\nversion = "0.0.0"\nedition = "2021"\n')
+    (root / "Cargo.lock").write_text('version = 4\n\n[[package]]\nname = "no-target"\nversion = "0.0.0"\n')
+    (root / "src").mkdir()
+    (root / "src/main.rs").write_text("fn main() {}\n")
+    subprocess.run(["git", "init", "-q", str(root)], env=environment, check=True)
     query = subprocess.run(["bash", str(root / "scripts/benchmarks/measure-query-compute.sh"),
-                            str(source), str(questions), "1"], env=environment, capture_output=True, text=True)
-    assert query.returncode != 0 and "no targets specified" in query.stderr
+                            "source", "questions.tsv", "1"], cwd=work, env=environment,
+                           capture_output=True, text=True)
+    assert query.returncode != 0 and "no bin target named" in query.stderr
     failed_query, = benchmark_dir.glob("query.*")
     assert not (failed_query / ".xcalygraph-disposable").exists()
     recovery = subprocess.run(["bash", str(root / "scripts/benchmarks/measure-shard-recovery.sh"),

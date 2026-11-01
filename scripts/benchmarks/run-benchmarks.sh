@@ -31,6 +31,7 @@ if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
   return 0
 fi
 
+original_args=("$@")
 upstream=0
 if [[ "${1:-}" == "--upstream" ]]; then
   upstream=1
@@ -94,6 +95,10 @@ done
 if [[ -L "${REPO_ROOT}/.cache" || -L "${WORK_BASE}" ]]; then
   echo "run-benchmarks.sh: benchmark cache must not be a symlink" >&2
   exit 1
+fi
+if ! bash "${REPO_ROOT}/scripts/utils/verification-lock.sh"; then
+  exec bash "${REPO_ROOT}/scripts/utils/guard-benchmark.sh" \
+    bash "${REPO_ROOT}/scripts/benchmarks/run-benchmarks.sh" "${original_args[@]}"
 fi
 bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
 BINARY="$(cargo build --release --locked --bin xcalygraph --message-format=json -q \

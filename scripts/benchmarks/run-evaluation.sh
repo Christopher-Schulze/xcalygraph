@@ -25,6 +25,7 @@ readonly WORK_BASE="${REPO_ROOT}/.cache/evaluation"
 readonly SNAPSHOTS="${REPO_ROOT}/.cache/corpus-snapshots"
 QUESTIONS="${REPO_ROOT}/scripts/benchmarks/questions"
 readonly PRIVATE_LIST="${QUESTIONS}/private/corpora.tsv"
+original_args=("$@")
 
 upstream=1
 phase=final
@@ -104,6 +105,21 @@ if (( upstream )) && ! command -v graphify >/dev/null; then
   echo "run-evaluation.sh: graphify missing; use --no-upstream for an explicitly one-tool evaluation" >&2
   exit 1
 fi
+if [[ -f "${QUESTIONS}/manifest.json" ]]; then
+  (( upstream )) || { echo "run-evaluation.sh: sealed comparisons require Graphify" >&2; exit 2; }
+  if (( ${#budget_args[@]} || ${#reuse_args[@]} )) && { [[ "${phase}" != development ]] || (( validate )); }; then
+    echo "run-evaluation.sh: --budget and --reuse-graphify are restricted to development" >&2
+    exit 2
+  fi
+fi
+if [[ -L "${REPO_ROOT}/.cache" || -L "${WORK_BASE}" ]]; then
+  echo "run-evaluation.sh: evaluation cache must not be a symlink" >&2
+  exit 1
+fi
+if (( ! validate )) && ! bash "${REPO_ROOT}/scripts/utils/verification-lock.sh"; then
+  exec bash "${REPO_ROOT}/scripts/utils/guard-benchmark.sh" \
+    bash "${REPO_ROOT}/scripts/benchmarks/run-evaluation.sh" "${original_args[@]}"
+fi
 
 cd "${REPO_ROOT}"
 build_binary() {
@@ -113,11 +129,6 @@ build_binary() {
 }
 
 if [[ -f "${QUESTIONS}/manifest.json" ]]; then
-  (( upstream )) || { echo "run-evaluation.sh: sealed comparisons require Graphify" >&2; exit 2; }
-  if (( ${#budget_args[@]} || ${#reuse_args[@]} )) && { [[ "${phase}" != development ]] || (( validate )); }; then
-    echo "run-evaluation.sh: --budget and --reuse-graphify are restricted to development" >&2
-    exit 2
-  fi
   if (( validate )); then
     phase=validate
     BINARY=""
@@ -125,10 +136,6 @@ if [[ -f "${QUESTIONS}/manifest.json" ]]; then
     BINARY="$(build_binary)"
   fi
   exec bash "${REPO_ROOT}/scripts/benchmarks/evaluate-sealed.sh" "${QUESTIONS}/manifest.json" "${phase}" "${BINARY}" "${budget_args[@]}" "${reuse_args[@]}" "$@"
-fi
-if [[ -L "${REPO_ROOT}/.cache" || -L "${WORK_BASE}" ]]; then
-  echo "run-evaluation.sh: evaluation cache must not be a symlink" >&2
-  exit 1
 fi
 BINARY="$(build_binary)"
 readonly BINARY

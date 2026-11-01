@@ -33,6 +33,10 @@ if [[ -L "${REPO_ROOT}/.cache" || -L "${REPO_ROOT}/.cache/benchmarks" ]]; then
   echo "measure-query-compute.sh: benchmark cache must not be a symlink" >&2
   exit 1
 fi
+if ! bash "${REPO_ROOT}/scripts/utils/verification-lock.sh"; then
+  exec bash "${REPO_ROOT}/scripts/utils/guard-benchmark.sh" \
+    bash "${REPO_ROOT}/scripts/benchmarks/measure-query-compute.sh" "${ROOT}" "${QUESTIONS}" "${SAMPLES}"
+fi
 mkdir -p "${REPO_ROOT}/.cache/benchmarks"
 WORK="$(mktemp -d "${REPO_ROOT}/.cache/benchmarks/query.XXXXXXXX")"
 readonly WORK

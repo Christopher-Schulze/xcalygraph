@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Serialize an owned verification target and invalidate stale project artifacts by content.
-# Usage: scripts/utils/verification-source.sh COMMAND [ARG...]
+# Usage: scripts/utils/verification-source.sh [--export-lock] COMMAND [ARG...]
 set -euo pipefail
-(( $# > 0 )) || { echo "usage: verification-source.sh COMMAND [ARG...]" >&2; exit 2; }
+export_lock=0
+if [[ "${1:-}" == --export-lock ]]; then export_lock=1; shift; fi
+(( $# > 0 )) || { echo "usage: verification-source.sh [--export-lock] COMMAND [ARG...]" >&2; exit 2; }
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
-python3 -I - "${REPO_ROOT}" "$@" <<'PYTHON'
+python3 -I - "${REPO_ROOT}" "${export_lock}" "$@" <<'PYTHON'
 import fcntl
 import hashlib
 import json
@@ -17,9 +19,10 @@ import subprocess
 import sys
 
 root = Path(sys.argv[1]).resolve()
+export_lock = sys.argv[2] == "1"
 identity = hashlib.sha256(os.fsencode(root)).hexdigest()
 target = Path(os.environ["CARGO_TARGET_DIR"])
-if (target.name != identity or target.parent.name != ".xcalygraph-verification"
+if (not target.is_absolute() or target.name != identity or target.parent.name != ".xcalygraph-verification"
         or target.is_symlink() or target.parent.is_symlink()
         or Path(os.environ["CARGO_BUILD_BUILD_DIR"]) != target):
     raise SystemExit("verification-source.sh: target ownership or build directory is invalid")
@@ -78,6 +81,9 @@ def snapshot():
     result = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
                             cwd=root, check=True, stdout=subprocess.PIPE)
     paths = {Path(os.fsdecode(path)) for path in result.stdout.split(b"\0") if path}
+    if target.is_relative_to(root):
+        relative_target = target.relative_to(root)
+        paths = {path for path in paths if not path.is_relative_to(relative_target)}
     for name in ("src", "tests", "skills", ".cargo"):
         paths.update(tree_paths(root / name))
     if (root / "build.rs").exists():
@@ -171,7 +177,17 @@ with os.fdopen(descriptor, "r+b") as state:
                 arguments.extend(("--package", package))
             subprocess.run(["cargo", "clean", "--locked", *arguments],
                            cwd=root, check=True, pass_fds=(state.fileno(),))
-        result = subprocess.run(sys.argv[2:], cwd=root, pass_fds=(state.fileno(),))
+        child_env = os.environ.copy()
+        child_env.pop("XCALYGRAPH_VERIFICATION_FD", None)
+        child_fd = state.fileno()
+        if export_lock:
+            child_fd = fcntl.fcntl(state.fileno(), fcntl.F_DUPFD, 100)
+            child_env["XCALYGRAPH_VERIFICATION_FD"] = str(child_fd)
+        try:
+            result = subprocess.run(sys.argv[3:], cwd=root, env=child_env, pass_fds=(child_fd,))
+        finally:
+            if export_lock:
+                os.close(child_fd)
         if result.returncode != 0:
             raise SystemExit(result.returncode if result.returncode > 0 else 128 - result.returncode)
         if snapshot() != current:
