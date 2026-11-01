@@ -12,7 +12,7 @@ use xxhash_rust::xxh3::xxh3_64;
 
 pub const MAGIC: [u8; 8] = *b"XCALYGR\x00";
 /// Bumped on every incompatible change of any index file layout.
-pub const FORMAT_VERSION: u32 = 7;
+pub const FORMAT_VERSION: u32 = 8;
 const HEADER_LEN: usize = 64;
 const ALIGN: usize = 64;
 
@@ -134,6 +134,11 @@ pub struct Container {
 
 impl Container {
     pub fn open(path: &Path, kind: Kind) -> Result<Self, OpenError> {
+        Self::open_version(path, kind, FORMAT_VERSION)
+    }
+
+    /// Opens a known container envelope at a specified version, for safe legacy-index cleanup.
+    pub fn open_version(path: &Path, kind: Kind, version: u32) -> Result<Self, OpenError> {
         let file = match File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -144,7 +149,7 @@ impl Container {
         // SAFETY: index files are never modified in place; writers replace them by rename, so the
         // mapped inode stays immutable for the lifetime of this mapping.
         let map = unsafe { Mmap::map(&file) }.map_err(OpenError::Io)?;
-        let sections = validate(&map, kind)?;
+        let sections = validate(&map, kind, version)?;
         Ok(Self { map, sections })
     }
 
@@ -161,7 +166,7 @@ impl Container {
     }
 }
 
-fn validate(bytes: &[u8], kind: Kind) -> Result<Vec<Range<usize>>, OpenError> {
+fn validate(bytes: &[u8], kind: Kind, version: u32) -> Result<Vec<Range<usize>>, OpenError> {
     let read_u32 =
         |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
     let read_u64 = |at: usize| {
@@ -175,7 +180,7 @@ fn validate(bytes: &[u8], kind: Kind) -> Result<Vec<Range<usize>>, OpenError> {
     if bytes[0..8] != MAGIC {
         return Err(OpenError::Invalid("magic"));
     }
-    if read_u32(8) != FORMAT_VERSION {
+    if read_u32(8) != version {
         return Err(OpenError::Invalid("format version"));
     }
     if read_u32(12) != kind as u32 {

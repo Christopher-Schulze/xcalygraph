@@ -306,6 +306,7 @@ fn old_signatures(
         path: path.to_owned(),
         size: content.len() as u64,
         mtime_ns: 0,
+        identity: None,
         hash: 0,
         role: crate::domain::role::Role::Src,
         file_type,

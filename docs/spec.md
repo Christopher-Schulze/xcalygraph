@@ -136,8 +136,8 @@ walk -> stat diff -> hash candidates -> extract changed files (parallel) -> writ
 
 Freshness:
 
-1. A file is unchanged when path, size and mtime_ns equal its stored record and mtime_ns is older than the stored index write time minus 2 s.
-2. Otherwise the XXH3-128 content hash decides; an equal hash updates only the stat record.
+1. A file is unchanged when path, size, mtime_ns and a usable filesystem identity (device, inode, status-change time) equal its stored record and both timestamps are older than the stored index write time minus 2 s. Unknown identity never takes the stat-only shortcut.
+2. Otherwise the XXH3-128 content hash decides for files whose content may be read; an equal hash updates only the stat record. Sensitive and oversized files remain path-only.
 3. New, changed and deleted files form the change set; an empty change set answers from the existing index without writes.
 4. A format or extraction version mismatch triggers a full rebuild.
 
@@ -342,7 +342,7 @@ Location: `<index-dir>/<root basename>-<XXH3-64 hex of the canonical root path>/
 | file | content | rewritten when |
 |------|---------|----------------|
 | `meta` | format version, extraction version, binary version, canonical root, write time | a refresh has changes |
-| `files` | per file: path, size, mtime_ns, content hash, role, language, shard | file set or stat records change |
+| `files` | per file: path, size, mtime_ns, optional device/inode/status-change time, content hash, role, language, shard | file set or stat records change |
 | `facts/NN` (64 shards by path hash) | fact records of the shard's files, shard-local string table | a file of the shard changes |
 | `derived` | interned strings, symbol table, CSR graph, ranks, modules, search index, test map, audit data | derived content changes |
 | `used` | empty; its mtime is the last use for `ls` | a writing query when older than an hour |
@@ -352,6 +352,7 @@ Location: `<index-dir>/<root basename>-<XXH3-64 hex of the canonical root path>/
 - Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum; fact shard sections deflated; search postings as delta-varint (node, term frequencies) pairs.
 - Writes: new exclusively created temp file in the same directory (`O_CREAT|O_EXCL`; an existing entry or symlink is skipped, never opened) -> rename; no fsync; unchanged files untouched; install and update use the same primitive. A checksum mismatch or truncation on open rebuilds that file.
 - Reads: memory-mapped, zero-copy.
+- Listing and safe cleanup also recognize format-7 containers; queries require the current format and writable queries rebuild older indexes.
 
 ## 10. Skill, install, update
 

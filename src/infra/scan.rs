@@ -100,6 +100,7 @@ fn inspect(root: &Path, stat: &Stat, cpp_sibling: bool) -> io::Result<FileRecord
         path: stat.path.clone(),
         size: stat.size,
         mtime_ns: stat.mtime_ns,
+        identity: stat.identity,
         hash,
         role: classification.role,
         file_type: classification.file_type,
@@ -248,6 +249,7 @@ mod tests {
             path: "unreadable.go".to_owned(),
             size: 0,
             mtime_ns: 0,
+            identity: None,
         };
         assert!(inspect(dir.path(), &stat, false).is_err());
         Ok(())

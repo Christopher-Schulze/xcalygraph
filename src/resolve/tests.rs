@@ -45,6 +45,7 @@ pub fn graph_of(root: &Path) -> std::io::Result<Graph> {
             path: path.clone(),
             size: content.len() as u64,
             mtime_ns: 0,
+            identity: None,
             hash: 0,
             role: classification.role,
             file_type: classification.file_type,

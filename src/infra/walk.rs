@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use ignore::{DirEntry, WalkBuilder, WalkState};
 
-use crate::domain::corpus::Stat;
+use crate::domain::corpus::{FileIdentity, Stat};
 
 /// Directory names never descended into.
 const PRUNED_NAMES: [&str; 6] = [
@@ -148,6 +148,7 @@ fn walked_file(root: &Path, entry: &DirEntry) -> io::Result<Option<Stat>> {
         path,
         size: metadata.len(),
         mtime_ns: mtime_ns(&metadata),
+        identity: identity(&metadata),
     }))
 }
 
@@ -161,6 +162,32 @@ fn relative_path(relative: &Path) -> Option<String> {
         path.push_str(component.as_os_str().to_str()?);
     }
     (!path.is_empty()).then_some(path)
+}
+
+fn identity(metadata: &Metadata) -> Option<FileIdentity> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        let inode = metadata.ino();
+        let nanos = metadata.ctime_nsec();
+        let change_time_ns = metadata
+            .ctime()
+            .checked_mul(1_000_000_000)?
+            .checked_add(nanos)?;
+        (inode != 0 && change_time_ns != 0 && (0..1_000_000_000).contains(&nanos)).then_some(
+            FileIdentity {
+                device: metadata.dev(),
+                inode,
+                change_time_ns,
+            },
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        None
+    }
 }
 
 pub fn mtime_ns(metadata: &Metadata) -> i64 {

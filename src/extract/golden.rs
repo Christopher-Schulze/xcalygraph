@@ -163,6 +163,7 @@ fn golden_facts_match() -> Result<(), Box<dyn std::error::Error>> {
             path: path.to_owned(),
             size: content.len() as u64,
             mtime_ns: 0,
+            identity: None,
             hash: 0,
             role: classification.role,
             file_type: classification.file_type,

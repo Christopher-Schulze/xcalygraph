@@ -6,6 +6,14 @@ use super::role::Role;
 /// Racy-clean window: a file modified this close to the last index write is re-hashed.
 pub const RACY_WINDOW_NS: i64 = 2_000_000_000;
 
+/// Filesystem identity and status-change time; absent when the platform cannot provide them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileIdentity {
+    pub device: u64,
+    pub inode: u64,
+    pub change_time_ns: i64,
+}
+
 /// File metadata from the walk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stat {
@@ -13,6 +21,7 @@ pub struct Stat {
     pub path: String,
     pub size: u64,
     pub mtime_ns: i64,
+    pub identity: Option<FileIdentity>,
 }
 
 /// One file of the index: stat record, content hash and classification.
@@ -21,6 +30,7 @@ pub struct FileRecord {
     pub path: String,
     pub size: u64,
     pub mtime_ns: i64,
+    pub identity: Option<FileIdentity>,
     /// XXH3-128 of the content; 0 for files whose content is never read.
     pub hash: u128,
     pub role: Role,
@@ -56,7 +66,14 @@ pub fn compare(
             let record = &stored[old];
             let same = record.size == stat.size
                 && record.mtime_ns == stat.mtime_ns
-                && stat.mtime_ns < write_time_ns.saturating_sub(RACY_WINDOW_NS);
+                && stat.mtime_ns < write_time_ns.saturating_sub(RACY_WINDOW_NS)
+                && matches!(
+                    (record.identity, stat.identity),
+                    (Some(previous), Some(current))
+                        if previous == current
+                            && current.change_time_ns
+                                < write_time_ns.saturating_sub(RACY_WINDOW_NS)
+                );
             decisions.push(if same {
                 Decision::Unchanged(old)
             } else {
@@ -104,6 +121,11 @@ mod tests {
             path: path.to_owned(),
             size,
             mtime_ns,
+            identity: Some(FileIdentity {
+                device: 1,
+                inode: 1,
+                change_time_ns: mtime_ns,
+            }),
             hash: 1,
             role: Role::Src,
             file_type: Some(FileType::Go),
@@ -115,6 +137,11 @@ mod tests {
             path: path.to_owned(),
             size,
             mtime_ns,
+            identity: Some(FileIdentity {
+                device: 1,
+                inode: 1,
+                change_time_ns: mtime_ns,
+            }),
         }
     }
 
@@ -149,6 +176,56 @@ mod tests {
             ]
         );
         assert_eq!(deleted, [4]);
+
+        let original = record("a.go", 1, old_time);
+        let mut unknown = stat("a.go", 1, old_time);
+        unknown.identity = None;
+        let mut different = stat("a.go", 1, old_time);
+        if let Some(identity) = &mut different.identity {
+            identity.inode += 1;
+        }
+        let mut other_device = stat("a.go", 1, old_time);
+        if let Some(identity) = &mut other_device.identity {
+            identity.device += 1;
+        }
+        let mut changed_status = stat("a.go", 1, old_time);
+        if let Some(identity) = &mut changed_status.identity {
+            identity.change_time_ns += 1;
+        }
+        let mut recent = stat("a.go", 1, old_time);
+        if let Some(identity) = &mut recent.identity {
+            identity.change_time_ns = racy_time;
+        }
+        for candidate in [
+            unknown,
+            different,
+            other_device,
+            changed_status,
+            recent.clone(),
+        ] {
+            let (decision, _) = compare(
+                std::slice::from_ref(&original),
+                std::slice::from_ref(&candidate),
+                write_time,
+            );
+            assert_eq!(decision, [Decision::Hash(Some(0))]);
+        }
+        let mut without_identity = original.clone();
+        without_identity.identity = None;
+        let (decision, _) = compare(
+            std::slice::from_ref(&without_identity),
+            &[stat("a.go", 1, old_time)],
+            write_time,
+        );
+        assert_eq!(decision, [Decision::Hash(Some(0))]);
+        let mut unknown = stat("a.go", 1, old_time);
+        unknown.identity = None;
+        let (decision, _) = compare(&[without_identity], &[unknown], write_time);
+        assert_eq!(decision, [Decision::Hash(Some(0))]);
+        let mut recent_record = original;
+        recent_record.identity = recent.identity;
+        let (decision, _) = compare(&[recent_record], &[recent], write_time);
+        assert_eq!(decision, [Decision::Hash(Some(0))]);
     }
 
     #[test]

@@ -353,6 +353,7 @@ mod tests {
             path: path.to_owned(),
             size: 0,
             mtime_ns: 0,
+            identity: None,
             hash: 0,
             role,
             file_type: Some(FileType::Text),

@@ -11,8 +11,11 @@ use super::error::AppError;
 use super::workspace::{self, LOCAL_DIR};
 use crate::cli::Options;
 use crate::infra::file_access;
-use crate::infra::store::container::{Container, Kind};
+use crate::infra::store::container::{Container, FORMAT_VERSION, Kind};
 use crate::infra::store::{self, SHARDS, Store};
+
+// Version 7 uses the same container envelope and meta encoding; other versions need review.
+const CLEANUP_FORMATS: [u32; 2] = [FORMAT_VERSION, 7];
 
 struct Entry {
     dir: PathBuf,
@@ -149,14 +152,24 @@ fn owned_root(dir: &Path) -> Option<PathBuf> {
     if !regular_file(&meta) {
         return None;
     }
-    let root = PathBuf::from(Store::new(dir.to_path_buf()).read_meta().ok()?.root);
+    let (meta, version) = known_meta(&Store::new(dir.to_path_buf()))?;
+    let root = PathBuf::from(meta.root);
     if !root.is_absolute() || dir.parent().map(|base| store::index_dir(base, &root))? != dir {
         return None;
     }
-    owned_contents(dir).then_some(root)
+    owned_contents(dir, version).then_some(root)
 }
 
-fn owned_contents(dir: &Path) -> bool {
+fn known_meta(store: &Store) -> Option<(store::Meta, u32)> {
+    CLEANUP_FORMATS.iter().find_map(|&version| {
+        store
+            .read_meta_version(version)
+            .ok()
+            .map(|meta| (meta, version))
+    })
+}
+
+fn owned_contents(dir: &Path, version: u32) -> bool {
     let Ok(entries) = fs::read_dir(dir) else {
         return false;
     };
@@ -170,14 +183,14 @@ fn owned_contents(dir: &Path) -> bool {
         };
         let path = entry.path();
         let valid = match name {
-            "meta" => owned_container(&path, Kind::Meta),
-            "files" => owned_container(&path, Kind::Files),
-            "derived" => owned_container(&path, Kind::Derived),
-            "git" => owned_container(&path, Kind::Git),
+            "meta" => owned_container(&path, Kind::Meta, version),
+            "files" => owned_container(&path, Kind::Files, version),
+            "derived" => owned_container(&path, Kind::Derived, version),
+            "git" => owned_container(&path, Kind::Git, version),
             "lock" | "used" => fs::symlink_metadata(&path).is_ok_and(|metadata| {
                 file_access::is_unshared_regular(&metadata) && metadata.len() == 0
             }),
-            "facts" => owned_shards(&path),
+            "facts" => owned_shards(&path, version),
             _ => false,
         };
         if !valid {
@@ -187,7 +200,7 @@ fn owned_contents(dir: &Path) -> bool {
     true
 }
 
-fn owned_shards(dir: &Path) -> bool {
+fn owned_shards(dir: &Path, version: u32) -> bool {
     if !fs::symlink_metadata(dir).is_ok_and(|metadata| metadata.is_dir()) {
         return false;
     }
@@ -205,7 +218,7 @@ fn owned_shards(dir: &Path) -> bool {
         if name.len() != 2
             || !name.bytes().all(|byte| byte.is_ascii_digit())
             || !name.parse::<usize>().is_ok_and(|shard| shard < SHARDS)
-            || !owned_container(&entry.path(), Kind::Facts)
+            || !owned_container(&entry.path(), Kind::Facts, version)
         {
             return false;
         }
@@ -217,8 +230,8 @@ fn regular_file(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| file_access::is_unshared_regular(&metadata))
 }
 
-fn owned_container(path: &Path, kind: Kind) -> bool {
-    regular_file(path) && Container::open(path, kind).is_ok()
+fn owned_container(path: &Path, kind: Kind, version: u32) -> bool {
+    regular_file(path) && Container::open_version(path, kind, version).is_ok()
 }
 
 fn base(options: &Options) -> Result<PathBuf, AppError> {
@@ -236,7 +249,7 @@ fn entries(base: &Path) -> Vec<Entry> {
         .map(|dir| {
             let store = Store::new(dir.clone());
             Entry {
-                root: store.read_meta().ok().map(|meta| PathBuf::from(meta.root)),
+                root: known_meta(&store).map(|(meta, _)| PathBuf::from(meta.root)),
                 bytes: size(&dir),
                 used: store.last_used(),
                 dir,

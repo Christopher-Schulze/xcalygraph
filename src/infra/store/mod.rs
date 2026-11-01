@@ -14,7 +14,7 @@ use xxhash_rust::xxh3::xxh3_64;
 use codec::{DecodeError, DecodeResult, Decoder, Encoder};
 use container::{Container, Kind, OpenError};
 
-use crate::domain::corpus::FileRecord;
+use crate::domain::corpus::{FileIdentity, FileRecord};
 use crate::domain::facts::Facts;
 use crate::domain::filetype::FileType;
 use crate::domain::history::History;
@@ -68,7 +68,12 @@ impl Store {
     }
 
     pub fn read_meta(&self) -> Result<Meta, OpenError> {
-        let container = Container::open(&self.path("meta"), Kind::Meta)?;
+        self.read_meta_version(container::FORMAT_VERSION)
+    }
+
+    /// Reads metadata from a known compatible container version.
+    pub fn read_meta_version(&self, version: u32) -> Result<Meta, OpenError> {
+        let container = Container::open_version(&self.path("meta"), Kind::Meta, version)?;
         decode_meta(container.section(0)).map_err(|_| OpenError::Invalid("meta content"))
     }
 
@@ -100,6 +105,14 @@ impl Store {
             encoder.str(&record.path[shared..]);
             encoder.var(record.size);
             encoder.signed(record.mtime_ns);
+            if let Some(identity) = record.identity {
+                encoder.u8(1);
+                encoder.var(identity.device);
+                encoder.var(identity.inode);
+                encoder.signed(identity.change_time_ns);
+            } else {
+                encoder.u8(0);
+            }
             encoder.u128(record.hash);
             encoder.u8(record.role as u8);
             encoder.u8(record.file_type.map_or(0, |file_type| file_type as u8));
@@ -316,6 +329,15 @@ fn decode_files(bytes: &[u8]) -> DecodeResult<Vec<FileRecord>> {
         let path = format!("{prefix}{suffix}");
         let size = decoder.var()?;
         let mtime_ns = decoder.signed()?;
+        let identity = match decoder.u8()? {
+            0 => None,
+            1 => Some(FileIdentity {
+                device: decoder.var()?,
+                inode: decoder.var()?,
+                change_time_ns: decoder.signed()?,
+            }),
+            _ => return Err(DecodeError("file identity tag")),
+        };
         let hash = decoder.u128()?;
         let role = Role::from_u8(decoder.u8()?).ok_or(DecodeError("role"))?;
         let file_type = match decoder.u8()? {
@@ -326,6 +348,7 @@ fn decode_files(bytes: &[u8]) -> DecodeResult<Vec<FileRecord>> {
             path,
             size,
             mtime_ns,
+            identity,
             hash,
             role,
             file_type,
@@ -344,6 +367,11 @@ mod tests {
             path: path.to_owned(),
             size: 12,
             mtime_ns: -3,
+            identity: Some(FileIdentity {
+                device: 42,
+                inode: 123,
+                change_time_ns: -5,
+            }),
             hash: 0xdead_beef,
             role,
             file_type,
@@ -363,11 +391,13 @@ mod tests {
         };
         store.write_meta(&meta)?;
         assert_eq!(store.read_meta().map_err(|e| e.to_string())?, meta);
+        let mut without_identity = record("x", Role::Sensitive, None);
+        without_identity.identity = None;
         let records = vec![
             record("src/a.go", Role::Src, Some(FileType::Go)),
             record("src/ab.go", Role::Test, Some(FileType::Go)),
             record("src/é/x", Role::Other, None),
-            record("x", Role::Sensitive, None),
+            without_identity,
         ];
         store.write_files(&records)?;
         assert_eq!(store.read_files().map_err(|e| e.to_string())?, records);

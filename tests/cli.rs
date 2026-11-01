@@ -428,6 +428,43 @@ fn clean_preserves_symlinked_shards_and_their_target() -> TestResult {
     Ok(())
 }
 
+fn verified_previous_format_cleanup() -> TestResult {
+    let dir = TempDir::new("clean-previous-format")?;
+    dir.write("repo/main.go", "package main\n")?;
+    let root = dir.0.join("repo");
+    let base = dir.0.join("index");
+    assert!(run_in(&root, &base, &["index"])?.status.success());
+    let store = index_for(&base, "repo")?;
+    let mut converted = 0;
+    for (path, mut content, _) in index_snapshot(&store)? {
+        if content.starts_with(b"XCALYGR\0") {
+            content[8..12].copy_from_slice(&7u32.to_le_bytes());
+            fs::write(path, content)?;
+            converted += 1;
+        }
+    }
+    assert!(converted > 2);
+    let listed = Command::new(BINARY)
+        .arg("ls")
+        .arg("--index-dir")
+        .arg(&base)
+        .env("HOME", dir.0.join("home"))
+        .output()?;
+    assert!(
+        String::from_utf8(listed.stdout)?.contains(&root.canonicalize()?.display().to_string())
+    );
+    let foreign = store.join("foreign");
+    fs::write(&foreign, b"preserve")?;
+    let skipped = clean_in(&dir, &base, &["repo"])?;
+    assert!(String::from_utf8(skipped.stdout)?.contains("skipped "));
+    assert_eq!(fs::read(&foreign)?, b"preserve");
+    fs::remove_file(foreign)?;
+    let removed = clean_in(&dir, &base, &["repo"])?;
+    assert!(String::from_utf8(removed.stdout)?.starts_with("deleted "));
+    assert!(!store.exists());
+    Ok(())
+}
+
 #[test]
 fn missing_root_is_a_runtime_error() -> TestResult {
     let dir = TempDir::new("missing-root")?;
@@ -1303,6 +1340,121 @@ fn write_aged(path: &Path, content: &str) -> io::Result<()> {
         .write(true)
         .open(path)?
         .set_modified(past)
+}
+
+fn index_snapshot(base: &Path) -> io::Result<Vec<(PathBuf, Vec<u8>, std::time::SystemTime)>> {
+    let mut directories = vec![base.to_path_buf()];
+    let mut files = Vec::new();
+    while let Some(directory) = directories.pop() {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let metadata = entry.metadata()?;
+            if metadata.is_dir() {
+                directories.push(entry.path());
+            } else {
+                files.push((entry.path(), fs::read(entry.path())?, metadata.modified()?));
+            }
+        }
+    }
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(files)
+}
+
+#[test]
+fn preserved_mtime_edits_and_replacements_invalidate_the_index() -> TestResult {
+    const BEFORE: &str = "package main\nfunc Alpha() {}\n";
+    const AFTER: &str = "package main\nfunc Bravo() {}\n";
+    assert_eq!(BEFORE.len(), AFTER.len());
+    for replacement in [true, false] {
+        let dir = TempDir::new(if replacement {
+            "same-mtime-replace"
+        } else {
+            "same-mtime-edit"
+        })?;
+        let root = dir.0.join("repo");
+        let source = root.join("main.go");
+        let index = dir.0.join("index");
+        write_aged(&source, BEFORE)?;
+        let initial = run_in(&root, &index, &["show", "Alpha"])?;
+        assert_eq!(initial.status.code(), Some(0));
+        let original_mtime = fs::metadata(&source)?.modified()?;
+        if replacement {
+            let candidate = root.join("replacement.tmp");
+            write_aged(&candidate, AFTER)?;
+            fs::rename(candidate, &source)?;
+        } else {
+            fs::write(&source, AFTER)?;
+            fs::File::options()
+                .write(true)
+                .open(&source)?
+                .set_modified(original_mtime)?;
+        }
+        assert_eq!(fs::metadata(&source)?.modified()?, original_mtime);
+        assert_eq!(fs::metadata(&source)?.len(), BEFORE.len() as u64);
+        let before = index_snapshot(&index)?;
+        let read_only = run_in(&root, &index, &["show", "Bravo", "--read-only"])?;
+        assert_eq!(read_only.status.code(), Some(5), "{replacement}");
+        assert_eq!(
+            index_snapshot(&index)?,
+            before,
+            "read-only wrote to the index"
+        );
+        let current = run_in(&root, &index, &["show", "Bravo"])?;
+        assert_eq!(
+            current.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&current.stderr)
+        );
+        assert!(String::from_utf8(current.stdout)?.contains("Bravo"));
+        assert_eq!(
+            run_in(&root, &index, &["show", "Alpha"])?.status.code(),
+            Some(4)
+        );
+        let fresh = dir.0.join("fresh");
+        assert!(run_in(&root, &fresh, &["index"])?.status.success());
+        assert_eq!(
+            derived_image(&index)?,
+            derived_image(&fresh)?,
+            "incremental differs from fresh"
+        );
+        let before = index_snapshot(&index)?;
+        fs::File::options()
+            .write(true)
+            .open(&source)?
+            .set_modified(original_mtime)?;
+        let same = run_in(&root, &index, &["show", "Bravo", "--read-only"])?;
+        assert_eq!(
+            same.status.code(),
+            Some(0),
+            "metadata-only change should stay readable"
+        );
+        assert_eq!(index_snapshot(&index)?, before, "read-only wrote metadata");
+        let meta = index_for(&index, "repo")?.join("meta");
+        let mut old_format = fs::read(&meta)?;
+        old_format[8..12].copy_from_slice(&7u32.to_le_bytes());
+        fs::write(&meta, old_format)?;
+        let before_upgrade = index_snapshot(&index)?;
+        assert_eq!(
+            run_in(&root, &index, &["show", "Bravo", "--read-only"])?
+                .status
+                .code(),
+            Some(5)
+        );
+        assert_eq!(
+            index_snapshot(&index)?,
+            before_upgrade,
+            "read-only changed an old index"
+        );
+        let upgraded = run_in(&root, &index, &["index"])?;
+        assert_eq!(upgraded.status.code(), Some(0));
+        assert_eq!(
+            String::from_utf8(upgraded.stdout)?,
+            "files 1 changed 1 deleted 0\n"
+        );
+        assert_eq!(derived_image(&index)?, derived_image(&fresh)?);
+    }
+    verified_previous_format_cleanup()
 }
 
 #[test]
