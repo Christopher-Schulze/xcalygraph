@@ -208,6 +208,7 @@ fn run_query(
         CommandName::Impact => {
             let impact = query::impact::ImpactOptions {
                 root,
+                store: &workspace.store,
                 depth: options.depth.unwrap_or(3),
                 json,
                 budget: budget(1500),

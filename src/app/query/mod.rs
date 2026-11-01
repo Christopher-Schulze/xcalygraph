@@ -61,6 +61,26 @@ impl Filter {
         })
     }
 
+    /// Path and test-role rules for a path absent from the index (a file deleted since REV).
+    pub fn removed_path(&self, path: &str) -> bool {
+        if self.no_tests
+            && crate::domain::role::classify(&crate::domain::role::FileFacts {
+                path,
+                size: 0,
+                head: None,
+                cpp_sibling: false,
+            })
+            .role
+                == Role::Test
+        {
+            return false;
+        }
+        match &self.paths {
+            Some(paths) => paths.matched_path_or_any_parents(path, false).is_ignore(),
+            None => true,
+        }
+    }
+
     pub fn file(&self, index: &Index, file: &FileRecord) -> bool {
         if self.no_tests && matches!(file.role(), Role::Test | Role::Gen | Role::Fixture) {
             return false;

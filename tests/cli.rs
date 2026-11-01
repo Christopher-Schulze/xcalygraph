@@ -719,6 +719,88 @@ fn final_tree_decides_the_index_regardless_of_change_order_and_threads() -> Test
 }
 
 #[test]
+fn impact_of_removed_files_and_symbols_names_their_surviving_dependents() -> TestResult {
+    const OPEN: &str =
+        "package store\n\nfunc Open(path string) int {\n\treturn len(path)\n}\n\nfunc Close() {}\n";
+    let dir = TempDir::new("impact-removed")?;
+    let root = dir.0.join("repo");
+    dir.write("repo/go.mod", "module example.com/app\n\ngo 1.23\n")?;
+    dir.write("repo/store/open.go", OPEN)?;
+    dir.write(
+        "repo/store/use.go",
+        "package store\n\nfunc Warm() int {\n\treturn Open(\"x\")\n}\n\nfunc Stop() {\n\tClose()\n}\n",
+    )?;
+    dir.write(
+        "repo/store/open_test.go",
+        "package store\n\nimport \"testing\"\n\nfunc TestOpen(t *testing.T) {\n\tOpen(\"y\")\n}\n",
+    )?;
+    git(&root, &["init", "-q"])?;
+    git(&root, &["add", "."])?;
+    git(&root, &["commit", "-q", "-m", "init"])?;
+    let index = dir.0.join("index");
+    let impact = |args: &[&str]| -> Result<String, Box<dyn Error>> {
+        let output = run_in(&root, &index, args)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}");
+        Ok(String::from_utf8(output.stdout)?)
+    };
+    let restore = || fs::write(root.join("store/open.go"), OPEN);
+    // Whole file deleted (staged): removed definitions, inferred survivors, their tests.
+    git(&root, &["rm", "-q", "store/open.go"])?;
+    let text = impact(&["impact", "--diff"])?;
+    assert_eq!(
+        text,
+        "~ Close store/open.go removed\n~ Open store/open.go removed\n< 1 store.Warm store/use.go:3?\n< 1 store.Stop store/use.go:7?\nt store.TestOpen store/open_test.go:5\nr go test ./store -run '^(TestOpen)$'\n"
+    );
+    let json = impact(&["impact", "--diff", "--json"])?;
+    assert!(
+        json.contains("{\"t\":\"sym\",\"rel\":\"chg\",\"name\":\"Open\",\"path\":\"store/open.go\",\"kind\":\"removed\"}"),
+        "{json}"
+    );
+    assert!(json.contains("\"name\":\"store.Warm\",\"path\":\"store/use.go\",\"line\":3,\"n\":1,\"conf\":\"inferred\""), "{json}");
+    let text = impact(&["impact", "--diff", "--no-tests"])?;
+    assert!(
+        !text.contains("TestOpen") && !text.contains("go test"),
+        "{text}"
+    );
+    git(&root, &["reset", "-q", "HEAD", "--", "store/open.go"])?;
+    restore()?;
+    // One function deleted as the last lines, unstaged on top of a staged edit elsewhere.
+    fs::write(
+        root.join("store/use.go"),
+        "package store\n\n// Warm opens.\nfunc Warm() int {\n\treturn Open(\"x\")\n}\n\nfunc Stop() {\n\tClose()\n}\n",
+    )?;
+    git(&root, &["add", "store/use.go"])?;
+    fs::write(
+        root.join("store/open.go"),
+        "package store\n\nfunc Open(path string) int {\n\treturn len(path)\n}\n",
+    )?;
+    let text = impact(&["impact", "--diff"])?;
+    assert!(text.contains("~ Close store/open.go removed\n"), "{text}");
+    assert!(text.contains("< 1 store.Stop store/use.go:8?\n"), "{text}");
+    assert!(!text.contains("Open store/open.go removed"), "{text}");
+    git(&root, &["checkout", "-q", "HEAD", "--", "store/use.go"])?;
+    restore()?;
+    // Rename: definitions moved, nothing removed, dependents stay exact.
+    git(&root, &["mv", "store/open.go", "store/opening.go"])?;
+    let text = impact(&["impact", "--diff"])?;
+    assert!(
+        text.contains("~ store/opening.go store/opening.go:1 new 2\n"),
+        "{text}"
+    );
+    assert!(!text.contains("removed") && !text.contains('?'), "{text}");
+    git(&root, &["mv", "store/opening.go", "store/open.go"])?;
+    // Non-HEAD revision.
+    git(&root, &["commit", "-q", "--allow-empty", "-m", "empty"])?;
+    fs::remove_file(root.join("store/open.go"))?;
+    let text = impact(&["impact", "--diff", "HEAD~1"])?;
+    assert!(text.contains("~ Open store/open.go removed\n"), "{text}");
+    restore()?;
+    // Unchanged tree: no false changes.
+    assert_eq!(impact(&["impact", "--diff"])?, "");
+    Ok(())
+}
+
+#[test]
 fn impact_of_a_diff_lists_changes_dependents_tests_and_run_lines() -> TestResult {
     let dir = TempDir::new("impact")?;
     let root = dir.0.join("repo");

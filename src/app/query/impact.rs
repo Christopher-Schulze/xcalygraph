@@ -7,7 +7,7 @@ use super::output::{Value, Writer};
 use super::{Filter, Index, Node};
 use crate::app::error::AppError;
 use crate::domain::corpus::FileRecord as CorpusRecord;
-use crate::domain::facts::{FLAG_TEST, Facts, SymKind};
+use crate::domain::facts::{FLAG_TEST, Facts, RefKind, SymKind};
 use crate::domain::filetype::FileType;
 use crate::domain::graph::EdgeKind;
 use crate::extract;
@@ -43,6 +43,8 @@ struct Target {
 
 pub struct ImpactOptions<'a> {
     pub root: &'a Path,
+    /// Fact shards, read only to find surviving references to removed definitions.
+    pub store: &'a crate::infra::store::Store,
     pub depth: usize,
     pub json: bool,
     pub budget: usize,
@@ -75,7 +77,7 @@ pub fn render_names(
             seeds: Vec::new(),
         })
         .collect();
-    render(index, filter, &targets, &[], options)
+    render(index, filter, &targets, &[], &[], options)
 }
 
 /// Targets from `git diff REV` (work tree included) with exported signature changes.
@@ -88,8 +90,19 @@ pub fn render_diff(
     let diffs = git::diff(options.root, rev)
         .ok_or_else(|| AppError::Invalid(format!("git diff against '{rev}' unavailable")))?;
     let mut targets: Vec<Target> = Vec::new();
-    let mut removed: Vec<String> = Vec::new();
+    // Definitions at REV per path, and the keys that still exist in a changed current file;
+    // a key present at REV but in no current changed file was removed (not moved).
+    let mut old_by_path: Vec<(&str, BTreeMap<String, String>)> = Vec::new();
+    let mut current_keys: BTreeSet<String> = BTreeSet::new();
     for diff in &diffs {
+        if diff.deleted {
+            if filter.removed_path(&diff.path)
+                && let Some(old) = old_signatures(options.root, rev, &diff.path, None)
+            {
+                old_by_path.push((&diff.path, old));
+            }
+            continue;
+        }
         let Some(file) = index
             .derived
             .files()
@@ -105,6 +118,7 @@ pub fn render_diff(
         }
         let symbols: Vec<u32> =
             (record.first_symbol..record.first_symbol + record.symbol_count).collect();
+        current_keys.extend(symbols.iter().map(|&node| symbol_key(index, node)));
         let file_node = index.symbol_count() + file;
         let old = (!diff.untracked)
             .then(|| old_signatures(options.root, rev, &diff.path, record.file_type()))
@@ -146,14 +160,85 @@ pub fn render_diff(
                 seeds: Vec::new(),
             });
         }
-        if let Some(old) = &old {
-            let current: BTreeSet<String> = symbols.iter().map(|&s| symbol_key(index, s)).collect();
-            for (key, _) in old.iter().filter(|(key, _)| !current.contains(*key)) {
-                removed.push(format!("{} {}", key.replace('\u{0}', "."), diff.path));
+        if let Some(old) = old {
+            old_by_path.push((&diff.path, old));
+        }
+    }
+    let mut removed: Vec<(String, &str)> = Vec::new();
+    let mut removed_names: BTreeSet<String> = BTreeSet::new();
+    for (path, old) in &old_by_path {
+        for key in old.keys().filter(|key| !current_keys.contains(*key)) {
+            removed.push((key.replace('\u{0}', "."), path));
+            if let Some(name) = key.rsplit('\u{0}').next() {
+                removed_names.insert(name.to_owned());
             }
         }
     }
-    Ok(render(index, filter, &targets, &removed, options))
+    let survivors = surviving_references(index, filter, options.store, &removed_names);
+    Ok(render(
+        index, filter, &targets, &removed, &survivors, options,
+    ))
+}
+
+/// Reference kinds through which code depends on a definition.
+const DEPENDING_REFS: [RefKind; 5] = [
+    RefKind::Call,
+    RefKind::Type,
+    RefKind::Inherit,
+    RefKind::Implement,
+    RefKind::Value,
+];
+
+/// Current symbols (or files) that still name a removed definition and whose reference resolves
+/// to no current symbol of that name: the dependents the refreshed graph can no longer show.
+/// Name-based, hence inferred. Reads fact shards only when something was removed.
+fn surviving_references(
+    index: &Index,
+    filter: &Filter,
+    store: &crate::infra::store::Store,
+    names: &BTreeSet<String>,
+) -> Vec<u32> {
+    if names.is_empty() {
+        return Vec::new();
+    }
+    let positions: HashMap<&str, usize> = index
+        .derived
+        .files()
+        .iter()
+        .enumerate()
+        .map(|(position, file)| (index.string(file.path), position))
+        .collect();
+    let mut found: BTreeSet<u32> = BTreeSet::new();
+    for shard in 0..crate::infra::store::SHARDS {
+        let Ok(files) = store.read_shard(shard) else {
+            continue;
+        };
+        for (path, facts) in &files {
+            let Some(&position) = positions.get(path.as_str()) else {
+                continue;
+            };
+            let record = &index.derived.files()[position];
+            for reference in &facts.refs {
+                if !DEPENDING_REFS.contains(&reference.kind) || !names.contains(&reference.name) {
+                    continue;
+                }
+                let node = reference
+                    .scope
+                    .map_or(index.symbol_count() + position as u32, |scope| {
+                        record.first_symbol + scope
+                    });
+                let resolved = index.derived.outgoing(node).iter().any(|edge| {
+                    edge.line == reference.line
+                        && index.label(edge.node).rsplit(['.', ':']).next()
+                            == Some(reference.name.as_str())
+                });
+                if !resolved && filter.includes(index, node) {
+                    found.insert(node);
+                }
+            }
+        }
+    }
+    found.into_iter().collect()
 }
 
 /// Symbols whose range intersects a changed range; an enclosing symbol is dropped when one of
@@ -205,6 +290,16 @@ fn old_signatures(
     file_type: Option<FileType>,
 ) -> Option<BTreeMap<String, String>> {
     let content = git::show(root, rev, path)?;
+    // A file deleted since REV has no current record; classify it from its REV content.
+    let file_type = file_type.or_else(|| {
+        crate::domain::role::classify(&crate::domain::role::FileFacts {
+            path,
+            size: content.len() as u64,
+            head: Some(&content[..content.len().min(crate::domain::role::HEAD_LEN)]),
+            cpp_sibling: false,
+        })
+        .file_type
+    });
     let record = CorpusRecord {
         path: path.to_owned(),
         size: content.len() as u64,
@@ -233,7 +328,8 @@ fn render(
     index: &Index,
     filter: &Filter,
     targets: &[Target],
-    removed: &[String],
+    removed: &[(String, &str)],
+    survivors: &[u32],
     options: &ImpactOptions,
 ) -> String {
     let mut writer = Writer::new(options.json, options.budget);
@@ -269,13 +365,14 @@ fn render(
             ],
         );
     }
-    for gone in removed {
+    for (name, path) in removed {
         writer.line(
-            &format!("~ {gone} removed"),
+            &format!("~ {name} {path} removed"),
             &[
                 ("t", Value::Str("sym")),
                 ("rel", Value::Str("chg")),
-                ("name", Value::Str(gone)),
+                ("name", Value::Str(name)),
+                ("path", Value::Str(path)),
                 ("kind", Value::Str("removed")),
             ],
         );
@@ -290,6 +387,16 @@ fn render(
     let mut tests: BTreeSet<u32> = BTreeSet::new();
     for depth in 1..=options.depth.max(1) {
         let mut layer = Vec::new();
+        // Surviving references to removed definitions are inferred direct dependents.
+        if depth == 1 {
+            for &node in survivors {
+                if let std::collections::hash_map::Entry::Vacant(slot) = depth_of.entry(node) {
+                    slot.insert(1);
+                    exact_of.insert(node, false);
+                    layer.push(node);
+                }
+            }
+        }
         for &node in &frontier {
             let chain_exact = exact_of[&node];
             for edge in index.derived.incoming(node) {

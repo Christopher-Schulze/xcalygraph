@@ -13,6 +13,8 @@ pub struct FileDiff {
     /// Inclusive new-side line ranges; a pure deletion is the line after which it happened.
     pub ranges: Vec<(u32, u32)>,
     pub untracked: bool,
+    /// The file existed at the revision and is gone from the work tree; `ranges` is empty.
+    pub deleted: bool,
 }
 
 fn git(root: &Path, args: &[&str]) -> Option<String> {
@@ -43,6 +45,7 @@ pub fn diff(root: &Path, rev: &str) -> Option<Vec<FileDiff>> {
             "--unified=0",
             "--no-color",
             "--no-ext-diff",
+            "--no-renames",
             rev,
             "--",
             ".",
@@ -58,6 +61,7 @@ pub fn diff(root: &Path, rev: &str) -> Option<Vec<FileDiff>> {
                 path: path.to_owned(),
                 ranges: Vec::new(),
                 untracked: true,
+                deleted: false,
             });
         }
     }
@@ -68,13 +72,25 @@ pub fn diff(root: &Path, rev: &str) -> Option<Vec<FileDiff>> {
 /// Parses `git diff --unified=0`; paths are made relative to the root via `prefix`.
 pub fn parse_diff(text: &str, prefix: &str) -> Vec<FileDiff> {
     let mut diffs: Vec<FileDiff> = Vec::new();
-    // Hunks of a deleted file (`+++ /dev/null`) belong to no current file.
+    // Hunks of a deleted file (`+++ /dev/null`) belong to no current file; the file itself is
+    // kept from its `--- a/<path>` line.
     let mut deleted = false;
+    let mut old_path: Option<&str> = None;
     for line in text.lines() {
-        if let Some(path) = line.strip_prefix("+++ ") {
+        if let Some(path) = line.strip_prefix("--- ") {
+            old_path = path.strip_prefix("a/");
+        } else if let Some(path) = line.strip_prefix("+++ ") {
             let path = path.strip_prefix("b/").unwrap_or(path);
             deleted = path == "/dev/null";
             if deleted {
+                if let Some(old) = old_path.take() {
+                    diffs.push(FileDiff {
+                        path: old.strip_prefix(prefix).unwrap_or(old).to_owned(),
+                        ranges: Vec::new(),
+                        untracked: false,
+                        deleted: true,
+                    });
+                }
                 continue;
             }
             let relative = path.strip_prefix(prefix).unwrap_or(path);
@@ -82,6 +98,7 @@ pub fn parse_diff(text: &str, prefix: &str) -> Vec<FileDiff> {
                 path: relative.to_owned(),
                 ranges: Vec::new(),
                 untracked: false,
+                deleted: false,
             });
         } else if let Some(hunk) = line.strip_prefix("@@ ") {
             if deleted {
@@ -104,7 +121,7 @@ pub fn parse_diff(text: &str, prefix: &str) -> Vec<FileDiff> {
             current.ranges.push(range);
         }
     }
-    diffs.retain(|diff| !diff.ranges.is_empty());
+    diffs.retain(|diff| diff.deleted || !diff.ranges.is_empty());
     diffs
 }
 
@@ -171,11 +188,20 @@ mod tests {
         let diffs = parse_diff(text, "sub/");
         assert_eq!(
             diffs,
-            [FileDiff {
-                path: "a.go".to_owned(),
-                ranges: vec![(4, 5), (12, 12), (23, 23)],
-                untracked: false,
-            }]
+            [
+                FileDiff {
+                    path: "a.go".to_owned(),
+                    ranges: vec![(4, 5), (12, 12), (23, 23)],
+                    untracked: false,
+                    deleted: false,
+                },
+                FileDiff {
+                    path: "old.go".to_owned(),
+                    ranges: Vec::new(),
+                    untracked: false,
+                    deleted: true,
+                }
+            ]
         );
     }
 }

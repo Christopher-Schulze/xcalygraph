@@ -284,7 +284,7 @@ Card order: header (path:start-end, kind, qualified name) -> signature -> doc ->
 
 ### 7.5 impact
 
-1. Targets: NAME symbols, or symbols whose line ranges intersect the `--diff` ranges. Exported signature changes: extract the REV version of each changed file (`git show REV:path`) and compare signatures.
+1. Targets: NAME symbols, or symbols whose line ranges intersect the `--diff` ranges (`git diff --no-renames`, deleted files kept). Exported signature changes: extract the REV version of each changed or deleted file (`git show REV:path`) and compare signatures. A REV definition absent from every changed current file is `removed`; current symbols whose unresolved call, type, inheritance or value reference names it are inferred depth-1 dependents (fact shards, no revision index).
 2. Affected: reverse BFS over `calls`, `uses`, `inherits`, `implements`, `references`, `queries` up to `--depth`, ordered by depth, then rank. A dependent is exact only when a shortest chain to a target consists of exact edges; otherwise it is inferred, also on every later hop.
 3. Tests: tests reaching any target or affected symbol (test map).
 4. Run lines: Go `go test ./<pkg> -run '^(<names>)$'` per package; Rust `cargo test -p <crate> -- <names>` per crate; Python `pytest <path>::<name> ...`; Java, Kotlin, Scala, Groovy with Gradle `./gradlew test --tests <class>`, with Maven `mvn test -Dtest=<class>`; C#, VB.NET `dotnet test --filter FullyQualifiedName~<name>`; Ruby `bundle exec rspec <path>` or `bundle exec ruby -Itest <path>`; PHP `vendor/bin/phpunit --filter <name>`; Swift `swift test --filter <name>`; Elixir `mix test <path>`; Dart `dart test <path>`; Zig `zig build test`; other languages list test files only.
