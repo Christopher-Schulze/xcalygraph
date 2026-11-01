@@ -73,15 +73,7 @@ pub fn run(invocation: &Invocation) -> Result<String, AppError> {
             if mode == Mode::Write {
                 workspace.store.mark_used();
             }
-            let index = match query::open(&workspace.store) {
-                Ok(index) => index,
-                // A corrupt derived file (checksum) is rebuilt from the facts once.
-                Err(_) if mode == Mode::Write => {
-                    refresh::rederive(&workspace)?;
-                    query::open(&workspace.store)?
-                }
-                Err(error) => return Err(error),
-            };
+            let index = open_index(&workspace, mode)?;
             let filter = query::Filter::new(options)?;
             run_query(
                 &index,
@@ -92,6 +84,18 @@ pub fn run(invocation: &Invocation) -> Result<String, AppError> {
                 &workspace,
             )
         }
+    }
+}
+
+/// Opens the derived image and, only for writable operations, repairs it once from facts.
+fn open_index(workspace: &Workspace, mode: Mode) -> Result<query::Index, AppError> {
+    match query::open(&workspace.store) {
+        Ok(index) => Ok(index),
+        Err(_) if mode == Mode::Write => {
+            refresh::rederive(workspace)?;
+            query::open(&workspace.store)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -233,6 +237,7 @@ fn version() -> String {
 
 fn index(workspace: &Workspace) -> Result<String, AppError> {
     let report = refresh::refresh(workspace, Mode::Write)?;
+    open_index(workspace, Mode::Write)?;
     workspace.store.mark_used();
     Ok(format!(
         "files {} changed {} deleted {}\n",

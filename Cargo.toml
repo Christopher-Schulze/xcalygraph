@@ -103,3 +103,7 @@ lang-verilog = ["dep:tree-sitter-verilog"]
 lang-powershell = ["dep:tree-sitter-powershell"]
 lang-robot = ["dep:tree-sitter-robot"]
 lang-dm = ["dep:tree-sitter-dm"]
+
+# Index integrity checks hash the full derived image in development too.
+[profile.dev.package.xxhash-rust]
+opt-level = 3

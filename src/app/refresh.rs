@@ -84,12 +84,12 @@ pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError> {
         return Ok(report);
     }
     report.bytes_written += write_shards(workspace, &changes, rebuilt)?;
-    report.bytes_written += store
-        .write_files(&changes.records)
-        .map_err(AppError::io("write file table"))?;
     if changes.has_content_changes() || rebuilt || !derived_valid {
         report.bytes_written += write_derived(workspace, &changes.records)?;
     }
+    report.bytes_written += store
+        .write_files(&changes.records)
+        .map_err(AppError::io("write file table"))?;
     let meta = Meta {
         extraction_version: extract::extraction_version(),
         binary_version: derive_version(),
@@ -135,20 +135,43 @@ pub fn rederive(workspace: &Workspace) -> Result<(), AppError> {
 
 /// Resolves the facts of every file and writes the `derived` file.
 fn write_derived(workspace: &Workspace, records: &[FileRecord]) -> Result<u64, AppError> {
-    let shards: Vec<Vec<(String, Facts)>> = (0..SHARDS)
+    let mut needed = [false; SHARDS];
+    for record in records.iter().filter(|record| record.role.is_extracted()) {
+        needed[store::shard_of(&record.path)] = true;
+    }
+    let shards: Vec<Result<Vec<(String, Facts)>, AppError>> = (0..SHARDS)
         .into_par_iter()
-        .map(|shard| workspace.store.read_shard(shard).unwrap_or_default())
+        .map(|shard| {
+            if !needed[shard] {
+                return Ok(Vec::new());
+            }
+            workspace.store.read_shard(shard).map_err(|error| {
+                AppError::Invalid(format!(
+                    "fact shard {shard:02} unreadable ({error}); cannot rebuild derived index"
+                ))
+            })
+        })
         .collect();
-    let mut by_path: FastMap<String, Facts> = shards.into_iter().flatten().collect();
+    let mut by_path: FastMap<String, Facts> = shards
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect();
     let facts: Vec<Option<Facts>> = records
         .iter()
         .map(|record| {
-            record
-                .role
-                .is_extracted()
-                .then(|| by_path.remove(&record.path).unwrap_or_default())
+            if !record.role.is_extracted() {
+                return Ok(None);
+            }
+            by_path.remove(&record.path).map(Some).ok_or_else(|| {
+                AppError::Invalid(format!(
+                    "fact missing for {}; cannot rebuild derived index",
+                    record.path
+                ))
+            })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
     let graph = resolve::build(&resolve::Input {
         files: records,
         facts: &facts,

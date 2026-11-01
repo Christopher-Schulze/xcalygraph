@@ -35,14 +35,23 @@ impl Workspace {
         // Agents confined to their repository cannot write the shared location: the index then
         // lives in the root, excluded from the walk.
         if options.index_dir.is_none()
-            && env::var_os("XCALYGRAPH_INDEX_DIR").is_none()
-            && create_private(&base).is_err()
+            && env::var_os("XCALYGRAPH_INDEX_DIR").is_none_or(|value| value.is_empty())
         {
-            base = root.join(LOCAL_DIR);
-            eprintln!(
-                "xcalygraph: index in {} (shared location not writable); add {LOCAL_DIR}/ to .gitignore",
-                base.display()
-            );
+            let local = root.join(LOCAL_DIR);
+            if options.read_only {
+                // Read-only location discovery must not create the base or a writability probe.
+                if !store::index_dir(&base, &root).is_dir()
+                    && store::index_dir(&local, &root).is_dir()
+                {
+                    base = local;
+                }
+            } else if create_private(&base).is_err() {
+                base = local;
+                eprintln!(
+                    "xcalygraph: index in {} (shared location not writable); add {LOCAL_DIR}/ to .gitignore",
+                    base.display()
+                );
+            }
         }
         Ok(Self {
             store: Store::new(store::index_dir(&base, &root)),

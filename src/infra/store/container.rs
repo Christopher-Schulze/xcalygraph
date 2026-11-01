@@ -73,9 +73,9 @@ pub fn build(kind: Kind, sections: &[&[u8]]) -> Vec<u8> {
 }
 
 /// Writes the image atomically (temp file in the same directory, then rename), without fsync.
-/// An existing file with the same checksum and length is left untouched. Returns bytes written.
+/// An existing byte-identical image is left untouched. Returns bytes written.
 pub fn write(path: &Path, image: &[u8]) -> io::Result<u64> {
-    if same_header(path, image) {
+    if same_image(path, image) {
         return Ok(0);
     }
     let name = path
@@ -92,7 +92,7 @@ pub fn write(path: &Path, image: &[u8]) -> io::Result<u64> {
     result.map(|()| image.len() as u64)
 }
 
-fn same_header(path: &Path, image: &[u8]) -> bool {
+fn same_image(path: &Path, image: &[u8]) -> bool {
     let Ok(mut file) = File::open(path) else {
         return false;
     };
@@ -100,8 +100,19 @@ fn same_header(path: &Path, image: &[u8]) -> bool {
     if file.read_exact(&mut header).is_err() {
         return false;
     }
-    header[..40] == image[..40]
-        && file.metadata().map(|meta| meta.len()).ok() == Some(image.len() as u64)
+    if image.get(..HEADER_LEN) != Some(header.as_slice())
+        || file.metadata().map(|meta| meta.len()).ok() != Some(image.len() as u64)
+    {
+        return false;
+    }
+    let mut buffer = [0u8; 64 * 1024];
+    for expected in image[HEADER_LEN..].chunks(buffer.len()) {
+        let actual = &mut buffer[..expected.len()];
+        if file.read_exact(actual).is_err() || actual != expected {
+            return false;
+        }
+    }
+    true
 }
 
 /// True when the file starts with a header of this format version and kind whose recorded
@@ -119,9 +130,9 @@ pub fn header_matches(path: &Path, kind: Kind) -> bool {
     header[0..8] == MAGIC
         && header[8..12] == FORMAT_VERSION.to_le_bytes()
         && header[12..16] == (kind as u32).to_le_bytes()
-        && file
-            .metadata()
-            .is_ok_and(|meta| meta.len() == u64::from_le_bytes(length) + HEADER_LEN as u64)
+        && file.metadata().is_ok_and(|meta| {
+            u64::from_le_bytes(length).checked_add(HEADER_LEN as u64) == Some(meta.len())
+        })
 }
 
 /// A validated, memory-mapped container.
