@@ -743,6 +743,235 @@ fn installer_without_skill_preserves_existing_output_on_failure() -> TestResult 
     Ok(())
 }
 
+fn release_builder_fixture(dir: &TempDir) -> io::Result<PathBuf> {
+    dir.write(
+        "project/Cargo.toml",
+        "[package]\nname = \"xcalygraph\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[dependencies]\nxcalygraph_absent_fixture_dependency = \"=0.0.0\"\n",
+    )?;
+    dir.write(
+        "project/src/main.rs",
+        "fn main() { println!(\"fixture\"); }\n",
+    )?;
+    dir.write("project/LICENSE", "fixture license\n")?;
+    let script = dir.0.join("project/scripts/build/build-release.sh");
+    fs::create_dir_all(
+        script
+            .parent()
+            .ok_or_else(|| io::Error::other("script parent"))?,
+    )?;
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/build/build-release.sh"),
+        &script,
+    )?;
+    Ok(script)
+}
+
+#[test]
+fn release_builder_preserves_foreign_dist_on_preparation_failure() -> TestResult {
+    let dir = TempDir::new("release-dist-preservation")?;
+    let script = release_builder_fixture(&dir)?;
+    dir.write("project/dist/foreign.txt", "preserve release data")?;
+    let output = Command::new("/bin/bash")
+        .arg(&script)
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("HOME", dir.0.join("home"))
+        .current_dir(dir.0.join("project"))
+        .output()?;
+    assert!(!output.status.success());
+    assert_eq!(
+        fs::read(dir.0.join("project/dist/foreign.txt"))?,
+        b"preserve release data"
+    );
+    assert_eq!(fs::read_dir(dir.0.join("project/dist"))?.count(), 1);
+    let os = if std::env::consts::OS == "macos" {
+        "darwin"
+    } else {
+        std::env::consts::OS
+    };
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "amd64",
+        other => other,
+    };
+    let conflict = dir
+        .0
+        .join(format!("project/dist/xcalygraph-0.0.0-{os}-{arch}.tar.gz"));
+    fs::write(&conflict, b"keep conflicting archive")?;
+    let output = Command::new("/bin/bash")
+        .arg(&script)
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("HOME", dir.0.join("home"))
+        .current_dir(dir.0.join("project"))
+        .output()?;
+    assert!(!output.status.success());
+    assert!(String::from_utf8(output.stderr)?.contains("output already exists"));
+    assert_eq!(fs::read(conflict)?, b"keep conflicting archive");
+    assert_eq!(
+        fs::read(dir.0.join("project/dist/foreign.txt"))?,
+        b"preserve release data"
+    );
+    assert_eq!(fs::read_dir(dir.0.join("project/dist"))?.count(), 2);
+    let unsupported = Command::new("/bin/bash")
+        .arg(&script)
+        .arg("unsupported-target")
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("HOME", dir.0.join("home"))
+        .current_dir(dir.0.join("project"))
+        .output()?;
+    assert!(!unsupported.status.success());
+    assert!(String::from_utf8(unsupported.stderr)?.contains("unsupported target"));
+    assert_eq!(fs::read_dir(dir.0.join("project/dist"))?.count(), 2);
+    let duplicate = TempDir::new("release-duplicate-target")?;
+    let duplicate_script = release_builder_fixture(&duplicate)?;
+    let output = Command::new("/bin/bash")
+        .arg(duplicate_script)
+        .args(["aarch64-apple-darwin", "aarch64-apple-darwin"])
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("HOME", duplicate.0.join("home"))
+        .current_dir(duplicate.0.join("project"))
+        .output()?;
+    assert!(!output.status.success());
+    assert!(String::from_utf8(output.stderr)?.contains("duplicate output"));
+    Ok(())
+}
+
+#[test]
+fn release_packaging_preserves_foreign_files_and_rejects_conflicts() -> TestResult {
+    use sha2::Digest;
+
+    let dir = TempDir::new("release-packaging")?;
+    let script = release_builder_fixture(&dir)?;
+    let stage = dir.0.join("stage with spaces");
+    let dist = dir.0.join("dist with spaces");
+    fs::create_dir(&stage)?;
+    fs::create_dir(&dist)?;
+    fs::write(stage.join("THIRD-PARTY-LICENSES.txt"), b"fixture notices")?;
+    fs::write(dist.join("foreign.tar.gz"), b"preserve unrelated archive")?;
+    let name = "xcalygraph-0.0.0-darwin-arm64";
+    let shell = "source \"$1\"; package_release \"$2\" \"$3\" \"$4\"; publish_releases \"$2\" \"$5\" \"$3.tar.gz\"";
+    let package = |destination: &Path, staging: &Path| {
+        Command::new("/bin/bash")
+            .args(["-c", shell, "release-test"])
+            .arg(&script)
+            .arg(staging)
+            .arg(name)
+            .arg(BINARY)
+            .arg(destination)
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("HOME", dir.0.join("home"))
+            .output()
+    };
+    let output = package(&dist, &stage)?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let archive = dist.join(format!("{name}.tar.gz"));
+    let digest: String = sha2::Sha256::digest(fs::read(&archive)?)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(
+        fs::read_to_string(dist.join("SHA256SUMS"))?,
+        format!("{digest}  {name}.tar.gz\n")
+    );
+    assert_eq!(
+        fs::read(dist.join("foreign.tar.gz"))?,
+        b"preserve unrelated archive"
+    );
+    let listing = Command::new("tar").arg("-tzf").arg(&archive).output()?;
+    assert!(listing.status.success());
+    let listing = String::from_utf8(listing.stdout)?;
+    for file in ["xcalygraph", "LICENSE", "THIRD-PARTY-LICENSES.txt"] {
+        assert!(listing.contains(&format!("{name}/{file}")), "{listing}");
+    }
+    let extracted = dir.0.join("extracted");
+    fs::create_dir(&extracted)?;
+    let unpacked = Command::new("tar")
+        .arg("-xzf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(&extracted)
+        .status()?;
+    assert!(unpacked.success());
+    let packaged = extracted.join(name);
+    assert!(
+        Command::new("cmp")
+            .arg("-s")
+            .arg(BINARY)
+            .arg(packaged.join("xcalygraph"))
+            .status()?
+            .success()
+    );
+    assert_eq!(fs::read(packaged.join("LICENSE"))?, b"fixture license\n");
+    assert_eq!(
+        fs::read(packaged.join("THIRD-PARTY-LICENSES.txt"))?,
+        b"fixture notices"
+    );
+    let conflict_stage = dir.0.join("conflict-stage");
+    let conflict_dist = dir.0.join("conflict-dist");
+    fs::create_dir(&conflict_stage)?;
+    fs::create_dir(&conflict_dist)?;
+    fs::write(
+        conflict_stage.join("THIRD-PARTY-LICENSES.txt"),
+        b"fixture notices",
+    )?;
+    fs::write(
+        conflict_dist.join(format!("{name}.tar.gz")),
+        b"preserve conflicting archive",
+    )?;
+    let conflict = package(&conflict_dist, &conflict_stage)?;
+    assert!(!conflict.status.success());
+    assert_eq!(
+        fs::read(conflict_dist.join(format!("{name}.tar.gz")))?,
+        b"preserve conflicting archive"
+    );
+    assert!(!conflict_dist.join("SHA256SUMS").exists());
+    let checksum_dist = dir.0.join("checksum-dist");
+    fs::create_dir(&checksum_dist)?;
+    fs::write(
+        checksum_dist.join("SHA256SUMS"),
+        b"preserve foreign checksums",
+    )?;
+    let check = Command::new("/bin/bash")
+        .args([
+            "-c",
+            "source \"$1\"; check_outputs \"$2\" \"$3\"",
+            "release-check",
+        ])
+        .arg(&script)
+        .arg(&checksum_dist)
+        .arg(format!("{name}.tar.gz"))
+        .output()?;
+    assert!(!check.status.success());
+    assert_eq!(
+        fs::read(checksum_dist.join("SHA256SUMS"))?,
+        b"preserve foreign checksums"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let linked_dist = dir.0.join("linked-dist");
+        fs::create_dir(&linked_dist)?;
+        let link = linked_dist.join(format!("{name}.tar.gz"));
+        symlink(dir.0.join("missing-target"), &link)?;
+        let check = Command::new("/bin/bash")
+            .args([
+                "-c",
+                "source \"$1\"; check_outputs \"$2\" \"$3\"",
+                "release-check",
+            ])
+            .arg(&script)
+            .arg(&linked_dist)
+            .arg(format!("{name}.tar.gz"))
+            .output()?;
+        assert!(!check.status.success());
+        assert!(fs::symlink_metadata(link)?.file_type().is_symlink());
+    }
+    Ok(())
+}
+
 #[test]
 fn update_reports_a_failed_skill_phase_after_replacing_the_binary() -> TestResult {
     use std::os::unix::fs::PermissionsExt;
