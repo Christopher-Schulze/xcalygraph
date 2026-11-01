@@ -42,16 +42,25 @@ pub fn extraction_version() -> u32 {
 
 /// Extracts the facts of one file of an extracted role.
 pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
+    extract_inner(record, content, false).facts
+}
+
+/// Extracts the usual facts plus transient, complete declaration identities for diff analysis.
+pub fn extract_with_identities(record: &FileRecord, content: &[u8]) -> engine::Parsed {
+    extract_inner(record, content, true)
+}
+
+fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) -> engine::Parsed {
     if matches!(
         record.file_type,
         Some(FileType::Vue | FileType::Svelte | FileType::Astro)
     ) {
-        let (mut facts, spans) = sfc::extract(record, content);
+        let mut parsed = sfc::extract(record, content, capture_identities);
         if record.role == Role::Src {
-            terms::add(content, &mut facts, &spans);
+            terms::add(content, &mut parsed.facts, &parsed.spans);
         }
-        facts.lines = count_lines(content);
-        return facts;
+        parsed.facts.lines = count_lines(content);
+        return parsed;
     }
     if let Some(
         file_type @ (FileType::Text
@@ -65,7 +74,7 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
     {
         let mut facts = prose::extract(file_type, &String::from_utf8_lossy(content));
         facts.lines = count_lines(content);
-        return facts;
+        return without_identities(facts, capture_identities);
     }
     if let Some(file_type) = record
         .file_type
@@ -75,7 +84,7 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
         if file_type != FileType::DmResource {
             assets::literal_paths(&String::from_utf8_lossy(content), &mut facts);
         }
-        return facts;
+        return without_identities(facts, capture_identities);
     }
     let document = match record.file_type {
         Some(FileType::Pdf) => Some(documents::pdf(content)),
@@ -91,12 +100,12 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
         _ => None,
     };
     if let Some(facts) = document {
-        return facts;
+        return without_identities(facts, capture_identities);
     }
     if record.file_type == Some(FileType::Markdown) {
         let mut facts = markdown::extract(&String::from_utf8_lossy(content));
         facts.lines = count_lines(content);
-        return facts;
+        return without_identities(facts, capture_identities);
     }
     #[cfg(feature = "lang-groovy")]
     let terminated;
@@ -114,13 +123,16 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
         if lower.ends_with(".dfm") || lower.ends_with(".lfm") {
             let mut facts = lang::pascal::form(&record.path, &String::from_utf8_lossy(content));
             facts.lines = count_lines(content);
-            return facts;
+            return without_identities(facts, capture_identities);
         }
         if lower.ends_with(".lpk") {
-            return Facts {
-                lines: count_lines(content),
-                ..Facts::default()
-            };
+            return without_identities(
+                Facts {
+                    lines: count_lines(content),
+                    ..Facts::default()
+                },
+                capture_identities,
+            );
         }
     }
     #[cfg(any(feature = "lang-c", feature = "lang-cpp", feature = "lang-objc"))]
@@ -138,14 +150,27 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
     };
     // World of Warcraft `.toc` files list the addon's files; they are no Lua source.
     let toc = record.path.ends_with(".toc");
-    let (mut facts, spans) = record
+    let parsed = record
         .file_type
         .filter(|_| !toc)
         .and_then(|file_type| lang::lookup(file_type, &record.path))
         .map(|(pack, language, query)| {
-            engine::extract(&language, query, &pack.hooks, &record.path, content)
+            engine::extract(
+                &language,
+                query,
+                &pack.hooks,
+                &record.path,
+                content,
+                capture_identities,
+            )
         })
         .unwrap_or_default();
+    let engine::Parsed {
+        mut facts,
+        spans,
+        mut identities,
+        incomplete,
+    } = parsed;
     #[cfg(any(feature = "lang-c", feature = "lang-cpp", feature = "lang-objc"))]
     if matches!(
         record.file_type,
@@ -262,7 +287,35 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
         facts.manifest = manifest::parse(name, &String::from_utf8_lossy(content));
     }
     facts.entry |= content.starts_with(b"#!");
-    facts
+    if capture_identities {
+        identities.resize(facts.symbols.len(), None);
+    }
+    engine::Parsed {
+        facts,
+        spans,
+        identities,
+        incomplete,
+    }
+}
+
+fn without_identities(facts: Facts, capture_identities: bool) -> engine::Parsed {
+    let identities = if capture_identities {
+        facts
+            .symbols
+            .iter()
+            .map(|symbol| {
+                (symbol.kind() == crate::domain::facts::SymKind::Heading)
+                    .then(|| symbol.name.clone())
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    engine::Parsed {
+        facts,
+        identities,
+        ..engine::Parsed::default()
+    }
 }
 
 pub fn count_lines(content: &[u8]) -> u32 {

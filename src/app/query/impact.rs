@@ -50,7 +50,7 @@ struct DefinitionKey {
 
 struct Definition {
     key: DefinitionKey,
-    signature: String,
+    signature: Option<String>,
     line: u32,
     matched: bool,
     ambiguous: bool,
@@ -71,6 +71,7 @@ struct CurrentFile {
     path: String,
     file_type: Option<FileType>,
     package: Option<String>,
+    hash: Option<u128>,
     symbols: Vec<Definition>,
 }
 
@@ -91,6 +92,7 @@ struct Move<'a> {
     previous: RevisionLocation<'a>,
     path: &'a str,
     line: u32,
+    signature_changed: bool,
 }
 
 pub struct ImpactOptions<'a> {
@@ -214,6 +216,11 @@ pub fn render_diff(
             },
             path: &current.path,
             line: new.line,
+            signature_changed: matches!(
+                index.node(index.derived.files()[current.file as usize].first_symbol + new_symbol as u32),
+                Node::Symbol(symbol) if symbol.exported != 0
+            ) && old.signature.as_ref().zip(new.signature.as_ref())
+                .is_some_and(|(before, after)| before != after),
         });
     }
     let survivors = surviving_references(index, filter, options.store, &removed_names);
@@ -307,11 +314,12 @@ fn innermost_hits(index: &Index, symbols: &[u32], ranges: &[(u32, u32)]) -> Vec<
         .collect()
 }
 
-fn definitions(facts: &Facts) -> Option<Vec<Definition>> {
+fn definitions(facts: &Facts, identities: &[Option<String>]) -> Option<Vec<Definition>> {
     facts
         .symbols
         .iter()
-        .map(|symbol| {
+        .enumerate()
+        .map(|(index, symbol)| {
             let mut parents = Vec::new();
             let mut current = symbol.parent;
             let mut remaining = facts.symbols.len();
@@ -334,7 +342,7 @@ fn definitions(facts: &Facts) -> Option<Vec<Definition>> {
                     kind: symbol.kind(),
                     parts: parents.into_iter().map(str::to_owned).collect(),
                 },
-                signature: symbol.signature.clone(),
+                signature: identities.get(index).cloned().flatten(),
                 line: symbol.line,
                 matched: false,
                 ambiguous: false,
@@ -351,8 +359,10 @@ fn revision_file(
     path: &str,
     file_type: Option<FileType>,
     keep_content: bool,
-) -> Option<RevisionFile> {
-    let content = git::show(root, rev, path)?;
+) -> Result<Option<RevisionFile>, AppError> {
+    let Some(content) = git::show(root, rev, path) else {
+        return Ok(None);
+    };
     // A file deleted since REV has no current record; classify it from its REV content.
     let file_type = file_type.or_else(|| {
         crate::domain::role::classify(&crate::domain::role::FileFacts {
@@ -372,14 +382,22 @@ fn revision_file(
         role: crate::domain::role::Role::Src,
         file_type,
     };
-    let facts: Facts = extract::extract(&record, &content);
-    Some(RevisionFile {
+    let parsed = extract::extract_with_identities(&record, &content);
+    if parsed.incomplete {
+        return Err(AppError::Invalid(format!(
+            "cannot verify revision definitions in '{path}': extraction incomplete"
+        )));
+    }
+    let facts = parsed.facts;
+    Ok(Some(RevisionFile {
         path: path.to_owned(),
         file_type,
         package: facts.package.clone(),
-        symbols: definitions(&facts)?,
+        symbols: definitions(&facts, &parsed.identities).ok_or_else(|| {
+            AppError::Invalid(format!("invalid revision definitions in '{path}'"))
+        })?,
         content: if keep_content { content } else { Vec::new() },
-    })
+    }))
 }
 
 fn collect_changes(
@@ -391,6 +409,9 @@ fn collect_changes(
 ) -> Result<Vec<Change>, AppError> {
     let mut shards = HashMap::new();
     let mut changes = Vec::new();
+    let records = store
+        .read_files()
+        .map_err(|error| AppError::Invalid(format!("cannot read index file records: {error}")))?;
     for diff in diffs {
         let file = (!diff.deleted)
             .then(|| {
@@ -434,14 +455,64 @@ fn collect_changes(
                         })?,
                 )
             };
-            let symbols = match facts {
-                Some(facts) => definitions(facts).ok_or_else(|| {
-                    AppError::Invalid(format!(
-                        "index facts disagree for '{}'; run 'xcalygraph index'",
+            let verify_empty = matches!(
+                record.role(),
+                crate::domain::role::Role::Src
+                    | crate::domain::role::Role::Test
+                    | crate::domain::role::Role::Gen
+            ) && record.file_type().is_some_and(FileType::is_code);
+            let (symbols, hash) = if facts.is_some() || verify_empty {
+                let source = records
+                    .binary_search_by(|entry| entry.path.as_str().cmp(diff.path.as_str()))
+                    .ok()
+                    .and_then(|position| records.get(position))
+                    .ok_or_else(|| {
+                        AppError::Invalid(format!("index file record missing for '{}'", diff.path))
+                    })?;
+                if source.role != record.role()
+                    || source.file_type != record.file_type()
+                    || !crate::domain::role::needs_content(&source.path, source.size)
+                {
+                    return Err(AppError::Invalid(format!(
+                        "index file record disagrees for '{}'",
                         diff.path
-                    ))
-                })?,
-                None => Vec::new(),
+                    )));
+                }
+                let content = std::fs::read(root.join(&diff.path))
+                    .map_err(AppError::io(format!("read source '{}'", diff.path)))?;
+                if xxhash_rust::xxh3::xxh3_128(&content) != source.hash {
+                    return Err(AppError::Invalid(format!(
+                        "source changed during diff analysis: '{}'",
+                        diff.path
+                    )));
+                }
+                let parsed = extract::extract_with_identities(source, &content);
+                if parsed.incomplete {
+                    return Err(AppError::Invalid(format!(
+                        "cannot verify current definitions in '{}': extraction incomplete",
+                        diff.path
+                    )));
+                }
+                let symbols = match facts {
+                    Some(facts)
+                        if parsed.facts.symbols == facts.symbols
+                            && parsed.facts.package == facts.package =>
+                    {
+                        definitions(facts, &parsed.identities).ok_or_else(|| {
+                            AppError::Invalid(format!("index facts disagree for '{}'", diff.path))
+                        })?
+                    }
+                    None if parsed.facts.symbols.is_empty() => Vec::new(),
+                    _ => {
+                        return Err(AppError::Invalid(format!(
+                            "index facts disagree for '{}'; run 'xcalygraph index'",
+                            diff.path
+                        )));
+                    }
+                };
+                (symbols, Some(source.hash))
+            } else {
+                (Vec::new(), None)
             };
             if symbols.len() != record.symbol_count as usize {
                 return Err(AppError::Invalid(format!(
@@ -489,6 +560,7 @@ fn collect_changes(
                 path: diff.path.clone(),
                 file_type: record.file_type(),
                 package: facts.and_then(|facts| facts.package.clone()),
+                hash,
                 symbols,
             })
         } else {
@@ -503,7 +575,7 @@ fn collect_changes(
                 &diff.path,
                 current.as_ref().and_then(|file| file.file_type),
                 diff.deleted,
-            )
+            )?
         };
         if previous.is_some() || current.is_some() {
             changes.push(Change {
@@ -526,13 +598,28 @@ fn match_local(previous: &mut [Definition], current: &mut [Definition]) {
     }
     for (old_indices, new_indices) in groups.values() {
         for &old_index in old_indices {
-            if let Some(&new_index) = new_indices.iter().find(|&&index| {
-                !current[index].matched && current[index].signature == previous[old_index].signature
-            }) {
-                previous[old_index].matched = true;
-                current[new_index].matched = true;
-                current[new_index].local = true;
+            let Some(signature) = previous[old_index].signature.as_deref() else {
+                continue;
+            };
+            if old_indices
+                .iter()
+                .filter(|&&index| previous[index].signature.as_deref() == Some(signature))
+                .take(2)
+                .count()
+                != 1
+            {
+                continue;
             }
+            let mut candidates = new_indices
+                .iter()
+                .copied()
+                .filter(|&index| current[index].signature.as_deref() == Some(signature));
+            let (Some(new_index), None) = (candidates.next(), candidates.next()) else {
+                continue;
+            };
+            previous[old_index].matched = true;
+            current[new_index].matched = true;
+            current[new_index].local = true;
         }
         let old_left: Vec<usize> = old_indices
             .iter()
@@ -545,11 +632,17 @@ fn match_local(previous: &mut [Definition], current: &mut [Definition]) {
             .filter(|&index| !current[index].matched)
             .collect();
         if old_left.len() == 1 && new_left.len() == 1 {
+            let changed = previous[old_left[0]]
+                .signature
+                .as_ref()
+                .zip(current[new_left[0]].signature.as_ref())
+                .map(|(old, new)| old != new);
             previous[old_left[0]].matched = true;
             let new = &mut current[new_left[0]];
             new.matched = true;
             new.local = true;
-            new.signature_changed = true;
+            new.signature_changed = changed == Some(true);
+            new.ambiguous = changed.is_none();
         } else if !old_left.is_empty() && !new_left.is_empty() {
             for index in old_left {
                 previous[index].ambiguous = true;
@@ -718,8 +811,11 @@ fn match_moves(
                 let possible = file_scoped(previous.file_type)
                     && change.diff.deleted
                     && next.previous.is_none()
-                    && !old.signature.is_empty()
-                    && old.signature == new.signature;
+                    && old
+                        .signature
+                        .as_ref()
+                        .zip(new.signature.as_ref())
+                        .is_some_and(|(old, new)| old == new);
                 let (identical, similar) = if !renamed
                     && !same_scope(previous, current)
                     && change.diff.deleted
@@ -735,6 +831,12 @@ fn match_moves(
                                 let bytes = std::fs::read(root.join(&current.path)).map_err(
                                     AppError::io(format!("cannot read '{}'", current.path)),
                                 )?;
+                                if Some(xxhash_rust::xxh3::xxh3_128(&bytes)) != current.hash {
+                                    return Err(AppError::Invalid(format!(
+                                        "source changed during diff analysis: '{}'",
+                                        current.path
+                                    )));
+                                }
                                 entry.insert(bytes)
                             }
                         };
@@ -942,10 +1044,15 @@ fn render(
     }
     for movement in moved {
         let previous = &movement.previous;
+        let signature = if movement.signature_changed {
+            " sig?"
+        } else {
+            ""
+        };
         writer.line(
             &format!(
-                "~ {} {}:{} -> {}:{} moved?",
-                previous.name, previous.path, previous.line, movement.path, movement.line
+                "~ {} {}:{} -> {}:{} moved?{signature}",
+                previous.name, previous.path, previous.line, movement.path, movement.line,
             ),
             &[
                 ("t", Value::Str("sym")),
@@ -957,6 +1064,14 @@ fn render(
                 ("new_path", Value::Str(movement.path)),
                 ("new_line", Value::Int(u64::from(movement.line))),
                 ("conf", Value::Str("inferred")),
+                (
+                    "sig_change",
+                    Value::Str(if movement.signature_changed {
+                        "changed"
+                    } else {
+                        ""
+                    }),
+                ),
             ],
         );
     }
@@ -1480,7 +1595,7 @@ mod tests {
                 }],
                 ..Facts::default()
             };
-            assert!(definitions(&facts).is_none(), "parent {parent}");
+            assert!(definitions(&facts, &[]).is_none(), "parent {parent}");
         }
     }
 }

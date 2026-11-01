@@ -8,11 +8,11 @@
 
 use super::lang;
 use crate::domain::corpus::FileRecord;
-use crate::domain::facts::{Facts, Ref, RefKind, SymKind, Symbol};
+use crate::domain::facts::{Ref, RefKind, SymKind, Symbol};
 use crate::domain::filetype::FileType;
 use crate::extract::engine;
 
-pub fn extract(record: &FileRecord, content: &[u8]) -> (Facts, crate::extract::engine::Spans) {
+pub fn extract(record: &FileRecord, content: &[u8], capture_identities: bool) -> engine::Parsed {
     let text = String::from_utf8_lossy(content);
     let (scripts, typescript) = script_ranges(&text, record.file_type == Some(FileType::Astro));
     let mut blanked: Vec<u8> = text
@@ -35,14 +35,34 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> (Facts, crate::extract::e
     } else {
         (FileType::JavaScript, format!("{}.js", record.path))
     };
-    let (mut facts, mut spans) = lang::lookup(file_type, &path)
+    let parsed = lang::lookup(file_type, &path)
         .map(|(pack, language, query)| {
-            engine::extract(&language, query, &pack.hooks, &record.path, &blanked)
+            engine::extract(
+                &language,
+                query,
+                &pack.hooks,
+                &record.path,
+                &blanked,
+                capture_identities,
+            )
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|| engine::Parsed {
+            incomplete: capture_identities,
+            ..engine::Parsed::default()
+        });
+    let engine::Parsed {
+        mut facts,
+        mut spans,
+        mut identities,
+        mut incomplete,
+    } = parsed;
     // Spans index the blanked text; they match `content` only when decoding kept every byte.
     if blanked.len() != content.len() {
         spans.clear();
+        if capture_identities {
+            identities.fill(None);
+            incomplete = true;
+        }
     }
     let mut parts = record.path.rsplit('/');
     let stem = parts
@@ -58,12 +78,16 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> (Facts, crate::extract::e
     };
     let lines = text.lines().count() as u32;
     let component = facts.symbols.len() as u32;
+    let component_signature = format!("component {}", pascal_case(stem));
+    if capture_identities {
+        identities.push(Some(component_signature.clone()));
+    }
     facts.symbols.push(Symbol {
         kind: Some(SymKind::Class),
         name: pascal_case(stem),
         line: 1,
         end_line: lines.max(1),
-        signature: format!("component {}", pascal_case(stem)),
+        signature: component_signature,
         exported: true,
         ..Symbol::default()
     });
@@ -105,7 +129,15 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> (Facts, crate::extract::e
         }
     }
     super::routes::add(&record.path, &text, Some(component), &mut facts);
-    (facts, spans)
+    if capture_identities {
+        identities.resize(facts.symbols.len(), None);
+    }
+    engine::Parsed {
+        facts,
+        spans,
+        identities,
+        incomplete,
+    }
 }
 
 /// Svelte 5 runes: compiler keywords, no stores.
@@ -340,10 +372,12 @@ mod tests {
     #[test]
     fn vue_script_and_template_components() {
         let source = "<template>\n  <div>\n    <UserCard :user=\"u\" />\n    <app-footer></app-footer>\n  </div>\n</template>\n<script setup lang=\"ts\">\nimport UserCard from './UserCard.vue'\nfunction load(): void { fetchUser() }\n</script>\n";
-        let (facts, _) = extract(
+        let facts = extract(
             &record("src/components/user-page.vue", FileType::Vue),
             source.as_bytes(),
-        );
+            false,
+        )
+        .facts;
         let symbols: Vec<(&str, u32)> = facts
             .symbols
             .iter()
@@ -366,10 +400,12 @@ mod tests {
     #[test]
     fn astro_frontmatter_is_typescript() {
         let source = "---\nimport Layout from '../layouts/Layout.astro';\nconst title = getTitle();\n---\n<Layout title={title}><Header /></Layout>\n";
-        let (facts, _) = extract(
+        let facts = extract(
             &record("src/pages/index.astro", FileType::Astro),
             source.as_bytes(),
-        );
+            false,
+        )
+        .facts;
         let calls: Vec<&str> = facts
             .refs
             .iter()
@@ -382,10 +418,12 @@ mod tests {
     #[test]
     fn svelte_markup_expressions_directives_and_stores() {
         let source = "<script>\n  import { enhance } from '$app/forms';\n  import { user } from '$lib/stores';\n  let { items } = $props();\n  function format(x) { return x }\n  function save() {}\n</script>\n\n{#each items as item}\n  <p>{format(item)}</p>\n{/each}\n<button onclick={save}>{$user.name}</button>\n<form use:enhance></form>\n<style>\n  p { color: red }\n</style>\n";
-        let (facts, _) = extract(
+        let facts = extract(
             &record("src/routes/items/+page.svelte", FileType::Svelte),
             source.as_bytes(),
-        );
+            false,
+        )
+        .facts;
         let mut refs: Vec<(&str, u32)> = facts
             .refs
             .iter()

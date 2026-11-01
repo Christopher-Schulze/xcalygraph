@@ -130,6 +130,15 @@ struct RawField {
 /// Byte range of each extracted symbol in the source, aligned with `Facts::symbols`.
 pub type Spans = Vec<(usize, usize)>;
 
+/// Transient extraction details; complete signature identities are only captured for diff queries.
+#[derive(Default)]
+pub struct Parsed {
+    pub facts: Facts,
+    pub spans: Spans,
+    pub identities: Vec<Option<String>>,
+    pub incomplete: bool,
+}
+
 /// Extracts facts from `source` with the given grammar, compiled query and hooks, plus the
 /// syntax-tree byte range of every symbol (for body-word ownership; not stored).
 pub fn extract(
@@ -138,20 +147,52 @@ pub fn extract(
     hooks: &Hooks,
     path: &str,
     source: &[u8],
-) -> (Facts, Spans) {
+    capture_identities: bool,
+) -> Parsed {
     PARSER.with(|parser| {
         let mut parser = parser.borrow_mut();
         if parser.set_language(language).is_err() {
-            return (Facts::default(), Spans::new());
+            return Parsed {
+                incomplete: capture_identities,
+                ..Parsed::default()
+            };
         }
-        match parser.parse(source, None) {
-            Some(tree) => collect(query, hooks, path, source, tree.root_node()),
-            None => (Facts::default(), Spans::new()),
+        // A NUL-only suffix cannot contain a declaration. Ignore it for strict diff parsing so
+        // an otherwise complete source prefix remains usable, while other parse errors fail.
+        let parse_source = if capture_identities && source.last() == Some(&0) {
+            let end = source
+                .iter()
+                .rposition(|&byte| byte != 0)
+                .map_or(0, |end| end + 1);
+            &source[..end]
+        } else {
+            source
+        };
+        match parser.parse(parse_source, None) {
+            Some(tree) => collect(
+                query,
+                hooks,
+                path,
+                source,
+                tree.root_node(),
+                capture_identities,
+            ),
+            None => Parsed {
+                incomplete: capture_identities,
+                ..Parsed::default()
+            },
         }
     })
 }
 
-fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) -> (Facts, Spans) {
+fn collect(
+    query: &Query,
+    hooks: &Hooks,
+    path: &str,
+    source: &[u8],
+    root: Node,
+    capture_identities: bool,
+) -> Parsed {
     let elixir = path.ends_with(".ex") || path.ends_with(".exs");
     let lisp = [".lisp", ".lsp", ".cl", ".asd"]
         .iter()
@@ -346,12 +387,15 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
             }
         }
     }
+    drop(matches);
+    let incomplete = capture_identities && (root.has_error() || cursor.did_exceed_match_limit());
     envs.retain(|_, (name, _, _)| !assigned.contains(name));
     let doc = file_doc(root, source);
-    let (mut facts, spans) = assemble(Assembly {
+    let mut parsed = assemble(Assembly {
         hooks,
         path,
         source,
+        capture_identities,
         package,
         defs,
         impls,
@@ -363,15 +407,20 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
         envs,
         locals,
     });
-    facts.doc = doc;
-    facts.entry |= entry;
-    (facts, spans)
+    parsed.facts.doc = doc;
+    parsed.facts.entry |= entry;
+    parsed.incomplete = incomplete;
+    if incomplete {
+        parsed.identities.fill(None);
+    }
+    parsed
 }
 
 struct Assembly<'a, 'tree> {
     hooks: &'a Hooks,
     path: &'a str,
     source: &'a [u8],
+    capture_identities: bool,
     package: Option<String>,
     defs: HashMap<usize, RawDef<'tree>>,
     impls: Vec<(Node<'tree>, String, Option<String>)>,
@@ -384,11 +433,12 @@ struct Assembly<'a, 'tree> {
     locals: Vec<(usize, String)>,
 }
 
-fn assemble(assembly: Assembly) -> (Facts, Spans) {
+fn assemble(assembly: Assembly) -> Parsed {
     let Assembly {
         hooks,
         path,
         source,
+        capture_identities,
         package,
         defs,
         impls,
@@ -430,6 +480,7 @@ fn assemble(assembly: Assembly) -> (Facts, Spans) {
         package: package.as_deref(),
     };
     let mut symbols: Vec<Symbol> = Vec::with_capacity(defs.len());
+    let mut identities = Vec::new();
     let mut stack: Vec<usize> = Vec::new();
     for (index, def) in defs.iter().enumerate() {
         let Some(node) = def.node else { continue };
@@ -493,6 +544,14 @@ fn assemble(assembly: Assembly) -> (Facts, Spans) {
             ),
             160,
         );
+        if capture_identities {
+            identities.push(
+                def.last_clause
+                    .is_none()
+                    .then(|| signature_identity(node, source))
+                    .flatten(),
+            );
+        }
         symbols.push(Symbol {
             kind: Some(kind),
             name: def.name.clone(),
@@ -705,8 +764,8 @@ fn assemble(assembly: Assembly) -> (Facts, Spans) {
     } else {
         Spans::new()
     };
-    (
-        Facts {
+    Parsed {
+        facts: Facts {
             package,
             symbols,
             imports: facts_imports,
@@ -717,7 +776,9 @@ fn assemble(assembly: Assembly) -> (Facts, Spans) {
             ..Facts::default()
         },
         spans,
-    )
+        identities,
+        incomplete: false,
+    }
 }
 
 fn is_primary(name: &str) -> bool {
@@ -1084,20 +1145,7 @@ fn signature(node: Node, source: &[u8]) -> String {
         let raw = String::from_utf8_lossy(&source[start..header.end_byte().min(source.len())]);
         return tidy_brackets(&facts::normalize_space(&raw));
     }
-    let mut walker = node.walk();
-    let body = node
-        .child_by_field_name("body")
-        .or_else(|| {
-            // Grammars without a `body` field (Kotlin `class_body`, `function_body`).
-            node.named_children(&mut walker)
-                .find(|child| child.kind().ends_with("_body") && child.kind() != "type_body")
-        })
-        .map(|body| body.start_byte())
-        .or_else(|| {
-            node.child_by_field_name("type")
-                .filter(|child| matches!(child.kind(), "struct_type" | "interface_type"))
-                .and_then(|child| first_brace(child, source))
-        });
+    let body = body_start(node, source);
     let end = body.unwrap_or_else(|| node.end_byte()).max(start);
     let raw = String::from_utf8_lossy(&source[start..end.min(source.len())]);
     let raw = match body {
@@ -1108,6 +1156,79 @@ fn signature(node: Node, source: &[u8]) -> String {
     text.trim_end_matches(|ch: char| ch == '{' || ch == ';' || ch.is_whitespace())
         .trim_end_matches(" =")
         .to_owned()
+}
+
+/// The parser's body boundary, or the opening brace of a Go structural type.
+fn body_start(node: Node, source: &[u8]) -> Option<usize> {
+    let mut walker = node.walk();
+    node.child_by_field_name("body")
+        .or_else(|| {
+            node.named_children(&mut walker)
+                .find(|child| child.kind().ends_with("_body") && child.kind() != "type_body")
+        })
+        .map(|body| body.start_byte())
+        .or_else(|| {
+            node.child_by_field_name("type")
+                .filter(|child| matches!(child.kind(), "struct_type" | "interface_type"))
+                .and_then(|child| first_brace(child, source))
+        })
+}
+
+/// Complete header tokens, ignoring formatting and comments but preserving literal contents.
+/// Unknown boundaries and malformed declarations stay unknown rather than compare as equal.
+fn signature_identity(node: Node, source: &[u8]) -> Option<String> {
+    if node.has_error() || node.is_missing() {
+        return None;
+    }
+    let mut walker = node.walk();
+    let header = if matches!(node.kind(), "function_definition" | "macro_definition") {
+        node.named_children(&mut walker)
+            .find(|child| child.kind() == "signature")
+            .map(|child| child.end_byte())
+    } else {
+        None
+    };
+    let end = header.or_else(|| body_start(node, source)).or_else(|| {
+        (node.kind().ends_with("signature") || node.kind().ends_with("signature_item"))
+            .then_some(node.end_byte())
+    })?;
+    let mut identity = node.kind().to_owned();
+    let mut cursor = node.walk();
+    loop {
+        let current = cursor.node();
+        let kind = current.kind();
+        let literal = kind.contains("string")
+            || kind.contains("char_literal")
+            || kind.contains("rune_literal")
+            || kind.contains("regex");
+        let interpolated = if literal {
+            let mut children = current.walk();
+            current.named_children(&mut children).any(|child| {
+                child.kind().contains("interpolation") || child.kind().contains("substitution")
+            })
+        } else {
+            false
+        };
+        let atomic = current.child_count() == 0 || (literal && !interpolated);
+        let within = current.start_byte() < end;
+        let comment = kind.contains("comment");
+        if within && !comment && atomic && current.end_byte() <= end {
+            let fragment =
+                std::str::from_utf8(source.get(current.start_byte()..current.end_byte())?).ok()?;
+            identity.push(':');
+            identity.push_str(&fragment.len().to_string());
+            identity.push(':');
+            identity.push_str(fragment);
+        }
+        if within && !comment && !atomic && cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return Some(identity);
+            }
+        }
+    }
 }
 
 /// A signature over `max` characters keeps its parameter list whole: each parameter shrinks to
