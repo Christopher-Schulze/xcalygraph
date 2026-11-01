@@ -862,6 +862,46 @@ fn compact_and_minified_symbols_are_found_by_their_own_body_words() -> TestResul
 }
 
 #[test]
+fn hyphenated_ui_text_is_searchable_while_class_lists_are_not() -> TestResult {
+    let dir = TempDir::new("class-context")?;
+    let root = dir.0.join("repo");
+    dir.write(
+        "repo/src/MobileNav.tsx",
+        "import { cn } from './utils'\n\nexport function MobileNav({ open }: { open: boolean }) {\n  return (\n    <nav aria-label=\"small-screen navigation\" className={cn(\n      \"flex items-center justify-between\",\n      open && \"translate-x-0 duration-300\"\n    )}>\n      <span className=\"text-sm font-medium\">Menu</span>\n    </nav>\n  )\n}\n\nexport function Banner() {\n  console.warn('read-only mode enabled')\n  return <div className=\"rounded-lg border-dashed p-4\">Maintenance</div>\n}\n",
+    )?;
+    dir.write(
+        "repo/src/Toggle.svelte",
+        "<script>\n  export let dark = false\n</script>\n\n<button class=\"rounded-full px-3 py-1\" title=\"switch color-scheme preference\" on:click={() => dark = !dark}>Theme</button>\n",
+    )?;
+    git(&root, &["init", "-q"])?;
+    let index = dir.0.join("index");
+    let find = |question: &str| -> Result<(Option<i32>, String), Box<dyn Error>> {
+        let mut args = vec!["find"];
+        args.extend(question.split(' '));
+        let output = run_in(&root, &index, &args)?;
+        Ok((output.status.code(), String::from_utf8(output.stdout)?))
+    };
+    for (question, symbol) in [
+        ("small screen navigation", "  3 function MobileNav("),
+        ("read only mode", "  14 function Banner()"),
+        ("color scheme preference", "  1 component Toggle"),
+    ] {
+        let (code, text) = find(question)?;
+        assert_eq!(code, Some(0), "{question}");
+        assert!(text.contains(symbol), "{question}\n{text}");
+    }
+    for classes in [
+        "items center justify between",
+        "translate duration",
+        "rounded full",
+        "border dashed",
+    ] {
+        assert_eq!(find(classes)?.0, Some(4), "{classes} is class noise");
+    }
+    Ok(())
+}
+
+#[test]
 fn impact_of_a_diff_lists_changes_dependents_tests_and_run_lines() -> TestResult {
     let dir = TempDir::new("impact")?;
     let root = dir.0.join("repo");

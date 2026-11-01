@@ -143,6 +143,7 @@ fn collect(
             }
         }
     }
+    without_class_lists(&mut text);
     seen.clear();
     let mut terms = String::new();
     let mut count = 0;
@@ -156,7 +157,6 @@ fn collect(
         // token shared by several words (`delete` of `deleteUser`, `deleteComment`) repeats, so
         // its frequency still counts.
         line_words.clear();
-        let line = &without_class_lists(line);
         for word in words(line) {
             let lower = word.to_ascii_lowercase();
             if !KEYWORDS.contains(&lower.as_str()) && seen.insert(lower) {
@@ -178,47 +178,104 @@ fn collect(
     terms
 }
 
-/// The line with quoted CSS class lists blanked (`"flex items-center px-4"`): utility class
-/// names would fill a component's token budget with layout noise.
-fn without_class_lists(text: &[u8]) -> std::borrow::Cow<'_, [u8]> {
-    let mut out: Option<Vec<u8>> = None;
+/// Functions whose string arguments are CSS class names (`cn("flex", cond && "px-4")`).
+const CLASS_CALLS: [&[u8]; 9] = [
+    b"cn",
+    b"clsx",
+    b"classnames",
+    b"classNames",
+    b"cx",
+    b"twMerge",
+    b"twJoin",
+    b"cva",
+    b"tv",
+];
+
+/// Blanks CSS class lists where the syntax says they are classes: the value of a `class=` or
+/// `className=` attribute (also `:class=`, `className={...}`) and string arguments of a class
+/// composition call ([`CLASS_CALLS`]), across lines. Every other string, comment and text stays:
+/// `"small-screen navigation"` in a label or log message is behavior text. Byte length and line
+/// breaks are preserved.
+fn without_class_lists(text: &mut [u8]) {
+    // Per open parenthesis: whether it opened a class composition call.
+    let mut calls: Vec<bool> = Vec::new();
     let mut index = 0;
     while index < text.len() {
-        let quote = text[index];
-        if !matches!(quote, b'"' | b'\'' | b'`') {
-            index += 1;
-            continue;
+        match text[index] {
+            b'/' if text.get(index + 1) == Some(&b'/') => {
+                index = text[index..]
+                    .iter()
+                    .position(|&byte| byte == b'\n')
+                    .map_or(text.len(), |offset| index + offset);
+            }
+            b'/' if text.get(index + 1) == Some(&b'*') => {
+                index = text[index + 2..]
+                    .windows(2)
+                    .position(|window| window == b"*/")
+                    .map_or(text.len(), |offset| index + offset + 4);
+            }
+            b'<' if text[index..].starts_with(b"<!--") => {
+                index = text[index + 4..]
+                    .windows(3)
+                    .position(|window| window == b"-->")
+                    .map_or(text.len(), |offset| index + offset + 7);
+            }
+            b'(' => {
+                let name_start = text[..index]
+                    .iter()
+                    .rposition(|byte| !(byte.is_ascii_alphanumeric() || *byte == b'_'))
+                    .map_or(0, |position| position + 1);
+                calls.push(CLASS_CALLS.contains(&&text[name_start..index]));
+                index += 1;
+            }
+            b')' => {
+                calls.pop();
+                index += 1;
+            }
+            quote @ (b'"' | b'\'' | b'`') => {
+                let end = string_end(text, index, quote);
+                if calls.contains(&true) || after_class_attribute(&text[..index]) {
+                    for byte in &mut text[index + 1..end.saturating_sub(1).max(index + 1)] {
+                        if *byte != b'\n' {
+                            *byte = b' ';
+                        }
+                    }
+                }
+                index = end;
+            }
+            _ => index += 1,
         }
-        let Some(length) = text[index + 1..].iter().position(|&byte| byte == quote) else {
-            break;
-        };
-        let inner = &text[index + 1..index + 1 + length];
-        if is_class_list(inner) {
-            out.get_or_insert_with(|| text.to_vec())[index + 1..index + 1 + length].fill(b' ');
-        }
-        index += length + 2;
     }
-    out.map_or(std::borrow::Cow::Borrowed(text), std::borrow::Cow::Owned)
 }
 
-/// At least two space-separated class-like items (lowercase, digits, `-:/[].%!`), one with a
-/// dash or colon: `"flex items-center"`, `"md:px-4 text-sm"`.
-fn is_class_list(inner: &[u8]) -> bool {
-    let items: Vec<&[u8]> = inner
-        .split(|byte| *byte == b' ')
-        .filter(|item| !item.is_empty())
-        .collect();
-    items.len() >= 2
-        && items.iter().all(|item| {
-            item.iter().all(|byte| {
-                byte.is_ascii_lowercase()
-                    || byte.is_ascii_digit()
-                    || matches!(byte, b'-' | b':' | b'/' | b'[' | b']' | b'.' | b'%' | b'!')
-            })
-        })
-        && items
-            .iter()
-            .any(|item| item.contains(&b'-') || item.contains(&b':'))
+/// Index just past the closing quote of the string opening at `start`, honoring backslash
+/// escapes; `'` and `"` strings end at a line break, template literals may span lines.
+fn string_end(text: &[u8], start: usize, quote: u8) -> usize {
+    let mut index = start + 1;
+    while index < text.len() {
+        match text[index] {
+            b'\\' => index += 2,
+            b'\n' if quote != b'`' => return index,
+            byte if byte == quote => return index + 1,
+            _ => index += 1,
+        }
+    }
+    text.len()
+}
+
+/// Whether the text before a quote ends with `class=` or `className=`, optionally followed by
+/// `{` (JSX expression) and whitespace.
+fn after_class_attribute(before: &[u8]) -> bool {
+    let trimmed = before.trim_ascii_end();
+    let trimmed = trimmed
+        .strip_suffix(b"{")
+        .unwrap_or(trimmed)
+        .trim_ascii_end();
+    let Some(name) = trimmed.strip_suffix(b"=") else {
+        return false;
+    };
+    let name = name.trim_ascii_end();
+    name.ends_with(b"className") || name.ends_with(b"class")
 }
 
 /// First line of the comment and annotation block directly above `line` (`///`, `/** */`,
@@ -310,15 +367,65 @@ mod tests {
         assert_eq!(facts.terms, "");
     }
 
+    fn kept_words(text: &str) -> Vec<String> {
+        let mut bytes = text.as_bytes().to_vec();
+        without_class_lists(&mut bytes);
+        assert_eq!(bytes.len(), text.len());
+        words(&bytes).map(str::to_owned).collect()
+    }
+
     #[test]
-    fn css_class_lists_are_no_words() {
-        let line = b"<div className=\"flex items-center gap-2\">Sign out</div>";
-        let kept = without_class_lists(line);
-        let words: Vec<&str> = words(&kept).collect();
-        assert_eq!(words, ["div", "className", "Sign", "out", "div"]);
-        assert!(KEYWORDS.contains(&"classname"));
-        assert!(!is_class_list(b"sign-in"));
-        assert!(!is_class_list(b"Hello world"));
+    fn class_lists_are_dropped_only_in_class_contexts() {
+        let cases: [(&str, &[&str]); 9] = [
+            (
+                "<div className=\"flex items-center gap-2\">Sign out</div>",
+                &["div", "className", "Sign", "out", "div"],
+            ),
+            (
+                "<nav class='md:hidden px-4'>Menu</nav>",
+                &["nav", "class", "Menu", "nav"],
+            ),
+            ("<p :class=\"{ 'text-red-500': failed }\">x</p>", &["class"]),
+            (
+                "cn(\n  \"flex items-center\",\n  active && \"bg-blue-500\"\n)",
+                &["cn", "active"],
+            ),
+            (
+                "className={`grid ${wide ? \"col-span-2\" : \"\"}`}",
+                &["className"],
+            ),
+            (
+                "label(\"small-screen navigation\"); log.warn('read-only mode')",
+                &[
+                    "label",
+                    "small",
+                    "screen",
+                    "navigation",
+                    "log",
+                    "warn",
+                    "read",
+                    "only",
+                    "mode",
+                ],
+            ),
+            (
+                "// set className=\"flex gap-2\" here",
+                &["set", "className", "flex", "gap", "here"],
+            ),
+            (
+                "say(\"use className=\\\"flex gap-2\\\" carefully\")",
+                &["say", "use", "className", "flex", "gap", "carefully"],
+            ),
+            (
+                "const styles = \"flex items-center\"; title(\"data-test-id\")",
+                &[
+                    "const", "styles", "flex", "items", "center", "title", "data", "test", "id",
+                ],
+            ),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(kept_words(text), expected, "{text}");
+        }
     }
 
     #[test]
