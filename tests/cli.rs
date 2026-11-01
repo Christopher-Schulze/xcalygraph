@@ -197,6 +197,237 @@ fn index_builds_refreshes_lists_and_cleans() -> TestResult {
     Ok(())
 }
 
+fn index_for(base: &Path, root_name: &str) -> io::Result<PathBuf> {
+    let prefix = format!("{root_name}-");
+    for entry in fs::read_dir(base)? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+            return Ok(entry.path());
+        }
+    }
+    Err(io::Error::other("index not found"))
+}
+
+fn clean_in(dir: &TempDir, base: &Path, args: &[&str]) -> io::Result<Output> {
+    Command::new(BINARY)
+        .arg("clean")
+        .args(args)
+        .arg("--index-dir")
+        .arg(base)
+        .current_dir(&dir.0)
+        .env("HOME", dir.0.join("home"))
+        .output()
+}
+
+#[test]
+fn clean_keeps_foreign_local_entries_and_removes_both_indexes() -> TestResult {
+    let dir = TempDir::new("clean-local-ownership")?;
+    dir.write("repo/main.go", "package main\n")?;
+    dir.write("repo/.xcalygraph/notes.txt", "keep local notes")?;
+    let root = dir.0.join("repo");
+    let shared = dir.0.join("shared");
+    let local = root.join(".xcalygraph");
+    assert!(run_in(&root, &shared, &["index"])?.status.success());
+    assert!(run_in(&root, &local, &["index"])?.status.success());
+    let shared_store = index_for(&shared, "repo")?;
+    let local_store = index_for(&local, "repo")?;
+    let output = clean_in(&dir, &shared, &["repo"])?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout)?;
+    assert_eq!(text.matches("deleted ").count(), 2, "{text}");
+    assert!(!shared_store.exists() && !local_store.exists());
+    assert_eq!(fs::read(local.join("notes.txt"))?, b"keep local notes");
+    Ok(())
+}
+
+#[test]
+fn clean_preserves_unrecognized_indexes_and_unexpected_contents() -> TestResult {
+    let dir = TempDir::new("clean-unowned")?;
+    dir.write("safe/main.go", "package safe\n")?;
+    dir.write("mixed/main.go", "package mixed\n")?;
+    dir.write("corrupt/main.go", "package corrupt\n")?;
+    dir.write("nested/main.go", "package nested\n")?;
+    let base = dir.0.join("index");
+    for name in ["safe", "mixed", "corrupt", "nested"] {
+        assert!(
+            run_in(&dir.0.join(name), &base, &["index"])?
+                .status
+                .success()
+        );
+    }
+    let safe = index_for(&base, "safe")?;
+    let mixed = index_for(&base, "mixed")?;
+    let corrupt = index_for(&base, "corrupt")?;
+    let nested = index_for(&base, "nested")?;
+    fs::write(mixed.join("precious.txt"), b"preserve unexpected contents")?;
+    fs::write(corrupt.join("derived"), b"damaged container")?;
+    fs::write(nested.join("facts/extra"), b"preserve nested contents")?;
+    dir.write("index/invalid/meta", "unrelated metadata")?;
+    dir.write("index/invalid/valuable", "preserve foreign directory")?;
+    fs::create_dir(base.join("wrong-identity"))?;
+    fs::copy(safe.join("meta"), base.join("wrong-identity/meta"))?;
+    dir.write("index/wrong-identity/valuable", "preserve wrong identity")?;
+    let output = clean_in(&dir, &base, &[])?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout)?;
+    assert!(!safe.exists(), "{text}");
+    assert_eq!(
+        fs::read(mixed.join("precious.txt"))?,
+        b"preserve unexpected contents"
+    );
+    assert_eq!(
+        fs::read(base.join("invalid/valuable"))?,
+        b"preserve foreign directory"
+    );
+    assert_eq!(
+        fs::read(base.join("wrong-identity/valuable"))?,
+        b"preserve wrong identity"
+    );
+    assert_eq!(fs::read(corrupt.join("derived"))?, b"damaged container");
+    assert_eq!(
+        fs::read(nested.join("facts/extra"))?,
+        b"preserve nested contents"
+    );
+    assert_eq!(text.matches("skipped ").count(), 5, "{text}");
+    Ok(())
+}
+
+#[test]
+fn clean_missing_only_removes_indexes_of_absent_roots() -> TestResult {
+    let dir = TempDir::new("clean-missing")?;
+    dir.write("present/main.go", "package present\n")?;
+    dir.write("gone/main.go", "package gone\n")?;
+    let base = dir.0.join("index");
+    for name in ["present", "gone"] {
+        assert!(
+            run_in(&dir.0.join(name), &base, &["index"])?
+                .status
+                .success()
+        );
+    }
+    let present = index_for(&base, "present")?;
+    let gone = index_for(&base, "gone")?;
+    let targeted = clean_in(&dir, &base, &["--missing", "present"])?;
+    assert!(targeted.status.success());
+    assert!(
+        present.is_dir(),
+        "targeted --missing removed an existing root"
+    );
+    fs::remove_dir_all(dir.0.join("gone"))?;
+    let all = clean_in(&dir, &base, &["--missing"])?;
+    assert!(
+        all.status.success(),
+        "{}",
+        String::from_utf8_lossy(&all.stderr)
+    );
+    assert!(present.is_dir());
+    assert!(!gone.exists());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn clean_preserves_linked_entries_and_reports_them() -> TestResult {
+    use std::os::unix::fs::symlink;
+
+    let dir = TempDir::new("clean-links")?;
+    dir.write("repo/main.go", "package main\n")?;
+    dir.write("outside/keep", "preserve target")?;
+    let root = dir.0.join("repo");
+    let base = dir.0.join("index");
+    assert!(run_in(&root, &base, &["index"])?.status.success());
+    let store = index_for(&base, "repo")?;
+    fs::hard_link(store.join("meta"), dir.0.join("outside/meta"))?;
+    symlink(dir.0.join("outside"), root.join(".xcalygraph"))?;
+    let output = clean_in(&dir, &base, &["repo"])?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout)?;
+    assert!(store.is_dir(), "{text}");
+    assert!(
+        fs::symlink_metadata(root.join(".xcalygraph"))?
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read(dir.0.join("outside/keep"))?, b"preserve target");
+    assert!(dir.0.join("outside/meta").is_file());
+    assert_eq!(text.matches("skipped ").count(), 2, "{text}");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn clean_preserves_symlinked_index_directory() -> TestResult {
+    use std::os::unix::fs::symlink;
+
+    let dir = TempDir::new("clean-index-link")?;
+    dir.write("repo/main.go", "package main\n")?;
+    let root = dir.0.join("repo");
+    let base = dir.0.join("index");
+    assert!(run_in(&root, &base, &["index"])?.status.success());
+    let store = index_for(&base, "repo")?;
+    let other = dir.0.join("other");
+    fs::create_dir(&other)?;
+    let link = other.join(
+        store
+            .file_name()
+            .ok_or_else(|| io::Error::other("index name"))?,
+    );
+    symlink(&store, &link)?;
+    let output = clean_in(&dir, &other, &["repo"])?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(fs::symlink_metadata(&link)?.file_type().is_symlink());
+    assert!(store.join("meta").is_file());
+    assert!(String::from_utf8(output.stdout)?.contains("skipped "));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn clean_preserves_symlinked_shards_and_their_target() -> TestResult {
+    use std::os::unix::fs::symlink;
+
+    let dir = TempDir::new("clean-shard-link")?;
+    dir.write("repo/main.go", "package main\n")?;
+    let root = dir.0.join("repo");
+    let base = dir.0.join("index");
+    assert!(run_in(&root, &base, &["index"])?.status.success());
+    let store = index_for(&base, "repo")?;
+    let shards = dir.0.join("saved-shards");
+    fs::rename(store.join("facts"), &shards)?;
+    symlink(&shards, store.join("facts"))?;
+    let output = clean_in(&dir, &base, &["repo"])?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        fs::symlink_metadata(store.join("facts"))?
+            .file_type()
+            .is_symlink()
+    );
+    assert!(shards.is_dir());
+    assert!(store.join("meta").is_file());
+    assert!(String::from_utf8(output.stdout)?.contains("skipped "));
+    Ok(())
+}
+
 #[test]
 fn missing_root_is_a_runtime_error() -> TestResult {
     let dir = TempDir::new("missing-root")?;

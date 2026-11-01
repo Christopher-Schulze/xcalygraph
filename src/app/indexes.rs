@@ -3,13 +3,16 @@
 
 use std::env;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use super::error::AppError;
 use super::workspace::{self, LOCAL_DIR};
 use crate::cli::Options;
-use crate::infra::store::{self, Store};
+use crate::infra::file_access;
+use crate::infra::store::container::{Container, Kind};
+use crate::infra::store::{self, SHARDS, Store};
 
 struct Entry {
     dir: PathBuf,
@@ -50,34 +53,55 @@ pub fn list(options: &Options) -> Result<String, AppError> {
     Ok(out)
 }
 
-/// Deletes every index, only those of the given roots (also `<root>/.xcalygraph`), or with
-/// `--missing` those whose root no longer exists; one line per deleted index.
+/// Deletes verified indexes, preserving entries whose ownership cannot be established.
 pub fn clean(options: &Options, roots: &[String]) -> Result<String, AppError> {
     let base = base(options)?;
     let cwd = env::current_dir().map_err(AppError::io("current directory"))?;
-    let targets: Vec<PathBuf> = if roots.is_empty() {
-        entries(&base)
+    let mut targets: Vec<(PathBuf, Option<PathBuf>)> = if roots.is_empty() {
+        candidates(&base)
+            .map_err(AppError::io(format!("read {}", base.display())))?
             .into_iter()
-            .filter(|entry| {
-                !options.missing || entry.root.as_ref().is_none_or(|root| !root.is_dir())
-            })
-            .map(|entry| entry.dir)
+            .map(|dir| (dir, None))
             .collect()
     } else {
         let mut dirs = Vec::new();
         for root in roots.iter().map(|root| cwd.join(root)) {
             let canonical = root.canonicalize().unwrap_or(root);
-            dirs.push(store::index_dir(&base, &canonical));
-            // An index the root holds itself (confined agents) goes too.
+            dirs.push((store::index_dir(&base, &canonical), Some(canonical.clone())));
             let local = canonical.join(LOCAL_DIR);
-            if local.is_dir() {
-                dirs.push(local);
+            match fs::symlink_metadata(&local) {
+                Ok(metadata) if metadata.is_dir() => dirs.push((
+                    store::index_dir(&local, &canonical),
+                    Some(canonical.clone()),
+                )),
+                Ok(_) => dirs.push((local, Some(canonical))),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(AppError::io(format!("read {}", local.display()))(error)),
             }
         }
         dirs
     };
+    targets.sort();
+    targets.dedup();
     let mut out = String::new();
-    for dir in targets {
+    for (dir, expected_root) in targets {
+        let metadata = match fs::symlink_metadata(&dir) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(AppError::io(format!("read {}", dir.display()))(error)),
+        };
+        let root = metadata.is_dir().then(|| owned_root(&dir)).flatten();
+        let Some(root) = root.filter(|root| expected_root.as_ref().is_none_or(|want| want == root))
+        else {
+            out.push_str(&format!(
+                "skipped {}: ownership unverified\n",
+                dir.display()
+            ));
+            continue;
+        };
+        if options.missing && root.is_dir() {
+            continue;
+        }
         let bytes = size(&dir);
         if Store::new(dir.clone())
             .drop_all()
@@ -94,6 +118,107 @@ pub fn clean(options: &Options, roots: &[String]) -> Result<String, AppError> {
         out.push_str("nothing to delete\n");
     }
     Ok(out)
+}
+
+fn candidates(base: &Path) -> io::Result<Vec<PathBuf>> {
+    let entries = match fs::read_dir(base) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut candidates = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let path = entry.path();
+        if kind.is_symlink() {
+            candidates.push(path);
+        } else if kind.is_dir() {
+            match fs::symlink_metadata(path.join("meta")) {
+                Ok(_) => candidates.push(path),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Ok(candidates)
+}
+
+fn owned_root(dir: &Path) -> Option<PathBuf> {
+    let meta = dir.join("meta");
+    if !regular_file(&meta) {
+        return None;
+    }
+    let root = PathBuf::from(Store::new(dir.to_path_buf()).read_meta().ok()?.root);
+    if !root.is_absolute() || dir.parent().map(|base| store::index_dir(base, &root))? != dir {
+        return None;
+    }
+    owned_contents(dir).then_some(root)
+}
+
+fn owned_contents(dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            return false;
+        };
+        let path = entry.path();
+        let valid = match name {
+            "meta" => owned_container(&path, Kind::Meta),
+            "files" => owned_container(&path, Kind::Files),
+            "derived" => owned_container(&path, Kind::Derived),
+            "git" => owned_container(&path, Kind::Git),
+            "lock" | "used" => fs::symlink_metadata(&path).is_ok_and(|metadata| {
+                file_access::is_unshared_regular(&metadata) && metadata.len() == 0
+            }),
+            "facts" => owned_shards(&path),
+            _ => false,
+        };
+        if !valid {
+            return false;
+        }
+    }
+    true
+}
+
+fn owned_shards(dir: &Path) -> bool {
+    if !fs::symlink_metadata(dir).is_ok_and(|metadata| metadata.is_dir()) {
+        return false;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            return false;
+        };
+        if name.len() != 2
+            || !name.bytes().all(|byte| byte.is_ascii_digit())
+            || !name.parse::<usize>().is_ok_and(|shard| shard < SHARDS)
+            || !owned_container(&entry.path(), Kind::Facts)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn regular_file(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|metadata| file_access::is_unshared_regular(&metadata))
+}
+
+fn owned_container(path: &Path, kind: Kind) -> bool {
+    regular_file(path) && Container::open(path, kind).is_ok()
 }
 
 fn base(options: &Options) -> Result<PathBuf, AppError> {
@@ -125,7 +250,7 @@ fn size(dir: &Path) -> u64 {
         return 0;
     };
     read.filter_map(Result::ok)
-        .map(|entry| match entry.metadata() {
+        .map(|entry| match fs::symlink_metadata(entry.path()) {
             Ok(meta) if meta.is_dir() => size(&entry.path()),
             Ok(meta) => meta.len(),
             Err(_) => 0,
