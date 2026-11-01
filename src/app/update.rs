@@ -2,7 +2,7 @@
 //! (`docs/spec.md` section 10).
 
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::Command;
 
@@ -265,13 +265,14 @@ pub fn replace_binary(
     }
     progress.pass(&format!("SHA-256 {}", &actual[..12]));
     let binary = extract_binary(&archive)?;
-    let temp = exe.with_file_name(format!(".xcalygraph.update.{}", std::process::id()));
-    fs::write(&temp, &binary).map_err(AppError::io(format!("write {}", temp.display())))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&temp, fs::Permissions::from_mode(0o755))
-            .map_err(AppError::io("make the new binary executable"))?;
+    let (temp, mut file) = crate::infra::file_access::create_beside(exe, "update", 0o755).map_err(
+        AppError::io(format!("create a new binary beside {}", exe.display())),
+    )?;
+    let written = file.write_all(&binary);
+    drop(file);
+    if let Err(error) = written {
+        let _ = fs::remove_file(&temp);
+        return Err(AppError::Io(format!("write {}", temp.display()), error));
     }
     progress.start("Smoke test");
     if let Err(error) = smoke_test(&temp, &release.version) {

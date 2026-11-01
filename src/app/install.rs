@@ -93,10 +93,14 @@ pub fn install(home: &Path, options: Options, progress: &mut Progress) -> Result
 pub fn install_skill(home: &Path) -> Result<String, AppError> {
     let dir = skill_dir(home);
     fs::create_dir_all(&dir).map_err(AppError::io(format!("create {}", dir.display())))?;
-    let changed = write_if_changed(&dir.join("SKILL.md"), SKILL.as_bytes())
+    let changed = write_if_changed(&dir.join("SKILL.md"), SKILL.as_bytes(), 0o644)
         .map_err(AppError::io("write skill"))?;
-    let stamped = write_if_changed(&dir.join(".version"), format!("{VERSION}\n").as_bytes())
-        .map_err(AppError::io("write skill version"))?;
+    let stamped = write_if_changed(
+        &dir.join(".version"),
+        format!("{VERSION}\n").as_bytes(),
+        0o644,
+    )
+    .map_err(AppError::io("write skill version"))?;
     Ok(format!(
         "skill {VERSION} {} {}\n",
         dir.join("SKILL.md").display(),
@@ -124,14 +128,18 @@ fn install_binary(home: &Path) -> Result<String, AppError> {
     }
     let bytes = fs::read(&exe).map_err(AppError::io(format!("read {}", exe.display())))?;
     fs::create_dir_all(&dir).map_err(AppError::io(format!("create {}", dir.display())))?;
-    let changed = write_if_changed(&target, &bytes)
+    let changed = write_if_changed(&target, &bytes, 0o755)
         .map_err(AppError::io(format!("write {}", target.display())))?;
     #[cfg(unix)]
-    {
+    if !changed {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).map_err(AppError::io(
-            format!("make {} executable", target.display()),
-        ))?;
+        let existing = fs::symlink_metadata(&target)
+            .map_err(AppError::io(format!("inspect {}", target.display())))?;
+        if existing.file_type().is_file() && existing.permissions().mode() & 0o111 != 0o111 {
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).map_err(
+                AppError::io(format!("make {} executable", target.display())),
+            )?;
+        }
     }
     Ok(format!(
         "binary {} {}\n",
@@ -219,20 +227,12 @@ fn symlink(target: &Path, link: &Path) -> io::Result<()> {
     std::os::windows::fs::symlink_dir(target, link)
 }
 
-/// Replaces the file by temp file plus rename unless its content is already equal.
-pub fn write_if_changed(path: &Path, content: &[u8]) -> io::Result<bool> {
+/// Replaces the file by a new exclusive temp file plus rename unless its content is already equal.
+pub fn write_if_changed(path: &Path, content: &[u8], mode: u32) -> io::Result<bool> {
     if fs::read(path).is_ok_and(|existing| existing == content) {
         return Ok(false);
     }
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("file");
-    let temp = path.with_file_name(format!(".{name}.tmp.{}", std::process::id()));
-    fs::write(&temp, content)?;
-    fs::rename(&temp, path).inspect_err(|_| {
-        let _ = fs::remove_file(&temp);
-    })?;
+    crate::infra::file_access::replace_with(path, content, mode)?;
     Ok(true)
 }
 
@@ -269,6 +269,26 @@ mod tests {
             mismatch_line(home),
             format!("! installed skill 0.0.1, binary {VERSION}; run 'xcalygraph install'\n")
         );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skill_install_never_writes_through_a_planted_temp_symlink()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = TestDir::new("install-temp-link")?;
+        let home = dir.path().join("home");
+        let foreign = dir.write("foreign", "foreign")?;
+        fs::create_dir_all(skill_dir(&home))?;
+        let planted = skill_dir(&home).join(format!(".SKILL.md.tmp.{}.0", std::process::id()));
+        std::os::unix::fs::symlink(&foreign, &planted)?;
+        install_skill(&home)?;
+        assert_eq!(
+            fs::read_to_string(skill_dir(&home).join("SKILL.md"))?,
+            SKILL
+        );
+        assert_eq!(fs::read_to_string(&foreign)?, "foreign");
+        assert!(fs::symlink_metadata(&planted)?.file_type().is_symlink());
         Ok(())
     }
 
