@@ -27,6 +27,10 @@ readonly SNAPSHOTS="${REPO_ROOT}/.cache/corpus-snapshots"
 QUESTIONS="${REPO_ROOT}/scripts/benchmarks/questions"
 readonly PRIVATE_LIST="${QUESTIONS}/private/corpora.tsv"
 original_args=("$@")
+CALLER_DIRECTORY="$(pwd -P && printf '.')"
+CALLER_DIRECTORY="${CALLER_DIRECTORY%.}"
+CALLER_DIRECTORY="${CALLER_DIRECTORY%$'\n'}"
+readonly CALLER_DIRECTORY
 
 upstream=1
 phase=final
@@ -47,14 +51,21 @@ while [[ "${1:-}" == --* ]]; do
 done
 readonly QUESTIONS
 corpus_root() {
+  local private
   case "$1" in
-    xcalygraph) echo "${REPO_ROOT}" ;;
-    graphify) echo "${REPO_ROOT}/research/upstream/graphify" ;;
+    xcalygraph) printf '%s' "${REPO_ROOT}" ;;
+    graphify) printf '%s' "${REPO_ROOT}/research/upstream/graphify" ;;
     *)
       if [[ -d "${REPO_ROOT}/research/corpora/$1" ]]; then
-        echo "${REPO_ROOT}/research/corpora/$1"
+        printf '%s' "${REPO_ROOT}/research/corpora/$1"
       elif [[ -f "${PRIVATE_LIST}" ]]; then
-        awk -F'\t' -v name="$1" '$1 == name { print $2 }' "${PRIVATE_LIST}"
+        private="$(bash "${REPO_ROOT}/scripts/utils/read-private-corpus.sh" get "${PRIVATE_LIST}" "$1" && printf '.')" || return 1
+        private="${private%.}"
+        if [[ -n "${private}" && "${private}" != /* ]]; then
+          printf '%s/%s' "${CALLER_DIRECTORY}" "${private}"
+        else
+          printf '%s' "${private}"
+        fi
       fi
       ;;
   esac
@@ -78,13 +89,15 @@ if [[ ! -f "${QUESTIONS}/manifest.json" ]]; then
   if (( ${#corpora[@]} == 0 )); then
     corpora=(xcalygraph graphify hono)
     if [[ -f "${PRIVATE_LIST}" ]]; then
-      while IFS=$'\t' read -r name _; do
+      bash "${REPO_ROOT}/scripts/utils/read-private-corpus.sh" validate "${PRIVATE_LIST}"
+      while IFS=$'\t' read -r name _ || [[ -n "${name}" ]]; do
         [[ -n "${name}" && "${name}" != \#* ]] && corpora+=("${name}")
       done < "${PRIVATE_LIST}"
     fi
   fi
   for corpus in "${corpora[@]}"; do
-    root="$(corpus_root "${corpus}")"
+    root="$(corpus_root "${corpus}" && printf '.')"
+    root="${root%.}"
     questions="$(question_file "${corpus}")"
     [[ -n "${root}" && -d "${root}" && -n "${questions}" ]] || {
       echo "run-evaluation.sh: ${corpus}: missing corpus or questions" >&2
@@ -119,7 +132,8 @@ if [[ -L "${REPO_ROOT}/.cache" || -L "${WORK_BASE}" ]]; then
 fi
 if (( ! validate )) && ! bash "${REPO_ROOT}/scripts/utils/verification-lock.sh"; then
   exec bash "${REPO_ROOT}/scripts/utils/guard-benchmark.sh" \
-    bash "${REPO_ROOT}/scripts/benchmarks/run-evaluation.sh" "${original_args[@]}"
+    bash -c 'cd -- "$1"; shift; exec "$@"' evaluation-reentry "${CALLER_DIRECTORY}" \
+    bash "${REPO_ROOT}/scripts/benchmarks/run-evaluation.sh" ${original_args[@]+"${original_args[@]}"}
 fi
 
 cd "${REPO_ROOT}"
@@ -195,7 +209,8 @@ rg_terms() {
 printf '%-12s %4s %7s %6s %8s %7s %8s %8s %6s %8s %6s %8s\n' \
   corpus n find@5 sym@5 find_any ctx@5 find_tok ctx_tok rg_hit rg_tok gfy_any gfy_tok
 for corpus in "${corpora[@]}"; do
-  root="$(corpus_root "${corpus}")"
+  root="$(corpus_root "${corpus}" && printf '.')"
+  root="${root%.}"
   questions="$(question_file "${corpus}")"
   [[ -n "${root}" && -d "${root}" && -n "${questions}" ]] || { echo "run-evaluation.sh: ${corpus}: missing corpus or questions" >&2; exit 1; }
   snapshot_args=()

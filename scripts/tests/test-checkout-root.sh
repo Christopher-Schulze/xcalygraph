@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory(prefix="checkout-root.", dir=repo / ".cache") a
              "scripts/benchmarks/run-benchmarks.sh", "scripts/benchmarks/run-evaluation.sh"]
     files += ["scripts/utils/" + name for name in ("verification-target.sh", "verification-source.sh",
               "verification-lock.sh", "guard-benchmark.sh", "capture-benchmark-binary.sh", "cargo-artifact.sh",
-              "check-build-space.sh", "prune-cache.sh", "sync-corpora.sh")]
+              "check-build-space.sh", "prune-cache.sh", "sync-corpora.sh", "read-private-corpus.sh")]
     for count in (1, 2):
         root = work / ("project" + "\n" * count)
         (root / "src").mkdir(parents=True)

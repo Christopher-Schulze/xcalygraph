@@ -7,7 +7,7 @@
 #   Each corpus/arm uses its own temporary HOME.
 #   Success: the final answer names the expected file. Cost: total tokens, turns and wall time
 #   from --output-format json.
-# Requires: claude, jq; graphify for the Graphify arm; Cargo for a guarded release build.
+# Requires: python3, claude, jq; graphify for the Graphify arm; Cargo for a guarded release build.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
@@ -36,10 +36,16 @@ if (( run )); then
 fi
 
 corpus_root() {
+  local private
   case "$1" in
-    xcalygraph) echo "${REPO_ROOT}" ;;
-    graphify) echo "${REPO_ROOT}/research/upstream/graphify" ;;
-    *) [[ -f "${PRIVATE_LIST}" ]] && awk -F'\t' -v name="$1" '$1 == name { print $2 }' "${PRIVATE_LIST}" ;;
+    xcalygraph) printf '%s' "${REPO_ROOT}" ;;
+    graphify) printf '%s' "${REPO_ROOT}/research/upstream/graphify" ;;
+    *) if [[ -f "${PRIVATE_LIST}" ]]; then
+         private="$(bash "${REPO_ROOT}/scripts/utils/read-private-corpus.sh" get "${PRIVATE_LIST}" "$1" && printf '.')" || return 1
+         private="${private%.}"
+         if [[ "${private}" == -* ]]; then private="./${private}"; fi
+         printf '%s' "${private}"
+       fi ;;
   esac
 }
 
@@ -51,7 +57,8 @@ select_corpora() {
   local corpus root questions
   selected_corpora=()
   for corpus in "$@"; do
-    root="$(corpus_root "${corpus}" || true)"
+    root="$(corpus_root "${corpus}" && printf '.')" || return 1
+    root="${root%.}"
     questions="$(question_file "${corpus}")"
     if [[ -n "${root}" && -d "${root}" && -f "${questions}" ]]; then
       selected_corpora+=("${corpus}")
@@ -137,9 +144,8 @@ os.execvpe(sys.argv[3], sys.argv[3:], environment)
 ' "${home}" "${directory}" "$@"
 }
 
+select_corpora "$@"
 if (( run )); then
-  select_corpora "$@"
-  set -- "${selected_corpora[@]}"
   WORK="$(create_run)"
   echo "evidence: ${WORK}" >&2
   [[ "${WORK}/bin" != *:* ]] || { echo "run-agent-benchmark.sh: binary directory cannot be represented in PATH" >&2; exit 1; }
@@ -155,8 +161,9 @@ readonly BINARY="${WORK}/bin/xcalygraph"
 readonly IDENTITY="${WORK}/binary-identity.json"
 last_xcalygraph_home=""
 results="${WORK}/results.tsv"
-for corpus in "$@"; do
-  root="$(corpus_root "${corpus}")"
+for corpus in "${selected_corpora[@]}"; do
+  root="$(corpus_root "${corpus}" && printf '.')"
+  root="${root%.}"
   questions="$(question_file "${corpus}")"
   [[ -d "${root}" && -f "${questions}" ]] || { echo "run-agent-benchmark.sh: ${corpus}: no root or questions" >&2; continue; }
   for arm in "${ARMS[@]}"; do

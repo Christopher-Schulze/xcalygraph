@@ -25,8 +25,18 @@ fi
   echo "measure-query-compute.sh: corpus or question file missing" >&2
   exit 2
 }
-ROOT="$(cd "$1" && pwd -P)"
-QUESTIONS="$(cd "$(dirname "$2")" && pwd -P)/$(basename "$2")"
+case "$1" in -*) root_argument="./$1" ;; *) root_argument="$1" ;; esac
+ROOT="$(cd -- "${root_argument}" && pwd -P && printf '.')"
+ROOT="${ROOT%.}"
+ROOT="${ROOT%$'\n'}"
+case "$2" in
+  */*) question_directory="${2%/*}"; question_name="${2##*/}"; [[ -n "${question_directory}" ]] || question_directory=/ ;;
+  *) question_directory=.; question_name="$2" ;;
+esac
+case "${question_directory}" in -*) question_directory="./${question_directory}" ;; esac
+QUESTIONS="$(cd -- "${question_directory}" && pwd -P && printf '.')"
+QUESTIONS="${QUESTIONS%.}"
+QUESTIONS="${QUESTIONS%$'\n'}/${question_name}"
 readonly ROOT QUESTIONS
 readonly RUSTUP_DIR="${RUSTUP_HOME:-${HOME}/.rustup}"
 readonly CARGO_DIR="${CARGO_HOME:-${HOME}/.cargo}"

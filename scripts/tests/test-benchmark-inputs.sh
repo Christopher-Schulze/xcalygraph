@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory(prefix="benchmark-inputs.", dir=repo / ".cache"
     shell = shutil.which("bash")
     assert shell
     # Forward to real utilities; Cargo is absent so a regression cannot start a build.
-    for name in ("dirname", "basename", "awk"):
+    for name in ("bash", "python3", "dirname", "basename", "awk"):
         executable = shutil.which(name)
         assert executable, name
         (tools / name).write_text("#!" + shell + "\nexec " + shlex.quote(executable) + ' "$@"\n')
@@ -40,6 +40,9 @@ with tempfile.TemporaryDirectory(prefix="benchmark-inputs.", dir=repo / ".cache"
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(repo / relative, destination)
+    helper = root / "scripts/utils/read-private-corpus.sh"
+    helper.parent.mkdir(parents=True)
+    shutil.copyfile(repo / "scripts/utils/read-private-corpus.sh", helper)
     benchmark = root / "scripts/benchmarks/run-benchmarks.sh"
     evaluation = root / "scripts/benchmarks/run-evaluation.sh"
     public = root / "research/corpora/hono"
