@@ -24,6 +24,55 @@ if [[ "${1:-}" == "--upstream" ]]; then
 fi
 tools=(hyperfine jq rsync python3)
 (( upstream )) && tools+=(graphify)
+
+cd "${REPO_ROOT}"
+corpora=("xcalygraph"$'\t'"${REPO_ROOT}")
+if [[ -d research/upstream/graphify ]]; then
+  corpora+=("graphify"$'\t'"${REPO_ROOT}/research/upstream/graphify")
+fi
+if [[ -d research/corpora ]]; then
+  for dir in research/corpora/*/; do
+    [[ -d "${dir}" ]] || continue
+    corpora+=("$(basename "${dir}")"$'\t'"${REPO_ROOT}/${dir%/}")
+  done
+fi
+if [[ -f "${PRIVATE_LIST}" ]]; then
+  while IFS=$'\t' read -r name path; do
+    [[ -z "${name}" || "${name}" == \#* ]] && continue
+    corpora+=("${name}"$'\t'"${path}")
+  done < "${PRIVATE_LIST}"
+fi
+wanted=("$@")
+selected() {
+  (( ${#wanted[@]} == 0 )) && return 0
+  local name
+  for name in "${wanted[@]}"; do [[ "${name}" == "$1" ]] && return 0; done
+  return 1
+}
+for requested in "${wanted[@]}"; do
+  found=0
+  for entry in "${corpora[@]}"; do
+    name="${entry%%$'\t'*}"
+    if [[ "${name}" == "${requested}" ]]; then found=1; break; fi
+  done
+  (( found )) || { echo "run-benchmarks.sh: unknown corpus: ${requested}" >&2; exit 2; }
+done
+selected_count=0
+available_corpora=()
+for entry in "${corpora[@]}"; do
+  name="${entry%%$'\t'*}"
+  path="${entry#*$'\t'}"
+  selected "${name}" || continue
+  if [[ ! -d "${path}" ]]; then
+    echo "run-benchmarks.sh: missing corpus ${name}: ${path}" >&2
+    (( ${#wanted[@]} == 0 )) && continue
+    exit 1
+  fi
+  selected_count=$((selected_count + 1))
+  available_corpora+=("${entry}")
+done
+(( selected_count > 0 )) || { echo "run-benchmarks.sh: no corpora to measure" >&2; exit 1; }
+
 for tool in "${tools[@]}"; do
   command -v "${tool}" >/dev/null || { echo "run-benchmarks.sh: ${tool} missing" >&2; exit 1; }
 done
@@ -32,7 +81,6 @@ if [[ -L "${REPO_ROOT}/.cache" || -L "${WORK_BASE}" ]]; then
   echo "run-benchmarks.sh: benchmark cache must not be a symlink" >&2
   exit 1
 fi
-cd "${REPO_ROOT}"
 cargo build --release --locked -q
 mkdir -p "${WORK_BASE}"
 WORK="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")"
@@ -44,28 +92,6 @@ readonly tee_pid
 readonly BENCHMARK_HOME="${WORK}/home"
 mkdir -p "${BENCHMARK_HOME}"
 printf 'binary_sha256\t%s\n' "$(python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${BINARY}")" > "${WORK}/identity.tsv"
-
-corpora=("xcalygraph	${REPO_ROOT}")
-[[ -d research/upstream/graphify ]] && corpora+=("graphify	${REPO_ROOT}/research/upstream/graphify")
-if [[ -d research/corpora ]]; then
-  for dir in research/corpora/*/; do
-    corpora+=("$(basename "${dir}")	${REPO_ROOT}/${dir%/}")
-  done
-fi
-if [[ -f "${PRIVATE_LIST}" ]]; then
-  while IFS=$'\t' read -r name path; do
-    [[ -z "${name}" || "${name}" == \#* ]] && continue
-    corpora+=("${name}	${path}")
-  done < "${PRIVATE_LIST}"
-fi
-
-wanted=("$@")
-selected() {
-  (( ${#wanted[@]} == 0 )) && return 0
-  local name
-  for name in "${wanted[@]}"; do [[ "${name}" == "$1" ]] && return 0; done
-  return 1
-}
 
 # Mean wall time in milliseconds of a command, from hyperfine's JSON export.
 mean_ms() {
@@ -110,11 +136,10 @@ upstream_columns() {
 header="$(printf '%-14s %8s %9s %9s %10s %10s %9s %9s' corpus files build_ms rss_mb fresh_ms change_ms index_kb write_kb)"
 (( upstream )) && header+="$(printf ' %12s %9s %9s %12s' up_build_ms up_rss_mb up_out_kb up_change_ms)"
 echo "${header}"
-for entry in "${corpora[@]}"; do
+for entry in "${available_corpora[@]}"; do
   name="${entry%%	*}"
   path="${entry#*	}"
-  selected "${name}" || continue
-  [[ -d "${path}" ]] || { echo "run-benchmarks.sh: ${name}: ${path} missing" >&2; continue; }
+  [[ -d "${path}" ]] || { echo "run-benchmarks.sh: ${name}: ${path} missing" >&2; exit 1; }
   path="$(bash "${REPO_ROOT}/scripts/utils/prepare-corpus.sh" "${path}" "${REPO_ROOT}/.cache/corpus-snapshots")"
   printf '%s\t%s\n' "${name}" "${path}" >> "${WORK}/identity.tsv"
   index="${WORK}/index-${name}"

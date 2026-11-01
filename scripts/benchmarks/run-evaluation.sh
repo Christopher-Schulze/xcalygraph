@@ -45,6 +45,59 @@ while [[ "${1:-}" == --* ]]; do
   shift
 done
 readonly QUESTIONS
+corpus_root() {
+  case "$1" in
+    xcalygraph) echo "${REPO_ROOT}" ;;
+    graphify) echo "${REPO_ROOT}/research/upstream/graphify" ;;
+    *)
+      if [[ -d "${REPO_ROOT}/research/corpora/$1" ]]; then
+        echo "${REPO_ROOT}/research/corpora/$1"
+      elif [[ -f "${PRIVATE_LIST}" ]]; then
+        awk -F'\t' -v name="$1" '$1 == name { print $2 }' "${PRIVATE_LIST}"
+      fi
+      ;;
+  esac
+}
+
+question_file() {
+  local name="${1//\//-}"
+  if [[ -f "${QUESTIONS}/${name}.tsv" ]]; then
+    echo "${QUESTIONS}/${name}.tsv"
+  elif [[ -f "${QUESTIONS}/private/${name}.tsv" ]]; then
+    echo "${QUESTIONS}/private/${name}.tsv"
+  fi
+}
+
+if [[ ! -f "${QUESTIONS}/manifest.json" ]]; then
+  if (( validate || ${#budget_args[@]} || ${#reuse_args[@]} )) || [[ "${phase}" != final ]]; then
+    echo "run-evaluation.sh: --phase/--budget/--reuse-graphify/--validate require a manifest-backed question set" >&2
+    exit 2
+  fi
+  corpora=("$@")
+  if (( ${#corpora[@]} == 0 )); then
+    corpora=(xcalygraph graphify hono)
+    if [[ -f "${PRIVATE_LIST}" ]]; then
+      while IFS=$'\t' read -r name _; do
+        [[ -n "${name}" && "${name}" != \#* ]] && corpora+=("${name}")
+      done < "${PRIVATE_LIST}"
+    fi
+  fi
+  for corpus in "${corpora[@]}"; do
+    root="$(corpus_root "${corpus}")"
+    questions="$(question_file "${corpus}")"
+    [[ -n "${root}" && -d "${root}" && -n "${questions}" ]] || {
+      echo "run-evaluation.sh: ${corpus}: missing corpus or questions" >&2
+      exit 1
+    }
+    has_questions=0
+    while IFS=$'\t' read -r question expected || [[ -n "${question}${expected}" ]]; do
+      [[ "${question}" == "question" || -z "${question}" ]] && continue
+      [[ -n "${expected}" ]] || { echo "run-evaluation.sh: ${corpus}: question has no expected location" >&2; exit 1; }
+      has_questions=1
+    done < "${questions}"
+    (( has_questions )) || { echo "run-evaluation.sh: ${corpus}: no questions" >&2; exit 1; }
+  done
+fi
 for tool in jq rg python3; do
   command -v "${tool}" >/dev/null || { echo "run-evaluation.sh: ${tool} missing" >&2; exit 1; }
 done
@@ -84,10 +137,6 @@ if [[ -f "${QUESTIONS}/manifest.json" ]]; then
   fi
   exec bash "${REPO_ROOT}/scripts/benchmarks/evaluate-sealed.sh" "${QUESTIONS}/manifest.json" "${phase}" "${BINARY}" "${budget_args[@]}" "${reuse_args[@]}" "$@"
 fi
-if (( validate || ${#budget_args[@]} || ${#reuse_args[@]} )) || [[ "${phase}" != final ]]; then
-  echo "run-evaluation.sh: --phase/--budget/--reuse-graphify/--validate require a manifest-backed question set" >&2
-  exit 2
-fi
 if [[ -L "${REPO_ROOT}/.cache" || -L "${WORK_BASE}" ]]; then
   echo "run-evaluation.sh: evaluation cache must not be a symlink" >&2
   exit 1
@@ -107,29 +156,6 @@ sha256_file() {
 }
 sha256_binary="$(sha256_file "${BINARY}")"
 printf 'binary_sha256\t%s\n' "${sha256_binary}" > "${WORK}/identity.tsv"
-
-corpus_root() {
-  case "$1" in
-    xcalygraph) echo "${REPO_ROOT}" ;;
-    graphify) echo "${REPO_ROOT}/research/upstream/graphify" ;;
-    *)
-      if [[ -d "${REPO_ROOT}/research/corpora/$1" ]]; then
-        echo "${REPO_ROOT}/research/corpora/$1"
-      elif [[ -f "${PRIVATE_LIST}" ]]; then
-        awk -F'\t' -v name="$1" '$1 == name { print $2 }' "${PRIVATE_LIST}"
-      fi
-      ;;
-  esac
-}
-
-question_file() {
-  local name="${1//\//-}"
-  if [[ -f "${QUESTIONS}/${name}.tsv" ]]; then
-    echo "${QUESTIONS}/${name}.tsv"
-  elif [[ -f "${QUESTIONS}/private/${name}.tsv" ]]; then
-    echo "${QUESTIONS}/private/${name}.tsv"
-  fi
-}
 
 tokens() {
   local bytes
@@ -170,16 +196,6 @@ rg_terms() {
 
 printf '%-12s %4s %7s %6s %8s %7s %8s %8s %6s %8s %6s %8s\n' \
   corpus n find@5 sym@5 find_any ctx@5 find_tok ctx_tok rg_hit rg_tok gfy_any gfy_tok
-corpora=("$@")
-if (( ${#corpora[@]} == 0 )); then
-  corpora=(xcalygraph graphify hono)
-  if [[ -f "${PRIVATE_LIST}" ]]; then
-    while IFS=$'\t' read -r name _; do
-      [[ -n "${name}" && "${name}" != \#* ]] && corpora+=("${name}")
-    done < "${PRIVATE_LIST}"
-  fi
-fi
-
 for corpus in "${corpora[@]}"; do
   root="$(corpus_root "${corpus}")"
   questions="$(question_file "${corpus}")"
@@ -199,8 +215,9 @@ for corpus in "${corpora[@]}"; do
     graph="${root}/graphify-out/graph.json"
   fi
   n=0 find_hits=0 symbol_hits=0 any_hits=0 ctx_hits=0 find_tokens=0 ctx_tokens=0 rg_hits=0 rg_tokens=0 gfy_hits=0 gfy_tokens=0
-  while IFS=$'\t' read -r question expected; do
+  while IFS=$'\t' read -r question expected || [[ -n "${question}${expected}" ]]; do
     [[ "${question}" == "question" || -z "${question}" ]] && continue
+    [[ -n "${expected}" ]] || { echo "run-evaluation.sh: ${corpus}: question has no expected location" >&2; exit 1; }
     n=$(( n + 1 ))
     path="${expected%%::*}"
     name=""
@@ -270,7 +287,7 @@ for corpus in "${corpora[@]}"; do
       (( found == 1 )) || printf 'impact miss: %s -> expected dependent %s\n' "${target}" "${dependent}" >> "${misses}"
     done < "${impact_set}"
   fi
-  (( n > 0 )) || continue
+  (( n > 0 )) || { echo "run-evaluation.sh: ${corpus}: no questions" >&2; exit 1; }
   if [[ -n "${graph}" ]]; then
     gfy_rate="$(( 100 * gfy_hits / n ))%"
     gfy_mean=$(( gfy_tokens / n ))
