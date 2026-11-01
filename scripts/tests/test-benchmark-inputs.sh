@@ -60,7 +60,7 @@ with tempfile.TemporaryDirectory(prefix="benchmark-inputs.", dir=repo / ".cache"
     questions.write_text("question\texpected\n")
 
     def invoke(script, *args):
-        return subprocess.run([shell, str(script), *args], env=environment, capture_output=True, text=True)
+        return subprocess.run([shell, str(script), *args], cwd=root, env=environment, capture_output=True, text=True)
 
     unknown = invoke(benchmark, "xcalygraph", "unknown-corpus")
     assert unknown.returncode != 0 and "unknown corpus" in unknown.stderr, unknown.stderr

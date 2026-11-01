@@ -40,6 +40,8 @@ with tempfile.TemporaryDirectory(prefix="benchmark-checkout-root.", dir=repo / "
         benchmark_dir.mkdir(parents=True)
         for name in ("run-agent-benchmark.sh", "run-benchmarks.sh", "measure-query-compute.sh", "compare-depth.sh"):
             shutil.copyfile(repo / "scripts/benchmarks" / name, benchmark_dir / name)
+        (root / "scripts/utils").mkdir(parents=True)
+        shutil.copyfile(repo / "scripts/utils/read-private-corpus.sh", root / "scripts/utils/read-private-corpus.sh")
         graphify = root / "research/upstream/graphify"
         corpus = root / "research/corpora/example"
         graphify.mkdir(parents=True)

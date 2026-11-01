@@ -33,6 +33,10 @@ if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
 fi
 
 original_args=("$@")
+CALLER_DIRECTORY="$(pwd -P && printf '.')"
+CALLER_DIRECTORY="${CALLER_DIRECTORY%.}"
+CALLER_DIRECTORY="${CALLER_DIRECTORY%$'\n'}"
+readonly CALLER_DIRECTORY
 upstream=0
 if [[ "${1:-}" == "--upstream" ]]; then
   upstream=1
@@ -49,15 +53,30 @@ fi
 if [[ -d research/corpora ]]; then
   for dir in research/corpora/*/; do
     [[ -d "${dir}" ]] || continue
-    corpora+=("$(basename "${dir}")"$'\t'"${REPO_ROOT}/${dir%/}")
+    name="${dir%/}"
+    name="${name##*/}"
+    [[ "${name}" != *[[:cntrl:]]* ]] || { echo "run-benchmarks.sh: invalid corpus name" >&2; exit 2; }
+    corpora+=("${name}"$'\t'"${REPO_ROOT}/${dir%/}")
   done
 fi
 if [[ -f "${PRIVATE_LIST}" ]]; then
+  private_records="$(bash "${REPO_ROOT}/scripts/utils/read-private-corpus.sh" list "${PRIVATE_LIST}" && printf '.')"
+  private_records="${private_records%.}"
   while IFS=$'\t' read -r name path; do
     [[ -z "${name}" || "${name}" == \#* ]] && continue
+    if [[ "${path}" != /* ]]; then path="${CALLER_DIRECTORY}/${path}"; fi
     corpora+=("${name}"$'\t'"${path}")
-  done < "${PRIVATE_LIST}"
+  done <<< "${private_records}"
 fi
+for (( corpus_position = 0; corpus_position < ${#corpora[@]}; corpus_position++ )); do
+  name="${corpora[corpus_position]%%$'\t'*}"
+  for (( previous_position = 0; previous_position < corpus_position; previous_position++ )); do
+    if [[ "${corpora[previous_position]%%$'\t'*}" == "${name}" ]]; then
+      echo "run-benchmarks.sh: duplicate corpus: ${name}" >&2
+      exit 2
+    fi
+  done
+done
 wanted=("$@")
 selected() {
   (( ${#wanted[@]} == 0 )) && return 0
@@ -65,7 +84,7 @@ selected() {
   for name in "${wanted[@]}"; do [[ "${name}" == "$1" ]] && return 0; done
   return 1
 }
-for requested in "${wanted[@]}"; do
+for requested in ${wanted[@]+"${wanted[@]}"}; do
   found=0
   for entry in "${corpora[@]}"; do
     name="${entry%%$'\t'*}"
@@ -97,9 +116,16 @@ if [[ -L "${REPO_ROOT}/.cache" || -L "${WORK_BASE}" ]]; then
   echo "run-benchmarks.sh: benchmark cache must not be a symlink" >&2
   exit 1
 fi
+selection_sha256="$(printf '%s\0' "${available_corpora[@]}" | python3 -I -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
 if ! bash "${REPO_ROOT}/scripts/utils/verification-lock.sh"; then
   exec bash "${REPO_ROOT}/scripts/utils/guard-benchmark.sh" \
-    bash "${REPO_ROOT}/scripts/benchmarks/run-benchmarks.sh" "${original_args[@]}"
+    bash -c 'expected="$1"; cd -- "$2"; shift 2; XCALYGRAPH_BENCHMARK_SELECTION_SHA256="$expected" exec "$@"' \
+    benchmark-reentry "${selection_sha256}" "${CALLER_DIRECTORY}" \
+    bash "${REPO_ROOT}/scripts/benchmarks/run-benchmarks.sh" ${original_args[@]+"${original_args[@]}"}
+fi
+if [[ -n "${XCALYGRAPH_BENCHMARK_SELECTION_SHA256:-}" && "${XCALYGRAPH_BENCHMARK_SELECTION_SHA256}" != "${selection_sha256}" ]]; then
+  echo "run-benchmarks.sh: corpus selection changed before the guard" >&2
+  exit 1
 fi
 bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
 BINARY="$(cargo build --release --locked --bin xcalygraph --message-format=json -q \
@@ -119,7 +145,7 @@ printf 'binary_sha256\t%s\n' "$(python3 -I -c 'import hashlib, pathlib, sys; pri
 # Mean wall time in milliseconds of a command, from hyperfine's JSON export.
 mean_ms() {
   local json
-  json="$(mktemp "${WORK}/timing-${name//\//-}.json.XXXXXXXX")" || return 1
+  json="$(mktemp "${WORK}/timing-${corpus_number}.json.XXXXXXXX")" || return 1
   hyperfine -N --warmup 3 --runs 15 --export-json "${json}" "$@" >"${json}.log" 2>&1 || return 1
   jq -er '.results[0].summary.time_wall_clock.mean * 10000 | round / 10' "${json}"
 }
@@ -159,16 +185,23 @@ upstream_columns() {
 header="$(printf '%-14s %8s %9s %9s %10s %10s %9s %9s' corpus files build_ms rss_mb fresh_ms change_ms index_kb write_kb)"
 (( upstream )) && header+="$(printf ' %12s %9s %9s %12s' up_build_ms up_rss_mb up_out_kb up_change_ms)"
 echo "${header}"
+corpus_number=0
 for entry in "${available_corpora[@]}"; do
   name="${entry%%	*}"
   path="${entry#*	}"
+  corpus_number=$((corpus_number + 1))
   [[ -d "${path}" ]] || { echo "run-benchmarks.sh: ${name}: ${path} missing" >&2; exit 1; }
+  input_root="${path}"
   path="$(bash "${REPO_ROOT}/scripts/utils/prepare-corpus.sh" "${path}" "${REPO_ROOT}/.cache/corpus-snapshots")"
-  printf '%s\t%s\n' "${name}" "${path}" >> "${WORK}/identity.tsv"
-  index="${WORK}/index-${name}"
-  rm -rf "${index}"
+  python3 -I - "${corpus_number}" "${name}" "${input_root}" "${path}" >> "${WORK}/identity.tsv" <<'PYTHON'
+import json
+import sys
+print("corpus\t" + sys.argv[1] + "\t" + "\t".join(json.dumps(value, ensure_ascii=True) for value in sys.argv[2:]))
+PYTHON
+  index="${WORK}/index-${corpus_number}"
+  [[ ! -e "${index}" && ! -L "${index}" ]] || { echo "run-benchmarks.sh: index path already exists" >&2; exit 1; }
   build="$( { /usr/bin/time -l env HOME="${BENCHMARK_HOME}" "${BINARY}" index -C "${path}" --index-dir "${index}" >"${WORK}/out" ; } 2>&1 )"
-  printf '%s\n' "${build}" > "${WORK}/${name//\//-}.full.time"
+  printf '%s\n' "${build}" > "${WORK}/corpus-${corpus_number}.full.time"
   files="$(awk '{ print $2 }' "${WORK}/out")"
   build_ms="$(awk '/ real / { printf "%.0f", $1 * 1000 }' <<<"${build}")"
   rss_mb="$(awk '/maximum resident set size/ { printf "%.0f", $1 / 1048576 }' <<<"${build}")"
@@ -179,10 +212,12 @@ for entry in "${available_corpora[@]}"; do
   write_kb="-"
   upstream_line=""
   if (( files <= COPY_LIMIT )); then
-    copy="${WORK}/copy-${name}"
-    copy_index="${WORK}/index-copy-${name}"
-    rm -rf "${copy}" "${copy_index}"
-    mkdir -p "${copy}"
+    copy="${WORK}/copy-${corpus_number}"
+    copy_index="${WORK}/index-copy-${corpus_number}"
+    [[ ! -e "${copy}" && ! -L "${copy}" && ! -e "${copy_index}" && ! -L "${copy_index}" ]] || {
+      echo "run-benchmarks.sh: copy path already exists" >&2; exit 1
+    }
+    mkdir "${copy}"
     rsync -a "${path}/" "${copy}/"
     "${BINARY}" index -C "${copy}" --index-dir "${copy_index}" >/dev/null
     # A tracked source file, so ignore rules cannot hide the change.

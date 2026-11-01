@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Validate a private corpus TSV and optionally return one path without a line delimiter.
-# Usage: read-private-corpus.sh validate LIST | get LIST NAME
+# Validate a private corpus TSV and return validated records or one path on request.
+# Usage: read-private-corpus.sh validate LIST | list LIST | get LIST NAME
 set -euo pipefail
-if [[ "${1:-}" == validate && $# == 2 ]] || [[ "${1:-}" == get && $# == 3 ]]; then
+if [[ "${1:-}" == validate && $# == 2 ]] || [[ "${1:-}" == list && $# == 2 ]] || [[ "${1:-}" == get && $# == 3 ]]; then
   python3 -I - "$@" <<'PYTHON'
 import os
 from pathlib import Path
@@ -23,10 +23,13 @@ for number, line in enumerate(Path(listing).read_bytes().split(b"\n"), 1):
             or name in records):
         raise SystemExit(f"read-private-corpus.sh: invalid or duplicate record at line {number}")
     records[name] = path
-if selected is not None:
+if action == "list":
+    for name, path in records.items():
+        sys.stdout.buffer.write(name + b"\t" + path + b"\n")
+elif selected is not None:
     sys.stdout.buffer.write(records.get(selected, b""))
 PYTHON
 else
-  echo "usage: read-private-corpus.sh validate LIST | get LIST NAME" >&2
+  echo "usage: read-private-corpus.sh validate LIST | list LIST | get LIST NAME" >&2
   exit 2
 fi
