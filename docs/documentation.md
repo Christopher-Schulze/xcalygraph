@@ -146,7 +146,7 @@ Grammars are cargo features (`lang-go`, `lang-rust`; all on by default). Adding 
 
 - Toolchain: `rust-toolchain.toml` pins Rust 1.99.1 with rustfmt and clippy; rustup selects it inside the repository. `Cargo.toml` sets `rust-version` to the same release.
 - Development builds: `cargo build` (debug profile); `xxhash-rust` alone uses optimization level 3 so full-index integrity checks stay fast, with debug assertions retained.
-- Gate: `scripts/tests/test.sh` runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` with `RUSTFLAGS=-Dwarnings`; any finding fails the run. Below 2 GiB free disk space it runs `cargo clean` first and aborts if that is not enough.
+- Gate: `scripts/tests/test.sh` runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` with `RUSTFLAGS=-Dwarnings`; any finding fails the run. Below 2 GiB free disk space it runs `cargo clean` first and aborts if that is not enough. It first runs `scripts/utils/prune-cache.sh`.
 - Lints: clippy denies `unwrap_used`, `expect_used`, `panic`, `todo` and `unimplemented` for all targets (`Cargo.toml`); tests return `Result` instead of unwrapping.
 - Tests: unit tests next to the code in `#[cfg(test)]` modules; end-to-end tests of the binary (stdout, stderr, exit codes) in `tests/`.
 - Golden fixtures: `tests/fixtures/languages/<id>/` holds sources whose extracted facts are compared with `<file>.facts`; `tests/fixtures/resolve/<case>/` holds small roots whose resolved edges are compared with `<case>.edges`. `XCALYGRAPH_BLESS=1 cargo test` rewrites the golden files; every changed line is checked against the fixture source before commit. A determinism test compares `derived` images built with 1 and 8 threads.
@@ -179,6 +179,7 @@ Grammars are cargo features (`lang-go`, `lang-rust`; all on by default). Adding 
 
 Refresh or pin the clone:
 
+- Development cache: `scripts/utils/prune-cache.sh [AGE_HOURS]` (default 24, `0` for all) removes ephemeral `.cache/` entries older than AGE_HOURS: ad-hoc test and profiling directories, `benchmarks/*`, `depth/*` and `evaluation/run.*` and `sealed.*` runs. Corpus snapshots, evaluation exposure receipts, `evaluation/upstream-*` and `index-*`, `generalization/`, `agent-benchmark/`, `index/` and every directory containing a `.keep` file stay; a sealed run used as `--reuse-graphify` baseline needs `.keep`. It warns when `.cache/` exceeds 3 GiB.
 - `scripts/utils/sync-upstream.sh` checks out the upstream default branch head.
 - `scripts/utils/sync-upstream.sh <COMMIT>` checks out an exact commit, for example the analysis commit above.
 

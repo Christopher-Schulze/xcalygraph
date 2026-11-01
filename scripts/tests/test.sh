@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Run the full gate: format check, lint and tests; any finding fails the run.
+# Run the full gate: prune stale development cache, then format check, lint and tests; any
+# finding fails the run.
 # Usage: scripts/tests/test.sh
 set -euo pipefail
 
@@ -12,6 +13,7 @@ free_kib() {
 }
 
 cd "${REPO_ROOT}"
+bash "${REPO_ROOT}/scripts/utils/prune-cache.sh"
 
 if (( $(free_kib) < MIN_FREE_KIB )); then
   echo "test.sh: less than 2 GiB free, running cargo clean" >&2
