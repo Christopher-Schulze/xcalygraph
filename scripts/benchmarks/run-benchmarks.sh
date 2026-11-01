@@ -13,7 +13,6 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
 readonly WORK_BASE="${REPO_ROOT}/.cache/benchmarks"
-readonly BINARY="${REPO_ROOT}/target/release/xcalygraph"
 readonly PRIVATE_LIST="${REPO_ROOT}/scripts/benchmarks/questions/private/corpora.tsv"
 readonly COPY_LIMIT=20000
 
@@ -97,7 +96,9 @@ if [[ -L "${REPO_ROOT}/.cache" || -L "${WORK_BASE}" ]]; then
   exit 1
 fi
 bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
-cargo build --release --locked -q
+BINARY="$(cargo build --release --locked --bin xcalygraph --message-format=json -q \
+  | bash "${REPO_ROOT}/scripts/utils/cargo-artifact.sh")"
+readonly BINARY
 mkdir -p "${WORK_BASE}"
 WORK="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")"
 readonly WORK

@@ -23,7 +23,6 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
 readonly WORK_BASE="${REPO_ROOT}/.cache/evaluation"
 readonly SNAPSHOTS="${REPO_ROOT}/.cache/corpus-snapshots"
-readonly BINARY="${REPO_ROOT}/target/debug/xcalygraph"
 QUESTIONS="${REPO_ROOT}/scripts/benchmarks/questions"
 readonly PRIVATE_LIST="${QUESTIONS}/private/corpora.tsv"
 
@@ -109,7 +108,8 @@ fi
 cd "${REPO_ROOT}"
 build_binary() {
   bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
-  RUSTFLAGS="-Dwarnings" cargo build --locked -q
+  RUSTFLAGS="-Dwarnings" cargo build --locked --bin xcalygraph --message-format=json -q \
+    | bash "${REPO_ROOT}/scripts/utils/cargo-artifact.sh"
 }
 
 if [[ -f "${QUESTIONS}/manifest.json" ]]; then
@@ -120,8 +120,9 @@ if [[ -f "${QUESTIONS}/manifest.json" ]]; then
   fi
   if (( validate )); then
     phase=validate
+    BINARY=""
   else
-    build_binary
+    BINARY="$(build_binary)"
   fi
   exec bash "${REPO_ROOT}/scripts/benchmarks/evaluate-sealed.sh" "${QUESTIONS}/manifest.json" "${phase}" "${BINARY}" "${budget_args[@]}" "${reuse_args[@]}" "$@"
 fi
@@ -129,7 +130,8 @@ if [[ -L "${REPO_ROOT}/.cache" || -L "${WORK_BASE}" ]]; then
   echo "run-evaluation.sh: evaluation cache must not be a symlink" >&2
   exit 1
 fi
-build_binary
+BINARY="$(build_binary)"
+readonly BINARY
 mkdir -p "${WORK_BASE}"
 WORK="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")"
 readonly WORK

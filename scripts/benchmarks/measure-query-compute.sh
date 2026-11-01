@@ -27,7 +27,6 @@ fi
 ROOT="$(cd "$1" && pwd -P)"
 QUESTIONS="$(cd "$(dirname "$2")" && pwd -P)/$(basename "$2")"
 readonly ROOT QUESTIONS
-readonly BINARY="${REPO_ROOT}/target/debug/xcalygraph"
 readonly RUSTUP_DIR="${RUSTUP_HOME:-${HOME}/.rustup}"
 readonly CARGO_DIR="${CARGO_HOME:-${HOME}/.cargo}"
 if [[ -L "${REPO_ROOT}/.cache" || -L "${REPO_ROOT}/.cache/benchmarks" ]]; then
@@ -43,7 +42,9 @@ cp "${QUESTIONS}" "${WORK}/questions.tsv"
 cd "${REPO_ROOT}"
 
 bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
-RUSTFLAGS="-Dwarnings" cargo build --locked -q
+BINARY="$(RUSTFLAGS="-Dwarnings" cargo build --locked --bin xcalygraph --message-format=json -q \
+  | bash "${REPO_ROOT}/scripts/utils/cargo-artifact.sh")"
+readonly BINARY
 snapshot="$(env HOME="${WORK}/home" bash scripts/utils/prepare-corpus.sh "${ROOT}" "${REPO_ROOT}/.cache/corpus-snapshots")"
 readonly snapshot
 env HOME="${WORK}/home" "${BINARY}" index -C "${snapshot}" --index-dir "${WORK}/index" | tee "${WORK}/index.txt"
@@ -57,32 +58,34 @@ python3 -I - "${BINARY}" "${WORK}/questions.tsv" "${snapshot}/../snapshot.json" 
   src/app/query/mod.rs src/app/query/output.rs src/app/query/benchmark.rs src/domain/search.rs \
   src/infra/store/derived.rs > "${WORK}/identity.tsv" <<'PYTHON'
 import hashlib
+import json
 from pathlib import Path
 import sys
 for name in sys.argv[1:]:
     path = Path(name)
-    print(hashlib.sha256(path.read_bytes()).hexdigest(), name, sep="\t")
+    label = json.dumps(name) if any(ord(char) < 32 or ord(char) == 127 for char in name) else name
+    print(hashlib.sha256(path.read_bytes()).hexdigest(), label, sep="\t")
 PYTHON
 printf 'test-profile-package-opt-level\t%s\n' "${OPT_LEVEL}" >> "${WORK}/identity.tsv"
 test_profile_args=(--config "profile.test.package.xcalygraph.opt-level=${OPT_LEVEL}")
 bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
 env HOME="${WORK}/home" RUSTUP_HOME="${RUSTUP_DIR}" CARGO_HOME="${CARGO_DIR}" RUSTFLAGS="-Dwarnings" \
   XCALYGRAPH_BENCH_STORE="${stores[0]}" XCALYGRAPH_BENCH_QUESTIONS="${WORK}/questions.tsv" \
-  XCALYGRAPH_BENCH_SAMPLES="${SAMPLES}" cargo test -v "${test_profile_args[@]}" --locked --bin xcalygraph measure_query_compute -- --ignored --nocapture 2> "${WORK}/cargo.log" \
+  XCALYGRAPH_BENCH_SAMPLES="${SAMPLES}" cargo test -v "${test_profile_args[@]}" --locked --bin xcalygraph \
+  --message-format=json measure_query_compute -- --ignored --nocapture 2> "${WORK}/cargo.log" \
+  | bash "${REPO_ROOT}/scripts/utils/cargo-artifact.sh" --test --passthrough 3> "${WORK}/test-binary.path" \
   | tee "${WORK}/results.txt"
-python3 -I - "${WORK}/cargo.log" >> "${WORK}/identity.tsv" <<'PYTHON'
+python3 -I - "${WORK}/test-binary.path" >> "${WORK}/identity.tsv" <<'PYTHON'
 import hashlib
+import json
 from pathlib import Path
-import shlex
 import sys
-for line in reversed(Path(sys.argv[1]).read_text().splitlines()):
-    if "Running `" in line and " measure_query_compute " in line:
-        command = line.split("Running `", 1)[1].rsplit("`", 1)[0]
-        binary = Path(shlex.split(command)[0])
-        print(hashlib.sha256(binary.read_bytes()).hexdigest(), binary, sep="\t")
-        break
-else:
+name = Path(sys.argv[1]).read_text()
+if not name.endswith("\n"):
     raise ValueError("Cargo did not report the benchmark test binary")
+name = name[:-1]
+label = json.dumps(name) if any(ord(char) < 32 or ord(char) == 127 for char in name) else name
+print(hashlib.sha256(Path(name).read_bytes()).hexdigest(), label, sep="\t")
 PYTHON
 env HOME="${WORK}/home" bash scripts/utils/prepare-corpus.sh --verify "${snapshot}" >/dev/null
 echo "evidence: ${WORK}"

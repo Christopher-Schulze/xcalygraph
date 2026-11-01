@@ -117,9 +117,10 @@ third_party > "${stage}/THIRD-PARTY-LICENSES.txt"
 index=0
 for target in "${targets[@]}"; do
   bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
-  cargo build --release --locked --target "${target}"
+  binary="$(cargo build --release --locked --bin xcalygraph --target "${target}" --message-format=json \
+    | bash "${REPO_ROOT}/scripts/utils/cargo-artifact.sh")"
   name="${archives[${index}]%.tar.gz}"
-  package_release "${stage}" "${name}" "target/${target}/release/xcalygraph"
+  package_release "${stage}" "${name}" "${binary}"
   index=$((index + 1))
 done
 publish_releases "${stage}" "${DIST}" "${archives[@]}"

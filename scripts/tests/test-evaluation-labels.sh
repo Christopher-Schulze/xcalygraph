@@ -34,7 +34,8 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
                    and key not in ("BASH_ENV", "ENV", "CDPATH", "TAR_OPTIONS")}
     environment.update(HOME=str(home), TMPDIR=str(temporary_directory), XDG_CONFIG_HOME=str(home / "config"),
                        GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
-    for relative in ("scripts/utils/prepare-corpus.sh", "scripts/benchmarks/evaluate-sealed.sh"):
+    for relative in ("scripts/utils/prepare-corpus.sh", "scripts/benchmarks/evaluate-sealed.sh",
+                     "scripts/benchmarks/run-evaluation.sh"):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(repo / relative, path)
@@ -91,6 +92,20 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
                              "cases": "fixture.jsonl", "cases_sha256": hashlib.sha256(case_data).hexdigest(), "count": 5}]}
     manifest_path = cases_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest))
+    (root / "scripts/benchmarks/questions").mkdir()
+    entry = root / "scripts/benchmarks/run-evaluation.sh"
+    validation_args = ["bash", str(entry), "--set", "../../../.cache/cases", "--validate"]
+    entry_validation = subprocess.run(validation_args, env=environment, capture_output=True, text=True)
+    assert entry_validation.returncode == 0, entry_validation.stderr + entry_validation.stdout
+    validation_evidence = Path(entry_validation.stdout.strip().rsplit("evidence: ", 1)[-1])
+    assert json.loads((validation_evidence / "identity.json").read_text())["binary_sha256"] is None
+    original_entry = entry.read_text()
+    mutated_entry = original_entry.replace('    BINARY=""\n', '    BINARY="$(build_binary)"\n', 1)
+    assert mutated_entry != original_entry
+    entry.write_text(mutated_entry)
+    mutation = subprocess.run(validation_args, env=environment, capture_output=True, text=True)
+    assert mutation.returncode != 0
+    entry.write_text(original_entry)
     runner = root / "scripts/benchmarks/evaluate-sealed.sh"
     arguments = ["bash", str(runner), str(manifest_path), "final", str(binary)]
     run = subprocess.run(arguments, env=environment, capture_output=True, text=True)
