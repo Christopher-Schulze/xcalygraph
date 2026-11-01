@@ -317,6 +317,8 @@ def main():
         if any(c["name"] not in report["corpora"] for c in corpora):
             raise ValueError("baseline lacks a completed selected corpus")
     base = repo / ".cache/evaluation"
+    if base.parent.is_symlink() or base.is_symlink():
+        raise ValueError("evaluation cache must not be a symlink")
     base.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="sealed.", dir=base))
     home = work / "home"
@@ -330,6 +332,7 @@ def main():
     validated = [(c, *validate_corpus(repo, work, manifest_path.parent, c, environment)) for c in corpora]
     print("validated:", len(corpora), "corpora; evidence:", work, flush=True)
     if phase == "validate":
+        write_new(work / ".xcalygraph-disposable", b"xcalygraph-cache-v1\n")
         return
     receipts = repo / ".cache/evaluation/exposure" / sha(manifest_data)
     exposure = {}
@@ -381,6 +384,7 @@ def main():
     write_new(work / "public-report.json", json_bytes(public))
     print(json.dumps(report, sort_keys=True), flush=True)
     print("evidence:", work, flush=True)
+    write_new(work / ".xcalygraph-disposable", b"xcalygraph-cache-v1\n")
 
 
 try:

@@ -30,6 +30,10 @@ readonly ROOT QUESTIONS
 readonly BINARY="${REPO_ROOT}/target/debug/xcalygraph"
 readonly RUSTUP_DIR="${RUSTUP_HOME:-${HOME}/.rustup}"
 readonly CARGO_DIR="${CARGO_HOME:-${HOME}/.cargo}"
+if [[ -L "${REPO_ROOT}/.cache" || -L "${REPO_ROOT}/.cache/benchmarks" ]]; then
+  echo "measure-query-compute.sh: benchmark cache must not be a symlink" >&2
+  exit 1
+fi
 mkdir -p "${REPO_ROOT}/.cache/benchmarks"
 WORK="$(mktemp -d "${REPO_ROOT}/.cache/benchmarks/query.XXXXXXXX")"
 readonly WORK
@@ -98,3 +102,4 @@ else:
 PYTHON
 env HOME="${WORK}/home" bash scripts/utils/prepare-corpus.sh --verify "${snapshot}" >/dev/null
 echo "evidence: ${WORK}"
+( set -o noclobber; printf 'xcalygraph-cache-v1\n' > "${WORK}/.xcalygraph-disposable" )

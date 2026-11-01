@@ -137,3 +137,4 @@ print(json.dumps({key: value for key, value in report.items() if key != "observa
 PYTHON
 env HOME="${WORK}/home" TMPDIR="${WORK}/tmp" XDG_CONFIG_HOME="${WORK}/home/config" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 bash "${REPO_ROOT}/scripts/utils/prepare-corpus.sh" --verify "$1" >/dev/null
 echo "evidence: ${WORK}"
+( set -o noclobber; printf 'xcalygraph-cache-v1\n' > "${WORK}/.xcalygraph-disposable" )

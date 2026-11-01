@@ -28,12 +28,19 @@ for tool in "${tools[@]}"; do
   command -v "${tool}" >/dev/null || { echo "run-benchmarks.sh: ${tool} missing" >&2; exit 1; }
 done
 
+if [[ -L "${REPO_ROOT}/.cache" || -L "${WORK_BASE}" ]]; then
+  echo "run-benchmarks.sh: benchmark cache must not be a symlink" >&2
+  exit 1
+fi
 cd "${REPO_ROOT}"
 cargo build --release --locked -q
 mkdir -p "${WORK_BASE}"
 WORK="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")"
 readonly WORK
+exec 3>&1
 exec > >(tee "${WORK}/results.txt")
+tee_pid=$!
+readonly tee_pid
 readonly BENCHMARK_HOME="${WORK}/home"
 mkdir -p "${BENCHMARK_HOME}"
 printf 'binary_sha256\t%s\n' "$(python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${BINARY}")" > "${WORK}/identity.tsv"
@@ -156,3 +163,6 @@ for entry in "${corpora[@]}"; do
     "${name}" "${files}" "${build_ms}" "${rss_mb}" "${fresh_ms}" "${change_ms}" "${index_kb}" "${write_kb}" "${upstream_line}"
 done
 echo "evidence: ${WORK} (identity.tsv and measurement artifacts)"
+exec >&3 3>&-
+wait "${tee_pid}"
+( set -o noclobber; printf 'xcalygraph-cache-v1\n' > "${WORK}/.xcalygraph-disposable" )

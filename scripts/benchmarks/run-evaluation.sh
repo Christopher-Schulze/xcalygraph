@@ -88,11 +88,18 @@ if (( validate || ${#budget_args[@]} || ${#reuse_args[@]} )) || [[ "${phase}" !=
   echo "run-evaluation.sh: --phase/--budget/--reuse-graphify/--validate require a manifest-backed question set" >&2
   exit 2
 fi
+if [[ -L "${REPO_ROOT}/.cache" || -L "${WORK_BASE}" ]]; then
+  echo "run-evaluation.sh: evaluation cache must not be a symlink" >&2
+  exit 1
+fi
 build_binary
 mkdir -p "${WORK_BASE}"
 WORK="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")"
 readonly WORK
+exec 3>&1
 exec > >(tee "${WORK}/results.txt")
+tee_pid=$!
+readonly tee_pid
 readonly BENCHMARK_HOME="${WORK}/home"
 mkdir -p "${BENCHMARK_HOME}"
 sha256_file() {
@@ -281,3 +288,6 @@ for corpus in "${corpora[@]}"; do
   fi
 done
 echo "evidence: ${WORK} (identity.tsv, misses-<corpus>.txt, upstream-errors.log)"
+exec >&3 3>&-
+wait "${tee_pid}"
+( set -o noclobber; printf 'xcalygraph-cache-v1\n' > "${WORK}/.xcalygraph-disposable" )

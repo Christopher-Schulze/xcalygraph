@@ -78,5 +78,6 @@ print(executables[0])
 PYTHON
 )"
 bash "${REPO_ROOT}/scripts/tests/test-prune-cache.sh"
+bash "${REPO_ROOT}/scripts/tests/test-cache-producers.sh" "${binary}"
 bash "${REPO_ROOT}/scripts/tests/test-corpus-snapshots.sh" "${binary}"
 bash "${REPO_ROOT}/scripts/tests/test-evaluation-labels.sh" "${binary}"

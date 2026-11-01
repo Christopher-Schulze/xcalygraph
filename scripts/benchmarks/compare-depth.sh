@@ -35,10 +35,17 @@ else
 fi
 [[ -d "${source_dir}" ]] || { echo "compare-depth.sh: ${source_dir} missing" >&2; exit 1; }
 
+if [[ -L "${REPO_ROOT}/.cache" || -L "${WORK_BASE}" ]]; then
+  echo "compare-depth.sh: depth cache must not be a symlink" >&2
+  exit 1
+fi
 mkdir -p "${WORK_BASE}"
 WORK="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")"
 readonly WORK
+exec 3>&1
 exec > >(tee "${WORK}/results.txt")
+tee_pid=$!
+readonly tee_pid
 readonly BENCHMARK_HOME="${WORK}/home"
 mkdir -p "${BENCHMARK_HOME}"
 copy="$(env HOME="${BENCHMARK_HOME}" bash "${REPO_ROOT}/scripts/utils/prepare-corpus.sh" "${source_dir}" "${REPO_ROOT}/.cache/corpus-snapshots" --graphify)"
@@ -155,3 +162,6 @@ for relation, rows in sorted(misses.items()):
         print("  " + row)
 PYTHON
 echo "evidence: ${WORK}; snapshot: ${copy}"
+exec >&3 3>&-
+wait "${tee_pid}"
+( set -o noclobber; printf 'xcalygraph-cache-v1\n' > "${WORK}/.xcalygraph-disposable" )

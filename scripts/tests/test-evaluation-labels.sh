@@ -96,6 +96,7 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
     run = subprocess.run(arguments, env=environment, capture_output=True, text=True)
     assert run.returncode == 0, run.stderr + run.stdout
     evidence = Path(run.stdout.splitlines()[-1].removeprefix("evidence: "))
+    assert (evidence / ".xcalygraph-disposable").read_bytes() == b"xcalygraph-cache-v1\n"
     report = json.loads((evidence / "report.json").read_text())
     public = json.loads((evidence / "public-report.json").read_text())
     assert public["manifest_sha256"] == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
@@ -121,14 +122,24 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
     assert metrics["workflow-text-600"]["multi_location_total"] == 2
     paired = report["corpora"]["xcalygraph"]["paired_complete"]["workflow-text-600-vs-graphify-legacy-2000"]
     assert sum(paired.values()) == 4
+    existing = set((root / ".cache/evaluation").glob("sealed.*"))
     repeat = subprocess.run(arguments, env=environment, capture_output=True, text=True)
     assert repeat.returncode != 0 and "already evaluated" in repeat.stderr
+    failed, = set((root / ".cache/evaluation").glob("sealed.*")) - existing
+    assert not (failed / ".xcalygraph-disposable").exists()
     assert len(list((root / ".cache/evaluation").glob("sealed.*/report.json"))) == 1
+    validation = subprocess.run(arguments[:3] + ["validate", arguments[4]], env=environment,
+                                capture_output=True, text=True)
+    assert validation.returncode == 0, validation.stderr + validation.stdout
+    validated = Path(validation.stdout.strip().rsplit("evidence: ", 1)[-1])
+    assert (validated / ".xcalygraph-disposable").read_bytes() == b"xcalygraph-cache-v1\n"
+    assert not (root / ".cache/evaluation/exposure/.xcalygraph-disposable").exists()
     focused = subprocess.run(arguments[:3] + ["development", arguments[4], "--budget", "600",
                                               "--reuse-graphify", str(evidence)],
                              env=environment, capture_output=True, text=True)
     assert focused.returncode == 0, focused.stderr + focused.stdout
     focused_evidence = Path(focused.stdout.splitlines()[-1].removeprefix("evidence: "))
+    assert (focused_evidence / ".xcalygraph-disposable").read_bytes() == b"xcalygraph-cache-v1\n"
     identity = json.loads((focused_evidence / "identity.json").read_text())
     focused_report = json.loads((focused_evidence / "report.json").read_text())
     focused_public = json.loads((focused_evidence / "public-report.json").read_text())
@@ -164,5 +175,16 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
                                                 "--reuse-graphify", str(focused_evidence)],
                                env=environment, capture_output=True, text=True)
     assert corrupted.returncode != 0 and "checksum mismatch" in corrupted.stderr
-    print("PASS: pinned restore, text/JSON scoring, wrong-definition rejection, partial coverage, negative penalty, exposure refusal, focused budgets and verified baseline reuse")
+    linked = work / "linked-repo"
+    linked_runner = linked / "scripts/benchmarks/evaluate-sealed.sh"
+    linked_runner.parent.mkdir(parents=True)
+    shutil.copyfile(runner, linked_runner)
+    foreign = work / "foreign-cache"
+    foreign.mkdir()
+    (linked / ".cache").symlink_to(foreign, target_is_directory=True)
+    rejected = subprocess.run(["bash", str(linked_runner), str(manifest_path), "validate", str(binary)],
+                              env=environment, capture_output=True, text=True)
+    assert rejected.returncode != 0 and "symlink" in rejected.stderr
+    assert not list(foreign.iterdir())
+    print("PASS: evaluator scoring, exposure, baseline reuse, completed-run markers and linked-cache refusal")
 PYTHON
