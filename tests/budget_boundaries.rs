@@ -1,10 +1,12 @@
 //! Real CLI output must obey byte budgets and retain actionable test commands.
 
+mod support;
+
 use std::error::Error;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::Output;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -83,7 +85,7 @@ impl Fixture {
     }
 
     fn git(&self, args: &[&str]) -> io::Result<()> {
-        let output = Command::new("git")
+        let output = support::command("git", &self.directory)
             .arg("-C")
             .arg(&self.root)
             .args([
@@ -96,15 +98,6 @@ impl Fixture {
             .env("HOME", &self.home)
             .env("TMPDIR", &self.temporary)
             .env("XDG_CONFIG_HOME", self.home.join("config"))
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_COMMON_DIR")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_OBJECT_DIRECTORY")
-            .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-            .env_remove("GIT_CONFIG_COUNT")
             .output()?;
         if output.status.success() {
             Ok(())
@@ -116,7 +109,7 @@ impl Fixture {
     }
 
     fn query(&self, args: &[&str], json: bool) -> io::Result<Output> {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_xcalygraph"));
+        let mut command = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &self.directory);
         command
             .args(args)
             .arg("-C")
@@ -130,17 +123,6 @@ impl Fixture {
             .env("HOME", &self.home)
             .env("TMPDIR", &self.temporary)
             .env("XDG_CONFIG_HOME", self.home.join("config"))
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_COMMON_DIR")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_OBJECT_DIRECTORY")
-            .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-            .env_remove("GIT_CONFIG_COUNT")
-            .env_remove("XCALYGRAPH_INSTALL_DIR")
-            .env_remove("XCALYGRAPH_INDEX_DIR")
             .output()
     }
 }

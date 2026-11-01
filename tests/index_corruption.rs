@@ -2,13 +2,15 @@
 
 #![cfg(unix)]
 
+mod support;
+
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
 use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 use std::time::SystemTime;
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -72,7 +74,7 @@ impl Fixture {
     }
 
     fn run(&self, args: &[&str], index: Option<&Path>) -> io::Result<Output> {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_xcalygraph"));
+        let mut command = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &self.work.0);
         command
             .args(args)
             .arg("-C")
@@ -279,7 +281,7 @@ fn read_only_discovers_a_local_index_without_probing_or_creating_a_shared_base()
     let actual = fixture.run(&["find", "recoverable_marker", "--read-only"], None)?;
     assert_success(&actual);
     assert_eq!(actual.stdout, expected.stdout);
-    let empty_override = Command::new(env!("CARGO_BIN_EXE_xcalygraph"))
+    let empty_override = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.work.0)
         .args(["find", "recoverable_marker", "--read-only", "-C"])
         .arg(&fixture.root)
         .env("HOME", &fixture.home)
@@ -726,7 +728,7 @@ fn shared_write_failure_falls_back_without_publishing_partial_state() -> TestRes
         "explicit locations must not fall back"
     );
     assert!(!fixture.root.join(".xcalygraph").exists());
-    let environment_override = Command::new(env!("CARGO_BIN_EXE_xcalygraph"))
+    let environment_override = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.work.0)
         .args(["index", "-C"])
         .arg(&fixture.root)
         .env("HOME", &fixture.home)

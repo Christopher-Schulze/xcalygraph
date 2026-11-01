@@ -300,17 +300,78 @@ fn version() -> String {
 
 #[cfg(test)]
 mod tests {
+    mod support {
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/support/mod.rs"));
+    }
+
     use std::error::Error;
     use std::fs;
-    use std::process::Command;
 
     use super::audit_history;
     use crate::domain::history::History;
     use crate::infra::{git, store::Store, testdir::TestDir};
 
     #[test]
+    fn history_test_does_not_inherit_a_foreign_git_repository() -> Result<(), Box<dyn Error>> {
+        let fixture = TestDir::new("history-foreign-environment")?;
+        let foreign = fixture.path().join("foreign");
+        fs::create_dir(&foreign)?;
+        let initialized = support::command("git", fixture.path())
+            .args(["init", "-q"])
+            .arg(&foreign)
+            .status()?;
+        assert!(initialized.success());
+        let configuration = foreign.join(".git/config");
+        let before = fs::read(&configuration)?;
+        let index = foreign.join("foreign-index");
+        let output = support::command(std::env::current_exe()?, fixture.path())
+            .args([
+                "--exact",
+                "app::tests::audit_recomputes_old_history_cache_without_writing_in_read_only_mode",
+            ])
+            .env("GIT_DIR", foreign.join(".git"))
+            .env("GIT_WORK_TREE", &foreign)
+            .env("GIT_INDEX_FILE", &index)
+            .output()?;
+        assert!(!index.exists(), "foreign Git index was created");
+        assert_eq!(fs::read(configuration)?, before);
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn audit_recomputes_old_history_cache_without_writing_in_read_only_mode()
     -> Result<(), Box<dyn Error>> {
+        let foreign_git = std::env::vars_os().any(|(name, value)| {
+            let name = name.to_string_lossy();
+            match name.as_ref() {
+                "GIT_CONFIG_GLOBAL" => value != "/dev/null",
+                "GIT_CONFIG_NOSYSTEM" => value != "1",
+                _ => name.starts_with("GIT_"),
+            }
+        });
+        let configured = std::env::var_os("GIT_CONFIG_GLOBAL").is_some_and(|v| v == "/dev/null")
+            && std::env::var_os("GIT_CONFIG_NOSYSTEM").is_some_and(|v| v == "1");
+        if std::env::var_os("XCALYGRAPH_HISTORY_TEST_CHILD").is_none() || foreign_git || !configured
+        {
+            let fixture = TestDir::new("history-isolated-child")?;
+            let output = support::command(std::env::current_exe()?, fixture.path())
+                .args(["--exact", "app::tests::audit_recomputes_old_history_cache_without_writing_in_read_only_mode"])
+                .env("XCALYGRAPH_HISTORY_TEST_CHILD", "1")
+                .output()?;
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Ok(());
+        }
         let dir = TestDir::new("history-cache-version")?;
         let root = dir.path().join("repo");
         dir.write("repo/ü.go", "package sample\nfunc One() {}\n")?;
@@ -319,7 +380,7 @@ mod tests {
             &["add", "."],
             &["commit", "-q", "-m", "initial"],
         ] {
-            let status = Command::new("git")
+            let status = support::command("git", dir.path())
                 .arg("-C")
                 .arg(&root)
                 .args(["-c", "user.email=t@t", "-c", "user.name=t"])

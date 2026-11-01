@@ -1,10 +1,11 @@
 //! A natural-language question can name distinct operations in the same file.
 
+mod support;
+
 use std::error::Error;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use std::process::Command;
 
 struct TempDir(PathBuf);
 
@@ -58,7 +59,7 @@ fn different_query_evidence_in_one_file_survives_duplicate_siblings() -> Result<
     }
     for verb in ["find", "ctx"] {
         for json in [false, true] {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_xcalygraph"));
+            let mut command = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &work.0);
             command
                 .args([verb, "compress and decompress archive", "-b", "600", "-C"])
                 .arg(&root)
@@ -111,7 +112,7 @@ fn related_word_forms_find_definitions_without_hiding_exact_matches() -> Result<
         ("retrieval", "fn get("),
     ] {
         for verb in ["find", "ctx"] {
-            let output = Command::new(env!("CARGO_BIN_EXE_xcalygraph"))
+            let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &work.0)
                 .args([verb, question, "-b", "600", "-C"])
                 .arg(&root)
                 .arg("--index-dir")
@@ -140,7 +141,7 @@ fn related_word_forms_find_definitions_without_hiding_exact_matches() -> Result<
         .join(" ");
     let long_question = format!("validation {many_terms}");
     for verb in ["find", "ctx"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_xcalygraph"))
+        let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &work.0)
             .args([verb, &long_question, "-b", "600", "-C"])
             .arg(&root)
             .arg("--index-dir")
@@ -174,7 +175,7 @@ fn context_covers_distinct_named_concepts_before_repeating_one() -> Result<(), B
         "pub fn validate(data: &[u8]) -> bool {\n    !data.is_empty()\n}\n",
     )?;
     for json in [false, true] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_xcalygraph"));
+        let mut command = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &work.0);
         command
             .args(["ctx", "writing image and validation", "-b", "600", "-C"])
             .arg(&root)
@@ -228,7 +229,7 @@ fn context_is_byte_identical_across_processes_for_a_symmetric_graph() -> Result<
     }
     fs::write(root.join("graph.rs"), source)?;
     let index = work.0.join("index");
-    let built = Command::new(env!("CARGO_BIN_EXE_xcalygraph"))
+    let built = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &work.0)
         .args(["index", "-C"])
         .arg(&root)
         .arg("--index-dir")
@@ -243,7 +244,7 @@ fn context_is_byte_identical_across_processes_for_a_symmetric_graph() -> Result<
     for json in [false, true] {
         let mut previous = None;
         for _ in 0..20 {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_xcalygraph"));
+            let mut command = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &work.0);
             command
                 .args(["ctx", "start", "-b", "600", "-C"])
                 .arg(&root)
@@ -286,7 +287,7 @@ fn find_is_byte_identical_for_symbols_on_the_same_line() -> Result<(), Box<dyn E
     for json in [false, true] {
         let mut previous = None;
         for _ in 0..20 {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_xcalygraph"));
+            let mut command = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &work.0);
             command
                 .args(["find", "read", "-b", "600", "-C"])
                 .arg(&root)
@@ -330,7 +331,7 @@ fn filtered_symbol_search_keeps_terms_inherited_from_its_file_path() -> Result<(
         "pub fn load_entry() -> usize { 3 }\n",
     )?;
     for json in [false, true] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_xcalygraph"));
+        let mut command = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &work.0);
         command
             .args([
                 "find",
@@ -377,7 +378,7 @@ fn exact_names_keep_their_bonus_for_ascii_and_unicode() -> Result<(), Box<dyn Er
          pub fn café_report_other() -> usize { 4 }\n",
     )?;
     for (question, expected) in [("READ-ENTRY", "Read_Entry"), ("CAFÉ_REPORT", "Café_report")] {
-        let output = Command::new(env!("CARGO_BIN_EXE_xcalygraph"))
+        let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &work.0)
             .args(["find", question, "-b", "600", "--json", "-C"])
             .arg(&root)
             .arg("--index-dir")

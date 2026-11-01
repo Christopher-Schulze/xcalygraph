@@ -1,10 +1,12 @@
 //! Diff identity must use complete, source-backed declarations rather than display signatures.
 
+mod support;
+
 use std::error::Error;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::Output;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -60,7 +62,7 @@ impl Fixture {
     }
 
     fn git(&self, args: &[&str]) -> io::Result<()> {
-        let output = Command::new("git")
+        let output = support::command("git", &self.directory)
             .arg("-C")
             .arg(&self.root)
             .args([
@@ -72,8 +74,6 @@ impl Fixture {
             .args(args)
             .env("HOME", &self.home)
             .env("TMPDIR", &self.temporary)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
             .output()?;
         if output.status.success() {
             Ok(())
@@ -94,7 +94,7 @@ impl Fixture {
     }
 
     fn impact_format(&self, extra: &[&str], json: bool) -> io::Result<Output> {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_xcalygraph"));
+        let mut command = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &self.directory);
         command.args(["impact", "--diff"]);
         if json {
             command.arg("--json");
@@ -107,10 +107,6 @@ impl Fixture {
             .arg(&self.index)
             .env("HOME", &self.home)
             .env("TMPDIR", &self.temporary)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env_remove("XCALYGRAPH_INSTALL_DIR")
-            .env_remove("XCALYGRAPH_INDEX_DIR")
             .output()
     }
 }
@@ -132,6 +128,47 @@ fn line_for<'a>(output: &'a str, path: &str, name: &str) -> Option<&'a str> {
     output.lines().find(|line| {
         line.contains(&format!("\"path\":\"{path}\"")) && line.contains(&format!("{name}\""))
     })
+}
+
+#[test]
+fn git_fixture_does_not_inherit_an_external_repository_or_index() -> TestResult {
+    let fixture = Fixture::new()?;
+    let foreign = fixture.directory.join("foreign");
+    fs::create_dir(&foreign)?;
+    let status = support::command("git", &fixture.directory)
+        .args(["init", "-q"])
+        .arg(&foreign)
+        .env("HOME", &fixture.home)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .status()?;
+    assert!(status.success());
+    let configuration = foreign.join(".git/config");
+    let before = fs::read(&configuration)?;
+    let redirected_index = foreign.join("foreign-index");
+    let output = support::command(std::env::current_exe()?, &fixture.directory)
+        .args([
+            "--exact",
+            "formatting_changes_do_not_become_signature_changes",
+        ])
+        .env("HOME", &fixture.home)
+        .env("TMPDIR", &fixture.temporary)
+        .env("GIT_DIR", foreign.join(".git"))
+        .env("GIT_WORK_TREE", &foreign)
+        .env("GIT_INDEX_FILE", &redirected_index)
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.bare")
+        .env("GIT_CONFIG_VALUE_0", "false")
+        .output()?;
+    assert!(!redirected_index.exists(), "foreign Git index was created");
+    assert_eq!(fs::read(configuration)?, before);
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
 }
 
 #[test]

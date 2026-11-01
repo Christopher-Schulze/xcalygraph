@@ -1,10 +1,12 @@
 //! End-to-end checks of the binary: stdout, stderr and exit codes.
 
+mod support;
+
 use std::error::Error;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -12,13 +14,8 @@ const BINARY: &str = env!("CARGO_BIN_EXE_xcalygraph");
 
 /// Runs the binary with a HOME that never points at the real one.
 fn run(args: &[&str]) -> io::Result<Output> {
-    Command::new(BINARY)
-        .args(args)
-        .env(
-            "HOME",
-            std::env::temp_dir().join("xcalygraph-it-empty-home"),
-        )
-        .output()
+    let fixture = TempDir::new("empty-home")?;
+    support::command(BINARY, &fixture.0).args(args).output()
 }
 
 #[test]
@@ -87,7 +84,8 @@ fn usage_errors_exit_2_with_one_stderr_line() -> TestResult {
 #[cfg(unix)]
 #[test]
 fn closed_stdout_is_not_an_error() -> TestResult {
-    let mut child = Command::new(BINARY)
+    let fixture = TempDir::new("closed-stdout")?;
+    let mut child = support::command(BINARY, &fixture.0)
         .arg("help")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -104,7 +102,16 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(label: &str) -> io::Result<Self> {
-        let base = std::env::temp_dir().canonicalize()?;
+        let cache = Path::new(env!("CARGO_MANIFEST_DIR")).join(".cache");
+        fs::create_dir_all(&cache)?;
+        if fs::symlink_metadata(&cache)?.file_type().is_symlink() {
+            return Err(io::Error::other("test cache must not be a symlink"));
+        }
+        Self::new_in(&cache, label)
+    }
+
+    fn new_in(base: &Path, label: &str) -> io::Result<Self> {
+        let base = base.canonicalize()?;
         let prefix = format!("xcalygraph-it-{}-{label}", std::process::id());
         for sequence in 0..1000 {
             let name = if sequence == 0 {
@@ -146,9 +153,21 @@ impl Drop for TempDir {
 }
 
 #[test]
+fn temporary_directory_is_created_in_repository_cache() -> TestResult {
+    let fixture = TempDir::new("cache-location")?;
+    let cache = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(".cache")
+        .canonicalize()?;
+    assert_eq!(fixture.0.parent(), Some(cache.as_path()));
+    Ok(())
+}
+
+#[test]
 fn temporary_directory_preserves_colliding_entries() -> TestResult {
-    if std::env::var_os("XCALYGRAPH_CLI_COLLISION_CHILD").is_some() {
-        let root = std::env::temp_dir();
+    let root = std::env::temp_dir();
+    if std::env::var_os("XCALYGRAPH_CLI_COLLISION_CHILD")
+        .is_some_and(|path| Path::new(&path) == root.as_path())
+    {
         let prefix = format!("xcalygraph-it-{}-collision", std::process::id());
         let directory = root.join(&prefix);
         let file = root.join(format!("{prefix}-1"));
@@ -161,7 +180,7 @@ fn temporary_directory_preserves_colliding_entries() -> TestResult {
             std::os::unix::fs::symlink(&directory, link)?;
             std::os::unix::fs::symlink(root.join("missing"), root.join(format!("{prefix}-3")))?;
         }
-        let owned = TempDir::new("collision")?;
+        let owned = TempDir::new_in(&root, "collision")?;
         assert_ne!(owned.0, directory);
         drop(owned);
         assert_eq!(fs::read(directory.join("keep"))?, b"directory sentinel");
@@ -185,10 +204,10 @@ fn temporary_directory_preserves_colliding_entries() -> TestResult {
     let path = cache.join(format!("cli-collision-fixture-{}", std::process::id()));
     fs::create_dir(&path)?;
     let fixture = TempDir(path);
-    let output = Command::new(std::env::current_exe()?)
+    let output = support::command(std::env::current_exe()?, &fixture.0)
         .args(["--exact", "temporary_directory_preserves_colliding_entries"])
         .env("TMPDIR", &fixture.0)
-        .env("XCALYGRAPH_CLI_COLLISION_CHILD", "1")
+        .env("XCALYGRAPH_CLI_COLLISION_CHILD", &fixture.0)
         .output()?;
     assert!(
         output.status.success(),
@@ -200,7 +219,7 @@ fn temporary_directory_preserves_colliding_entries() -> TestResult {
 }
 
 fn run_in(root: &Path, index: &Path, args: &[&str]) -> io::Result<Output> {
-    Command::new(BINARY)
+    support::command(BINARY, index.parent().unwrap_or(root))
         .args(args)
         .arg("-C")
         .arg(root)
@@ -235,7 +254,7 @@ fn index_builds_refreshes_lists_and_cleans() -> TestResult {
         "files 2 changed 0 deleted 1\n"
     );
     let tool = |args: &[&str]| {
-        Command::new(BINARY)
+        support::command(BINARY, &dir.0)
             .args(args)
             .arg("--index-dir")
             .arg(&index)
@@ -272,7 +291,7 @@ fn index_for(base: &Path, root_name: &str) -> io::Result<PathBuf> {
 }
 
 fn clean_in(dir: &TempDir, base: &Path, args: &[&str]) -> io::Result<Output> {
-    Command::new(BINARY)
+    support::command(BINARY, &dir.0)
         .arg("clean")
         .args(args)
         .arg("--index-dir")
@@ -507,7 +526,7 @@ fn verified_previous_format_cleanup() -> TestResult {
         }
     }
     assert!(converted > 2);
-    let listed = Command::new(BINARY)
+    let listed = support::command(BINARY, &dir.0)
         .arg("ls")
         .arg("--index-dir")
         .arg(&base)
@@ -547,7 +566,7 @@ fn confined_agents_get_the_index_inside_the_root() -> TestResult {
     let locked = dir.0.join("tmp");
     fs::create_dir_all(&locked)?;
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o500))?;
-    let output = Command::new(BINARY)
+    let output = support::command(BINARY, &dir.0)
         .args(["index", "-C"])
         .arg(dir.0.join("root"))
         .env("TMPDIR", &locked)
@@ -573,7 +592,12 @@ fn confined_agents_get_the_index_inside_the_root() -> TestResult {
 fn install_writes_the_skill_and_version_reports_mismatches() -> TestResult {
     let dir = TempDir::new("install")?;
     let home = dir.0.join("home");
-    let with_home = |args: &[&str]| Command::new(BINARY).args(args).env("HOME", &home).output();
+    let with_home = |args: &[&str]| {
+        support::command(BINARY, &dir.0)
+            .args(args)
+            .env("HOME", &home)
+            .output()
+    };
     // The Claude Code link appears without a flag once `~/.claude` exists.
     fs::create_dir_all(home.join(".claude"))?;
     let installed = with_home(&["install"])?;
@@ -590,7 +614,7 @@ fn install_writes_the_skill_and_version_reports_mismatches() -> TestResult {
     );
     // The binary lands in ~/.local/bin and runs from there.
     let copied = home.join(".local/bin/xcalygraph");
-    let copied_version = Command::new(&copied).arg("version").output()?;
+    let copied_version = support::command(&copied, &dir.0).arg("version").output()?;
     assert!(String::from_utf8(copied_version.stdout)?.starts_with("xcalygraph "));
     let skill = fs::read_to_string(home.join(".agents/skills/xcalygraph/SKILL.md"))?;
     assert!(skill.starts_with("---\nname: xcalygraph\n"));
@@ -621,10 +645,92 @@ fn install_writes_the_skill_and_version_reports_mismatches() -> TestResult {
 }
 
 #[test]
+fn install_test_does_not_inherit_an_external_install_destination() -> TestResult {
+    let fixture = TempDir::new("inherited-install")?;
+    let foreign = fixture.0.join("foreign");
+    fs::create_dir(&foreign)?;
+    fs::write(foreign.join("xcalygraph"), b"preserve foreign binary")?;
+    let output = support::command(std::env::current_exe()?, &fixture.0)
+        .args([
+            "--exact",
+            "install_writes_the_skill_and_version_reports_mismatches",
+        ])
+        .env("HOME", fixture.0.join("home"))
+        .env("TMPDIR", &fixture.0)
+        .env("XCALYGRAPH_INSTALL_DIR", &foreign)
+        .output()?;
+    let foreign_binary = foreign.join("xcalygraph");
+    assert!(
+        fs::metadata(&foreign_binary)?.len() == b"preserve foreign binary".len() as u64
+            && fs::read(&foreign_binary)? == b"preserve foreign binary",
+        "foreign install destination was changed"
+    );
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+#[test]
+fn installer_test_ignores_inherited_shell_startup_and_tar_options() -> TestResult {
+    let root = std::env::temp_dir();
+    if std::env::var_os("XCALYGRAPH_ENV_INSPECTION_CHILD")
+        .is_some_and(|path| Path::new(&path) == root.as_path())
+    {
+        let environment = support::command("/bin/sh", &root)
+            .args([
+                "-c",
+                "test -z \"${BASH_ENV+x}\" && test -z \"${TAR_OPTIONS+x}\"",
+            ])
+            .status()?;
+        assert!(environment.success(), "shell options were inherited");
+        return Ok(());
+    }
+    let fixture = TempDir::new("inherited-shell")?;
+    fixture.write("startup.sh", "printf started > \"$TEST_SHELL_MARKER\"\n")?;
+    let marker = fixture.0.join("startup-ran");
+    let output = support::command(std::env::current_exe()?, &fixture.0)
+        .args([
+            "--exact",
+            "installer_without_skill_preserves_foreign_temporary_entries",
+        ])
+        .env("BASH_ENV", fixture.0.join("startup.sh"))
+        .env("TAR_OPTIONS", "--xcalygraph-invalid-option")
+        .env("TEST_SHELL_MARKER", &marker)
+        .output()?;
+    assert!(!marker.exists(), "inherited shell startup file ran");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let inspection = support::command(std::env::current_exe()?, &fixture.0)
+        .args([
+            "--exact",
+            "installer_test_ignores_inherited_shell_startup_and_tar_options",
+        ])
+        .env("XCALYGRAPH_ENV_INSPECTION_CHILD", &fixture.0)
+        .env("BASH_ENV", fixture.0.join("startup.sh"))
+        .env("TAR_OPTIONS", "--xcalygraph-invalid-option")
+        .output()?;
+    assert!(
+        inspection.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&inspection.stdout),
+        String::from_utf8_lossy(&inspection.stderr)
+    );
+    Ok(())
+}
+
+#[test]
 fn update_check_compares_with_the_latest_release() -> TestResult {
     let dir = TempDir::new("update")?;
     dir.write("latest.json", "{\"tag_name\": \"v0.0.1\", \"assets\": []}")?;
-    let output = Command::new(BINARY)
+    let output = support::command(BINARY, &dir.0)
         .args(["update", "--check"])
         .env("HOME", dir.0.join("home"))
         .env(
@@ -644,7 +750,7 @@ fn update_check_compares_with_the_latest_release() -> TestResult {
     let skill = dir.0.join("home/.agents/skills/xcalygraph");
     fs::create_dir_all(&skill)?;
     fs::write(skill.join(".version"), "0.0.1\n")?;
-    let refreshed = Command::new(BINARY)
+    let refreshed = support::command(BINARY, &dir.0)
         .arg("update")
         .env("HOME", dir.0.join("home"))
         .env(
@@ -659,7 +765,7 @@ fn update_check_compares_with_the_latest_release() -> TestResult {
         env!("CARGO_PKG_VERSION")
     );
     dir.write("latest.json", "{\"tag_name\": \"v99.0.0\", \"assets\": []}")?;
-    let newer = Command::new(BINARY)
+    let newer = support::command(BINARY, &dir.0)
         .args(["update", "--check"])
         .env("HOME", dir.0.join("home"))
         .env(
@@ -743,7 +849,7 @@ fn installer_release(dir: &TempDir, reported_version: &str) -> TestResult {
 }
 
 fn install_without_skill(dir: &TempDir) -> io::Result<Output> {
-    Command::new("bash")
+    support::command("bash", &dir.0)
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/utils/install.sh"))
         .args(["--version", "99.0.0", "--no-skill"])
         .env(
@@ -871,7 +977,7 @@ fn release_builder_preserves_foreign_dist_on_preparation_failure() -> TestResult
     let dir = TempDir::new("release-dist-preservation")?;
     let script = release_builder_fixture(&dir)?;
     dir.write("project/dist/foreign.txt", "preserve release data")?;
-    let output = Command::new("/bin/bash")
+    let output = support::command("/bin/bash", &dir.0)
         .arg(&script)
         .env("CARGO_NET_OFFLINE", "true")
         .env("HOME", dir.0.join("home"))
@@ -897,7 +1003,7 @@ fn release_builder_preserves_foreign_dist_on_preparation_failure() -> TestResult
         .0
         .join(format!("project/dist/xcalygraph-0.0.0-{os}-{arch}.tar.gz"));
     fs::write(&conflict, b"keep conflicting archive")?;
-    let output = Command::new("/bin/bash")
+    let output = support::command("/bin/bash", &dir.0)
         .arg(&script)
         .env("CARGO_NET_OFFLINE", "true")
         .env("HOME", dir.0.join("home"))
@@ -911,7 +1017,7 @@ fn release_builder_preserves_foreign_dist_on_preparation_failure() -> TestResult
         b"preserve release data"
     );
     assert_eq!(fs::read_dir(dir.0.join("project/dist"))?.count(), 2);
-    let unsupported = Command::new("/bin/bash")
+    let unsupported = support::command("/bin/bash", &dir.0)
         .arg(&script)
         .arg("unsupported-target")
         .env("CARGO_NET_OFFLINE", "true")
@@ -923,7 +1029,7 @@ fn release_builder_preserves_foreign_dist_on_preparation_failure() -> TestResult
     assert_eq!(fs::read_dir(dir.0.join("project/dist"))?.count(), 2);
     let duplicate = TempDir::new("release-duplicate-target")?;
     let duplicate_script = release_builder_fixture(&duplicate)?;
-    let output = Command::new("/bin/bash")
+    let output = support::command("/bin/bash", &duplicate.0)
         .arg(duplicate_script)
         .args(["aarch64-apple-darwin", "aarch64-apple-darwin"])
         .env("CARGO_NET_OFFLINE", "true")
@@ -950,7 +1056,7 @@ fn release_packaging_preserves_foreign_files_and_rejects_conflicts() -> TestResu
     let name = "xcalygraph-0.0.0-darwin-arm64";
     let shell = "source \"$1\"; package_release \"$2\" \"$3\" \"$4\"; publish_releases \"$2\" \"$5\" \"$3.tar.gz\"";
     let package = |destination: &Path, staging: &Path| {
-        Command::new("/bin/bash")
+        support::command("/bin/bash", &dir.0)
             .args(["-c", shell, "release-test"])
             .arg(&script)
             .arg(staging)
@@ -980,7 +1086,10 @@ fn release_packaging_preserves_foreign_files_and_rejects_conflicts() -> TestResu
         fs::read(dist.join("foreign.tar.gz"))?,
         b"preserve unrelated archive"
     );
-    let listing = Command::new("tar").arg("-tzf").arg(&archive).output()?;
+    let listing = support::command("tar", &dir.0)
+        .arg("-tzf")
+        .arg(&archive)
+        .output()?;
     assert!(listing.status.success());
     let listing = String::from_utf8(listing.stdout)?;
     for file in ["xcalygraph", "LICENSE", "THIRD-PARTY-LICENSES.txt"] {
@@ -988,7 +1097,7 @@ fn release_packaging_preserves_foreign_files_and_rejects_conflicts() -> TestResu
     }
     let extracted = dir.0.join("extracted");
     fs::create_dir(&extracted)?;
-    let unpacked = Command::new("tar")
+    let unpacked = support::command("tar", &dir.0)
         .arg("-xzf")
         .arg(&archive)
         .arg("-C")
@@ -997,7 +1106,7 @@ fn release_packaging_preserves_foreign_files_and_rejects_conflicts() -> TestResu
     assert!(unpacked.success());
     let packaged = extracted.join(name);
     assert!(
-        Command::new("cmp")
+        support::command("cmp", &dir.0)
             .arg("-s")
             .arg(BINARY)
             .arg(packaged.join("xcalygraph"))
@@ -1034,7 +1143,7 @@ fn release_packaging_preserves_foreign_files_and_rejects_conflicts() -> TestResu
         checksum_dist.join("SHA256SUMS"),
         b"preserve foreign checksums",
     )?;
-    let check = Command::new("/bin/bash")
+    let check = support::command("/bin/bash", &dir.0)
         .args([
             "-c",
             "source \"$1\"; check_outputs \"$2\" \"$3\"",
@@ -1056,7 +1165,7 @@ fn release_packaging_preserves_foreign_files_and_rejects_conflicts() -> TestResu
         fs::create_dir(&linked_dist)?;
         let link = linked_dist.join(format!("{name}.tar.gz"));
         symlink(dir.0.join("missing-target"), &link)?;
-        let check = Command::new("/bin/bash")
+        let check = support::command("/bin/bash", &dir.0)
             .args([
                 "-c",
                 "source \"$1\"; check_outputs \"$2\" \"$3\"",
@@ -1103,7 +1212,7 @@ fn update_reports_a_failed_skill_phase_after_replacing_the_binary() -> TestResul
         if read_only {
             fs::set_permissions(&skills, fs::Permissions::from_mode(0o555))?;
         }
-        let output = Command::new(&exe)
+        let output = support::command(&exe, &dir.0)
             .arg("update")
             .env("HOME", &home)
             .env(
@@ -1142,7 +1251,7 @@ fn update_reports_a_failed_skill_phase_after_replacing_the_binary() -> TestResul
 }
 
 fn git(root: &Path, args: &[&str]) -> io::Result<()> {
-    let status = Command::new("git")
+    let status = support::command("git", root)
         .arg("-C")
         .arg(root)
         .args(["-c", "user.email=t@t", "-c", "user.name=t"])
@@ -1616,7 +1725,7 @@ fn final_tree_decides_the_index_regardless_of_change_order_and_threads() -> Test
     }
     for threads in ["1", "4"] {
         let index = dir.0.join(format!("threads{threads}"));
-        let output = Command::new(BINARY)
+        let output = support::command(BINARY, &dir.0)
             .args(["index", "-C"])
             .arg(&root)
             .arg("--index-dir")
@@ -1937,7 +2046,7 @@ fn impact_diff_never_reads_deleted_sensitive_revision_content() -> TestResult {
         std::iter::once(dir.0.join("bin")).chain(std::env::split_paths(&path)),
     )?;
     let trace = dir.0.join("git-invocations");
-    let output = Command::new(BINARY)
+    let output = support::command(BINARY, &dir.0)
         .args(["impact", "--diff", "--json", "-C"])
         .arg(&root)
         .arg("--index-dir")
