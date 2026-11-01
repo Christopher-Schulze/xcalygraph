@@ -7,7 +7,8 @@ if (( $# < 3 || $# > 5 )) || { (( $# == 5 )) && [[ "$5" != "--default-index" ]];
   echo "usage: measure-index-validation.sh SNAPSHOT BEFORE_BINARY AFTER_BINARY [RUNS] [--default-index]" >&2
   exit 2
 fi
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 readonly RUNS="${4:-15}"
 readonly MODE="${5:-explicit}"

@@ -8,7 +8,8 @@ if (( $# < 2 || $# > 3 )); then
   echo "usage: measure-query-compute.sh ROOT QUESTIONS.tsv [SAMPLES]" >&2
   exit 2
 fi
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 readonly SAMPLES="${3:-10}"
 readonly OPT_LEVEL="${XCALYGRAPH_BENCH_OPT_LEVEL:-0}"

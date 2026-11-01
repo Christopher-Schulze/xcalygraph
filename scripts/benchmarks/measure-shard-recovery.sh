@@ -7,7 +7,8 @@ if (( $# < 2 || $# > 3 )); then
   echo "usage: measure-shard-recovery.sh SNAPSHOT BINARY [RUNS]" >&2
   exit 2
 fi
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 readonly RUNS="${3:-5}"
 if [[ ! "${RUNS}" =~ ^[0-9]{1,2}$ ]] || (( 10#${RUNS} < 1 || 10#${RUNS} > 20 )); then

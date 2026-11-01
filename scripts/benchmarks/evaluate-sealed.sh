@@ -3,7 +3,8 @@
 # Usage: evaluate-sealed.sh MANIFEST final|development|validate BINARY [--budget N] [--reuse-graphify RUN] [CORPUS...]
 # All tools run on verified frozen sources with an isolated HOME and explicit index path.
 set -euo pipefail
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 python3 -I - "$REPO_ROOT" "$@" <<'PYTHON'
 import collections
 import hashlib

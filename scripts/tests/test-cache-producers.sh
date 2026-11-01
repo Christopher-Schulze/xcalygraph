@@ -23,9 +23,13 @@ if not target.is_absolute():
 binary = Path(sys.argv[2]).resolve(strict=True) if sys.argv[2] else (target / "debug/xcalygraph").resolve(strict=True)
 with tempfile.TemporaryDirectory(prefix="cache-producers.", dir=repo / ".cache") as temporary:
     work = Path(temporary)
-    root, home, tmp, source = (work / name for name in ("project", "home", "tmp", "source"))
+    root, home, tmp, source = (work / name for name in ("project\n", "home", "tmp", "source"))
     for directory in (root, home, tmp, source):
         directory.mkdir()
+    decoy = work / "project"
+    decoy.mkdir()
+    sentinel = decoy / "sentinel"
+    sentinel.write_text("preserve\n")
     environment = {key: value for key, value in os.environ.items()
                    if not key.startswith(("GIT_", "XCALYGRAPH_"))
                    and key not in ("BASH_ENV", "ENV", "CDPATH", "TAR_OPTIONS")}
@@ -100,5 +104,6 @@ with tempfile.TemporaryDirectory(prefix="cache-producers.", dir=repo / ".cache")
     assert pruned.returncode == 0, pruned.stderr + pruned.stdout
     assert protected.is_dir() and not disposable.exists() and not recovered.exists()
     assert failed.is_dir() and failed_query.is_dir() and snapshot.is_dir()
+    assert sentinel.read_text() == "preserve\n" and list(decoy.iterdir()) == [sentinel]
     print("PASS: real completed and failed benchmark runs, .keep, snapshot retention and eligible pruning")
 PYTHON

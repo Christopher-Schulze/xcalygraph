@@ -10,7 +10,8 @@
 # Requires: claude, jq; graphify for the Graphify arm; Cargo for a guarded release build.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 readonly WORK_BASE="${REPO_ROOT}/.cache/agent-benchmark"
 readonly QUESTIONS="${REPO_ROOT}/scripts/benchmarks/questions"

@@ -19,7 +19,8 @@
 # Requires: jq, rg, python3; graphify for the upstream baseline.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 readonly WORK_BASE="${REPO_ROOT}/.cache/evaluation"
 readonly SNAPSHOTS="${REPO_ROOT}/.cache/corpus-snapshots"

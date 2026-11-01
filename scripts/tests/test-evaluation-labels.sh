@@ -24,14 +24,21 @@ if not target.is_absolute():
 binary = Path(sys.argv[2]).resolve(strict=True) if sys.argv[2] else (target / "debug/xcalygraph").resolve(strict=True)
 with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache") as temporary:
     work = Path(temporary)
-    root = work / "repo"
+    root = work / "repo\n\n"
     home = work / "home"
     root.mkdir()
     home.mkdir()
+    decoy = work / "repo"
+    decoy.mkdir()
+    sentinel = decoy / "sentinel"
+    sentinel.write_text("preserve\n")
     temporary_directory = work / "temporary"
     temporary_directory.mkdir()
-    environment = {key: value for key, value in os.environ.items()
-                   if not key.startswith(("GIT_", "XCALYGRAPH_"))
+    function_marker = work / "unexpected-cargo-function"
+    inherited = dict(os.environ, TEST_CARGO_PROBE=str(function_marker))
+    inherited["BASH_FUNC_cargo%%"] = '() { printf invoked > "$TEST_CARGO_PROBE"; return 127; }'
+    environment = {key: value for key, value in inherited.items()
+                   if not key.startswith(("GIT_", "XCALYGRAPH_", "BASH_FUNC_"))
                    and key not in ("BASH_ENV", "ENV", "CDPATH", "TAR_OPTIONS")}
     environment.update(HOME=str(home), TMPDIR=str(temporary_directory), XDG_CONFIG_HOME=str(home / "config"),
                        GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
@@ -101,8 +108,16 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
         assert marker in result.stdout, result.stdout
         return directory / result.stdout.rsplit(marker, 1)[1].removesuffix("\n")
 
+    validation_tools = work / "validation-tools"
+    validation_tools.mkdir()
+    for name in ("bash", "dirname", "git", "jq", "rg", "python3", "graphify"):
+        executable = shutil.which(name)
+        assert executable, name
+        (validation_tools / name).symlink_to(executable)
+    validation_environment = dict(environment, PATH=str(validation_tools), LC_ALL="C")
+    assert shutil.which("cargo", path=validation_environment["PATH"]) is None
     validation_args = ["bash", str(entry), "--set", "../../../.cache/cases", "--validate"]
-    entry_validation = subprocess.run(validation_args, env=environment, capture_output=True, text=True)
+    entry_validation = subprocess.run(validation_args, env=validation_environment, capture_output=True, text=True)
     assert entry_validation.returncode == 0, entry_validation.stderr + entry_validation.stdout
     validation_evidence = evidence(entry_validation)
     assert json.loads((validation_evidence / "identity.json").read_text())["binary_sha256"] is None
@@ -110,8 +125,9 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
     mutated_entry = original_entry.replace('    BINARY=""\n', '    BINARY="$(build_binary)"\n', 1)
     assert mutated_entry != original_entry
     entry.write_text(mutated_entry)
-    mutation = subprocess.run(validation_args, env=environment, capture_output=True, text=True)
-    assert mutation.returncode != 0
+    mutation = subprocess.run(validation_args, env=validation_environment, capture_output=True, text=True)
+    assert mutation.returncode != 0 and "cargo: command not found" in mutation.stderr, mutation.stderr
+    assert not function_marker.exists(), "exported cargo function was invoked"
     entry.write_text(original_entry)
     runner = root / "scripts/benchmarks/evaluate-sealed.sh"
     arguments = ["bash", str(runner), str(manifest_path), "final", str(binary)]
@@ -123,7 +139,7 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
     public = json.loads((final_evidence / "public-report.json").read_text())
     assert public["manifest_sha256"] == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     assert public["binary_sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
-    assert public["corpora"] == report["corpora"] and str(root) not in json.dumps(public)
+    assert public["corpora"] == report["corpora"] and json.dumps(str(root))[1:-1] not in json.dumps(public)
     assert report["exposure"]["xcalygraph"]["first_evaluation"]
     for arm in ("find-text", "find-json"):
         scores = [json.loads(line) for line in (final_evidence / "xcalygraph" / (arm + "-600.scores.jsonl")).read_text().splitlines()]
@@ -208,5 +224,6 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
                               env=environment, capture_output=True, text=True)
     assert rejected.returncode != 0 and "symlink" in rejected.stderr
     assert not list(foreign.iterdir())
+    assert sentinel.read_text() == "preserve\n" and list(decoy.iterdir()) == [sentinel]
     print("PASS: evaluator scoring, exposure, baseline reuse, completed-run markers and linked-cache refusal")
 PYTHON
