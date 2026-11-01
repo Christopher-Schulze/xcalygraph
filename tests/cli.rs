@@ -340,6 +340,125 @@ fn update_check_compares_with_the_latest_release() -> TestResult {
     Ok(())
 }
 
+/// A release directory for `update` whose binary reports version 99.0.0 and runs `install`
+/// through `delegate` (a shell command line receiving the arguments).
+fn fake_release(dir: &TempDir, delegate: &str) -> Result<PathBuf, Box<dyn Error>> {
+    use sha2::Digest;
+    let script = format!(
+        "#!/bin/sh\nif [ \"$1\" = version ]; then echo 'xcalygraph 99.0.0'; exit 0; fi\n{delegate}\n"
+    );
+    let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+        Vec::new(),
+        flate2::Compression::default(),
+    ));
+    let mut header = tar::Header::new_gnu();
+    header.set_size(script.len() as u64);
+    header.set_mode(0o755);
+    header.set_cksum();
+    builder.append_data(
+        &mut header,
+        "xcalygraph-99.0.0/xcalygraph",
+        script.as_bytes(),
+    )?;
+    let archive = builder.into_inner()?.finish()?;
+    let os = if std::env::consts::OS == "macos" {
+        "darwin"
+    } else {
+        std::env::consts::OS
+    };
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "amd64",
+        other => other,
+    };
+    let name = format!("xcalygraph-99.0.0-{os}-{arch}.tar.gz");
+    let release = dir.0.join("release");
+    fs::create_dir_all(&release)?;
+    fs::write(release.join(&name), &archive)?;
+    let sum: String = sha2::Sha256::digest(&archive)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    fs::write(release.join("SHA256SUMS"), format!("{sum}  {name}\n"))?;
+    fs::write(
+        release.join("latest.json"),
+        format!(
+            "{{\"tag_name\": \"v99.0.0\", \"assets\": [{{\"browser_download_url\": \"file://{0}/{name}\"}}, {{\"browser_download_url\": \"file://{0}/SHA256SUMS\"}}]}}",
+            release.display()
+        ),
+    )?;
+    Ok(release.join("latest.json"))
+}
+
+#[test]
+fn update_reports_a_failed_skill_phase_after_replacing_the_binary() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+    // (name, delegate for `install`, make the skill directory read-only, expected exit)
+    let cases = [
+        ("success", format!("exec '{BINARY}' \"$@\""), false, Some(0)),
+        (
+            "read-only skill",
+            format!("exec '{BINARY}' \"$@\""),
+            true,
+            Some(1),
+        ),
+        (
+            "child failure",
+            "echo 'xcalygraph: disk on fire' >&2; exit 7".to_owned(),
+            false,
+            Some(1),
+        ),
+    ];
+    for (name, delegate, read_only, code) in cases {
+        let dir = TempDir::new(&format!("update-skill-{}", name.replace(' ', "-")))?;
+        let latest = fake_release(&dir, &delegate)?;
+        let exe = dir.0.join("bin/xcalygraph");
+        fs::create_dir_all(dir.0.join("bin"))?;
+        fs::copy(BINARY, &exe)?;
+        let home = dir.0.join("home");
+        let skills = home.join(".agents/skills");
+        fs::create_dir_all(&skills)?;
+        if read_only {
+            fs::set_permissions(&skills, fs::Permissions::from_mode(0o555))?;
+        }
+        let output = Command::new(&exe)
+            .arg("update")
+            .env("HOME", &home)
+            .env(
+                "XCALYGRAPH_UPDATE_URL",
+                format!("file://{}", latest.display()),
+            )
+            .output()?;
+        fs::set_permissions(&skills, fs::Permissions::from_mode(0o755))?;
+        let stdout = String::from_utf8(output.stdout)?;
+        let stderr = String::from_utf8(output.stderr)?;
+        assert_eq!(output.status.code(), code, "{name}\n{stdout}\n{stderr}");
+        // The binary is replaced in every case: the new script is in place.
+        assert!(
+            fs::read_to_string(&exe)?.contains("xcalygraph 99.0.0"),
+            "{name}"
+        );
+        let skill = skills.join("xcalygraph/SKILL.md");
+        if code == Some(0) {
+            assert!(stdout.starts_with("updated "), "{name}\n{stdout}");
+            assert!(skill.exists(), "{name}: skill missing");
+        } else {
+            assert!(stdout.is_empty(), "{name}\n{stdout}");
+            assert!(
+                stderr.contains("binary updated to 99.0.0 at ")
+                    && stderr.contains("but the skill was not installed")
+                    && stderr.contains("run 'xcalygraph install'"),
+                "{name}\n{stderr}"
+            );
+            assert!(!skill.exists(), "{name}: skill unexpectedly written");
+        }
+        if name == "child failure" {
+            assert!(stderr.contains("(disk on fire)"), "{stderr}");
+        }
+    }
+    Ok(())
+}
+
 fn git(root: &Path, args: &[&str]) -> io::Result<()> {
     let status = Command::new("git")
         .arg("-C")

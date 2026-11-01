@@ -188,31 +188,55 @@ pub fn update(check: bool, progress: &mut Progress) -> Result<String, AppError> 
         .and_then(|path| path.canonicalize())
         .map_err(AppError::io("locate the running binary"))?;
     replace_binary(&release, &exe, progress)?;
-    progress.start("Skill");
-    let installed = Command::new(&exe)
-        .args(["install", "--skill-only"])
-        .output()
-        .map_err(|error| {
-            progress.fail("new binary did not run");
-            AppError::Io("run install with the new binary".to_owned(), error)
-        })?;
-    let lines = String::from_utf8_lossy(&installed.stdout).into_owned();
-    if installed.status.success() {
-        progress.pass(
-            lines
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .trim_start_matches("skill "),
-        );
-    } else {
-        progress.fail("run 'xcalygraph install'");
-    }
+    let lines = skill_with_new_binary(&exe, &release.version, progress)?;
     Ok(format!(
         "updated {VERSION} -> {} at {}\n{lines}",
         release.version,
         exe.display()
     ))
+}
+
+/// Installs the skill with the just installed binary. The binary is already replaced, so a
+/// failure says so and names the one remaining repair step instead of reporting success.
+fn skill_with_new_binary(
+    exe: &Path,
+    version: &str,
+    progress: &mut Progress,
+) -> Result<String, AppError> {
+    progress.start("Skill");
+    let replaced = format!("binary updated to {version} at {}", exe.display());
+    let output = Command::new(exe)
+        .args(["install", "--skill-only"])
+        .output()
+        .map_err(|error| {
+            progress.fail("new binary did not run");
+            AppError::Invalid(format!(
+                "{replaced}, but it could not run to install the skill ({error}); run 'xcalygraph install'"
+            ))
+        })?;
+    let lines = String::from_utf8_lossy(&output.stdout).into_owned();
+    if !output.status.success() {
+        progress.fail("run 'xcalygraph install'");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = stderr
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .map_or_else(
+                || format!("exit {}", output.status.code().unwrap_or(-1)),
+                |line| line.trim().trim_start_matches("xcalygraph: ").to_owned(),
+            );
+        return Err(AppError::Invalid(format!(
+            "{replaced}, but the skill was not installed ({reason}); run 'xcalygraph install'"
+        )));
+    }
+    progress.pass(
+        lines
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .trim_start_matches("skill "),
+    );
+    Ok(lines)
 }
 
 /// Downloads the platform asset, verifies it against `SHA256SUMS`, extracts the binary,
@@ -425,6 +449,23 @@ mod tests {
             matches!(result, Err(AppError::Invalid(message)) if message.contains("smoke test"))
         );
         assert_eq!(fs::read(&exe)?, b"old");
+        Ok(())
+    }
+
+    #[test]
+    fn skill_phase_spawn_failure_reports_the_replaced_binary()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = TestDir::new("update-spawn")?;
+        let missing = dir.path().join("bin/xcalygraph");
+        let result = skill_with_new_binary(&missing, "9.9.9", &mut Progress::new(false, false));
+        let Err(AppError::Invalid(message)) = result else {
+            return Err("spawn failure must be an error".into());
+        };
+        assert!(
+            message.starts_with("binary updated to 9.9.9 at "),
+            "{message}"
+        );
+        assert!(message.ends_with("run 'xcalygraph install'"), "{message}");
         Ok(())
     }
 
