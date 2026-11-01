@@ -127,27 +127,31 @@ struct RawField {
     position: usize,
 }
 
-/// Extracts facts from `source` with the given grammar, compiled query and hooks.
+/// Byte range of each extracted symbol in the source, aligned with `Facts::symbols`.
+pub type Spans = Vec<(usize, usize)>;
+
+/// Extracts facts from `source` with the given grammar, compiled query and hooks, plus the
+/// syntax-tree byte range of every symbol (for body-word ownership; not stored).
 pub fn extract(
     language: &Language,
     query: &Query,
     hooks: &Hooks,
     path: &str,
     source: &[u8],
-) -> Facts {
+) -> (Facts, Spans) {
     PARSER.with(|parser| {
         let mut parser = parser.borrow_mut();
         if parser.set_language(language).is_err() {
-            return Facts::default();
+            return (Facts::default(), Spans::new());
         }
         match parser.parse(source, None) {
             Some(tree) => collect(query, hooks, path, source, tree.root_node()),
-            None => Facts::default(),
+            None => (Facts::default(), Spans::new()),
         }
     })
 }
 
-fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) -> Facts {
+fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) -> (Facts, Spans) {
     let elixir = path.ends_with(".ex") || path.ends_with(".exs");
     let lisp = [".lisp", ".lsp", ".cl", ".asd"]
         .iter()
@@ -344,7 +348,7 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
     }
     envs.retain(|_, (name, _, _)| !assigned.contains(name));
     let doc = file_doc(root, source);
-    let mut facts = assemble(Assembly {
+    let (mut facts, spans) = assemble(Assembly {
         hooks,
         path,
         source,
@@ -361,7 +365,7 @@ fn collect(query: &Query, hooks: &Hooks, path: &str, source: &[u8], root: Node) 
     });
     facts.doc = doc;
     facts.entry |= entry;
-    facts
+    (facts, spans)
 }
 
 struct Assembly<'a, 'tree> {
@@ -380,7 +384,7 @@ struct Assembly<'a, 'tree> {
     locals: Vec<(usize, String)>,
 }
 
-fn assemble(assembly: Assembly) -> Facts {
+fn assemble(assembly: Assembly) -> (Facts, Spans) {
     let Assembly {
         hooks,
         path,
@@ -696,16 +700,24 @@ fn assemble(assembly: Assembly) -> Facts {
         })
         .collect();
     facts_envs.sort_by(|a, b| (a.line, &a.name, a.scope).cmp(&(b.line, &b.name, b.scope)));
-    Facts {
-        package,
-        symbols,
-        imports: facts_imports,
-        refs: facts_refs,
-        bindings: facts_bindings,
-        envs: facts_envs,
-        fields: grouped,
-        ..Facts::default()
-    }
+    let spans = if ranges.len() == symbols.len() {
+        ranges
+    } else {
+        Spans::new()
+    };
+    (
+        Facts {
+            package,
+            symbols,
+            imports: facts_imports,
+            refs: facts_refs,
+            bindings: facts_bindings,
+            envs: facts_envs,
+            fields: grouped,
+            ..Facts::default()
+        },
+        spans,
+    )
 }
 
 fn is_primary(name: &str) -> bool {

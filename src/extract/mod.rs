@@ -27,7 +27,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 53;
+const EXTRACTION_VERSION: u32 = 54;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -46,9 +46,9 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
         record.file_type,
         Some(FileType::Vue | FileType::Svelte | FileType::Astro)
     ) {
-        let mut facts = sfc::extract(record, content);
+        let (mut facts, spans) = sfc::extract(record, content);
         if record.role == Role::Src {
-            terms::add(content, &mut facts);
+            terms::add(content, &mut facts, &spans);
         }
         facts.lines = count_lines(content);
         return facts;
@@ -138,7 +138,7 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
     };
     // World of Warcraft `.toc` files list the addon's files; they are no Lua source.
     let toc = record.path.ends_with(".toc");
-    let mut facts = record
+    let (mut facts, spans) = record
         .file_type
         .filter(|_| !toc)
         .and_then(|file_type| lang::lookup(file_type, &record.path))
@@ -254,7 +254,7 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
             .file_type
             .is_some_and(|file_type| file_type.is_code())
     {
-        terms::add(content, &mut facts);
+        terms::add(content, &mut facts, &spans);
     }
     facts.lines = count_lines(content);
     if record.role == Role::Manifest {

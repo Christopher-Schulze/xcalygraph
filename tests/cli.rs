@@ -801,6 +801,67 @@ fn impact_of_removed_files_and_symbols_names_their_surviving_dependents() -> Tes
 }
 
 #[test]
+fn compact_and_minified_symbols_are_found_by_their_own_body_words() -> TestResult {
+    let dir = TempDir::new("compact-bodies")?;
+    let root = dir.0.join("repo");
+    dir.write("repo/go.mod", "module example.com/app\n\ngo 1.23\n")?;
+    dir.write(
+        "repo/space.go",
+        "package app\n\nfunc Quasar() { launchRocketEngine() }\n\nfunc Nebula() {\n\tcollectStardustSamples()\n}\n\nfunc Other() { brewMorningCoffee() }\n",
+    )?;
+    dir.write(
+        "repo/lib.rs",
+        "fn ignite() { start_plasma_coil(); } fn idle() { sleep_quietly_forever(); }\n",
+    )?;
+    dir.write(
+        "repo/tools.py",
+        "def purge(): wipe_archive_cache()\ndef keep(): retain_journal_pages()\n",
+    )?;
+    dir.write(
+        "repo/min.js",
+        "const a=()=>sendWelcomeEmail();const b=()=>archiveOldInvoices();function c(){rotateSigningKeys()}\n",
+    )?;
+    git(&root, &["init", "-q"])?;
+    let index = dir.0.join("index");
+    // (question, first symbol line, neighbor that must not be listed)
+    let cases = [
+        ("launch rocket engine", "  3 func Quasar()\n", "Other"),
+        ("collect stardust samples", "  5 func Nebula()\n", "Quasar"),
+        ("brew morning coffee", "  9 func Other()\n", "Quasar"),
+        ("start plasma coil", "  1 fn ignite()\n", "idle"),
+        ("sleep quietly forever", "  1 fn idle()\n", "ignite"),
+        ("wipe archive cache", "  1 def purge():\n", "keep"),
+        ("retain journal pages", "  2 def keep():\n", "purge"),
+        (
+            "send welcome email",
+            "  1 const a=()=>sendWelcomeEmail()\n",
+            "rotateSigningKeys",
+        ),
+        (
+            "rotate signing keys",
+            "  1 function c()\n",
+            "sendWelcomeEmail",
+        ),
+    ];
+    for (question, first, neighbor) in cases {
+        let mut args = vec!["find"];
+        args.extend(question.split(' '));
+        let output = run_in(&root, &index, &args)?;
+        let text = String::from_utf8(output.stdout)?;
+        let symbol = text
+            .lines()
+            .find(|line| line.starts_with("  "))
+            .unwrap_or("");
+        assert_eq!(format!("{symbol}\n"), first, "{question}\n{text}");
+        assert!(
+            !text.contains(neighbor),
+            "{question} lists {neighbor}\n{text}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn impact_of_a_diff_lists_changes_dependents_tests_and_run_lines() -> TestResult {
     let dir = TempDir::new("impact")?;
     let root = dir.0.join("repo");

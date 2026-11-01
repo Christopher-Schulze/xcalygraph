@@ -69,22 +69,43 @@ const KEYWORDS: [&str; 51] = [
 ];
 
 /// Fills [`crate::domain::facts::Symbol::terms`] for code symbols and
-/// [`Facts::terms`] for top-level code from the file content.
-pub fn add(content: &[u8], facts: &mut Facts) {
+/// [`Facts::terms`] for top-level code from the file content. `spans` holds the syntax-tree byte
+/// range of the leading symbols (the engine's); later symbols span their whole lines. Ownership
+/// is by bytes, so one-line and minified symbols keep their own words and never take a
+/// neighbor's.
+pub fn add(content: &[u8], facts: &mut Facts, spans: &[(usize, usize)]) {
     let starts = line_starts(content);
-    let ranges: Vec<(u32, u32)> = facts
+    let line_start = |line: u32| starts.get(line.saturating_sub(1) as usize).copied();
+    let line_end = |line: u32| {
+        starts
+            .get(line as usize)
+            .map_or(content.len(), |next| next - 1)
+    };
+    let owned: Vec<(usize, usize)> = facts
         .symbols
         .iter()
-        .map(|symbol| {
+        .enumerate()
+        .map(|(index, symbol)| {
+            let (start, end) = spans.get(index).copied().unwrap_or_else(|| {
+                (
+                    line_start(symbol.line).unwrap_or(0),
+                    line_end(symbol.end_line.max(symbol.line)),
+                )
+            });
+            // The doc comment directly above belongs to the symbol.
             let first = leading_comment_start(content, &starts, symbol.line);
-            (first, symbol.end_line.max(symbol.line))
+            let start = if first < symbol.line {
+                line_start(first).map_or(start, |comment| comment.min(start))
+            } else {
+                start
+            };
+            (start.min(content.len()), end.min(content.len()).max(start))
         })
         .collect();
     let mut seen: HashSet<String> = HashSet::new();
-    let lines = starts.len() as u32;
-    facts.terms = collect(content, &starts, (1, lines), &ranges, &mut seen);
+    facts.terms = collect(content, (0, content.len()), &owned, &mut seen);
     for (index, symbol) in facts.symbols.iter_mut().enumerate() {
-        if !matches!(
+        if matches!(
             symbol.kind(),
             SymKind::Fn
                 | SymKind::Method
@@ -99,55 +120,44 @@ pub fn add(content: &[u8], facts: &mut Facts) {
                 | SymKind::Table
                 | SymKind::View
         ) {
-            continue;
+            symbol.terms = collect(content, owned[index], &owned, &mut seen);
         }
-        let range = ranges[index];
-        // A one-line symbol without doc comment: its words are its signature.
-        if range.0 == range.1 {
-            continue;
-        }
-        symbol.terms = collect(content, &starts, range, &ranges, &mut seen);
     }
 }
 
-/// Tokens of the distinct words of the lines of `range` outside the ranges of `others` strictly
-/// inside it (the symbol itself and symbols on the same lines are not inside).
+/// Tokens of the distinct words of the bytes of `range` outside the ranges of `others` strictly
+/// inside it (the range itself and identical ranges are not inside), line by line.
 fn collect(
     content: &[u8],
-    starts: &[usize],
-    (first, last): (u32, u32),
-    others: &[(u32, u32)],
+    (first, last): (usize, usize),
+    others: &[(usize, usize)],
     seen: &mut HashSet<String>,
 ) -> String {
-    let nested: Vec<(u32, u32)> = others
-        .iter()
-        .copied()
-        .filter(|&(line, end)| line >= first && end <= last && (line, end) != (first, last))
-        .collect();
+    let mut text = content[first..last].to_vec();
+    for &(start, end) in others {
+        if start >= first && end <= last && (start, end) != (first, last) {
+            for byte in &mut text[start - first..end - first] {
+                if *byte != b'\n' {
+                    *byte = b' ';
+                }
+            }
+        }
+    }
     seen.clear();
     let mut terms = String::new();
     let mut count = 0;
     let mut line_words = String::new();
     let mut buffer = String::new();
-    for line in first..=last {
+    for line in text.split(|byte| *byte == b'\n') {
         if count >= BODY_TERMS {
             break;
         }
-        if nested
-            .iter()
-            .any(|&(start, end)| (start..=end).contains(&line))
-        {
-            continue;
-        }
-        let Some(text) = line_text(content, starts, line) else {
-            break;
-        };
         // Search tokens of the line's new words (phrases such as `sign in` stay adjacent); a
         // token shared by several words (`delete` of `deleteUser`, `deleteComment`) repeats, so
         // its frequency still counts.
         line_words.clear();
-        let text = &without_class_lists(text);
-        for word in words(text) {
+        let line = &without_class_lists(line);
+        for word in words(line) {
             let lower = word.to_ascii_lowercase();
             if !KEYWORDS.contains(&lower.as_str()) && seen.insert(lower) {
                 line_words.push_str(word);
@@ -294,7 +304,7 @@ mod tests {
             ],
             ..Facts::default()
         };
-        add(content, &mut facts);
+        add(content, &mut facts, &[]);
         assert_eq!(facts.symbols[0].terms, "session ttl");
         assert_eq!(facts.symbols[1].terms, "save cooky set jwt token");
         assert_eq!(facts.terms, "");
@@ -324,7 +334,7 @@ mod tests {
             }],
             ..Facts::default()
         };
-        add(content, &mut facts);
+        add(content, &mut facts, &[]);
         assert_eq!(facts.symbols[0].terms, "compos middlewar into one handler");
         assert_eq!(facts.terms, "setup app");
     }
@@ -342,9 +352,9 @@ mod tests {
             }],
             ..Facts::default()
         };
-        add(content, &mut facts);
-        // A one-line symbol's words are its signature.
-        assert_eq!(facts.symbols[0].terms, "");
+        add(content, &mut facts, &[]);
+        // A one-line symbol owns its line; URLs stay skipped.
+        assert_eq!(facts.symbols[0].terms, "base");
         assert_eq!(facts.terms, "api interceptor use notify");
     }
 }

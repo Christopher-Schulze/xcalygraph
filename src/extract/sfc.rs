@@ -12,7 +12,7 @@ use crate::domain::facts::{Facts, Ref, RefKind, SymKind, Symbol};
 use crate::domain::filetype::FileType;
 use crate::extract::engine;
 
-pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
+pub fn extract(record: &FileRecord, content: &[u8]) -> (Facts, crate::extract::engine::Spans) {
     let text = String::from_utf8_lossy(content);
     let (scripts, typescript) = script_ranges(&text, record.file_type == Some(FileType::Astro));
     let mut blanked: Vec<u8> = text
@@ -35,11 +35,15 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
     } else {
         (FileType::JavaScript, format!("{}.js", record.path))
     };
-    let mut facts = lang::lookup(file_type, &path)
+    let (mut facts, mut spans) = lang::lookup(file_type, &path)
         .map(|(pack, language, query)| {
             engine::extract(&language, query, &pack.hooks, &record.path, &blanked)
         })
         .unwrap_or_default();
+    // Spans index the blanked text; they match `content` only when decoding kept every byte.
+    if blanked.len() != content.len() {
+        spans.clear();
+    }
     let mut parts = record.path.rsplit('/');
     let stem = parts
         .next()
@@ -101,7 +105,7 @@ pub fn extract(record: &FileRecord, content: &[u8]) -> Facts {
         }
     }
     super::routes::add(&record.path, &text, Some(component), &mut facts);
-    facts
+    (facts, spans)
 }
 
 /// Svelte 5 runes: compiler keywords, no stores.
@@ -335,7 +339,7 @@ mod tests {
     #[test]
     fn vue_script_and_template_components() {
         let source = "<template>\n  <div>\n    <UserCard :user=\"u\" />\n    <app-footer></app-footer>\n  </div>\n</template>\n<script setup lang=\"ts\">\nimport UserCard from './UserCard.vue'\nfunction load(): void { fetchUser() }\n</script>\n";
-        let facts = extract(
+        let (facts, _) = extract(
             &record("src/components/user-page.vue", FileType::Vue),
             source.as_bytes(),
         );
@@ -361,7 +365,7 @@ mod tests {
     #[test]
     fn astro_frontmatter_is_typescript() {
         let source = "---\nimport Layout from '../layouts/Layout.astro';\nconst title = getTitle();\n---\n<Layout title={title}><Header /></Layout>\n";
-        let facts = extract(
+        let (facts, _) = extract(
             &record("src/pages/index.astro", FileType::Astro),
             source.as_bytes(),
         );
@@ -377,7 +381,7 @@ mod tests {
     #[test]
     fn svelte_markup_expressions_directives_and_stores() {
         let source = "<script>\n  import { enhance } from '$app/forms';\n  import { user } from '$lib/stores';\n  let { items } = $props();\n  function format(x) { return x }\n  function save() {}\n</script>\n\n{#each items as item}\n  <p>{format(item)}</p>\n{/each}\n<button onclick={save}>{$user.name}</button>\n<form use:enhance></form>\n<style>\n  p { color: red }\n</style>\n";
-        let facts = extract(
+        let (facts, _) = extract(
             &record("src/routes/items/+page.svelte", FileType::Svelte),
             source.as_bytes(),
         );
