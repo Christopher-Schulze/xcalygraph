@@ -36,6 +36,30 @@ import shutil
 import stat
 import sys
 
+def declared_file(directory, value):
+    current = os.sep if os.path.isabs(value) else directory
+    for component in value.split(os.sep):
+        if component in ("", "."):
+            continue
+        current = os.path.join(current, component)
+        if stat.S_ISLNK(os.stat(current, follow_symlinks=False).st_mode):
+            raise OSError("declared license path contains a symlink")
+    info = os.stat(current, follow_symlinks=False)
+    if not stat.S_ISREG(info.st_mode):
+        raise OSError("declared license is not a regular file")
+    return current, (info.st_dev, info.st_ino)
+
+def write_license(path, name):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError("license entry is no longer a regular file")
+        output.write(b"---- " + os.fsencode(name) + b"\n")
+        shutil.copyfileobj(source, output)
+        output.write(b"\n")
+        return info.st_dev, info.st_ino
+
 packages = set()
 for package in json.load(sys.stdin)["packages"]:
     if package["name"] == "xcalygraph":
@@ -44,12 +68,17 @@ for package in json.load(sys.stdin)["packages"]:
     if os.path.basename(manifest) != "Cargo.toml":
         raise ValueError("unexpected Cargo manifest path")
     license_name = package["license"] if package["license"] is not None else "see files"
-    packages.add((package["name"], package["version"], license_name, os.path.dirname(manifest)))
+    license_file = package["license_file"]
+    packages.add((package["name"], package["version"], license_name, os.path.dirname(manifest),
+                  license_file is not None, license_file or ""))
 
 output = sys.stdout.buffer
-for name, version, license_name, directory in sorted(packages, key=lambda row: tuple(map(os.fsencode, row))):
+for name, version, license_name, directory, has_declared, declaration in sorted(
+        packages, key=lambda row: (tuple(map(os.fsencode, row[:4])), row[4], os.fsencode(row[5]))):
     if not stat.S_ISDIR(os.stat(directory, follow_symlinks=False).st_mode):
         raise OSError("dependency directory is not a regular directory")
+    declared = declared_file(directory, declaration) if has_declared else None
+    declared_seen = False
     output.write(b"==== " + os.fsencode(name) + b" " + os.fsencode(version)
                  + b" (" + os.fsencode(license_name) + b")\n")
     with os.scandir(directory) as entries:
@@ -59,13 +88,11 @@ for name, version, license_name, directory in sorted(packages, key=lambda row: t
     for entry in files:
         if not stat.S_ISREG(entry.stat(follow_symlinks=False).st_mode):
             continue
-        descriptor = os.open(entry.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(descriptor, "rb") as source:
-            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
-                raise OSError("license entry is no longer a regular file")
-            output.write(b"---- " + os.fsencode(entry.name) + b"\n")
-            shutil.copyfileobj(source, output)
-            output.write(b"\n")
+        identity = write_license(entry.path, entry.name)
+        if declared is not None and identity == declared[1]:
+            declared_seen = True
+    if declared is not None and not declared_seen:
+        write_license(declared[0], os.path.basename(declaration))
 '
 }
 

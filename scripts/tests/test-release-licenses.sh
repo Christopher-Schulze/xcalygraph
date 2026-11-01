@@ -123,6 +123,81 @@ with tempfile.TemporaryDirectory(prefix="release-licenses.", dir=repo / ".cache"
         unreadable.chmod(0o644)
     assert all(path.read_bytes() == content for path, content in licenses.items())
 
+    legal = root / dependencies["line_dep"] / "legal"
+    legal.mkdir()
+    nested = legal / "custom\n"
+    shared = root / "deps/SHARED-LICENSE"
+    absolute = root / "ABS-LICENSE"
+    declared_files = {nested: b"NESTED DECLARED\n", shared: b"PARENT DECLARED\n", absolute: b"ABSOLUTE DECLARED\n"}
+    for path, content in declared_files.items():
+        path.write_bytes(content)
+    declarations = {
+        "line_dep": "legal/custom\n",
+        "tab_dep": "./COPYING\tactual",
+        "back_dep": "../SHARED-LICENSE",
+        "ordinary_dep": str(absolute),
+    }
+    for name, declaration in declarations.items():
+        dependency_manifest = root / dependencies[name] / "Cargo.toml"
+        original = dependency_manifest.read_text()
+        assert original.count('license="MIT"') == 1
+        dependency_manifest.write_text(original.replace('license="MIT"', "license-file=" + json.dumps(declaration)))
+    metadata = subprocess.run(["cargo", "metadata", "--locked", "--offline", "--format-version", "1"],
+                              cwd=root, env=environment, capture_output=True, check=True)
+    packages = {package["name"]: package for package in json.loads(metadata.stdout)["packages"]}
+    assert all(packages[name]["license_file"] == value for name, value in declarations.items())
+
+    def verify_declared(content):
+        verify(content)
+        for expected in declared_files.values():
+            assert content.count(expected) == 1, (expected, content)
+        assert b"---- custom\n\nNESTED DECLARED\n" in content
+        assert os.fsencode(root) not in content
+
+    declared = collect()
+    assert declared.returncode == 0, declared.stderr
+    verify_declared(declared.stdout)
+    line_manifest = root / dependencies["line_dep"] / "Cargo.toml"
+    original_manifest = line_manifest.read_text()
+    named_license = "license-file=" + json.dumps(declarations["line_dep"])
+    assert original_manifest.count(named_license) == 1
+    line_manifest.write_text(original_manifest.replace(named_license, 'license-file=""'))
+    try:
+        assert collect().returncode != 0
+    finally:
+        line_manifest.write_text(original_manifest)
+    saved_nested = legal / "saved-custom"
+    nested.rename(saved_nested)
+    try:
+        assert collect().returncode != 0
+        nested.symlink_to(saved_nested.name)
+        try:
+            assert collect().returncode != 0
+        finally:
+            nested.unlink()
+    finally:
+        saved_nested.rename(nested)
+    saved_legal = legal.with_name("legal-saved")
+    legal.rename(saved_legal)
+    try:
+        legal.symlink_to(saved_legal.name, target_is_directory=True)
+        try:
+            assert collect().returncode != 0
+        finally:
+            legal.unlink()
+    finally:
+        saved_legal.rename(legal)
+    nested.chmod(0)
+    try:
+        try:
+            nested.read_bytes()
+        except PermissionError:
+            assert collect().returncode != 0
+            permission_checks += 1
+    finally:
+        nested.chmod(0o644)
+    assert all(path.read_bytes() == content for path, content in declared_files.items())
+
     # The source guard rejects all project symlinks; test collection above before staging.
     saved_link = work / "saved-link"
     link.rename(saved_link)
@@ -142,9 +217,9 @@ with tempfile.TemporaryDirectory(prefix="release-licenses.", dir=repo / ".cache"
     name = f"xcalygraph-0.0.0-{platform}"
     bundled = subprocess.run(["tar", "-xOzf", str(stage / (name + ".tar.gz")),
                               name + "/THIRD-PARTY-LICENSES.txt"], capture_output=True, check=True)
-    verify(bundled.stdout)
+    verify_declared(bundled.stdout)
     saved_link.rename(link)
     assert all(path.read_bytes() == content for path, content in licenses.items()) and link.is_symlink()
     print("PASS: exact dependency and license paths, decoys, symlinks, failures and guarded debug archive;"
-          f" permission checks: {permission_checks}/2")
+          f" permission checks: {permission_checks}/3")
 PYTHON
