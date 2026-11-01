@@ -28,7 +28,17 @@ pub fn scan(
         .par_iter()
         .zip(walked.par_iter())
         .map(|(decision, stat)| match decision {
-            Decision::Unchanged(index) => Ok((stored[*index].clone(), false)),
+            Decision::Unchanged(index) if !sibling_context_changed(&paths, stored, &stat.path) => {
+                Ok((stored[*index].clone(), false))
+            }
+            Decision::Unchanged(index) => {
+                let record = inspect(root, stat, has_cpp_sibling(&paths, &stat.path))?;
+                let old = &stored[*index];
+                let changed = old.hash != record.hash
+                    || old.role != record.role
+                    || old.file_type != record.file_type;
+                Ok((record, changed))
+            }
             Decision::Hash(previous) => {
                 let record = inspect(root, stat, has_cpp_sibling(&paths, &stat.path))?;
                 let changed = previous.is_none_or(|index| {
@@ -94,6 +104,22 @@ fn inspect(root: &Path, stat: &Stat, cpp_sibling: bool) -> io::Result<FileRecord
         role: classification.role,
         file_type: classification.file_type,
     })
+}
+
+/// Whether a header's C++ sibling appeared or disappeared since the stored scan; the only
+/// classification input that lies outside the file itself (`role::FileFacts`). `stored` is
+/// sorted by path, so the old state costs binary searches, no extra set.
+fn sibling_context_changed(paths: &HashSet<&str>, stored: &[FileRecord], path: &str) -> bool {
+    let Some(stem) = path.strip_suffix(".h") else {
+        return false;
+    };
+    let before = CPP_SUFFIXES.iter().any(|suffix| {
+        let sibling = format!("{stem}.{suffix}");
+        stored
+            .binary_search_by(|record| record.path.as_str().cmp(&sibling))
+            .is_ok()
+    });
+    before != has_cpp_sibling(paths, path)
 }
 
 fn has_cpp_sibling(paths: &HashSet<&str>, path: &str) -> bool {

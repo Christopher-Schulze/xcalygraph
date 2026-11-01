@@ -582,6 +582,142 @@ fn every_query_stage_obeys_the_shared_filters() -> TestResult {
     Ok(())
 }
 
+/// The single derived image below an index base.
+fn derived_image(base: &Path) -> io::Result<Vec<u8>> {
+    let mut stores = fs::read_dir(base)?.collect::<io::Result<Vec<_>>>()?;
+    match stores.pop() {
+        Some(store) if stores.is_empty() => fs::read(store.path().join("derived")),
+        _ => Err(io::Error::other("expected exactly one index store")),
+    }
+}
+
+/// Writes a file whose mtime lies in the past, so a later scan trusts its stat record.
+fn write_aged(path: &Path, content: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, content)?;
+    let past = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_577_836_800);
+    fs::File::options()
+        .write(true)
+        .open(path)?
+        .set_modified(past)
+}
+
+#[test]
+fn incremental_updates_equal_a_fresh_build() -> TestResult {
+    const HEADER: &str = "int area(int w);\n";
+    const CPP: &str = "int area(int w) { return w; }\n";
+    type Step = fn(&Path) -> io::Result<()>;
+    // (name, files before, change, expected header type after)
+    let scenarios: [(&str, bool, Step, &str); 5] = [
+        (
+            "add sibling",
+            false,
+            |root| write_aged(&root.join("widget.cpp"), CPP),
+            "cpp",
+        ),
+        (
+            "remove sibling",
+            true,
+            |root| fs::remove_file(root.join("widget.cpp")),
+            "c",
+        ),
+        (
+            "rename sibling away",
+            true,
+            |root| fs::rename(root.join("widget.cpp"), root.join("other.cpp")),
+            "c",
+        ),
+        (
+            "rename to another C++ suffix",
+            true,
+            |root| fs::rename(root.join("widget.cpp"), root.join("widget.cc")),
+            "cpp",
+        ),
+        (
+            "ignore sibling",
+            true,
+            |root| write_aged(&root.join(".gitignore"), "widget.cpp\n"),
+            "c",
+        ),
+    ];
+    for (name, with_sibling, change, expected) in scenarios {
+        let dir = TempDir::new("equivalence")?;
+        let root = dir.0.join("repo");
+        write_aged(&root.join("widget.h"), HEADER)?;
+        write_aged(&root.join("main.c"), "int main(void) { return 0; }\n")?;
+        if with_sibling {
+            write_aged(&root.join("widget.cpp"), CPP)?;
+        }
+        git(&root, &["init", "-q"])?;
+        let incremental = dir.0.join("incremental");
+        assert!(run_in(&root, &incremental, &["index"])?.status.success());
+        change(&root)?;
+        assert!(run_in(&root, &incremental, &["index"])?.status.success());
+        let show = run_in(&root, &incremental, &["show", "widget.h", "--read-only"])?;
+        let show = String::from_utf8(show.stdout)?;
+        assert!(
+            show.starts_with(&format!("widget.h {expected} ")),
+            "{name}: {show}"
+        );
+        let fresh = dir.0.join("fresh");
+        assert!(run_in(&root, &fresh, &["index"])?.status.success());
+        assert!(
+            derived_image(&incremental)? == derived_image(&fresh)?,
+            "{name}: incremental and fresh derived images differ"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn final_tree_decides_the_index_regardless_of_change_order_and_threads() -> TestResult {
+    let dir = TempDir::new("change-order")?;
+    let root = dir.0.join("repo");
+    write_aged(&root.join("widget.h"), "int area(int w);\n")?;
+    write_aged(&root.join("main.c"), "int main(void) { return 0; }\n")?;
+    write_aged(&root.join("util.c"), "int util(void) { return 1; }\n")?;
+    git(&root, &["init", "-q"])?;
+    let orders: [&[&str]; 2] = [&["add", "edit", "delete"], &["delete", "add", "edit"]];
+    let mut images = Vec::new();
+    for (position, order) in orders.iter().enumerate() {
+        let index = dir.0.join(format!("order{position}"));
+        // Reset the tree to the starting state, then index it.
+        write_aged(&root.join("util.c"), "int util(void) { return 1; }\n")?;
+        write_aged(&root.join("main.c"), "int main(void) { return 0; }\n")?;
+        let _ = fs::remove_file(root.join("widget.cpp"));
+        assert!(run_in(&root, &index, &["index"])?.status.success());
+        for step in *order {
+            match *step {
+                "add" => write_aged(&root.join("widget.cpp"), "int area(int w) { return w; }\n")?,
+                "edit" => write_aged(&root.join("main.c"), "int main(void) { return area(2); }\n")?,
+                _ => fs::remove_file(root.join("util.c"))?,
+            }
+            assert!(run_in(&root, &index, &["index"])?.status.success());
+        }
+        images.push(derived_image(&index)?);
+    }
+    for threads in ["1", "4"] {
+        let index = dir.0.join(format!("threads{threads}"));
+        let output = Command::new(BINARY)
+            .args(["index", "-C"])
+            .arg(&root)
+            .arg("--index-dir")
+            .arg(&index)
+            .env("HOME", &index)
+            .env("RAYON_NUM_THREADS", threads)
+            .output()?;
+        assert!(output.status.success());
+        images.push(derived_image(&index)?);
+    }
+    assert!(
+        images.windows(2).all(|pair| pair[0] == pair[1]),
+        "change order or thread count changed the derived image"
+    );
+    Ok(())
+}
+
 #[test]
 fn impact_of_a_diff_lists_changes_dependents_tests_and_run_lines() -> TestResult {
     let dir = TempDir::new("impact")?;
