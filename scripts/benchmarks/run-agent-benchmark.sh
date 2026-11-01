@@ -4,7 +4,7 @@
 # Usage: scripts/benchmarks/run-agent-benchmark.sh [--run] [--runs N] CORPUS...
 #   Without --run it prints the planned invocations only (dry run). Real runs use the owner's
 #   Claude subscription and need owner approval per milestone (AGENTS.md, Loop protocol).
-#   Each arm runs with its own temporary HOME, so only that arm's skill is visible.
+#   Each corpus/arm uses its own temporary HOME.
 #   Success: the final answer names the expected file. Cost: total tokens, turns and wall time
 #   from --output-format json.
 # Requires: claude, jq; graphify for the Graphify arm; an installed xcalygraph release build.
@@ -12,7 +12,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
-readonly WORK="${REPO_ROOT}/.cache/agent-benchmark"
+readonly WORK_BASE="${REPO_ROOT}/.cache/agent-benchmark"
 readonly QUESTIONS="${REPO_ROOT}/scripts/benchmarks/questions"
 readonly PRIVATE_LIST="${QUESTIONS}/private/corpora.tsv"
 readonly BINARY="${REPO_ROOT}/target/release/xcalygraph"
@@ -29,9 +29,11 @@ while (( $# > 0 )); do
   esac
 done
 (( $# > 0 )) || { echo "usage: run-agent-benchmark.sh [--run] [--runs N] CORPUS..." >&2; exit 2; }
-for tool in claude jq; do
-  command -v "${tool}" >/dev/null || { echo "run-agent-benchmark.sh: ${tool} missing" >&2; exit 1; }
-done
+if (( run )); then
+  for tool in claude jq; do
+    command -v "${tool}" >/dev/null || { echo "run-agent-benchmark.sh: ${tool} missing" >&2; exit 1; }
+  done
+fi
 
 corpus_root() {
   case "$1" in
@@ -45,34 +47,53 @@ question_file() {
   if [[ -f "${QUESTIONS}/$1.tsv" ]]; then echo "${QUESTIONS}/$1.tsv"; else echo "${QUESTIONS}/private/$1.tsv"; fi
 }
 
-# Prepares the temporary HOME of an arm: only that arm's skill is installed.
+create_run() {
+  if [[ -L "${REPO_ROOT}/.cache" || -L "${WORK_BASE}" ]]; then
+    echo "run-agent-benchmark.sh: benchmark cache must not be a symlink" >&2
+    return 1
+  fi
+  mkdir -p "${WORK_BASE}" || return
+  local work
+  work="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")" || return
+  ( set -o noclobber; printf 'corpus\tarm\trun\tquestion\tsuccess\ttokens\tturns\tms\n' > "${work}/results.tsv" ) || return
+  printf '%s\n' "${work}"
+}
+
+# Prepares a fresh HOME of an arm: only that arm's skill is installed.
 prepare_home() {
-  local arm="$1" home="${WORK}/home-$1"
-  rm -rf "${home}"
-  mkdir -p "${home}/.claude"
+  local arm="$1" home
+  home="$(mktemp -d "$2/home-${arm}.XXXXXXXX")" || return
+  mkdir "${home}/.claude" || return
   case "${arm}" in
-    graphify) HOME="${home}" graphify install --platform claude >/dev/null ;;
-    xcalygraph) HOME="${home}" "${BINARY}" install --skill-only >/dev/null ;;
+    graphify) HOME="${home}" graphify install --platform claude >/dev/null || return ;;
+    xcalygraph) HOME="${home}" "${BINARY}" install --skill-only >/dev/null || return ;;
   esac
   echo "${home}"
 }
 
-mkdir -p "${WORK}"
+if (( run )); then
+  WORK="$(create_run)"
+  echo "evidence: ${WORK}" >&2
+else
+  WORK="${WORK_BASE}/run.<new>"
+fi
+readonly WORK
 results="${WORK}/results.tsv"
-(( run )) && printf 'corpus\tarm\trun\tquestion\tsuccess\ttokens\tturns\tms\n' > "${results}"
 for corpus in "$@"; do
   root="$(corpus_root "${corpus}")"
   questions="$(question_file "${corpus}")"
   [[ -d "${root}" && -f "${questions}" ]] || { echo "run-agent-benchmark.sh: ${corpus}: no root or questions" >&2; continue; }
   for arm in "${ARMS[@]}"; do
-    home="${WORK}/home-${arm}"
-    (( run )) && home="$(prepare_home "${arm}")"
+    home="${WORK}/home-${arm}.<new>"
+    if (( run )); then
+      home="$(prepare_home "${arm}" "${WORK}")"
+    fi
     while IFS=$'\t' read -r question expected; do
       [[ "${question}" == "question" || -z "${question}" ]] && continue
       path="${expected%%::*}"
       for attempt in $(seq 1 "${runs}"); do
         if (( ! run )); then
-          printf 'HOME=%s claude -p %q --output-format json  # cwd %s, arm %s, run %d\n' \
+          printf 'HOME=%q claude -p %q --output-format json  # cwd %s, arm %s, run %d\n' \
             "${home}" "${question} ${PROMPT_SUFFIX}" "${root}" "${arm}" "${attempt}"
           continue
         fi
