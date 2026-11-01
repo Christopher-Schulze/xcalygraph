@@ -33,7 +33,7 @@ with tempfile.TemporaryDirectory(prefix="cache-producers.", dir=repo / ".cache")
                        RUSTUP_HOME=os.environ.get("RUSTUP_HOME", str(Path.home() / ".rustup")),
                        CARGO_HOME=os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")),
                        CARGO_TARGET_DIR=str(work / "target"), CARGO_NET_OFFLINE="true")
-    for relative in ("scripts/utils/prepare-corpus.sh", "scripts/utils/prune-cache.sh",
+    for relative in ("scripts/utils/prepare-corpus.sh", "scripts/utils/prune-cache.sh", "scripts/utils/check-build-space.sh",
                      "scripts/benchmarks/measure-index-validation.sh", "scripts/benchmarks/measure-query-compute.sh",
                      "scripts/benchmarks/measure-shard-recovery.sh"):
         path = root / relative

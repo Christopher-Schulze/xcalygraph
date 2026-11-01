@@ -81,6 +81,7 @@ if [[ -L "${REPO_ROOT}/.cache" || -L "${WORK_BASE}" ]]; then
   echo "run-benchmarks.sh: benchmark cache must not be a symlink" >&2
   exit 1
 fi
+bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
 cargo build --release --locked -q
 mkdir -p "${WORK_BASE}"
 WORK="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")"

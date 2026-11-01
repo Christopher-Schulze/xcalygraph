@@ -39,6 +39,7 @@ if [[ -L "${REPO_ROOT}/.cache" || -L "${WORK_BASE}" ]]; then
   echo "compare-depth.sh: depth cache must not be a symlink" >&2
   exit 1
 fi
+bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
 mkdir -p "${WORK_BASE}"
 WORK="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")"
 readonly WORK
@@ -53,6 +54,7 @@ copy="$(env HOME="${BENCHMARK_HOME}" bash "${REPO_ROOT}/scripts/utils/prepare-co
 ours="${WORK}/edges.tsv"
 (
   cd "${REPO_ROOT}"
+  bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
   env CARGO_HOME="${CARGO_HOME:-${HOME}/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-${HOME}/.rustup}" \
     HOME="${BENCHMARK_HOME}" XCALYGRAPH_DUMP_ROOT="${copy}" XCALYGRAPH_DUMP_FILE="${ours}" \
     cargo test -q --release --locked dump_edges -- --ignored >/dev/null

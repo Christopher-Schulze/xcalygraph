@@ -42,23 +42,7 @@ mkdir "${WORK}/home"
 cp "${QUESTIONS}" "${WORK}/questions.tsv"
 cd "${REPO_ROOT}"
 
-check_build_space() {
-  local available estimate=0
-  df -h / >&2
-  available="$(df -Pk / | awk 'NR == 2 { print $4 }')"
-  [[ ! -d target ]] || estimate="$(du -sk target | awk '{ print $1 }')"
-  if (( available < 2 * 1024 * 1024 + estimate )); then
-    cargo clean
-    df -h / >&2
-    available="$(df -Pk / | awk 'NR == 2 { print $4 }')"
-    if (( available < 2 * 1024 * 1024 + estimate )); then
-      echo "Build aborted: free at least 2 GiB plus the estimated build output." >&2
-      exit 1
-    fi
-  fi
-}
-
-check_build_space
+bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
 RUSTFLAGS="-Dwarnings" cargo build --locked -q
 snapshot="$(env HOME="${WORK}/home" bash scripts/utils/prepare-corpus.sh "${ROOT}" "${REPO_ROOT}/.cache/corpus-snapshots")"
 readonly snapshot
@@ -81,7 +65,7 @@ for name in sys.argv[1:]:
 PYTHON
 printf 'test-profile-package-opt-level\t%s\n' "${OPT_LEVEL}" >> "${WORK}/identity.tsv"
 test_profile_args=(--config "profile.test.package.xcalygraph.opt-level=${OPT_LEVEL}")
-check_build_space
+bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
 env HOME="${WORK}/home" RUSTUP_HOME="${RUSTUP_DIR}" CARGO_HOME="${CARGO_DIR}" RUSTFLAGS="-Dwarnings" \
   XCALYGRAPH_BENCH_STORE="${stores[0]}" XCALYGRAPH_BENCH_QUESTIONS="${WORK}/questions.tsv" \
   XCALYGRAPH_BENCH_SAMPLES="${SAMPLES}" cargo test -v "${test_profile_args[@]}" --locked --bin xcalygraph measure_query_compute -- --ignored --nocapture 2> "${WORK}/cargo.log" \

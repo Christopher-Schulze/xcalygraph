@@ -108,19 +108,7 @@ fi
 
 cd "${REPO_ROOT}"
 build_binary() {
-  local available estimate=0
-  df -h / >&2
-  available="$(df -Pk / | awk 'NR == 2 { print $4 }')"
-  [[ ! -d target ]] || estimate="$(du -sk target | awk '{ print $1 }')"
-  if (( available < 2 * 1024 * 1024 + estimate )); then
-    cargo clean
-    df -h / >&2
-    available="$(df -Pk / | awk 'NR == 2 { print $4 }')"
-    if (( available < 2 * 1024 * 1024 + estimate )); then
-      echo "Build aborted: free at least 2 GiB plus the estimated build output." >&2
-      exit 1
-    fi
-  fi
+  bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
   RUSTFLAGS="-Dwarnings" cargo build --locked -q
 }
 

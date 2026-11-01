@@ -3,7 +3,7 @@
 # Usage: scripts/build/build-release.sh [TARGET...]
 #   TARGET is a Rust target triple (default: the host). Writes dist/xcalygraph-<version>-<os>-<arch>.tar.gz
 #   (binary, licenses, third-party license notices) and dist/SHA256SUMS.
-# Requires: cargo, jq, tar, and shasum or sha256sum.
+# Requires: cargo, jq, python3, tar, and shasum or sha256sum.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -116,6 +116,7 @@ trap 'rm -rf -- "${stage}"' EXIT
 third_party > "${stage}/THIRD-PARTY-LICENSES.txt"
 index=0
 for target in "${targets[@]}"; do
+  bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
   cargo build --release --locked --target "${target}"
   name="${archives[${index}]%.tar.gz}"
   package_release "${stage}" "${name}" "target/${target}/release/xcalygraph"

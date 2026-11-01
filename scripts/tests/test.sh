@@ -5,8 +5,6 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
-readonly MIN_FREE_KIB=$((2 * 1024 * 1024))
-readonly FRESH_BUILD_KIB=$((4 * 1024 * 1024))
 
 if [[ -n "${XCALYGRAPH_BLESS+x}" ]]; then
   echo "test.sh: XCALYGRAPH_BLESS is set; refusing to run the gate" >&2
@@ -16,10 +14,6 @@ readonly TOOLCHAIN_HOME="${RUSTUP_HOME:-${HOME}/.rustup}"
 readonly PACKAGE_HOME="${CARGO_HOME:-${HOME}/.cargo}"
 for variable in ${!GIT_@} ${!XCALYGRAPH_@}; do unset "${variable}"; done
 unset BASH_ENV ENV CDPATH TAR_OPTIONS
-
-free_kib() {
-  df -Pk "${REPO_ROOT}" | awk 'NR == 2 { print $4 }'
-}
 
 cd "${REPO_ROOT}"
 bash "${REPO_ROOT}/scripts/utils/prune-cache.sh"
@@ -37,31 +31,12 @@ for tool in cargo git python3 graphify shellcheck; do
 done
 find "${REPO_ROOT}/scripts" -type f -name '*.sh' -print0 | xargs -0 shellcheck
 
-target="$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; from pathlib import Path; print(Path(json.load(sys.stdin)["target_directory"]).resolve())')"
-estimate="${FRESH_BUILD_KIB}"
-if [[ -d "${target}" ]]; then
-  target_size="$(du -sk "${target}" | awk '{ print $1 }')"
-  (( target_size <= estimate )) || estimate="${target_size}"
-fi
-check_build_space() {
-  df -h / >&2
-  if (( $(free_kib) < MIN_FREE_KIB + estimate )); then
-    echo "test.sh: insufficient free space; cleaning this package's build artifacts" >&2
-    cargo clean --locked -p xcalygraph
-    df -h / >&2
-    if (( $(free_kib) < MIN_FREE_KIB + estimate )); then
-      echo "test.sh: build aborted; free at least 2 GiB plus the estimated build size" >&2
-      exit 1
-    fi
-  fi
-}
-
 cargo fmt --all --check
-check_build_space
+bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
 cargo clippy --all-targets --locked -- -D warnings
-check_build_space
+bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
 cargo test --locked
-check_build_space
+bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
 cargo build --locked --bin xcalygraph --message-format=json > "${work}/build.jsonl"
 binary="$(python3 -I - "${work}/build.jsonl" <<'PYTHON'
 import json
@@ -80,6 +55,7 @@ PYTHON
 bash "${REPO_ROOT}/scripts/tests/test-prune-cache.sh"
 bash "${REPO_ROOT}/scripts/tests/test-agent-benchmark-safety.sh"
 bash "${REPO_ROOT}/scripts/tests/test-benchmark-inputs.sh"
+bash "${REPO_ROOT}/scripts/tests/test-build-space.sh"
 bash "${REPO_ROOT}/scripts/tests/test-cache-producers.sh" "${binary}"
 bash "${REPO_ROOT}/scripts/tests/test-corpus-snapshots.sh" "${binary}"
 bash "${REPO_ROOT}/scripts/tests/test-evaluation-labels.sh" "${binary}"
