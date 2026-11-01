@@ -106,10 +106,27 @@ pub fn index_base(flag: Option<&Path>, cwd: &Path) -> PathBuf {
 /// Creates the index base readable by its owner only (the temp directory may be shared).
 fn create_private(base: &Path) -> std::io::Result<()> {
     if base.is_dir() {
-        // Writable check without leaving anything behind.
-        let probe = base.join(format!(".probe.{}", std::process::id()));
-        std::fs::write(&probe, b"")?;
-        return std::fs::remove_file(&probe);
+        for attempt in 0..128 {
+            let name = if attempt == 0 {
+                format!(".probe.{}", std::process::id())
+            } else {
+                format!(".probe.{}.{attempt}", std::process::id())
+            };
+            let probe = base.join(name);
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&probe)
+            {
+                Ok(file) => return remove_owned_probe(&probe, &file),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "no unused writability probe name",
+        ));
     }
     std::fs::create_dir_all(base)?;
     #[cfg(unix)]
@@ -118,6 +135,23 @@ fn create_private(base: &Path) -> std::io::Result<()> {
         std::fs::set_permissions(base, std::fs::Permissions::from_mode(0o700))?;
     }
     Ok(())
+}
+
+fn remove_owned_probe(path: &Path, file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let opened = file.metadata()?;
+        let current = std::fs::symlink_metadata(path)?;
+        if !current.file_type().is_file()
+            || (opened.dev(), opened.ino()) != (current.dev(), current.ino())
+        {
+            return Err(std::io::Error::other("writability probe was replaced"));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = file;
+    std::fs::remove_file(path)
 }
 
 fn absolute(cwd: &Path, path: &Path) -> PathBuf {
@@ -190,6 +224,117 @@ mod tests {
         let dir = TestDir::new("workspace-base")?;
         let base = index_base(Some(Path::new("idx/new")), dir.path());
         assert_eq!(base, dir.path().join("idx/new"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn colliding_probe_file_is_never_replaced_or_removed() -> std::io::Result<()> {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = TestDir::new("workspace-probe-file")?;
+        let base = dir.path().join("base");
+        std::fs::create_dir(&base)?;
+        let probe = base.join(format!(".probe.{}", std::process::id()));
+        std::fs::write(&probe, b"preserve")?;
+        let before = std::fs::metadata(&probe)?;
+        create_private(&base)?;
+        let after = std::fs::metadata(&probe)?;
+        assert_eq!(std::fs::read(&probe)?, b"preserve");
+        assert_eq!(
+            (after.ino(), after.modified()?),
+            (before.ino(), before.modified()?)
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn colliding_probe_symlink_and_target_are_never_changed() -> std::io::Result<()> {
+        use std::os::unix::fs::{MetadataExt, symlink};
+
+        let dir = TestDir::new("workspace-probe-link")?;
+        let base = dir.path().join("base");
+        std::fs::create_dir(&base)?;
+        let target = dir.path().join("target");
+        std::fs::write(&target, b"preserve")?;
+        let probe = base.join(format!(".probe.{}", std::process::id()));
+        symlink(&target, &probe)?;
+        let before_link = std::fs::symlink_metadata(&probe)?;
+        let before_target = std::fs::metadata(&target)?;
+        create_private(&base)?;
+        let after_link = std::fs::symlink_metadata(&probe)?;
+        let after_target = std::fs::metadata(&target)?;
+        assert!(after_link.file_type().is_symlink());
+        assert_eq!(after_link.ino(), before_link.ino());
+        assert_eq!(std::fs::read(&target)?, b"preserve");
+        assert_eq!(after_target.modified()?, before_target.modified()?);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replaced_probe_is_not_removed_during_cleanup() -> std::io::Result<()> {
+        let dir = TestDir::new("workspace-probe-replaced")?;
+        let probe = dir.path().join("probe");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)?;
+        std::fs::rename(&probe, dir.path().join("original"))?;
+        std::fs::write(&probe, b"replacement")?;
+        assert!(remove_owned_probe(&probe, &file).is_err());
+        assert_eq!(std::fs::read(&probe)?, b"replacement");
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_writability_checks_do_not_interfere() -> std::io::Result<()> {
+        let dir = TestDir::new("workspace-probe-concurrent")?;
+        let base = dir.path().join("base");
+        std::fs::create_dir(&base)?;
+        let barrier = std::sync::Barrier::new(32);
+        std::thread::scope(|scope| {
+            let handles = (0..32)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        create_private(&base)
+                    })
+                })
+                .collect::<Vec<_>>();
+            for handle in handles {
+                handle
+                    .join()
+                    .map_err(|_| std::io::Error::other("probe thread panicked"))??;
+            }
+            Ok::<(), std::io::Error>(())
+        })?;
+        assert_eq!(std::fs::read_dir(&base)?.count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn exhausted_probe_names_leave_all_existing_files_untouched() -> std::io::Result<()> {
+        let dir = TestDir::new("workspace-probe-exhausted")?;
+        let base = dir.path().join("base");
+        std::fs::create_dir(&base)?;
+        for attempt in 0..128 {
+            let name = if attempt == 0 {
+                format!(".probe.{}", std::process::id())
+            } else {
+                format!(".probe.{}.{attempt}", std::process::id())
+            };
+            std::fs::write(base.join(name), b"preserve")?;
+        }
+        assert_eq!(
+            create_private(&base).err().map(|e| e.kind()),
+            Some(std::io::ErrorKind::AlreadyExists)
+        );
+        for entry in std::fs::read_dir(&base)? {
+            assert_eq!(std::fs::read(entry?.path())?, b"preserve");
+        }
+        assert_eq!(std::fs::read_dir(&base)?.count(), 128);
         Ok(())
     }
 }

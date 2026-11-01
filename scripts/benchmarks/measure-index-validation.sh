@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Compare unchanged explicit-index latency and writes on one verified source snapshot.
-# Usage: measure-index-validation.sh SNAPSHOT BEFORE_BINARY AFTER_BINARY [RUNS]
+# Compare unchanged index latency and writes on one verified source snapshot.
+# Usage: measure-index-validation.sh SNAPSHOT BEFORE_BINARY AFTER_BINARY [RUNS] [--default-index]
 set -euo pipefail
 
-if (( $# < 3 || $# > 4 )); then
-  echo "usage: measure-index-validation.sh SNAPSHOT BEFORE_BINARY AFTER_BINARY [RUNS]" >&2
+if (( $# < 3 || $# > 5 )) || { (( $# == 5 )) && [[ "$5" != "--default-index" ]]; }; then
+  echo "usage: measure-index-validation.sh SNAPSHOT BEFORE_BINARY AFTER_BINARY [RUNS] [--default-index]" >&2
   exit 2
 fi
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
 readonly RUNS="${4:-15}"
+readonly MODE="${5:-explicit}"
 if [[ ! "${RUNS}" =~ ^[0-9]{1,3}$ ]] || (( 10#${RUNS} < 1 || 10#${RUNS} > 100 )); then
   echo "measure-index-validation.sh: runs must be 1 to 100" >&2
   exit 2
@@ -21,10 +22,10 @@ fi
 mkdir -p "${REPO_ROOT}/.cache/benchmarks"
 WORK="$(mktemp -d "${REPO_ROOT}/.cache/benchmarks/index-validation.XXXXXXXX")"
 readonly WORK
-mkdir "${WORK}/home"
+mkdir "${WORK}/home" "${WORK}/tmp"
 echo "evidence: ${WORK}"
 env HOME="${WORK}/home" bash "${REPO_ROOT}/scripts/utils/prepare-corpus.sh" --verify "$1" >/dev/null
-python3 -I - "$1" "$2" "$3" "${RUNS}" "${WORK}" <<'PYTHON'
+python3 -I - "$1" "$2" "$3" "${RUNS}" "${WORK}" "${MODE}" <<'PYTHON'
 import hashlib
 import json
 import math
@@ -36,9 +37,11 @@ import sys
 import time
 
 source, before, after = (Path(name).resolve(strict=True) for name in sys.argv[1:4])
-runs, work = int(sys.argv[4]), Path(sys.argv[5])
-index = work / "index"
-environment = dict(os.environ, HOME=str(work / "home"))
+runs, work, mode = int(sys.argv[4]), Path(sys.argv[5]), sys.argv[6]
+index = work / "tmp/xcalygraph-xcalygraph-benchmark" if mode == "--default-index" else work / "index"
+environment = dict(os.environ, HOME=str(work / "home"), TMPDIR=str(work / "tmp"),
+                   XDG_CONFIG_HOME=str(work / "home/config"), USER="xcalygraph-benchmark",
+                   GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
 environment.pop("XCALYGRAPH_INDEX_DIR", None)
 
 def digest(path):
@@ -46,8 +49,10 @@ def digest(path):
 
 def invoke(binary):
     started = time.monotonic_ns()
-    result = subprocess.run([str(binary), "index", "-C", str(source), "--index-dir", str(index)],
-                            env=environment, capture_output=True)
+    command = [str(binary), "index", "-C", str(source)]
+    if mode != "--default-index":
+        command.extend(["--index-dir", str(index)])
+    result = subprocess.run(command, env=environment, capture_output=True)
     elapsed = (time.monotonic_ns() - started) / 1_000_000
     if result.returncode:
         raise ValueError("index command failed: " + result.stderr.decode(errors="replace"))
@@ -90,7 +95,7 @@ def summarize(values):
             "max_ms": ordered[-1]}
 
 report = {"source_metadata_sha256": digest(source.parent / "snapshot.json"),
-          "before_sha256": digest(before), "after_sha256": digest(after), "runs_per_binary": runs,
+          "before_sha256": digest(before), "after_sha256": digest(after), "runs_per_binary": runs, "mode": mode,
           "before": summarize(samples["before"]), "after": summarize(samples["after"]),
           "index_unchanged": True, "observations": observations}
 for name, value in (("index-before.json", initial), ("index-after.json", final), ("results.json", report)):
