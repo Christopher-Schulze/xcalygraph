@@ -103,6 +103,16 @@ impl Filter {
         }
     }
 
+    /// Whether a node may appear in an answer or on a path: symbols by symbol rules, files by
+    /// file rules. Unlike `node`, a kind filter does not exclude files, so a file NAME, a
+    /// file-level fact or an import hop stays usable under `-k`.
+    pub fn includes(&self, index: &Index, node: u32) -> bool {
+        match index.node(node) {
+            Node::Symbol(symbol) => self.symbol(index, symbol),
+            Node::File(file) => self.file(index, file),
+        }
+    }
+
     pub fn edge(&self, edge: &EdgeRecord) -> bool {
         !self.exact || edge.is_exact()
     }

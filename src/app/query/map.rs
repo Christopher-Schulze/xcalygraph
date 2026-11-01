@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use super::output::{Value, Writer, json_object};
-use super::{Filter, Index, Node};
+use super::{Filter, Index};
 use crate::domain::facts::{EnvSource, FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST, SymKind};
 use crate::domain::graph::EdgeKind;
 use crate::domain::role::Role;
@@ -26,6 +26,7 @@ pub fn render(
     json: bool,
     budget: usize,
 ) -> String {
+    let included = included_modules(index, filter);
     let mut sections = vec![
         Section {
             keyword: "",
@@ -37,9 +38,9 @@ pub fn render(
         section("tasks", tasks(index, filter), SECTION_LINES),
         section("hubs", hubs(index, filter), SECTION_LINES),
         section("api", api(index, filter), SECTION_LINES),
-        section("cycles", cycles(index), SECTION_LINES),
-        section("layers", layers(index), SECTION_LINES),
-        section("ext", externals(index), EXTERNAL_LINES),
+        section("cycles", cycles(index, &included), SECTION_LINES),
+        section("layers", layers(index, &included), SECTION_LINES),
+        section("ext", externals(index, &included), EXTERNAL_LINES),
         section("env", envs(index, filter), SECTION_LINES),
     ];
     sections.retain(|section| !section.lines.is_empty());
@@ -373,9 +374,26 @@ fn hubs(index: &Index, filter: &Filter) -> Vec<(String, String)> {
         .collect()
 }
 
-fn cycles(index: &Index) -> Vec<(String, String)> {
+/// Per module: whether any of its files passes the filter. Module-level sections (cycles,
+/// layers, externals) show only these modules, so a path restriction never exposes others.
+fn included_modules(index: &Index, filter: &Filter) -> Vec<bool> {
+    let mut included = vec![false; index.derived.modules().len()];
+    for file in index.derived.files() {
+        if let Some(flag) = included.get_mut(file.module as usize)
+            && filter.file(index, file)
+        {
+            *flag = true;
+        }
+    }
+    included
+}
+
+fn cycles(index: &Index, included: &[bool]) -> Vec<(String, String)> {
     let mut groups: BTreeMap<u32, Vec<&str>> = BTreeMap::new();
-    for module in index.derived.modules() {
+    for (id, module) in index.derived.modules().iter().enumerate() {
+        if !included[id] {
+            continue;
+        }
         groups
             .entry(module.cycle)
             .or_default()
@@ -400,7 +418,7 @@ fn cycles(index: &Index) -> Vec<(String, String)> {
 }
 
 /// Modules per layer, top layer first; layer 0 has no dependencies inside the root.
-fn layers(index: &Index) -> Vec<(String, String)> {
+fn layers(index: &Index, included: &[bool]) -> Vec<(String, String)> {
     let modules = index.derived.modules();
     let has_edges: Vec<bool> = {
         let mut flags = vec![false; modules.len()];
@@ -412,7 +430,7 @@ fn layers(index: &Index) -> Vec<(String, String)> {
     };
     let mut by_layer: BTreeMap<u32, Vec<&str>> = BTreeMap::new();
     for (id, module) in modules.iter().enumerate() {
-        if has_edges[id] {
+        if has_edges[id] && included[id] {
             by_layer
                 .entry(module.layer)
                 .or_default()
@@ -438,9 +456,16 @@ fn layers(index: &Index) -> Vec<(String, String)> {
         .collect()
 }
 
-fn externals(index: &Index) -> Vec<(String, String)> {
+fn externals(index: &Index, included: &[bool]) -> Vec<(String, String)> {
     let mut uses: BTreeMap<&str, u32> = BTreeMap::new();
     for external in index.derived.externals() {
+        if !included
+            .get(external.module as usize)
+            .copied()
+            .unwrap_or(false)
+        {
+            continue;
+        }
         *uses.entry(index.string(external.name)).or_default() += external.uses;
     }
     let mut ordered: Vec<(&str, u32)> = uses.into_iter().collect();
@@ -468,7 +493,7 @@ fn envs(index: &Index, filter: &Filter) -> Vec<(String, String)> {
     }
     let mut usages: BTreeMap<&str, Usage> = BTreeMap::new();
     for env in index.derived.envs() {
-        if !filter.node(index, env.node) && !matches!(index.node(env.node), Node::File(_)) {
+        if !filter.includes(index, env.node) {
             continue;
         }
         let usage = usages.entry(index.string(env.name)).or_insert(Usage {

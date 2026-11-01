@@ -40,7 +40,7 @@ Implemented commands; the full target surface is `docs/spec.md` section 2. `xcal
 | `help [COMMAND]` | none | syntax overview or one command with its flags; aliases `-h`, `--help`, `<command> --help` |
 
 - Search also looks up related query-only forms (`validation`/`validate`, `token`/`tokenize`, `retrieval`/`get`) at half the original term's weight. Exact terms remain indexed and are never replaced; the higher contribution per query term is used.
-- Query flags: `-C, --root PATH`, `-b, --budget N` (tokens, bytes / 3), `--json`, `--read-only`, `--index-dir PATH`, `-p, --path GLOB` (gitignore syntax, repeatable), `-l, --lang LIST`, `-k, --kind LIST`, `--exact`, `--no-tests`; `show` adds `-d, --depth N` and `--all`.
+- Query flags: `-C, --root PATH`, `-b, --budget N` (tokens, bytes / 3), `--json`, `--read-only`, `--index-dir PATH`, `-p, --path GLOB` (gitignore syntax, repeatable), `-l, --lang LIST`, `-k, --kind LIST`, `--exact`, `--no-tests`; `show` adds `-d, --depth N` and `--all`. One inclusion rule (`Filter::includes`, `src/app/query/mod.rs`) governs every stage: NAME resolution in all forms, `path` hops (induced subgraph), `impact` dependents, tests and run lines (traversal itself crosses excluded nodes), `show` tests and `map` module sections; `-k` limits symbols only, so files stay resolvable.
 - NAME forms: `qualified.name` or `qualified::name`, a qualified suffix (`Store.Get`), `path:line` (innermost symbol containing the line), `path::name`, a file path, or a bare name.
 - Query commands refresh the index first; `--read-only` never writes and exits 5 when the index is missing or stale.
 - Exit codes: 0 answer, 1 runtime error, 2 usage error, 3 ambiguous NAME (candidates on stdout), 4 no match, 5 index missing or stale under `--read-only`.

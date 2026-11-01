@@ -57,6 +57,7 @@ pub fn shortest(
                 if !KINDS.contains(&edge.kind())
                     || !filter.edge(edge)
                     || best.contains_key(&edge.node)
+                    || !filter.includes(index, edge.node)
                 {
                     continue;
                 }

@@ -483,6 +483,105 @@ fn path_and_impact_keep_inferred_dispatch_inferred_on_every_hop() -> TestResult 
     Ok(())
 }
 
+/// Arguments, exit code, required substrings, forbidden substrings.
+type FilterCase<'a> = (&'a [&'a str], i32, &'a [&'a str], &'a [&'a str]);
+
+#[test]
+fn every_query_stage_obeys_the_shared_filters() -> TestResult {
+    let dir = TempDir::new("filters")?;
+    let root = dir.0.join("repo");
+    dir.write("repo/go.mod", "module example.com/app\n\ngo 1.23\n")?;
+    dir.write(
+        "repo/a/a.go",
+        "package a\n\nimport \"example.com/app/b\"\n\nfunc A() {\n\tb.B()\n}\n",
+    )?;
+    dir.write(
+        "repo/b/b.go",
+        "package b\n\nimport \"example.com/app/c\"\n\nfunc B() {\n\tc.C()\n}\n",
+    )?;
+    dir.write(
+        "repo/c/c.go",
+        "package c\n\nimport \"os\"\n\nfunc C() string {\n\treturn os.Getenv(\"MODE\")\n}\n",
+    )?;
+    dir.write(
+        "repo/c/c_test.go",
+        "package c\n\nimport \"testing\"\n\nfunc TestC(t *testing.T) {\n\tC()\n}\n",
+    )?;
+    git(&root, &["init", "-q"])?;
+    let index = dir.0.join("index");
+    let cases: &[FilterCase] = &[
+        (&["path", "a.A", "c.C"], 0, &["> b.B b/b.go:5\n"], &[]),
+        (
+            &["path", "a.A", "c.C", "-p", "a/", "-p", "c/"],
+            4,
+            &[],
+            &["b.B"],
+        ),
+        (&["show", "c/c.go:6"], 0, &["fn c.C"], &[]),
+        (&["show", "c/c.go:6", "-p", "a/"], 4, &[], &["c.C"]),
+        (&["show", "c/c.go", "-p", "a/"], 4, &[], &["c.C"]),
+        (&["show", "c/c.go::C", "-p", "a/"], 4, &[], &["c.C"]),
+        (
+            &["show", "c/c.go", "-k", "fn"],
+            0,
+            &["5 func C() string\n"],
+            &[],
+        ),
+        (&["show", "c.C", "-k", "struct"], 4, &[], &[]),
+        (&["show", "c.C", "-l", "python"], 4, &[], &[]),
+        (&["show", "c.C"], 0, &["t c.TestC", "< b.B"], &[]),
+        (&["show", "c.C", "--no-tests"], 0, &["< b.B"], &["TestC"]),
+        (
+            &["impact", "c.C"],
+            0,
+            &["< 1 b.B", "< 2 a.A", "t c.TestC", "r go test ./c"],
+            &[],
+        ),
+        (
+            &["impact", "c.C", "--no-tests"],
+            0,
+            &["< 1 b.B", "< 2 a.A"],
+            &["TestC", "go test"],
+        ),
+        (
+            &["impact", "c.C", "--no-tests", "--json"],
+            0,
+            &["\"name\":\"b.B\""],
+            &["TestC", "go test"],
+        ),
+        (&["impact", "c.C", "-p", "a/"], 4, &[], &[]),
+        (
+            &["impact", "c.C", "-p", "c/", "-p", "a/"],
+            0,
+            &["< 2 a.A", "t c.TestC"],
+            &["b.B"],
+        ),
+        (&["find", "C", "-p", "a/"], 4, &[], &["c/c.go"]),
+        (
+            &["map", "-p", "a/"],
+            0,
+            &["a.A"],
+            &["b.B", "c.C", " b\n", " c\n", "MODE"],
+        ),
+        (&["map"], 0, &["MODE"], &[]),
+    ];
+    for (args, code, required, forbidden) in cases {
+        let output = run_in(&root, &index, args)?;
+        let text = String::from_utf8(output.stdout)?;
+        assert_eq!(output.status.code(), Some(*code), "{args:?}\n{text}");
+        for needle in *required {
+            assert!(text.contains(needle), "{args:?} lacks {needle:?}\n{text}");
+        }
+        for needle in *forbidden {
+            assert!(
+                !text.contains(needle),
+                "{args:?} exposes {needle:?}\n{text}"
+            );
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn impact_of_a_diff_lists_changes_dependents_tests_and_run_lines() -> TestResult {
     let dir = TempDir::new("impact")?;

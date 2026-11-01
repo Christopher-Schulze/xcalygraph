@@ -382,7 +382,9 @@ fn tests(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: us
         .derived
         .incoming(node)
         .iter()
-        .filter(|edge| edge.kind() == EdgeKind::Tests && filter.edge(edge))
+        .filter(|edge| {
+            edge.kind() == EdgeKind::Tests && filter.edge(edge) && filter.includes(index, edge.node)
+        })
         .map(|edge| (edge, false))
         .collect();
     let mut seen: HashSet<u32> = found.iter().map(|(edge, _)| edge.node).collect();
@@ -393,7 +395,11 @@ fn tests(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: us
         .filter(|edge| edge.kind() == EdgeKind::Calls)
     {
         for edge in index.derived.incoming(caller.node) {
-            if edge.kind() == EdgeKind::Tests && filter.edge(edge) && seen.insert(edge.node) {
+            if edge.kind() == EdgeKind::Tests
+                && filter.edge(edge)
+                && filter.includes(index, edge.node)
+                && seen.insert(edge.node)
+            {
                 found.push((edge, true));
             }
         }

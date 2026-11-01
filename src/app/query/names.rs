@@ -6,7 +6,14 @@ use crate::app::error::AppError;
 use crate::domain::graph::has_qualified_suffix;
 
 /// Resolves NAME to nodes: one when unique, several for an ambiguous name, none otherwise.
+/// Every form obeys the shared filter; an excluded file or `path:line` target is no match.
 pub fn lookup(index: &Index, filter: &Filter, name: &str) -> Vec<u32> {
+    let mut found = lookup_unfiltered(index, filter, name);
+    found.retain(|&node| filter.includes(index, node));
+    found
+}
+
+fn lookup_unfiltered(index: &Index, filter: &Filter, name: &str) -> Vec<u32> {
     let name = name.trim();
     if let Some((path, line)) = name.rsplit_once(':')
         && !path.ends_with(':')

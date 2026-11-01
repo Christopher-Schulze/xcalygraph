@@ -293,8 +293,10 @@ fn render(
         for &node in &frontier {
             let chain_exact = exact_of[&node];
             for edge in index.derived.incoming(node) {
-                if edge.kind() == EdgeKind::Tests && filter.edge(edge) {
-                    tests.insert(edge.node);
+                if edge.kind() == EdgeKind::Tests {
+                    if filter.edge(edge) && filter.includes(index, edge.node) {
+                        tests.insert(edge.node);
+                    }
                     continue;
                 }
                 if !AFFECTING.contains(&edge.kind()) || !filter.edge(edge) {
@@ -319,7 +321,9 @@ fn render(
         let mut next = Vec::new();
         for node in layer {
             if is_test(index, node) {
-                tests.insert(node);
+                if filter.includes(index, node) {
+                    tests.insert(node);
+                }
                 continue;
             }
             if filter.node(index, node) {

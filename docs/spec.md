@@ -42,7 +42,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | `help` | `[COMMAND]` | none | syntax reference |
 
 - Query commands (`map`, `find`, `ctx`, `show`, `impact`, `path`, `audit`) refresh the index first (section 4) unless `--read-only`.
-- Filters (`-p`, `-l`, `-k`, `--exact`, `--no-tests`) apply to every query command and restrict seeds, expansions and listed facts alike.
+- Filters (`-p`, `-l`, `-k`, `--exact`, `--no-tests`) apply to every query command and restrict seeds, expansions and listed facts alike: every NAME form (an excluded file or `path:line` is no match), `path` searches only the subgraph of included nodes, `impact` traverses the whole graph but lists only included dependents, tests and their run lines, and `map` module sections (cycles, layers, externals) show only modules with an included file. `-k` restricts symbols; a file NAME, file-level facts and import hops stay usable.
 - NAME forms: `qualified.name`; `path:line`; `path::name`; bare name (must be unique).
 - Aliases: `-h`, `--help` = `help`; `<command> -h|--help` = `help <command>`; `-V`, `--version` = `version`.
 - Usage errors: one stderr line `xcalygraph: <error>; run 'xcalygraph help'`, exit 2. A reader that closes stdout early is not an error.
