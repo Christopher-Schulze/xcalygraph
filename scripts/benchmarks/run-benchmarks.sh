@@ -81,6 +81,14 @@ if previous is not None:
 PYTHON
 }
 
+# Preserve the selected pathname exactly and fail if enumeration fails.
+select_source_path() {
+  local copy="$1" record="$2"
+  ( set -o noclobber
+    find "${copy}" -type f \( -name '*.go' -o -name '*.rs' -o -name '*.py' -o -name '*.ts' -o -name '*.java' -o -name '*.kt' -o -name '*.cs' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.m' -o -name '*.swift' \) -print0 -quit > "${record}"
+  )
+}
+
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
   return 0
 fi
@@ -267,12 +275,11 @@ PYTHON
     mkdir "${copy}"
     rsync -a "${path}/" "${copy}/"
     "${BINARY}" index -C "${copy}" --index-dir "${copy_index}" >/dev/null
-    # A tracked source file, so ignore rules cannot hide the change.
-    tracked="$(git -C "${path}" ls-files -- '*.go' '*.rs' '*.py' '*.ts' '*.java' '*.kt' '*.cs' '*.c' '*.cc' '*.cpp' '*.m' '*.swift' 2>/dev/null | awk 'NR == 1')"
-    if [[ -n "${tracked}" ]]; then
-      target="${copy}/${tracked}"
-    else
-      target="$(find "${copy}" -type f \( -name '*.go' -o -name '*.rs' -o -name '*.py' -o -name '*.ts' -o -name '*.java' -o -name '*.kt' -o -name '*.cs' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.m' -o -name '*.swift' \) -print -quit)"
+    source_record="${WORK}/source-${corpus_number}.path"
+    select_source_path "${copy}" "${source_record}"
+    target=""
+    if ! IFS= read -r -d '' target < "${source_record}"; then
+      [[ -z "${target}" ]] || { echo "run-benchmarks.sh: invalid source path record" >&2; exit 1; }
     fi
     if [[ -n "${target}" ]]; then
       # A comment line valid in the file's language, so both tools see a parseable change.
