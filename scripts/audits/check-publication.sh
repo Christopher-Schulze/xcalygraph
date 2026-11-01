@@ -46,7 +46,40 @@ fi
 patterns="$(mktemp)"
 home_patterns="$(mktemp)"
 trap 'rm -f "${patterns}" "${home_patterns}"' EXIT
-grep -Ev '^[[:space:]]*(#|$)' "${PATTERN_FILE}" > "${patterns}" || true
+# Both commands read the pattern file; neither writes it.
+# shellcheck disable=SC2094
+if ! LC_ALL=C tr -d '\000' < "${PATTERN_FILE}" | cmp -s "${PATTERN_FILE}" -; then
+  echo "check-publication.sh: private pattern file is unreadable or contains NUL" >&2
+  exit 1
+fi
+pattern_status=0
+grep -aEv '^[[:space:]]*(#|$)' "${PATTERN_FILE}" > "${patterns}" 2>/dev/null || pattern_status=$?
+if (( pattern_status > 1 )); then
+  echo "check-publication.sh: cannot read private patterns" >&2
+  exit 1
+fi
+
+scan() {
+  local label="$1"
+  shift
+  scan_status=0
+  scan_error="$(
+    command_status=0
+    "$@" 2>&1 >/dev/null || command_status=$?
+    printf '.'
+    exit "${command_status}"
+  )" || scan_status=$?
+  scan_error="${scan_error%.}"
+  if (( scan_status > 1 )) || [[ -n "${scan_error}" ]]; then
+    if [[ -n "${scan_error}" ]]; then
+      echo "check-publication.sh: ${label} reported diagnostics (exit ${scan_status})" >&2
+    else
+      echo "check-publication.sh: ${label} failed (exit ${scan_status})" >&2
+    fi
+    return 1
+  fi
+}
+scan 'private pattern validation' grep -q -i -E -f "${patterns}" /dev/null || exit 1
 # Home paths match case-sensitively: `/users/` in `app/api/users/route.ts` is no home path.
 printf '%s\n' "${HOME_PATH_PATTERNS[@]}" > "${home_patterns}"
 
@@ -67,17 +100,26 @@ for commit in "${commits[@]}"; do
     echo "${short}: local-only file tracked" >&2
     findings=1
   fi
-  if git grep -n -I -i -E -f "${patterns}" "${commit}" -- . \
-    || git grep -n -I -E -f "${home_patterns}" "${commit}" -- .; then
+  scan "${short}: private content scan" git grep -q -I -i -E -f "${patterns}" "${commit}" -- ':(top)' || exit 1
+  private_match="${scan_status}"
+  scan "${short}: home path content scan" git grep -q -I -E -f "${home_patterns}" "${commit}" -- ':(top)' || exit 1
+  if (( private_match == 0 || scan_status == 0 )); then
     echo "${short}: private pattern in tree" >&2
     findings=1
   fi
-  if git log -1 --format=%B "${commit}" | grep -n -i '^co-authored-by:'; then
+  if ! message="$(git log -1 --format=%B "${commit}" 2>/dev/null)"; then
+    echo "${short}: cannot read commit message" >&2
+    exit 1
+  fi
+  scan "${short}: trailer scan" grep -q -i '^co-authored-by:' <<< "${message}" || exit 1
+  if (( scan_status == 0 )); then
     echo "${short}: co-author trailer in commit message" >&2
     findings=1
   fi
-  message="$(git log -1 --format=%B "${commit}")"
-  if grep -n -i -E -f "${patterns}" <<<"${message}" || grep -n -E -f "${home_patterns}" <<<"${message}"; then
+  scan "${short}: private message scan" grep -q -i -E -f "${patterns}" <<< "${message}" || exit 1
+  private_match="${scan_status}"
+  scan "${short}: home path message scan" grep -q -E -f "${home_patterns}" <<< "${message}" || exit 1
+  if (( private_match == 0 || scan_status == 0 )); then
     echo "${short}: private pattern in commit message" >&2
     findings=1
   fi
