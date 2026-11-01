@@ -26,7 +26,7 @@ export HOME="${work}/home" TMPDIR="${work}/temporary" XDG_CONFIG_HOME="${work}/h
 export RUSTUP_HOME="${TOOLCHAIN_HOME}" CARGO_HOME="${PACKAGE_HOME}"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 RUSTFLAGS="-Dwarnings"
 
-for tool in cargo git python3 graphify shellcheck; do
+for tool in cargo git python3 graphify shellcheck hyperfine; do
   command -v "${tool}" >/dev/null || { echo "test.sh: ${tool} is required" >&2; exit 1; }
 done
 find "${REPO_ROOT}/scripts" -type f -name '*.sh' -print0 | xargs -0 shellcheck
@@ -56,6 +56,7 @@ bash "${REPO_ROOT}/scripts/tests/test-prune-cache.sh"
 bash "${REPO_ROOT}/scripts/tests/test-agent-benchmark-safety.sh"
 bash "${REPO_ROOT}/scripts/tests/test-benchmark-inputs.sh"
 bash "${REPO_ROOT}/scripts/tests/test-build-space.sh"
+bash "${REPO_ROOT}/scripts/tests/test-hyperfine-args.sh"
 bash "${REPO_ROOT}/scripts/tests/test-cache-producers.sh" "${binary}"
 bash "${REPO_ROOT}/scripts/tests/test-corpus-snapshots.sh" "${binary}"
 bash "${REPO_ROOT}/scripts/tests/test-evaluation-labels.sh" "${binary}"

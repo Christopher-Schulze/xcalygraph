@@ -17,6 +17,21 @@ readonly BINARY="${REPO_ROOT}/target/release/xcalygraph"
 readonly PRIVATE_LIST="${REPO_ROOT}/scripts/benchmarks/questions/private/corpora.tsv"
 readonly COPY_LIMIT=20000
 
+hyperfine_command() {
+  python3 -I -c 'import shlex,sys; print(shlex.join(sys.argv[1:]))' "$@"
+}
+
+hyperfine_append_command() {
+  local command target
+  command="$(hyperfine_command printf '%s' "$1")" || return
+  target="$(hyperfine_command "$2")" || return
+  printf '%s >> %s\n' "${command}" "${target}"
+}
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
+
 upstream=0
 if [[ "${1:-}" == "--upstream" ]]; then
   upstream=1
@@ -150,7 +165,8 @@ for entry in "${available_corpora[@]}"; do
   files="$(awk '{ print $2 }' "${WORK}/out")"
   build_ms="$(awk '/ real / { printf "%.0f", $1 * 1000 }' <<<"${build}")"
   rss_mb="$(awk '/maximum resident set size/ { printf "%.0f", $1 / 1048576 }' <<<"${build}")"
-  fresh_ms="$(mean_ms "${BINARY} index -C ${path} --index-dir ${index}")"
+  fresh_command="$(hyperfine_command "${BINARY}" index -C "${path}" --index-dir "${index}")"
+  fresh_ms="$(mean_ms "${fresh_command}")"
   index_kb="$(du -sk "${index}" | awk '{ print $1 }')"
   change_ms="-"
   write_kb="-"
@@ -176,7 +192,9 @@ for entry in "${available_corpora[@]}"; do
       (( upstream )) && upstream_line="$(upstream_columns "${copy}" "${target}" "${edit}")"
       sleep 2
       find "${copy_index}" -type f -exec stat -f '%i %z %N' {} + | sort > "${WORK}/snapshot"
-      change_ms="$(mean_ms --prepare "printf '%s' '${edit}' >> '${target}'" "${BINARY} index -C ${copy} --index-dir ${copy_index}")"
+      prepare_command="$(hyperfine_append_command "${edit}" "${target}")"
+      change_command="$(hyperfine_command "${BINARY}" index -C "${copy}" --index-dir "${copy_index}")"
+      change_ms="$(mean_ms --prepare "${prepare_command}" "${change_command}")"
       printf '%s' "${edit}" >> "${target}"
       find "${copy_index}" -type f -exec stat -f '%i %z %N' {} + | sort > "${WORK}/snapshot"
       printf '%s' "${edit}" >> "${target}"
