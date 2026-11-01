@@ -2,8 +2,8 @@
 //! a section table and 64-byte aligned sections (`docs/spec.md` section 9).
 
 use std::fmt;
-use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::fs::File;
+use std::io::{self, Read};
 use std::ops::Range;
 use std::path::Path;
 
@@ -72,24 +72,15 @@ pub fn build(kind: Kind, sections: &[&[u8]]) -> Vec<u8> {
     image
 }
 
-/// Writes the image atomically (temp file in the same directory, then rename), without fsync.
+/// Writes the image atomically (new exclusive temp file in the same directory, then rename),
+/// without fsync.
 /// An existing byte-identical image is left untouched. Returns bytes written.
 pub fn write(path: &Path, image: &[u8]) -> io::Result<u64> {
     if same_image(path, image) {
         return Ok(0);
     }
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| io::Error::other("index file path without name"))?;
-    let temp = path.with_file_name(format!(".{name}.tmp.{}", std::process::id()));
-    let result = File::create(&temp)
-        .and_then(|mut file| file.write_all(image))
-        .and_then(|()| fs::rename(&temp, path));
-    if result.is_err() {
-        let _ = fs::remove_file(&temp);
-    }
-    result.map(|()| image.len() as u64)
+    crate::infra::file_access::replace_with(path, image, 0o644)?;
+    Ok(image.len() as u64)
 }
 
 fn same_image(path: &Path, image: &[u8]) -> bool {
@@ -226,6 +217,7 @@ const fn align(value: usize) -> usize {
 mod tests {
     use super::*;
     use crate::infra::testdir::TestDir;
+    use std::fs;
 
     #[test]
     fn sections_round_trip_aligned() -> Result<(), Box<dyn std::error::Error>> {

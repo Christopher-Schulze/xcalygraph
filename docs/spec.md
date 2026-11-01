@@ -350,7 +350,7 @@ Location: `<index-dir>/<root basename>-<XXH3-64 hex of the canonical root path>/
 | `lock` | writer lock | never |
 
 - Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum; fact shard sections deflated; search postings as delta-varint (node, term frequencies) pairs.
-- Writes: temp file in the same directory -> rename; no fsync; unchanged files untouched. A checksum mismatch or truncation on open rebuilds that file.
+- Writes: new exclusively created temp file in the same directory (`O_CREAT|O_EXCL`; an existing entry or symlink is skipped, never opened) -> rename; no fsync; unchanged files untouched; install and update use the same primitive. A checksum mismatch or truncation on open rebuilds that file.
 - Reads: memory-mapped, zero-copy.
 
 ## 10. Skill, install, update

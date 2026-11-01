@@ -1,8 +1,53 @@
-//! Open existing index control files without following or modifying foreign entries.
+//! Open existing index control files and create replacement files without following or
+//! modifying foreign entries.
 
 use std::fs::{self, File, Metadata};
-use std::io;
-use std::path::Path;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+
+const TEMP_ATTEMPTS: u32 = 64;
+
+/// Creates a new file `.<name>.<tag>.<pid>.<n>` beside `target` with `O_CREAT | O_EXCL`, so a
+/// pre-existing entry, including a symlink, is never opened, truncated or followed; occupied
+/// names are skipped. `mode` applies at creation on Unix (subject to the umask).
+pub fn create_beside(target: &Path, tag: &str, mode: u32) -> io::Result<(PathBuf, File)> {
+    let name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| io::Error::other("target path without name"))?;
+    let pid = std::process::id();
+    for attempt in 0..TEMP_ATTEMPTS {
+        let temp = target.with_file_name(format!(".{name}.{tag}.{pid}.{attempt}"));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
+        #[cfg(not(unix))]
+        let _ = mode;
+        match options.open(&temp) {
+            Ok(file) => return Ok((temp, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "no unused temporary name",
+    ))
+}
+
+/// Atomically replaces `target` with `content`: a new exclusive file beside it (see
+/// `create_beside`), then rename. On failure only the file created here is removed.
+pub fn replace_with(target: &Path, content: &[u8], mode: u32) -> io::Result<()> {
+    let (temp, mut file) = create_beside(target, "tmp", mode)?;
+    let result = file
+        .write_all(content)
+        .and_then(|()| fs::rename(&temp, target));
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
 
 /// A regular file with no other hard link; symbolic links are rejected by `symlink_metadata`.
 pub fn is_unshared_regular(metadata: &Metadata) -> bool {
@@ -73,5 +118,55 @@ fn safe_open_flags() -> io::Result<i32> {
             io::ErrorKind::Unsupported,
             "unsupported secure-open platform",
         ))
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::infra::testdir::TestDir;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    #[test]
+    fn replacement_never_touches_pre_existing_temp_entries()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = TestDir::new("replace-temp")?;
+        let target = dir.path().join("derived");
+        let foreign = dir.write("outside/foreign", "foreign")?;
+        let pid = std::process::id();
+        let linked = dir.path().join(format!(".derived.tmp.{pid}.0"));
+        symlink(&foreign, &linked)?;
+        let occupied = dir.write(&format!(".derived.tmp.{pid}.1"), "occupied")?;
+        replace_with(&target, b"image", 0o644)?;
+        assert_eq!(fs::read(&target)?, b"image");
+        assert_eq!(fs::read_to_string(&foreign)?, "foreign");
+        assert!(fs::symlink_metadata(&linked)?.file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&occupied)?, "occupied");
+        assert!(!dir.path().join(format!(".derived.tmp.{pid}.2")).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn created_file_has_the_requested_mode_and_failure_removes_only_it()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = TestDir::new("replace-mode")?;
+        let target = dir.path().join("xcalygraph");
+        let (temp, file) = create_beside(&target, "update", 0o755)?;
+        drop(file);
+        assert_eq!(fs::metadata(&temp)?.permissions().mode() & 0o111, 0o111);
+        fs::create_dir(dir.path().join("blocked"))?;
+        dir.write("blocked/inner", "keep")?;
+        let error = replace_with(&dir.path().join("blocked"), b"image", 0o644);
+        assert!(error.is_err());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("blocked/inner"))?,
+            "keep"
+        );
+        let leftovers: Vec<_> = fs::read_dir(dir.path())?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".blocked."))
+            .collect();
+        assert!(leftovers.is_empty());
+        Ok(())
     }
 }
