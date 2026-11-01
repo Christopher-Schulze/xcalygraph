@@ -7,6 +7,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 [[ ! -L "${REPO_ROOT}/.cache" ]] || { echo "test cache must not be a symlink" >&2; exit 1; }
 mkdir -p "${REPO_ROOT}/.cache"
 python3 -I - "${REPO_ROOT}" <<'PYTHON'
+import json
 import os
 from pathlib import Path
 import shlex
@@ -63,6 +64,51 @@ with tempfile.TemporaryDirectory(prefix="build-space.", dir=repo / ".cache") as 
     check = root / "scripts/utils/check-build-space.sh"
     normal = subprocess.run([shell, str(check)], cwd=root, env=real, capture_output=True, text=True)
     assert normal.returncode == 0, normal.stderr
+    bad_build = work / "build-is-a-file"
+    bad_build.write_text("preserve\n")
+    build_environment = dict(real, CARGO_BUILD_BUILD_DIR=str(bad_build))
+    invalid_build = subprocess.run([shell, str(check)], cwd=root, env=build_environment, capture_output=True, text=True)
+    assert invalid_build.returncode != 0 and "build" in invalid_build.stderr and "not a directory" in invalid_build.stderr, invalid_build.stderr
+    assert bad_build.read_text() == "preserve\n" and sentinel.read_text() == "retain\n"
+    template_environment = dict(real, CARGO_BUILD_BUILD_DIR=str(work / "build-{workspace-path-hash}"))
+    template = subprocess.run([shell, str(check)], cwd=root, env=template_environment, capture_output=True, text=True)
+    assert template.returncode == 0, template.stderr
+    metadata = subprocess.run(["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"],
+                              cwd=root, env=template_environment, capture_output=True, text=True, check=True)
+    assert "{workspace-path-hash}" not in json.loads(metadata.stdout)["build_directory"]
+    opaque_build = work / "opaque-build"
+    (opaque_build / "opaque").mkdir(parents=True)
+    opaque = opaque_build / "opaque"
+    opaque.chmod(0)
+    try:
+        if not os.access(opaque, os.R_OK | os.X_OK):
+            opaque_environment = dict(real, CARGO_BUILD_BUILD_DIR=str(opaque_build))
+            unreadable = subprocess.run([shell, str(check)], cwd=root, env=opaque_environment, capture_output=True, text=True)
+            assert unreadable.returncode != 0 and "cannot measure build directory" in unreadable.stderr, unreadable.stderr
+    finally:
+        opaque.chmod(0o700)
+    split_target, split_build = work / "split-target", work / "split-build with newline\n"
+    for directory in (split_target, split_build):
+        directory.mkdir()
+        (directory / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")
+        (directory / "unrelated").write_text("keep\n")
+    split_environment = dict(real, CARGO_TARGET_DIR=str(split_target), CARGO_BUILD_BUILD_DIR=str(split_build))
+    split_check = subprocess.run([shell, str(check)], cwd=root, env=split_environment, capture_output=True, text=True)
+    assert split_check.returncode == 0, split_check.stderr
+    subprocess.run(["df", "-h", "/"], check=True, stdout=subprocess.DEVNULL)
+    assert shutil.disk_usage(root).free > 2 * 1024**3 + 128 * 1024**2
+    subprocess.run(["cargo", "build", "--locked", "--bin", "xcalygraph"],
+                   cwd=root, env=split_environment, capture_output=True, text=True, check=True)
+    assert (split_target / "debug/xcalygraph").is_file() and (split_build / "debug").is_dir()
+    intermediate_artifacts = list((split_build / "debug/deps").glob("xcalygraph-*"))
+    assert intermediate_artifacts
+    split_forced = subprocess.run([shell, str(check), str(shutil.disk_usage(split_target).free // 1024 + 8 * 1024 * 1024)],
+                                  cwd=root, env=split_environment, capture_output=True, text=True)
+    assert split_forced.returncode != 0 and "build aborted" in split_forced.stderr, split_forced.stderr
+    assert "could not safely clean" not in split_forced.stderr, split_forced.stderr
+    assert not (split_target / "debug/xcalygraph").exists()
+    assert all(not path.exists() for path in intermediate_artifacts)
+    assert all((directory / "unrelated").read_text() == "keep\n" for directory in (split_target, split_build))
     available_kib = shutil.disk_usage(target).free // 1024
     forced = subprocess.run([shell, str(check), str(available_kib + 8 * 1024 * 1024)],
                             cwd=root, env=real, capture_output=True, text=True)
@@ -97,5 +143,5 @@ with tempfile.TemporaryDirectory(prefix="build-space.", dir=repo / ".cache") as 
     bad = subprocess.run([shell, str(check)], cwd=root, env=bad_environment, capture_output=True, text=True)
     assert bad.returncode != 0 and "not a directory" in bad.stderr, bad.stderr
     assert bad_target.read_text() == "keep\n" and sentinel.read_text() == "retain\n"
-    print("PASS: real build preflight, configured and overridden targets, reserve failure and foreign-file preservation")
+    print("PASS: real preflight, split build directories, unreadable paths, reserve failure and safe cleanup")
 PYTHON
