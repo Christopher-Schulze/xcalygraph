@@ -171,6 +171,7 @@ fn run_query(
     let root = workspace.root.as_path();
     let json = options.json;
     let budget = |default: usize| options.budget.unwrap_or(default);
+    let ambiguity = budget(query::names::AMBIGUITY_BUDGET).min(query::names::AMBIGUITY_BUDGET);
     match command {
         CommandName::Map => Ok(query::map::render(
             index,
@@ -196,7 +197,7 @@ fn run_query(
                 .ok_or_else(|| AppError::NoMatch(format!("no match for '{terms}'")))
         }
         CommandName::Show => {
-            let node = query::names::resolve_one(index, filter, &args[0], json)?;
+            let node = query::names::resolve_one(index, filter, &args[0], json, ambiguity)?;
             let show = query::show::ShowOptions {
                 depth: options.depth.unwrap_or(1),
                 all: options.all,
@@ -227,7 +228,7 @@ fn run_query(
                     "impact needs NAME... or --diff [REV]".to_owned(),
                 ));
             }
-            let targets = query::impact::named(index, filter, args, json)?;
+            let targets = query::impact::named(index, filter, args, json, ambiguity)?;
             Ok(query::impact::render_names(index, filter, targets, &impact))
         }
         CommandName::Audit => {
@@ -242,8 +243,8 @@ fn run_query(
             ))
         }
         CommandName::Path => {
-            let from = query::names::resolve_one(index, filter, &args[0], json)?;
-            let to = query::names::resolve_one(index, filter, &args[1], json)?;
+            let from = query::names::resolve_one(index, filter, &args[0], json, ambiguity)?;
+            let to = query::names::resolve_one(index, filter, &args[1], json, ambiguity)?;
             query::path::render(index, filter, from, to, json, budget(400)).ok_or_else(|| {
                 AppError::NoMatch(format!("no path from '{}' to '{}'", args[0], args[1]))
             })

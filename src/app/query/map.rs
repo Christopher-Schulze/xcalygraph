@@ -45,13 +45,24 @@ pub fn render(
     ];
     sections.retain(|section| !section.lines.is_empty());
     // The budget cuts from the lowest-priority section upward.
-    let limit = budget * super::output::BYTES_PER_TOKEN;
+    // Same bound as every writer: the truncation line is reserved, so the output never exceeds
+    // the budget; when not even the root line fits, the answer is the truncation line alone.
+    let limit =
+        (budget * super::output::BYTES_PER_TOKEN).saturating_sub(super::output::footer_len(json));
+    let keyword_size = |keyword: &str| -> usize {
+        match (keyword.is_empty(), json) {
+            (true, _) => 0,
+            (false, true) => {
+                json_object(&[("t", Value::Str("sec")), ("name", Value::Str(keyword))]).len()
+            }
+            (false, false) => keyword.len() + 1,
+        }
+    };
     let size = |sections: &[Section]| -> usize {
         sections
             .iter()
             .map(|section| {
-                section.keyword.len()
-                    + 1
+                keyword_size(section.keyword)
                     + section
                         .lines
                         .iter()
@@ -60,7 +71,13 @@ pub fn render(
             })
             .sum()
     };
-    while size(&sections) > limit && sections.len() > 1 {
+    let mut dropped = 0;
+    while size(&sections) > limit && !sections.is_empty() {
+        if sections.len() == 1 {
+            dropped += sections[0].lines.len() + sections[0].cut;
+            sections.clear();
+            break;
+        }
         let Some(last) = sections.last_mut() else {
             break;
         };
@@ -96,7 +113,7 @@ pub fn render(
         }
         cut += section.cut;
     }
-    writer.skip(cut);
+    writer.skip(cut + dropped);
     writer.finish()
 }
 

@@ -113,12 +113,17 @@ fn in_file(index: &Index, filter: &Filter, path: &str, name: &str) -> Vec<u32> {
         .collect()
 }
 
-/// Exactly one node for NAME; ambiguity lists the candidates (exit 3), no match is exit 4.
+/// Candidate list budget of an ambiguous NAME, lowered by a smaller `-b`.
+pub const AMBIGUITY_BUDGET: usize = 600;
+
+/// Exactly one node for NAME; ambiguity lists the candidates (exit 3) within `budget`, no match
+/// is exit 4.
 pub fn resolve_one(
     index: &Index,
     filter: &Filter,
     name: &str,
     json: bool,
+    budget: usize,
 ) -> Result<u32, AppError> {
     let found = lookup(index, filter, name);
     match found.as_slice() {
@@ -136,7 +141,7 @@ pub fn resolve_one(
                 })
                 .collect();
             Err(AppError::Ambiguous(super::find::render(
-                index, &hits, json, 600,
+                index, &hits, json, budget,
             )))
         }
     }

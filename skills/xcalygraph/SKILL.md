@@ -31,7 +31,7 @@ Local, deterministic index of the repository (symbols, calls, type uses, imports
 
 NAME: `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get`), `path:line`, `path::name`, a file path, or a unique bare name.
 
-Flags: `-p GLOB` (paths, gitignore syntax, repeatable), `-l go,rust` (languages), `-k fn,method,struct` (kinds), `--no-tests`, `--exact` (drop inferred edges), `-d N` (show depth), `--all` (show without caps), `-b N` (token budget), `--json`, `--read-only` (never write; exit 5 when stale), `-C DIR` (root).
+Flags: `-p GLOB` (paths, gitignore syntax, repeatable), `-l go,rust` (languages), `-k fn,method,struct` (kinds), `--no-tests`, `--exact` (drop inferred edges), `-d N` (show depth), `--all` (show without caps), `-b N` (token budget, hard cap), `--json`, `--read-only` (never write; exit 5 when stale), `-C DIR` (root).
 
 ## Reading the output
 

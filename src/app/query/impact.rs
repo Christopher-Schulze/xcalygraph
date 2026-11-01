@@ -23,6 +23,7 @@ const AFFECTING: [EdgeKind; 6] = [
 ];
 
 /// Lines per section; tests and run commands are never displaced by long change lists.
+/// Run commands get their budget reserved first (half the budget at most).
 const CHANGED_LINES: usize = 15;
 const AFFECTED_LINES: usize = 25;
 const TEST_LINES: usize = 15;
@@ -56,10 +57,11 @@ pub fn named(
     filter: &Filter,
     names: &[String],
     json: bool,
+    budget: usize,
 ) -> Result<Vec<u32>, AppError> {
     names
         .iter()
-        .map(|name| super::names::resolve_one(index, filter, name, json))
+        .map(|name| super::names::resolve_one(index, filter, name, json, budget))
         .collect()
 }
 
@@ -449,6 +451,32 @@ fn render(
             .then(rank(b.1).total_cmp(&rank(a.1)))
             .then(a.1.cmp(&b.1))
     });
+    // Run commands are the actionable result: their package-level form is reserved before the
+    // dependents and tests fill the budget.
+    let commands = run_lines(index, options.root, &tests);
+    let run_record = |command: &str| -> (String, String) {
+        let text = format!("r {command}");
+        let record = super::output::json_object(&[
+            ("t", Value::Str("edge")),
+            ("rel", Value::Str("run")),
+            ("name", Value::Str(command)),
+        ]);
+        (text, record)
+    };
+    let run_size = |command: &str| -> usize {
+        let (text, record) = run_record(command);
+        if options.json {
+            record.len()
+        } else {
+            text.len() + 1
+        }
+    };
+    let wanted: usize = commands
+        .iter()
+        .take(RUN_LINES)
+        .map(|(_, compact)| run_size(compact))
+        .sum();
+    let reserved = writer.reserve(wanted.min(options.budget * super::output::BYTES_PER_TOKEN / 2));
     for (shown, (depth, node, exact)) in affected.iter().enumerate() {
         if shown >= AFFECTED_LINES {
             more(&mut writer, affected.len() - shown, "affected");
@@ -493,13 +521,25 @@ fn render(
             ],
         );
     }
-    let commands = run_lines(index, options.root, &tests);
-    for (shown, command) in commands.iter().enumerate() {
+    writer.release(reserved);
+    let shown_commands = commands.len().min(RUN_LINES);
+    for (shown, (precise, compact)) in commands.iter().enumerate() {
         if shown >= RUN_LINES {
             more(&mut writer, commands.len() - shown, "run commands");
             break;
         }
-        writer.force_line(
+        // The precise command only while every later command still fits in its short form;
+        // otherwise the package-level one; a command that fits in neither form is counted.
+        let later: usize = commands[shown + 1..shown_commands]
+            .iter()
+            .map(|(_, compact)| run_size(compact))
+            .sum();
+        let command = if run_size(precise) + later <= writer.remaining() {
+            precise
+        } else {
+            compact
+        };
+        writer.line(
             &format!("r {command}"),
             &[
                 ("t", Value::Str("edge")),
@@ -531,7 +571,9 @@ fn is_test(index: &Index, node: u32) -> bool {
 
 /// Commands that run exactly the selected tests: Go per package, Rust per crate, JVM test classes
 /// per Gradle or Maven project, test files otherwise (section 7.5).
-fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
+/// Run commands as (precise, package-level): the second is shorter and still correct, running
+/// the whole package, crate, project or suite; it replaces the first when the budget is short.
+fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<(String, String)> {
     let mut go: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     let mut rust: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     // (build tool, project directory) -> test classes.
@@ -676,13 +718,11 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
             format!("go -C {module}")
         };
         // Beyond a handful of names the whole package is the shorter and safer command.
+        let whole = format!("{prefix} test {package}");
         if names.len() > RUN_NAMES {
-            lines.push(format!("{prefix} test {package}"));
+            lines.push((whole.clone(), whole));
         } else {
-            lines.push(format!(
-                "{prefix} test {package} -run '^({})$'",
-                names.join("|")
-            ));
+            lines.push((format!("{whole} -run '^({})$'", names.join("|")), whole));
         }
     }
     for (crate_name, names) in rust {
@@ -692,10 +732,11 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
         } else {
             format!(" -p {crate_name}")
         };
+        let whole = format!("cargo test{package}");
         if names.len() > RUN_NAMES {
-            lines.push(format!("cargo test{package}"));
+            lines.push((whole.clone(), whole));
         } else {
-            lines.push(format!("cargo test{package} -- {}", names.join(" ")));
+            lines.push((format!("{whole} -- {}", names.join(" ")), whole));
         }
     }
     for ((build, project), classes) in jvm {
@@ -711,7 +752,10 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
                     .iter()
                     .map(|class| format!("--tests {class}"))
                     .collect();
-                format!("./gradlew{project} test {}", filters.join(" "))
+                (
+                    format!("./gradlew{project} test {}", filters.join(" ")),
+                    format!("./gradlew{project} test"),
+                )
             }
             JvmBuild::Maven => {
                 let project = if project.is_empty() {
@@ -719,7 +763,10 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
                 } else {
                     format!(" -f {project}/pom.xml")
                 };
-                format!("mvn{project} test -Dtest={}", classes.join(","))
+                (
+                    format!("mvn{project} test -Dtest={}", classes.join(",")),
+                    format!("mvn{project} test"),
+                )
             }
         });
     }
@@ -730,9 +777,9 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
             format!(" --package-path {package}")
         };
         let classes: Vec<String> = classes.into_iter().collect();
-        lines.push(format!(
-            "swift test{package} --filter '{}'",
-            classes.join("|")
+        lines.push((
+            format!("swift test{package} --filter '{}'", classes.join("|")),
+            format!("swift test{package}"),
         ));
     }
     for (project, names) in dotnet {
@@ -745,28 +792,34 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<String> {
             .iter()
             .map(|name| format!("FullyQualifiedName~{name}"))
             .collect();
-        lines.push(format!(
-            "dotnet test{project} --filter \"{}\"",
-            filter.join("|")
+        lines.push((
+            format!("dotnet test{project} --filter \"{}\"", filter.join("|")),
+            format!("dotnet test{project}"),
         ));
     }
     for (runner, paths) in by_path {
         let paths: Vec<String> = paths.into_iter().collect();
         if runner == "bundle exec ruby -Itest" {
-            // Minitest runs one file per process.
-            lines.extend(paths.iter().map(|path| format!("{runner} {path}")));
+            // Minitest runs one file per process; no shorter command is equally correct.
+            lines.extend(paths.iter().map(|path| {
+                let line = format!("{runner} {path}");
+                (line.clone(), line)
+            }));
         } else {
-            lines.push(format!("{runner} {}", paths.join(" ")));
+            lines.push((format!("{runner} {}", paths.join(" ")), runner.to_owned()));
         }
     }
     if !phpunit.is_empty() {
         let names: Vec<String> = phpunit.into_iter().collect();
-        lines.push(format!("vendor/bin/phpunit --filter '{}'", names.join("|")));
+        lines.push((
+            format!("vendor/bin/phpunit --filter '{}'", names.join("|")),
+            "vendor/bin/phpunit".to_owned(),
+        ));
     }
     if zig {
-        lines.push("zig build test".to_owned());
+        lines.push(("zig build test".to_owned(), "zig build test".to_owned()));
     }
-    lines.extend(files);
+    lines.extend(files.into_iter().map(|file| (file.clone(), file)));
     lines
 }
 

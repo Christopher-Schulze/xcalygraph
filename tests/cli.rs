@@ -1021,6 +1021,67 @@ fn hyphenated_ui_text_is_searchable_while_class_lists_are_not() -> TestResult {
 }
 
 #[test]
+fn impact_run_commands_stay_inside_the_budget() -> TestResult {
+    let dir = TempDir::new("impact-budget")?;
+    let root = dir.0.join("repo");
+    dir.write("repo/go.mod", "module example.com/app\n\ngo 1.23\n")?;
+    dir.write(
+        "repo/core/core.go",
+        "package core\n\nfunc Ünïcode() int { return 1 }\n",
+    )?;
+    for package in ["alpha", "beta", "gamma"] {
+        dir.write(
+            &format!("repo/{package}/use.go"),
+            &format!("package {package}\n\nimport \"example.com/app/core\"\n\nfunc Use() int {{ return core.Ünïcode() }}\n"),
+        )?;
+        dir.write(
+            &format!("repo/{package}/use_test.go"),
+            &format!("package {package}\n\nimport \"testing\"\n\nfunc TestAVeryLongDescriptiveNameForUsingTheCoreFunctionOne(t *testing.T) {{ Use() }}\nfunc TestAVeryLongDescriptiveNameForUsingTheCoreFunctionTwo(t *testing.T) {{ Use() }}\n"),
+        )?;
+    }
+    git(&root, &["init", "-q"])?;
+    let index = dir.0.join("index");
+    let impact = |budget: &str, json: bool| -> Result<String, Box<dyn Error>> {
+        let mut args = vec!["impact", "core.Ünïcode", "-b", budget];
+        if json {
+            args.push("--json");
+        }
+        let output = run_in(&root, &index, &args)?;
+        assert_eq!(output.status.code(), Some(0));
+        Ok(String::from_utf8(output.stdout)?)
+    };
+    // A large budget keeps the precise commands.
+    let wide = impact("1500", false)?;
+    assert!(
+        wide.contains("r go test ./alpha -run '^(TestAVeryLong"),
+        "{wide}"
+    );
+    // A small one keeps package-level commands, reserved before dependents and tests.
+    for budget in [200usize, 60, 30] {
+        for json in [false, true] {
+            let text = impact(&budget.to_string(), json)?;
+            assert!(
+                text.len() <= budget * 3,
+                "{budget} {json}: {} bytes\n{text}",
+                text.len()
+            );
+            assert!(!text.contains("-run"), "{budget}\n{text}");
+            if json {
+                assert!(
+                    text.contains("\"rel\":\"run\",\"name\":\"go test ./alpha\""),
+                    "{text}"
+                );
+            } else {
+                assert!(text.contains("r go test ./alpha\n"), "{text}");
+            }
+        }
+    }
+    // Below one item the answer is the truncation line alone.
+    assert_eq!(impact("10", false)?, "+13 more\n");
+    Ok(())
+}
+
+#[test]
 fn impact_of_a_diff_lists_changes_dependents_tests_and_run_lines() -> TestResult {
     let dir = TempDir::new("impact")?;
     let root = dir.0.join("repo");

@@ -282,7 +282,7 @@ impl Flag {
     fn summary(self) -> &'static str {
         match self {
             Self::Root => "index root; default: nearest ancestor with .git, else cwd",
-            Self::Budget => "output budget in tokens (bytes / 3)",
+            Self::Budget => "hard output cap in tokens (bytes / 3)",
             Self::Json => "JSON Lines output",
             Self::ReadOnly => "never build or refresh; exit 5 if missing or stale",
             Self::IndexDir => {

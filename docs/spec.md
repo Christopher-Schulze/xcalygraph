@@ -13,7 +13,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | flag | default | description |
 |------|---------|-------------|
 | `-C, --root PATH` | nearest ancestor of cwd containing `.git`, else cwd | index root |
-| `-b, --budget N` | per command | output budget in tokens; estimate = ceil(bytes / 3) |
+| `-b, --budget N` | per command | output budget in tokens; estimate = ceil(bytes / 3); stdout of every query, truncation line, ambiguity candidates and `impact` run commands included, is at most 3N bytes (the truncation line alone when not one item fits) |
 | `--json` | off | JSON Lines instead of text (section 8) |
 | `--read-only` | off | never create or refresh the index; exit 5 if missing or stale |
 | `--index-dir PATH` | nonempty `$XCALYGRAPH_INDEX_DIR`, else `<system temp directory>/xcalygraph-<user>` (created mode at most 0700); on actual shared-index location failure, `<root>/.xcalygraph/` with a one-line notice | index base directory; explicit paths never fall back |
@@ -286,7 +286,7 @@ Card order: header (path:start-end, kind, qualified name) -> signature -> doc ->
 
 1. Targets: NAME symbols, or symbols whose line ranges intersect the `--diff` ranges (`git diff --no-renames`, deleted files kept). Exported signature changes: extract the REV version of each changed or deleted file (`git show REV:path`) and compare signatures. A REV definition absent from every changed current file is `removed`; current symbols whose unresolved call, type, inheritance or value reference names it are inferred depth-1 dependents (fact shards, no revision index).
 2. Affected: reverse BFS over `calls`, `uses`, `inherits`, `implements`, `references`, `queries` up to `--depth`, ordered by depth, then rank. A dependent is exact only when a shortest chain to a target consists of exact edges; otherwise it is inferred, also on every later hop.
-3. Tests: tests reaching any target or affected symbol (test map).
+3. Tests: tests reaching any target or affected symbol (test map). Run lines get their budget reserved first (package-level form, at most half the budget); a run line is precise (test names) only while every later run line still fits in its package-level form (`go test ./pkg`, `cargo test -p crate`, `./gradlew test`, `mvn test`, `swift test`, `dotnet test`, the bare runner); a line fitting in neither form is counted in `+<n> more`.
 4. Run lines: Go `go test ./<pkg> -run '^(<names>)$'` per package; Rust `cargo test -p <crate> -- <names>` per crate; Python `pytest <path>::<name> ...`; Java, Kotlin, Scala, Groovy with Gradle `./gradlew test --tests <class>`, with Maven `mvn test -Dtest=<class>`; C#, VB.NET `dotnet test --filter FullyQualifiedName~<name>`; Ruby `bundle exec rspec <path>` or `bundle exec ruby -Itest <path>`; PHP `vendor/bin/phpunit --filter <name>`; Swift `swift test --filter <name>`; Elixir `mix test <path>`; Dart `dart test <path>`; Zig `zig build test`; other languages list test files only.
 
 ### 7.6 path
@@ -302,7 +302,7 @@ Sections: dead candidates -> unused exports -> cycles -> stale doc references ->
 Text:
 
 - Paths are root-relative with `/`. Symbol lines are grouped under their file line and indented two spaces: `<line> <signature>`, or `<line> <kind> <name>` when a symbol has no signature.
-- No headers, banners or empty fields. Truncation emits one final line `+<n> more`.
+- No headers, banners or empty fields. Truncation emits one final line `+<n> more` (JSON `{"t":"more","n":<n>}`), whose space is reserved in the budget; only complete lines and complete JSON records are emitted.
 - `map` and `audit` open each section with one keyword line: `modules`, `entry`, `tasks`, `hubs`, `api`, `cycles`, `layers`, `ext`, `env`, `dead`, `unused`, `stale`, `drift`, `assets`, `coupling`, `hotspots`.
 
 | marker | meaning |

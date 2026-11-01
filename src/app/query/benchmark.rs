@@ -61,7 +61,13 @@ fn measure_query_compute() -> Result<(), Box<dyn Error>> {
             let started = Instant::now();
             #[cfg(target_os = "macos")]
             let cpu_started = thread_cpu_time()?;
-            let node = names::resolve_one(&index, &filter, black_box(name), false)?;
+            let node = names::resolve_one(
+                &index,
+                &filter,
+                black_box(name),
+                false,
+                names::AMBIGUITY_BUDGET,
+            )?;
             let answer = show::render(&index, &filter, node, &show_options);
             drop(black_box(answer));
             let show_elapsed = started.elapsed().as_nanos();
