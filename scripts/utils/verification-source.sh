@@ -8,7 +8,9 @@ cd "${REPO_ROOT}"
 python3 -I - "${REPO_ROOT}" "$@" <<'PYTHON'
 import fcntl
 import hashlib
+import json
 import os
+from collections import Counter, defaultdict
 from pathlib import Path
 import stat
 import subprocess
@@ -30,23 +32,26 @@ if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or marker.read_bytes() !
 def walk_error(error):
     raise error
 
-def fingerprint():
-    result = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-                            cwd=root, check=True, stdout=subprocess.PIPE)
-    paths = {Path(os.fsdecode(path)) for path in result.stdout.split(b"\0") if path}
-    for name in ("src", "tests", "skills", ".cargo"):
-        directory = root / name
-        if directory.is_symlink():
-            raise ValueError(f"source directory is a symlink: {name}")
-        if not directory.exists():
-            continue
-        for parent, directories, files in os.walk(directory, followlinks=False, onerror=walk_error):
-            for entry in directories:
-                if (Path(parent) / entry).is_symlink():
-                    raise ValueError(f"source directory is a symlink: {Path(parent) / entry}")
-            paths.update((Path(parent) / entry).relative_to(root) for entry in files)
-    if (root / "build.rs").exists():
-        paths.add(Path("build.rs"))
+def normalized(name):
+    return name.replace("-", "_").casefold()
+
+def tree_paths(directory):
+    if directory.is_symlink():
+        raise ValueError(f"source directory is a symlink: {directory}")
+    if not directory.exists():
+        return set()
+    paths = set()
+    for parent, directories, files in os.walk(directory, followlinks=False, onerror=walk_error):
+        for entry in directories[:]:
+            child = Path(parent) / entry
+            if child.is_symlink():
+                raise ValueError(f"source directory is a symlink: {child}")
+            if entry == ".git" or child == target:
+                directories.remove(entry)
+        paths.update((Path(parent) / entry).relative_to(root) for entry in files)
+    return paths
+
+def hash_paths(paths):
     digest = hashlib.sha256()
     for relative in sorted(paths, key=os.fsencode):
         path = root / relative
@@ -67,7 +72,45 @@ def fingerprint():
         digest.update(stat.S_IMODE(before.st_mode).to_bytes(4, "big"))
         digest.update(len(content).to_bytes(8, "big"))
         digest.update(content)
-    return digest.hexdigest().encode()
+    return digest.hexdigest()
+
+def snapshot():
+    result = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+                            cwd=root, check=True, stdout=subprocess.PIPE)
+    paths = {Path(os.fsdecode(path)) for path in result.stdout.split(b"\0") if path}
+    for name in ("src", "tests", "skills", ".cargo"):
+        paths.update(tree_paths(root / name))
+    if (root / "build.rs").exists():
+        paths.add(Path("build.rs"))
+    metadata = subprocess.run(["cargo", "metadata", "--locked", "--format-version", "1"],
+                              cwd=root, check=True, stdout=subprocess.PIPE)
+    graph = json.loads(metadata.stdout)["packages"]
+    counts = Counter(normalized(package["name"]) for package in graph)
+    targets = defaultdict(set)
+    for package in graph:
+        for item in package["targets"]:
+            if "custom-build" not in item["kind"]:
+                targets[normalized(item["name"])].add(package["id"])
+    packages = {}
+    root_package = None
+    for package in graph:
+        if package["source"] is not None:
+            continue
+        if counts[normalized(package["name"])] != 1:
+            raise ValueError(f"ambiguous local Cargo package: {package['name']}")
+        for item in package["targets"]:
+            if "custom-build" not in item["kind"] and len(targets[normalized(item["name"])]) != 1:
+                raise ValueError(f"ambiguous local Cargo target: {item['name']}")
+        manifest = Path(package["manifest_path"]).resolve(strict=True)
+        if manifest == root / "Cargo.toml":
+            root_package = package["name"]
+            continue
+        if not manifest.is_relative_to(root):
+            raise ValueError(f"local Cargo package is outside the repository: {manifest}")
+        packages[package["name"]] = hash_paths(tree_paths(manifest.parent))
+    if root_package is None:
+        raise ValueError("Cargo metadata did not identify the root package")
+    return {"source": hash_paths(paths), "root": root_package, "packages": packages}
 
 def append(stream, record):
     stream.seek(0, os.SEEK_END)
@@ -99,22 +142,41 @@ with os.fdopen(descriptor, "r+b") as state:
     if not data.startswith(header):
         raise SystemExit("verification-source.sh: state ownership is unverified")
     try:
-        current = fingerprint()
+        current = snapshot()
+        encoded = json.dumps(current, sort_keys=True, separators=(",", ":")).encode()
         lines = data.splitlines() if data.endswith(b"\n") else []
-        reusable = len(lines) >= 3 and lines[-2:] == [b"start " + current, b"ok " + current]
+        previous = None
+        if len(lines) >= 3 and lines[-1].startswith(b"ok ") and lines[-2] == b"start " + lines[-1][3:]:
+            try:
+                previous = json.loads(lines[-1][3:])
+                if (not isinstance(previous, dict) or set(previous) != {"source", "root", "packages"}
+                        or previous["root"] != current["root"] or not isinstance(previous["source"], str)
+                        or not isinstance(previous["packages"], dict)
+                        or not all(isinstance(key, str) and isinstance(value, str)
+                                   for key, value in previous["packages"].items())):
+                    previous = None
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                pass
+        reusable = previous == current
         if not data.endswith(b"\n"):
             append(state, b"")
-        append(state, b"start " + current)
+        append(state, b"start " + encoded)
         if not reusable:
             print("verification-source.sh: invalidating project artifacts", file=sys.stderr, flush=True)
-            subprocess.run(["cargo", "clean", "--locked", "--package", "xcalygraph"],
+            old_packages = previous["packages"] if previous is not None else {}
+            changed = [package for package, digest in current["packages"].items()
+                       if old_packages.get(package) != digest]
+            arguments = ["--package", current["root"]]
+            for package in changed:
+                arguments.extend(("--package", package))
+            subprocess.run(["cargo", "clean", "--locked", *arguments],
                            cwd=root, check=True, pass_fds=(state.fileno(),))
         result = subprocess.run(sys.argv[2:], cwd=root, pass_fds=(state.fileno(),))
         if result.returncode != 0:
             raise SystemExit(result.returncode if result.returncode > 0 else 128 - result.returncode)
-        if fingerprint() != current:
+        if snapshot() != current:
             raise ValueError("verification inputs changed during the gate")
-        append(state, b"ok " + current)
+        append(state, b"ok " + encoded)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print("verification-source.sh: " + str(error), file=sys.stderr)
         raise SystemExit(1) from error
