@@ -1,6 +1,7 @@
 //! Parallel directory walk with ignore rules and pruning (`docs/spec.md` section 3).
 
 use std::fs::Metadata;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -20,7 +21,7 @@ const PRUNED_NAMES: [&str; 6] = [
 
 /// Walks `root` in parallel and returns its files sorted by path. `excluded` directories (for
 /// example an index directory inside the root) are pruned.
-pub fn walk(root: &Path, excluded: &[PathBuf]) -> Vec<Stat> {
+pub fn walk(root: &Path, excluded: &[PathBuf]) -> io::Result<Vec<Stat>> {
     let excluded: Arc<Vec<PathBuf>> = Arc::new(excluded.to_vec());
     let mut builder = WalkBuilder::new(root);
     builder
@@ -36,26 +37,49 @@ pub fn walk(root: &Path, excluded: &[PathBuf]) -> Vec<Stat> {
     builder.current_dir(root.to_path_buf());
     builder.filter_entry(move |entry| keep(entry, &excluded));
     let found: Mutex<Vec<Stat>> = Mutex::new(Vec::new());
+    let failure: Mutex<Option<io::Error>> = Mutex::new(None);
     builder.build_parallel().run(|| {
+        let failure = &failure;
         let mut collector = Collector {
             local: Vec::new(),
             shared: &found,
         };
         Box::new(move |result| {
-            if let Ok(entry) = result
-                && let Some(file) = walked_file(root, &entry)
-            {
-                collector.push(file);
+            let file = match result {
+                Ok(entry) => match entry.error() {
+                    Some(error) => Err(io::Error::other(error.to_string())),
+                    None => walked_file(root, &entry),
+                },
+                Err(error) => Err(io::Error::other(error)),
+            };
+            match file {
+                Ok(Some(file)) => collector.push(file),
+                Ok(None) => {}
+                Err(error) => {
+                    let mut first = failure
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if first.is_none() {
+                        *first = Some(error);
+                    }
+                    return WalkState::Quit;
+                }
             }
             WalkState::Continue
         })
     });
+    if let Some(error) = failure
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    {
+        return Err(error);
+    }
     let mut files = found
         .into_inner()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     files.sort_unstable_by(|left, right| left.path.cmp(&right.path));
     files.dedup_by(|left, right| left.path == right.path);
-    files
+    Ok(files)
 }
 
 /// Per-thread buffer that moves its files into the shared list when full and when dropped.
@@ -111,18 +135,20 @@ fn keep(entry: &DirEntry, excluded: &[PathBuf]) -> bool {
     !excluded.iter().any(|dir| dir == path)
 }
 
-fn walked_file(root: &Path, entry: &DirEntry) -> Option<Stat> {
-    if !entry.file_type()?.is_file() {
-        return None;
+fn walked_file(root: &Path, entry: &DirEntry) -> io::Result<Option<Stat>> {
+    if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+        return Ok(None);
     }
-    let relative = entry.path().strip_prefix(root).ok()?;
-    let path = relative_path(relative)?;
-    let metadata = entry.metadata().ok()?;
-    Some(Stat {
+    let relative = entry.path().strip_prefix(root).map_err(io::Error::other)?;
+    let Some(path) = relative_path(relative) else {
+        return Ok(None);
+    };
+    let metadata = entry.metadata().map_err(io::Error::other)?;
+    Ok(Some(Stat {
         path,
         size: metadata.len(),
         mtime_ns: mtime_ns(&metadata),
-    })
+    }))
 }
 
 /// `/`-separated UTF-8 path; non-UTF-8 paths are skipped because output must stay text.
@@ -181,7 +207,7 @@ mod tests {
         dir.write("sub/kept.go", "")?;
         dir.write(".hidden/visible.go", "")?;
         dir.write("main.go", "")?;
-        let files = walk(dir.path(), &[]);
+        let files = walk(dir.path(), &[])?;
         assert_eq!(
             paths(&files),
             [
@@ -216,7 +242,7 @@ mod tests {
         ] {
             dir.write(path, "x")?;
         }
-        let files = walk(dir.path(), &[dir.path().join("index")]);
+        let files = walk(dir.path(), &[dir.path().join("index")])?;
         assert_eq!(paths(&files), ["app.go", "go.mod"]);
         Ok(())
     }
@@ -228,7 +254,7 @@ mod tests {
         dir.write("real/a.go", "x")?;
         std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("link"))?;
         std::os::unix::fs::symlink(dir.path().join("real/a.go"), dir.path().join("b.go"))?;
-        assert_eq!(paths(&walk(dir.path(), &[])), ["real/a.go"]);
+        assert_eq!(paths(&walk(dir.path(), &[])?), ["real/a.go"]);
         Ok(())
     }
 
@@ -236,10 +262,17 @@ mod tests {
     fn records_size_and_mtime() -> std::io::Result<()> {
         let dir = TestDir::new("walk-stat")?;
         dir.write("a.txt", "hello")?;
-        let files = walk(dir.path(), &[]);
+        let files = walk(dir.path(), &[])?;
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].size, 5);
         assert!(files[0].mtime_ns > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn a_failed_walk_is_reported_instead_of_returning_an_empty_corpus() -> io::Result<()> {
+        let dir = TestDir::new("walk-error")?;
+        assert!(walk(&dir.path().join("missing"), &[]).is_err());
         Ok(())
     }
 }

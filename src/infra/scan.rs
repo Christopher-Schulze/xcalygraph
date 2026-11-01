@@ -20,17 +20,17 @@ pub fn scan(
     excluded: &[PathBuf],
     stored: &[FileRecord],
     write_time_ns: i64,
-) -> ChangeSet {
-    let walked = walk::walk(root, excluded);
+) -> io::Result<ChangeSet> {
+    let walked = walk::walk(root, excluded)?;
     let (decisions, deleted) = corpus::compare(stored, &walked, write_time_ns);
     let paths: HashSet<&str> = walked.iter().map(|stat| stat.path.as_str()).collect();
-    let hashed: Vec<Option<(FileRecord, bool)>> = decisions
+    let hashed: Vec<io::Result<(FileRecord, bool)>> = decisions
         .par_iter()
         .zip(walked.par_iter())
         .map(|(decision, stat)| match decision {
-            Decision::Unchanged(index) => Some((stored[*index].clone(), false)),
+            Decision::Unchanged(index) => Ok((stored[*index].clone(), false)),
             Decision::Hash(previous) => {
-                let record = inspect(root, stat, has_cpp_sibling(&paths, &stat.path)).ok()?;
+                let record = inspect(root, stat, has_cpp_sibling(&paths, &stat.path))?;
                 let changed = previous.is_none_or(|index| {
                     let old = &stored[index];
                     old.hash != record.hash
@@ -39,7 +39,7 @@ pub fn scan(
                         || record.hash == 0
                             && (old.size, old.mtime_ns) != (record.size, record.mtime_ns)
                 });
-                Some((record, changed))
+                Ok((record, changed))
             }
         })
         .collect();
@@ -50,22 +50,12 @@ pub fn scan(
             .collect(),
         ..ChangeSet::default()
     };
-    for (record, changed) in hashed.into_iter().flatten() {
+    for candidate in hashed {
+        let (record, changed) = candidate?;
         if changed {
             changes.changed.push(changes.records.len());
         }
         changes.records.push(record);
-    }
-    // Files that vanished between walk and read count as deleted when they were stored.
-    let current: HashSet<&str> = changes
-        .records
-        .iter()
-        .map(|record| record.path.as_str())
-        .collect();
-    for record in stored {
-        if !current.contains(record.path.as_str()) && paths.contains(record.path.as_str()) {
-            changes.deleted.push(record.path.clone());
-        }
     }
     changes.deleted.sort_unstable();
     changes.records_changed = changes.records.len() != stored.len()
@@ -74,17 +64,16 @@ pub fn scan(
             .iter()
             .zip(stored)
             .any(|(new, old)| new != old);
-    changes
+    Ok(changes)
 }
 
 /// Reads, hashes and classifies one file; sensitive and large files are never read.
 fn inspect(root: &Path, stat: &Stat, cpp_sibling: bool) -> io::Result<FileRecord> {
     let (hash, content) = if role::needs_content(&stat.path, stat.size) {
-        match std::fs::read(root.join(&stat.path)) {
-            Ok(content) => (xxh3_128(&content), Some(content)),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(error),
-            Err(_) => (0, None),
-        }
+        let content = std::fs::read(root.join(&stat.path)).map_err(|error| {
+            io::Error::new(error.kind(), format!("read source {}: {error}", stat.path))
+        })?;
+        (xxh3_128(&content), Some(content))
     } else {
         (0, None)
     };
@@ -132,14 +121,15 @@ mod tests {
     #[test]
     fn first_scan_hashes_and_classifies_everything() -> io::Result<()> {
         let dir = TestDir::new("scan-first")?;
+        dir.write(".gitignore", "!.env*\n")?;
         dir.write("main.go", "package main")?;
         dir.write("lib.h", "int f(void);")?;
         dir.write("view.h", "int g(void);")?;
         dir.write("view.cpp", "int g() { return 1; }")?;
         dir.write(".env", "TOKEN=secret")?;
-        let changes = scan(dir.path(), &[], &[], FAR_FUTURE);
-        assert_eq!(changes.records.len(), 5);
-        assert_eq!(changes.changed, [0, 1, 2, 3, 4]);
+        let changes = scan(dir.path(), &[], &[], FAR_FUTURE)?;
+        assert_eq!(changes.records.len(), 6);
+        assert_eq!(changes.changed, [0, 1, 2, 3, 4, 5]);
         let main = record(&changes, "main.go");
         assert_eq!(
             main.map(|r| (r.role, r.file_type)),
@@ -165,21 +155,21 @@ mod tests {
         dir.write("a.go", "package a")?;
         dir.write("b.go", "package b")?;
         dir.write("c.go", "package c")?;
-        let first = scan(dir.path(), &[], &[], FAR_FUTURE);
+        let first = scan(dir.path(), &[], &[], FAR_FUTURE)?;
 
         // Inside the racy window every file is re-hashed, but equal content is no change.
-        let same = scan(dir.path(), &[], &first.records, 0);
+        let same = scan(dir.path(), &[], &first.records, 0)?;
         assert!(same.changed.is_empty() && same.deleted.is_empty());
         assert!(!same.records_changed);
 
         // Outside the racy window nothing is read at all.
-        let quiet = scan(dir.path(), &[], &first.records, FAR_FUTURE);
+        let quiet = scan(dir.path(), &[], &first.records, FAR_FUTURE)?;
         assert!(quiet.is_empty());
 
         dir.write("b.go", "package b2")?;
         std::fs::remove_file(dir.path().join("c.go"))?;
         dir.write("d.go", "package d")?;
-        let changed = scan(dir.path(), &[], &first.records, 0);
+        let changed = scan(dir.path(), &[], &first.records, 0)?;
         let changed_paths: Vec<&str> = changed
             .changed
             .iter()
@@ -195,10 +185,10 @@ mod tests {
     fn touched_file_with_equal_content_updates_only_the_stat_record() -> io::Result<()> {
         let dir = TestDir::new("scan-touch")?;
         dir.write("a.go", "package a")?;
-        let first = scan(dir.path(), &[], &[], FAR_FUTURE);
+        let first = scan(dir.path(), &[], &[], FAR_FUTURE)?;
         let mut stale = first.records.clone();
         stale[0].mtime_ns -= 1_000;
-        let touched = scan(dir.path(), &[], &stale, FAR_FUTURE);
+        let touched = scan(dir.path(), &[], &stale, FAR_FUTURE)?;
         assert!(touched.changed.is_empty());
         assert!(touched.records_changed);
         assert_eq!(touched.records, first.records);
@@ -208,9 +198,10 @@ mod tests {
     #[test]
     fn sensitive_and_large_content_is_never_read() -> io::Result<()> {
         let dir = TestDir::new("scan-sensitive")?;
+        dir.write(".gitignore", "!.env*\n")?;
         dir.write("deploy/id_rsa", "PRIVATE")?;
         dir.write(".env.local", "TOKEN=x")?;
-        let changes = scan(dir.path(), &[], &[], FAR_FUTURE);
+        let changes = scan(dir.path(), &[], &[], FAR_FUTURE)?;
         // A read would yield a non-zero content hash.
         for path in ["deploy/id_rsa", ".env.local"] {
             let record = record(&changes, path);
@@ -220,6 +211,19 @@ mod tests {
                 "{path}"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn unreadable_source_is_not_classified_as_other() -> io::Result<()> {
+        let dir = TestDir::new("scan-read-error")?;
+        std::fs::create_dir(dir.path().join("unreadable.go"))?;
+        let stat = Stat {
+            path: "unreadable.go".to_owned(),
+            size: 0,
+            mtime_ns: 0,
+        };
+        assert!(inspect(dir.path(), &stat, false).is_err());
         Ok(())
     }
 }

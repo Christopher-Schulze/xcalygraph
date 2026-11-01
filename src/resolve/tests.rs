@@ -196,7 +196,7 @@ fn sample_edges() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(50);
-    let graph = corpus_graph(&root);
+    let graph = corpus_graph(&root)?;
     let symbols = graph.symbols.len() as u32;
     let location = |node: u32| -> (String, u32, String) {
         if node < symbols {
@@ -251,22 +251,23 @@ fn sample_edges() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Scans, extracts and resolves a whole root, as a full index build does.
-fn corpus_graph(root: &Path) -> Graph {
-    let changes = crate::infra::scan::scan(root, &[], &[], i64::MAX);
+fn corpus_graph(root: &Path) -> std::io::Result<Graph> {
+    let changes = crate::infra::scan::scan(root, &[], &[], i64::MAX)?;
     let facts: Vec<Option<crate::domain::facts::Facts>> = changes
         .records
         .iter()
-        .map(|record| {
-            record.role.is_extracted().then(|| {
-                let content = fs::read(root.join(&record.path)).unwrap_or_default();
-                extract(record, &content)
-            })
+        .map(|record| -> std::io::Result<_> {
+            if !record.role.is_extracted() {
+                return Ok(None);
+            }
+            let content = fs::read(root.join(&record.path))?;
+            Ok(Some(extract(record, &content)))
         })
-        .collect();
-    build(&Input {
+        .collect::<std::io::Result<_>>()?;
+    Ok(build(&Input {
         files: &changes.records,
         facts: &facts,
-    })
+    }))
 }
 
 /// Depth comparison input (`scripts/benchmarks/compare-depth.sh`): writes every edge of the
@@ -281,7 +282,7 @@ fn dump_edges() -> Result<(), Box<dyn std::error::Error>> {
     ) else {
         return Ok(());
     };
-    let graph = corpus_graph(&PathBuf::from(root).canonicalize()?);
+    let graph = corpus_graph(&PathBuf::from(root).canonicalize()?)?;
     let symbols = graph.symbols.len() as u32;
     let location = |node: u32| -> (&str, u32, &str) {
         if node < symbols {

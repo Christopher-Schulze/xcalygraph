@@ -79,6 +79,9 @@ impl Fixture {
             .arg(&self.root)
             .env("HOME", &self.home)
             .env("TMPDIR", &self.temp)
+            .env("XDG_CONFIG_HOME", self.home.join("config"))
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("USER", "xcalygraph-recovery-test")
             .env_remove("XCALYGRAPH_INDEX_DIR");
         if let Some(index) = index {
@@ -281,6 +284,9 @@ fn read_only_discovers_a_local_index_without_probing_or_creating_a_shared_base()
         .arg(&fixture.root)
         .env("HOME", &fixture.home)
         .env("TMPDIR", &fixture.temp)
+        .env("XDG_CONFIG_HOME", fixture.home.join("config"))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("USER", "xcalygraph-recovery-test")
         .env("XCALYGRAPH_INDEX_DIR", "")
         .output()?;
@@ -414,5 +420,153 @@ fn damaged_shard_never_publishes_a_stale_or_incomplete_graph() -> TestResult {
         let read_only = fixture.run(&["find", "recoverable_marker", "--read-only"], Some(&base))?;
         assert_eq!(read_only.status.code(), Some(5));
     }
+    Ok(())
+}
+
+#[test]
+fn damaged_unrelated_shards_recover_to_a_fresh_graph() -> TestResult {
+    for damage in ["missing", "compression", "missing-fact", "corrupt"] {
+        for trigger in ["changed-source", "derived-recovery"] {
+            let fixture = Fixture::new()?;
+            fs::write(
+                fixture.root.join("lib.rs"),
+                "pub fn recoverable_marker() -> usize { 42 }\npub fn calls_marker() -> usize { recoverable_marker() }\n",
+            )?;
+            let marker_shard = xxhash_rust::xxh3::xxh3_64(b"lib.rs") % 64;
+            let mut other = (0..100)
+                .map(|number| format!("other_{number}.rs"))
+                .filter(|name| xxhash_rust::xxh3::xxh3_64(name.as_bytes()) % 64 != marker_shard);
+            let changed = other.next().ok_or("missing changed source")?;
+            let changed_shard = xxhash_rust::xxh3::xxh3_64(changed.as_bytes()) % 64;
+            let untouched = other
+                .find(|name| xxhash_rust::xxh3::xxh3_64(name.as_bytes()) % 64 != changed_shard)
+                .ok_or("missing untouched source")?;
+            fs::write(fixture.root.join(&changed), "pub fn changed_old() {}\n")?;
+            fs::write(fixture.root.join(&untouched), "pub fn stable_marker() {}\n")?;
+            let base = fixture.work.0.join("index");
+            assert_success(&fixture.run(&["index"], Some(&base))?);
+            let path = derived(&base)?;
+            let damaged = fact_shard(&path, "lib.rs")?;
+            let stable = fact_shard(&path, &untouched)?;
+            let stable_metadata = fs::metadata(&stable)?;
+            let stable_before = (
+                stable_metadata.ino(),
+                stable_metadata.modified()?,
+                fs::read(&stable)?,
+            );
+            match damage {
+                "missing" => fs::remove_file(&damaged)?,
+                "compression" => {
+                    let mut image = fs::read(&damaged)?;
+                    let start = usize::try_from(u64::from_le_bytes(image[64..72].try_into()?))?;
+                    image[start] = 0xff;
+                    let checksum = xxhash_rust::xxh3::xxh3_64(&image[64..]);
+                    image[32..40].copy_from_slice(&checksum.to_le_bytes());
+                    fs::write(&damaged, image)?;
+                }
+                "missing-fact" => {
+                    let untouched_shard = xxhash_rust::xxh3::xxh3_64(untouched.as_bytes()) % 64;
+                    let empty_shard = (0..64)
+                        .find(|shard| {
+                            ![marker_shard, changed_shard, untouched_shard].contains(shard)
+                        })
+                        .ok_or("missing empty shard")?;
+                    let facts = damaged.parent().ok_or("missing facts directory")?;
+                    fs::write(&damaged, fs::read(facts.join(format!("{empty_shard:02}")))?)?;
+                }
+                "corrupt" => fs::write(&damaged, b"corrupt shard")?,
+                _ => return Err("unknown damage".into()),
+            }
+            if trigger == "changed-source" {
+                fs::write(fixture.root.join(&changed), "pub fn changed_new() {}\n")?;
+            } else {
+                corrupt(&path, "payload")?;
+            }
+            let result = fixture.run(&["index"], Some(&base))?;
+            assert!(
+                result.status.success(),
+                "{damage} {trigger}: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            let stable_metadata = fs::metadata(&stable)?;
+            assert_eq!(
+                (
+                    stable_metadata.ino(),
+                    stable_metadata.modified()?,
+                    fs::read(&stable)?
+                ),
+                stable_before,
+                "valid unaffected shard changed: {damage} {trigger}"
+            );
+            let fresh_base = fixture.work.0.join("fresh-index");
+            assert_success(&fixture.run(&["index"], Some(&fresh_base))?);
+            assert!(
+                fs::read(&path)? == fs::read(derived(&fresh_base)?)?,
+                "recovered graph differs from fresh graph: {damage} {trigger}"
+            );
+            let recovered = fixture.run(
+                &["show", "recoverable_marker", "--json", "--read-only"],
+                Some(&base),
+            )?;
+            let fresh = fixture.run(
+                &["show", "recoverable_marker", "--json", "--read-only"],
+                Some(&fresh_base),
+            )?;
+            assert_success(&recovered);
+            assert_success(&fresh);
+            assert_eq!(recovered.stdout, fresh.stdout);
+            let output = String::from_utf8_lossy(&recovered.stdout);
+            assert!(output.contains("recoverable_marker") && output.contains("calls_marker"));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn failed_update_cannot_leave_new_facts_behind_an_old_file_table() -> TestResult {
+    let fixture = Fixture::new()?;
+    let marker_shard = xxhash_rust::xxh3::xxh3_64(b"lib.rs") % 64;
+    let mut other = (0..100)
+        .map(|number| format!("other_{number}.rs"))
+        .filter(|name| xxhash_rust::xxh3::xxh3_64(name.as_bytes()) % 64 != marker_shard);
+    let changed = other.next().ok_or("missing changed source")?;
+    let changed_shard = xxhash_rust::xxh3::xxh3_64(changed.as_bytes()) % 64;
+    let later = other
+        .find(|name| xxhash_rust::xxh3::xxh3_64(name.as_bytes()) % 64 != changed_shard)
+        .ok_or("missing later source")?;
+    fs::write(fixture.root.join(&changed), "pub fn changed_old() {}\n")?;
+    fs::write(fixture.root.join(&later), "pub fn later_old() {}\n")?;
+    let base = fixture.work.0.join("index");
+    assert_success(&fixture.run(&["index"], Some(&base))?);
+    let path = derived(&base)?;
+    let files = path.parent().ok_or("missing index store")?.join("files");
+    let original_derived = fs::read(&path)?;
+    let original_files = fs::read(&files)?;
+    let damaged = fact_shard(&path, "lib.rs")?;
+    let original_shard = fs::read(&damaged)?;
+    fs::remove_file(&damaged)?;
+    fs::create_dir(&damaged)?;
+    fs::write(fixture.root.join(&changed), "pub fn changed_new() {}\n")?;
+    let result = fixture.run(&["index"], Some(&base))?;
+    assert!(
+        !result.status.success(),
+        "blocked shard replacement must fail"
+    );
+    assert!(fs::read(&path)? == original_derived);
+    assert!(fs::read(&files)? == original_files);
+    let read_only = fixture.run(&["find", "recoverable_marker", "--read-only"], Some(&base))?;
+    assert_eq!(read_only.status.code(), Some(5));
+    fs::remove_dir(&damaged)?;
+    fs::write(&damaged, original_shard)?;
+    fs::write(fixture.root.join(&changed), "pub fn changed_old() {}\n")?;
+    assert_success(&fixture.run(&["index"], Some(&base))?);
+    fs::write(fixture.root.join(&later), "pub fn later_new() {}\n")?;
+    assert_success(&fixture.run(&["index"], Some(&base))?);
+    let fresh_base = fixture.work.0.join("fresh-index");
+    assert_success(&fixture.run(&["index"], Some(&fresh_base))?);
+    assert!(
+        fs::read(path)? == fs::read(derived(&fresh_base)?)?,
+        "a failed update left stale facts in the graph"
+    );
     Ok(())
 }

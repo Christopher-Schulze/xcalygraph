@@ -155,7 +155,13 @@ mod tests {
         assert_eq!(detect_root(&deep), dir.path().join("repo"));
         let plain = dir.path().join("repo2");
         std::fs::create_dir_all(&plain)?;
-        assert_eq!(detect_root(&plain).file_name(), plain.file_name());
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let expected = if plain.starts_with(checkout) && checkout.join(".git").exists() {
+            checkout
+        } else {
+            plain.as_path()
+        };
+        assert_eq!(detect_root(&plain), expected);
         Ok(())
     }
 

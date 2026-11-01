@@ -150,6 +150,7 @@ fn run_in(root: &Path, index: &Path, args: &[&str]) -> io::Result<Output> {
 #[test]
 fn index_builds_refreshes_lists_and_cleans() -> TestResult {
     let dir = TempDir::new("index")?;
+    dir.write("root/.gitignore", "!.env*\n")?;
     dir.write("root/main.go", "package main\n")?;
     dir.write("root/.env", "SECRET=1\n")?;
     let (root, index) = (dir.0.join("root"), dir.0.join("index"));
@@ -162,13 +163,13 @@ fn index_builds_refreshes_lists_and_cleans() -> TestResult {
     );
     assert_eq!(
         String::from_utf8(first.stdout)?,
-        "files 2 changed 2 deleted 0\n"
+        "files 3 changed 3 deleted 0\n"
     );
     fs::remove_file(root.join(".env"))?;
     let second = run_in(&root, &index, &["index"])?;
     assert_eq!(
         String::from_utf8(second.stdout)?,
-        "files 1 changed 0 deleted 1\n"
+        "files 2 changed 0 deleted 1\n"
     );
     let tool = |args: &[&str]| {
         Command::new(BINARY)

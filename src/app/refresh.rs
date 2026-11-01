@@ -46,7 +46,8 @@ pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError> {
             &workspace.excluded(),
             &stored,
             meta.write_time_ns,
-        );
+        )
+        .map_err(AppError::io("scan source"))?;
         if changes.has_content_changes() {
             return Err(AppError::Stale("index stale"));
         }
@@ -71,7 +72,8 @@ pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError> {
         &workspace.excluded(),
         &stored,
         write_time_ns,
-    );
+    )
+    .map_err(AppError::io("scan source"))?;
     let mut report = Report {
         files: changes.records.len(),
         changed: changes.changed.len(),
@@ -83,6 +85,15 @@ pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError> {
     if changes.is_empty() && !rebuilt && derived_valid {
         return Ok(report);
     }
+    let meta = Meta {
+        extraction_version: extract::extraction_version(),
+        binary_version: derive_version(),
+        root: workspace.root.to_string_lossy().into_owned(),
+        write_time_ns: scan_start,
+    };
+    if changes.has_content_changes() || rebuilt || !derived_valid {
+        report.bytes_written += invalidate_meta(workspace, &meta)?;
+    }
     report.bytes_written += write_shards(workspace, &changes, rebuilt)?;
     if changes.has_content_changes() || rebuilt || !derived_valid {
         report.bytes_written += write_derived(workspace, &changes.records)?;
@@ -90,12 +101,6 @@ pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError> {
     report.bytes_written += store
         .write_files(&changes.records)
         .map_err(AppError::io("write file table"))?;
-    let meta = Meta {
-        extraction_version: extract::extraction_version(),
-        binary_version: derive_version(),
-        root: workspace.root.to_string_lossy().into_owned(),
-        write_time_ns: scan_start,
-    };
     report.bytes_written += store
         .write_meta(&meta)
         .map_err(AppError::io("write meta"))?;
@@ -126,38 +131,80 @@ fn derived_is_valid(workspace: &Workspace) -> bool {
 pub fn rederive(workspace: &Workspace) -> Result<(), AppError> {
     let _lock = WriterLock::acquire(&workspace.store.dir, lock::WAIT)
         .map_err(AppError::io("lock index"))?;
-    let records = workspace
+    let (records, meta) = stored_state(workspace)
+        .ok_or_else(|| AppError::Invalid("index changed during recovery; retry".to_owned()))?;
+    invalidate_meta(workspace, &meta)?;
+    write_derived(workspace, &records)?;
+    workspace
         .store
-        .read_files()
-        .map_err(|error| AppError::Invalid(format!("index unreadable ({error})")))?;
-    write_derived(workspace, &records).map(|_| ())
+        .write_meta(&meta)
+        .map_err(AppError::io("finish index recovery"))?;
+    Ok(())
+}
+
+/// Invalidate the current generation before changing any of its shards.
+fn invalidate_meta(workspace: &Workspace, meta: &Meta) -> Result<u64, AppError> {
+    let mut pending = meta.clone();
+    pending.extraction_version ^= 1;
+    pending.binary_version.clear();
+    workspace
+        .store
+        .write_meta(&pending)
+        .map_err(AppError::io("begin index update"))
 }
 
 /// Resolves the facts of every file and writes the `derived` file.
 fn write_derived(workspace: &Workspace, records: &[FileRecord]) -> Result<u64, AppError> {
-    let mut needed = [false; SHARDS];
+    let mut needed: Vec<Vec<&FileRecord>> = (0..SHARDS).map(|_| Vec::new()).collect();
     for record in records.iter().filter(|record| record.role.is_extracted()) {
-        needed[store::shard_of(&record.path)] = true;
+        needed[store::shard_of(&record.path)].push(record);
     }
-    let shards: Vec<Result<Vec<(String, Facts)>, AppError>> = (0..SHARDS)
+    let shards = needed
         .into_par_iter()
-        .map(|shard| {
-            if !needed[shard] {
-                return Ok(Vec::new());
+        .enumerate()
+        .map(|(shard, files)| -> Result<_, AppError> {
+            if files.is_empty() {
+                return Ok((Vec::new(), 0));
             }
-            workspace.store.read_shard(shard).map_err(|error| {
-                AppError::Invalid(format!(
-                    "fact shard {shard:02} unreadable ({error}); cannot rebuild derived index"
-                ))
-            })
+            if let Ok(entries) = workspace.store.read_shard(shard)
+                && entries.len() == files.len()
+                && entries
+                    .iter()
+                    .zip(&files)
+                    .all(|((path, _), file)| path == &file.path)
+            {
+                return Ok((entries, 0));
+            }
+            let facts: Vec<Facts> = files
+                .par_iter()
+                .map(|record| extract_file(workspace, record))
+                .collect::<Result<_, _>>()?;
+            let entries: Vec<(&str, &Facts)> = files
+                .iter()
+                .map(|record| record.path.as_str())
+                .zip(&facts)
+                .collect();
+            let written = workspace
+                .store
+                .write_shard(shard, &entries)
+                .map_err(AppError::io(format!("recover fact shard {shard:02}")))?;
+            Ok((
+                files
+                    .into_iter()
+                    .map(|record| record.path.clone())
+                    .zip(facts)
+                    .collect(),
+                written,
+            ))
         })
-        .collect();
-    let mut by_path: FastMap<String, Facts> = shards
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect();
+        .collect::<Vec<_>>();
+    let mut by_path = FastMap::default();
+    let mut recovered_bytes = 0;
+    for shard in shards {
+        let (entries, written) = shard?;
+        by_path.extend(entries);
+        recovered_bytes += written;
+    }
     let facts: Vec<Option<Facts>> = records
         .iter()
         .map(|record| {
@@ -185,13 +232,15 @@ fn write_derived(workspace: &Workspace, records: &[FileRecord]) -> Result<u64, A
         move || drop(graph),
         || workspace.store.write_container("derived", &image),
     );
-    written.map_err(AppError::io("write derived data"))
+    written
+        .map(|bytes| bytes + recovered_bytes)
+        .map_err(AppError::io("write derived data"))
 }
 
 /// Stored file table and meta when both are valid and current; `None` forces a full rebuild.
 fn stored_state(workspace: &Workspace) -> Option<(Vec<FileRecord>, Meta)> {
     let meta = workspace.store.read_meta().ok()?;
-    if meta.extraction_version != extract::extraction_version() {
+    if meta.binary_version.is_empty() || meta.extraction_version != extract::extraction_version() {
         return None;
     }
     let files = workspace.store.read_files().ok()?;
@@ -253,10 +302,10 @@ fn write_shards(
             let facts: Vec<Facts> = files
                 .par_iter()
                 .map(|record| match old.get(&record.path) {
-                    Some(_) if !changed.contains(record.path.as_str()) => None,
-                    _ => Some(extract_file(workspace, record)),
+                    Some(_) if !changed.contains(record.path.as_str()) => Ok(None),
+                    _ => extract_file(workspace, record).map(Some),
                 })
-                .collect::<Vec<Option<Facts>>>()
+                .collect::<Result<Vec<Option<Facts>>, AppError>>()?
                 .into_iter()
                 .zip(&files)
                 .map(|(fresh, record)| {
@@ -276,15 +325,22 @@ fn write_shards(
     written.into_iter().sum()
 }
 
-fn extract_file(workspace: &Workspace, record: &FileRecord) -> Facts {
-    let Ok(content) = std::fs::read(workspace.root.join(&record.path)) else {
-        return Facts::default();
-    };
+fn extract_file(workspace: &Workspace, record: &FileRecord) -> Result<Facts, AppError> {
+    let content = std::fs::read(workspace.root.join(&record.path))
+        .map_err(AppError::io(format!("read source {}", record.path)))?;
+    if xxhash_rust::xxh3::xxh3_128(&content) != record.hash {
+        return Err(AppError::Invalid(format!(
+            "source changed while indexing {}; retry",
+            record.path
+        )));
+    }
     // A parser fault on one malformed file costs that file's facts, never the index.
-    std::panic::catch_unwind(|| extract::extract(record, &content)).unwrap_or_else(|_| Facts {
-        doc: "! extraction failed".to_owned(),
-        ..Facts::default()
-    })
+    Ok(
+        std::panic::catch_unwind(|| extract::extract(record, &content)).unwrap_or_else(|_| Facts {
+            doc: "! extraction failed".to_owned(),
+            ..Facts::default()
+        }),
+    )
 }
 
 fn now_ns() -> i64 {
@@ -430,6 +486,78 @@ mod tests {
                 .len(),
             1
         );
+        Ok(())
+    }
+
+    #[test]
+    fn vanished_source_fails_extraction_instead_of_writing_empty_facts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = TestDir::new("refresh-source-error")?;
+        dir.write("root/a.go", "package a\n")?;
+        let workspace = workspace(&dir);
+        refresh(&workspace, Mode::Write)?;
+        let records = workspace.store.read_files().map_err(|e| e.to_string())?;
+        let shard = workspace
+            .store
+            .dir
+            .join(format!("facts/{:02}", store::shard_of("a.go")));
+        let before = std::fs::read(&shard)?;
+        std::fs::remove_file(workspace.root.join("a.go"))?;
+        let changes = ChangeSet {
+            records,
+            changed: vec![0],
+            ..ChangeSet::default()
+        };
+        let error = write_shards(&workspace, &changes, false)
+            .err()
+            .ok_or("expected source error")?;
+        assert!(error.to_string().contains("read source a.go"));
+        assert!(std::fs::read(shard)? == before);
+        Ok(())
+    }
+
+    #[test]
+    fn source_changed_after_scan_does_not_publish_mismatched_facts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = TestDir::new("refresh-source-race")?;
+        dir.write("root/a.go", "package a\n")?;
+        let workspace = workspace(&dir);
+        refresh(&workspace, Mode::Write)?;
+        let records = workspace.store.read_files().map_err(|e| e.to_string())?;
+        let shard = workspace
+            .store
+            .dir
+            .join(format!("facts/{:02}", store::shard_of("a.go")));
+        let before = std::fs::read(&shard)?;
+        dir.write("root/a.go", "package changed\n")?;
+        let changes = ChangeSet {
+            records,
+            changed: vec![0],
+            ..ChangeSet::default()
+        };
+        let error = write_shards(&workspace, &changes, false)
+            .err()
+            .ok_or("expected race error")?;
+        assert!(
+            error
+                .to_string()
+                .contains("source changed while indexing a.go")
+        );
+        assert!(std::fs::read(shard)? == before);
+        Ok(())
+    }
+
+    #[test]
+    fn incomplete_generation_is_rejected_even_if_extraction_version_matches()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = TestDir::new("refresh-incomplete-version")?;
+        dir.write("root/a.go", "package a\n")?;
+        let workspace = workspace(&dir);
+        refresh(&workspace, Mode::Write)?;
+        let mut meta = workspace.store.read_meta().map_err(|e| e.to_string())?;
+        meta.binary_version.clear();
+        workspace.store.write_meta(&meta)?;
+        assert!(stored_state(&workspace).is_none());
         Ok(())
     }
 }
