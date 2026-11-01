@@ -11,7 +11,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
 REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 readonly PATTERN_FILE="${REPO_ROOT}/scripts/audits/private-patterns.txt"
-readonly LOCAL_ONLY_PATTERN='^(AGENTS\.md|CLAUDE\.md|docs/decisions\.md|docs/tasks\.md|docs/tasks/|research/|scripts/benchmarks/questions/private/|scripts/audits/private-patterns\.txt)'
+readonly LOCAL_ONLY_PATTERN='^(AGENTS\.md|CLAUDE\.md|docs/decisions\.md|docs/tasks\.md|docs/tasks(/|$)|research(/|$)|scripts/benchmarks/questions/private(/|$)|scripts/audits/private-patterns\.txt)'
 readonly HOME_PATH_PATTERNS=('/Users/[A-Za-z0-9._-]+' '/home/[A-Za-z0-9._-]+/')
 
 cd "${REPO_ROOT}"
@@ -30,9 +30,15 @@ if [[ -z "${range}" ]] && git rev-parse --verify --quiet origin/main >/dev/null;
   range="origin/main..HEAD"
 fi
 commits=()
-while IFS= read -r commit; do
-  commits+=("${commit}")
-done < <(git rev-list "${range:-HEAD}")
+if ! history="$(git rev-list "${range:-HEAD}")"; then
+  echo "check-publication.sh: cannot enumerate commits" >&2
+  exit 1
+fi
+if [[ -n "${history}" ]]; then
+  while IFS= read -r commit; do
+    commits+=("${commit}")
+  done <<< "${history}"
+fi
 if (( ${#commits[@]} == 0 )); then
   commits=("$(git rev-parse HEAD)")
 fi
@@ -47,7 +53,17 @@ printf '%s\n' "${HOME_PATH_PATTERNS[@]}" > "${home_patterns}"
 findings=0
 for commit in "${commits[@]}"; do
   short="$(git rev-parse --short "${commit}")"
-  if git ls-tree -r --name-only "${commit}" | grep -E "${LOCAL_ONLY_PATTERN}"; then
+  if ! local_only="$(
+    export LC_ALL=C
+    git ls-tree -r -t --full-tree --name-only -z "${commit}" | while IFS= read -r -d '' path; do
+      if [[ "${path}" =~ ${LOCAL_ONLY_PATTERN} ]]; then printf '%q\n' "${path}"; fi
+    done
+  )"; then
+    echo "${short}: cannot enumerate tracked paths" >&2
+    exit 1
+  fi
+  if [[ -n "${local_only}" ]]; then
+    printf '%s\n' "${local_only}"
     echo "${short}: local-only file tracked" >&2
     findings=1
   fi
