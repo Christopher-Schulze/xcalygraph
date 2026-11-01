@@ -31,6 +31,7 @@ PYTHON
 )"
 bash "${REPO_ROOT}/scripts/tests/test-prune-cache.sh"
 bash "${REPO_ROOT}/scripts/tests/test-agent-benchmark-safety.sh" "${binary}"
+bash "${REPO_ROOT}/scripts/tests/test-agent-benchmark-questions.sh"
 bash "${REPO_ROOT}/scripts/tests/test-benchmark-inputs.sh"
 bash "${REPO_ROOT}/scripts/tests/test-benchmark-input-paths.sh"
 bash "${REPO_ROOT}/scripts/tests/test-evaluation-relative-corpus.sh"

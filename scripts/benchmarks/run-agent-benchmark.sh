@@ -7,7 +7,7 @@
 #   Each corpus/arm uses its own temporary HOME.
 #   Success: the final answer names the expected file. Cost: total tokens, turns and wall time
 #   from --output-format json.
-# Requires: python3, claude, jq; graphify for the Graphify arm; Cargo for a guarded release build.
+# Requires: python3, seq, claude, jq; graphify for the Graphify arm; Cargo for a guarded release build.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
@@ -24,11 +24,22 @@ runs=3
 while (( $# > 0 )); do
   case "$1" in
     --run) run=1; shift ;;
-    --runs) runs="$2"; shift 2 ;;
+    --runs) (( $# >= 2 )) || { echo "run-agent-benchmark.sh: --runs needs a positive integer" >&2; exit 2; }; runs="$2"; shift 2 ;;
     *) break ;;
   esac
 done
 (( $# > 0 )) || { echo "usage: run-agent-benchmark.sh [--run] [--runs N] CORPUS..." >&2; exit 2; }
+[[ "${runs}" =~ ^[0-9]+$ && "${runs}" =~ [1-9] ]] || {
+  echo "run-agent-benchmark.sh: --runs needs a positive integer" >&2
+  exit 2
+}
+run_attempts="$(seq 1 "${runs}")" || { echo "run-agent-benchmark.sh: cannot enumerate runs" >&2; exit 1; }
+[[ -n "${run_attempts}" ]] || { echo "run-agent-benchmark.sh: cannot enumerate runs" >&2; exit 1; }
+attempts=()
+while IFS= read -r attempt; do
+  [[ "${attempt}" =~ ^[0-9]+$ ]] || { echo "run-agent-benchmark.sh: invalid run enumeration" >&2; exit 1; }
+  attempts+=("${attempt}")
+done <<< "${run_attempts}"
 if (( run )); then
   for tool in claude jq; do
     command -v "${tool}" >/dev/null || { echo "run-agent-benchmark.sh: ${tool} missing" >&2; exit 1; }
@@ -53,20 +64,61 @@ question_file() {
   if [[ -f "${QUESTIONS}/$1.tsv" ]]; then echo "${QUESTIONS}/$1.tsv"; else echo "${QUESTIONS}/private/$1.tsv"; fi
 }
 
+validate_questions() {
+  python3 -I - "$1" <<'PYTHON'
+from pathlib import Path
+import sys
+
+count = 0
+for number, line in enumerate(Path(sys.argv[1]).read_bytes().split(b"\n"), 1):
+    if not line:
+        continue
+    if line.count(b"\t") != 1:
+        raise SystemExit(f"run-agent-benchmark.sh: invalid question record at line {number}")
+    question, expected = line.split(b"\t")
+    if question == b"question" and expected == b"expected":
+        continue
+    path, separator, name = expected.partition(b"::")
+    if (not question.strip() or not path.strip() or (separator and not name.strip())
+            or any(byte < 32 or byte == 127 for byte in question + expected)):
+        raise SystemExit(f"run-agent-benchmark.sh: invalid question record at line {number}")
+    count += 1
+if not count:
+    raise SystemExit("run-agent-benchmark.sh: no questions")
+PYTHON
+}
+
 select_corpora() {
-  local corpus root questions
+  local corpus root questions missing=0
   selected_corpora=()
   for corpus in "$@"; do
     root="$(corpus_root "${corpus}" && printf '.')" || return 1
     root="${root%.}"
     questions="$(question_file "${corpus}")"
     if [[ -n "${root}" && -d "${root}" && -f "${questions}" ]]; then
+      validate_questions "${questions}" || return 1
       selected_corpora+=("${corpus}")
     else
       echo "run-agent-benchmark.sh: ${corpus}: no root or questions" >&2
+      missing=1
     fi
   done
   (( ${#selected_corpora[@]} > 0 )) || { echo "run-agent-benchmark.sh: no runnable corpora" >&2; return 1; }
+  (( ! missing )) || { echo "run-agent-benchmark.sh: incomplete corpus selection" >&2; return 1; }
+}
+
+score_answer() {
+  local path="$1" answer="$2" status
+  [[ -n "${path//[[:space:]]/}" ]] || { echo "run-agent-benchmark.sh: empty expected path" >&2; return 2; }
+  if grep -q -F -- "${path}" <<< "${answer}"; then
+    printf '1'
+  else
+    status=$?
+    if (( status == 1 )); then printf '0'; else
+      echo "run-agent-benchmark.sh: answer matcher failed" >&2
+      return "${status}"
+    fi
+  fi
 }
 
 create_run() {
@@ -165,7 +217,7 @@ for corpus in "${selected_corpora[@]}"; do
   root="$(corpus_root "${corpus}" && printf '.')"
   root="${root%.}"
   questions="$(question_file "${corpus}")"
-  [[ -d "${root}" && -f "${questions}" ]] || { echo "run-agent-benchmark.sh: ${corpus}: no root or questions" >&2; continue; }
+  [[ -d "${root}" && -f "${questions}" ]] || { echo "run-agent-benchmark.sh: ${corpus}: no root or questions" >&2; exit 1; }
   for arm in "${ARMS[@]}"; do
     home="${WORK}/home-${arm}.<new>"
     if (( run )); then
@@ -175,10 +227,11 @@ for corpus in "${selected_corpora[@]}"; do
         last_xcalygraph_home="${home}"
       fi
     fi
-    while IFS=$'\t' read -r question expected; do
-      [[ "${question}" == "question" || -z "${question}" ]] && continue
+    while IFS=$'\t' read -r question expected || [[ -n "${question}${expected}" ]]; do
+      [[ "${question}" == "question" && "${expected}" == "expected" || -z "${question}" ]] && continue
       path="${expected%%::*}"
-      for attempt in $(seq 1 "${runs}"); do
+      [[ -n "${path//[[:space:]]/}" ]] || { echo "run-agent-benchmark.sh: empty expected path" >&2; exit 1; }
+      for attempt in "${attempts[@]}"; do
         if (( ! run )); then
           printf 'HOME=%q claude -p %q --output-format json  # cwd %s, arm %s, run %d\n' \
             "${home}" "${question} ${PROMPT_SUFFIX}" "${root}" "${arm}" "${attempt}"
@@ -191,8 +244,7 @@ for corpus in "${selected_corpora[@]}"; do
         fi
         if [[ "${arm}" == xcalygraph ]]; then verify_arm "${home}" "${BINARY}" "${IDENTITY}"; fi
         answer="$(jq -r '.result // ""' <<<"${output}")"
-        success=0
-        grep -q -F "${path}" <<<"${answer}" && success=1
+        success="$(score_answer "${path}" "${answer}")" || exit 1
         tokens="$(jq -r '((.usage.input_tokens // 0) + (.usage.output_tokens // 0) + (.usage.cache_read_input_tokens // 0) + (.usage.cache_creation_input_tokens // 0))' <<<"${output}")"
         turns="$(jq -r '.num_turns // 0' <<<"${output}")"
         ms="$(jq -r '.duration_ms // 0' <<<"${output}")"
