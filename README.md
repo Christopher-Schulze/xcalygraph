@@ -277,4 +277,4 @@ Early release (0.1.1). Commands, output format and index format may still change
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) Copyright (c) 2026 Christopher Schulze.
