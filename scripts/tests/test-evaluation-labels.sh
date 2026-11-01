@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Exercise the real sealed evaluator, binary and Graphify on an exclusive temporary git corpus.
+# Usage: scripts/tests/test-evaluation-labels.sh [BINARY]
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-python3 -I - "$REPO_ROOT" <<'PYTHON'
+(( $# <= 1 )) || { echo "usage: test-evaluation-labels.sh [BINARY]" >&2; exit 2; }
+[[ ! -L "${REPO_ROOT}/.cache" ]] || { echo "test cache must not be a symlink" >&2; exit 1; }
+mkdir -p "${REPO_ROOT}/.cache"
+python3 -I - "$REPO_ROOT" "${1:-}" <<'PYTHON'
 import hashlib
 import json
 import os
@@ -13,13 +17,23 @@ import sys
 import tempfile
 
 repo = Path(sys.argv[1])
+target = Path(os.environ.get("CARGO_TARGET_DIR", repo / "target"))
+if not target.is_absolute():
+    target = repo / target
+binary = Path(sys.argv[2]).resolve(strict=True) if sys.argv[2] else (target / "debug/xcalygraph").resolve(strict=True)
 with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache") as temporary:
     work = Path(temporary)
     root = work / "repo"
     home = work / "home"
     root.mkdir()
     home.mkdir()
-    environment = dict(os.environ, HOME=str(home))
+    temporary_directory = work / "temporary"
+    temporary_directory.mkdir()
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("GIT_", "XCALYGRAPH_"))
+                   and key not in ("BASH_ENV", "ENV", "CDPATH", "TAR_OPTIONS")}
+    environment.update(HOME=str(home), TMPDIR=str(temporary_directory), XDG_CONFIG_HOME=str(home / "config"),
+                       GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
     for relative in ("scripts/utils/prepare-corpus.sh", "scripts/benchmarks/evaluate-sealed.sh"):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -78,14 +92,14 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
     manifest_path = cases_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest))
     runner = root / "scripts/benchmarks/evaluate-sealed.sh"
-    arguments = ["bash", str(runner), str(manifest_path), "final", str(repo / "target/debug/xcalygraph")]
+    arguments = ["bash", str(runner), str(manifest_path), "final", str(binary)]
     run = subprocess.run(arguments, env=environment, capture_output=True, text=True)
     assert run.returncode == 0, run.stderr + run.stdout
     evidence = Path(run.stdout.splitlines()[-1].removeprefix("evidence: "))
     report = json.loads((evidence / "report.json").read_text())
     public = json.loads((evidence / "public-report.json").read_text())
     assert public["manifest_sha256"] == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
-    assert public["binary_sha256"] == hashlib.sha256((repo / "target/debug/xcalygraph").read_bytes()).hexdigest()
+    assert public["binary_sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
     assert public["corpora"] == report["corpora"] and str(root) not in json.dumps(public)
     assert report["exposure"]["xcalygraph"]["first_evaluation"]
     for arm in ("find-text", "find-json"):

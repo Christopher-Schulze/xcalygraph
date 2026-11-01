@@ -18,7 +18,17 @@ if base.is_symlink():
     raise SystemExit("test cache must not be a symlink")
 base.mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory(prefix="prune-regression.", dir=base) as temporary:
-    root = Path(temporary) / "project"
+    work = Path(temporary)
+    home = work / "home"
+    temporary_directory = work / "temporary"
+    home.mkdir()
+    temporary_directory.mkdir()
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("GIT_", "XCALYGRAPH_"))
+                   and key not in ("BASH_ENV", "ENV", "CDPATH", "TAR_OPTIONS")}
+    environment.update(HOME=str(home), TMPDIR=str(temporary_directory), XDG_CONFIG_HOME=str(home / "config"),
+                       GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    root = work / "project"
     script = root / "scripts/utils/prune-cache.sh"
     script.parent.mkdir(parents=True)
     shutil.copyfile(repo / "scripts/utils/prune-cache.sh", script)
@@ -70,7 +80,7 @@ with tempfile.TemporaryDirectory(prefix="prune-regression.", dir=base) as tempor
         os.utime(path, (past, past), follow_symlinks=False)
 
     def run(age):
-        return subprocess.run(["bash", str(script), age], text=True, capture_output=True)
+        return subprocess.run(["bash", str(script), age], env=environment, text=True, capture_output=True)
 
     result = run("24")
     assert result.returncode == 0, result.stderr
@@ -108,7 +118,7 @@ with tempfile.TemporaryDirectory(prefix="prune-regression.", dir=base) as tempor
     invalid = run("9" * 80)
     assert invalid.returncode == 2, invalid.stderr
     assert fresh.is_dir() and foreign.is_dir()
-    extra = subprocess.run(["bash", str(script), "24", "0"], text=True, capture_output=True)
+    extra = subprocess.run(["bash", str(script), "24", "0"], env=environment, text=True, capture_output=True)
     assert extra.returncode == 2
     all_runs = run("0")
     assert all_runs.returncode == 0 and "removed 1 entries" in all_runs.stdout
@@ -133,16 +143,16 @@ with tempfile.TemporaryDirectory(prefix="prune-regression.", dir=base) as tempor
     linked_script.parent.mkdir(parents=True)
     shutil.copyfile(script, linked_script)
     (linked_project / ".cache").symlink_to(outside, target_is_directory=True)
-    result = subprocess.run(["bash", str(linked_script), "0"], text=True, capture_output=True)
+    result = subprocess.run(["bash", str(linked_script), "0"], env=environment, text=True, capture_output=True)
     assert result.returncode != 0 and "symlink" in result.stderr
     assert (outside / "keep").read_text() == "foreign"
     (linked_project / ".cache").unlink()
     (linked_project / ".cache").symlink_to(linked_project / "missing", target_is_directory=True)
-    result = subprocess.run(["bash", str(linked_script), "0"], text=True, capture_output=True)
+    result = subprocess.run(["bash", str(linked_script), "0"], env=environment, text=True, capture_output=True)
     assert result.returncode != 0 and "symlink" in result.stderr
     (linked_project / ".cache").unlink()
     (linked_project / ".cache").write_text("foreign cache file")
-    result = subprocess.run(["bash", str(linked_script), "0"], text=True, capture_output=True)
+    result = subprocess.run(["bash", str(linked_script), "0"], env=environment, text=True, capture_output=True)
     assert result.returncode != 0 and "not a directory" in result.stderr
     assert (linked_project / ".cache").read_text() == "foreign cache file"
     print("PASS: age bounds, marked ownership, protected evidence, links, foreign data and size reporting")

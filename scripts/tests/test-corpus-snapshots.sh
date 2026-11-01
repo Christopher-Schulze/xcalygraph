@@ -1,27 +1,39 @@
 #!/usr/bin/env bash
 # Verify snapshot identity and Graphify reuse using real source files and tools.
-# Usage: scripts/tests/test-corpus-snapshots.sh
+# Usage: scripts/tests/test-corpus-snapshots.sh [BINARY]
 # Requires git, python3, graphify and a development xcalygraph binary.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
+(( $# <= 1 )) || { echo "usage: test-corpus-snapshots.sh [BINARY]" >&2; exit 2; }
+[[ ! -L "${REPO_ROOT}/.cache" ]] || { echo "test cache must not be a symlink" >&2; exit 1; }
 mkdir -p "${REPO_ROOT}/.cache"
 work="$(mktemp -d "${REPO_ROOT}/.cache/test-corpus.XXXXXXXX")"
 readonly work
 trap 'rm -rf "${work}"' EXIT
-python3 -I - "${REPO_ROOT}" "${work}" <<'PYTHON'
+python3 -I - "${REPO_ROOT}" "${work}" "${1:-}" <<'PYTHON'
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 
-repo, work = map(Path, sys.argv[1:])
+repo, work = map(Path, sys.argv[1:3])
+target = Path(os.environ.get("CARGO_TARGET_DIR", repo / "target"))
+if not target.is_absolute():
+    target = repo / target
+binary = Path(sys.argv[3]).resolve(strict=True) if sys.argv[3] else (target / "debug/xcalygraph").resolve(strict=True)
 root, cache = work / "root with spaces", work / "snapshots"
 root.mkdir()
 home = work / "home"
 home.mkdir()
-environment = dict(os.environ, HOME=str(home))
+temporary = work / "temporary"
+temporary.mkdir()
+environment = {key: value for key, value in os.environ.items()
+               if not key.startswith(("GIT_", "XCALYGRAPH_"))
+               and key not in ("BASH_ENV", "ENV", "CDPATH", "TAR_OPTIONS")}
+environment.update(HOME=str(home), TMPDIR=str(temporary), XDG_CONFIG_HOME=str(home / "config"),
+                   GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
 helper = repo / "scripts/utils/prepare-corpus.sh"
 (root / "main.go").write_text("package sample\nfunc Earlier() {}\nfunc Entry() { Earlier() }\n")
 (root / ".gitignore").write_text("ignored/\n")
@@ -74,7 +86,6 @@ verified = subprocess.run(["bash", str(helper), "--verify", str(graph_source)],
 assert Path(verified.stdout.strip()) == graph_source
 assert any("Later" in node.get("label", "") for node in content["nodes"])
 assert not any("Earlier" in node.get("label", "") for node in content["nodes"])
-binary = repo / "target/debug/xcalygraph"
 index = work / "index"
 result = subprocess.run([str(binary), "show", "Later", "-C", str(graph_source), "--index-dir", str(index)],
                         env=environment, capture_output=True, text=True, check=True)

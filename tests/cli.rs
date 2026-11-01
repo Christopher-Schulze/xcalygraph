@@ -726,6 +726,58 @@ fn installer_test_ignores_inherited_shell_startup_and_tar_options() -> TestResul
     Ok(())
 }
 
+fn gate_fixture(label: &str) -> io::Result<(TempDir, PathBuf)> {
+    let fixture = TempDir::new(label)?;
+    let root = fixture.0.join("project");
+    for directory in ["scripts/tests", "scripts/utils"] {
+        fs::create_dir_all(root.join(directory))?;
+    }
+    for relative in ["scripts/tests/test.sh", "scripts/utils/prune-cache.sh"] {
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(relative),
+            root.join(relative),
+        )?;
+    }
+    fs::write(root.join("Cargo.toml"), "not a valid manifest\n")?;
+    Ok((fixture, root))
+}
+
+#[test]
+fn gate_refuses_blessing_before_running_checks() -> TestResult {
+    let (fixture, root) = gate_fixture("gate-blessing")?;
+    for value in ["1", ""] {
+        let output = support::command("bash", &fixture.0)
+            .arg(root.join("scripts/tests/test.sh"))
+            .env("XCALYGRAPH_BLESS", value)
+            .output()?;
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("XCALYGRAPH_BLESS"));
+        assert!(
+            output.stdout.is_empty(),
+            "checks ran before rejecting blessing"
+        );
+        assert!(!root.join(".cache").exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn gate_propagates_real_shellcheck_findings() -> TestResult {
+    let (fixture, root) = gate_fixture("gate-shellcheck")?;
+    fs::write(
+        root.join("scripts/utils/invalid.sh"),
+        "#!/usr/bin/env bash\necho $UNQUOTED\n",
+    )?;
+    let output = support::command("bash", &fixture.0)
+        .arg(root.join("scripts/tests/test.sh"))
+        .output()?;
+    assert!(!output.status.success());
+    let diagnostics = String::from_utf8_lossy(&output.stdout).to_string()
+        + &String::from_utf8_lossy(&output.stderr);
+    assert!(diagnostics.contains("SC2086"), "{diagnostics}");
+    Ok(())
+}
+
 #[test]
 fn update_check_compares_with_the_latest_release() -> TestResult {
     let dir = TempDir::new("update")?;
