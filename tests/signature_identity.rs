@@ -90,8 +90,16 @@ impl Fixture {
     }
 
     fn impact(&self, extra: &[&str]) -> io::Result<Output> {
-        Command::new(env!("CARGO_BIN_EXE_xcalygraph"))
-            .args(["impact", "--diff", "--json"])
+        self.impact_format(extra, true)
+    }
+
+    fn impact_format(&self, extra: &[&str], json: bool) -> io::Result<Output> {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_xcalygraph"));
+        command.args(["impact", "--diff"]);
+        if json {
+            command.arg("--json");
+        }
+        command
             .args(extra)
             .arg("-C")
             .arg(&self.root)
@@ -429,24 +437,147 @@ fn incomplete_current_or_revision_source_cannot_produce_exact_removals() -> Test
     fixture.write("probe.py", "def greet(x):\n    return x\n")?;
     fixture.commit()?;
     fixture.write("probe.py", "def greet(\n")?;
-    let output = fixture.impact(&[])?;
+    let output = answer(fixture.impact(&[])?)?;
     assert!(
-        !output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stdout)
+        output.contains("incomplete current") && !output.contains("\"kind\":\"removed\""),
+        "{output}"
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("extraction incomplete"));
 
     let fixture = Fixture::new()?;
     fixture.write("probe.py", "def greet(\n")?;
     fixture.commit()?;
     fixture.write("probe.py", "def greet(x):\n    return x\n")?;
-    let output = fixture.impact(&[])?;
+    let output = answer(fixture.impact(&[])?)?;
     assert!(
-        !output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stdout)
+        output.contains("incomplete revision") && !output.contains("\"kind\":\"removed\""),
+        "{output}"
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("extraction incomplete"));
+    Ok(())
+}
+
+#[test]
+fn filtered_and_complete_changes_survive_an_unrelated_parse_error() -> TestResult {
+    let fixture = Fixture::new()?;
+    fixture.write("good.py", "def visible(value: int):\n    return value\n")?;
+    fixture.write(
+        "bad.py",
+        "from good import visible\ndef other(value):\n    return visible(value)\n",
+    )?;
+    fixture.commit()?;
+    fixture.write("good.py", "def visible(value: str):\n    return value\n")?;
+    fixture.write(
+        "bad.py",
+        "from good import visible\ndef other(value):\n    return visible(value)\ndef broken(\n",
+    )?;
+    for extra in [
+        &[][..],
+        &["-p", "good.py"][..],
+        &["-p", "good.py", "--exact"][..],
+    ] {
+        let output = answer(fixture.impact(extra)?)?;
+        let line = line_for(&output, "good.py", "visible")
+            .ok_or_else(|| io::Error::other(output.clone()))?;
+        assert!(line.contains("\"kind\":\"sig\""), "{output}");
+        assert!(
+            output.contains("\"t\":\"note\"")
+                && output.contains("\"path\":\"bad.py\"")
+                && output.contains("incomplete current"),
+            "{output}"
+        );
+        assert!(!output.contains("bad.other"), "{output}");
+    }
+    let text = answer(fixture.impact_format(&["-p", "good.py"], false)?)?;
+    assert!(
+        text.contains("! incomplete current bad.py")
+            && text.contains("visible")
+            && text.contains(" sig"),
+        "{text}"
+    );
+    let current = answer(fixture.impact(&["-p", "good.py"])?)?;
+    assert_eq!(
+        current,
+        answer(fixture.impact(&["-p", "good.py", "--read-only"])?)?
+    );
+    for budget in ["10", "20", "30", "50"] {
+        let output = fixture.impact(&["-p", "good.py", "-b", budget])?;
+        assert!(output.status.success());
+        assert!(
+            output.stdout.len() <= budget.parse::<usize>()? * 3,
+            "{budget}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn an_incomplete_current_file_cannot_fabricate_same_language_removals() -> TestResult {
+    let fixture = Fixture::new()?;
+    fixture.write("old.py", "def moved(value):\n    return value\n")?;
+    fixture.write("bad.py", "def other(value):\n    return value\n")?;
+    fixture.write("old.go", "package fixture\nfunc Gone() {}\n")?;
+    fixture.commit()?;
+    fs::remove_file(fixture.root.join("old.py"))?;
+    fs::remove_file(fixture.root.join("old.go"))?;
+    fixture.write("bad.py", "def moved(\n")?;
+    fixture.write("fresh.py", "def fresh(\n")?;
+    let output = answer(fixture.impact(&[])?)?;
+    let python =
+        line_for(&output, "old.py", "moved").ok_or_else(|| io::Error::other(output.clone()))?;
+    assert!(
+        python.contains("\"kind\":\"uncertain\"") && !python.contains("\"kind\":\"removed\""),
+        "{output}"
+    );
+    let go = line_for(&output, "old.go", "Gone").ok_or_else(|| io::Error::other(output.clone()))?;
+    assert!(go.contains("\"kind\":\"removed\""), "{output}");
+    assert!(
+        output.contains("\"path\":\"fresh.py\"")
+            && !output.contains(
+                "\"name\":\"fresh.py\",\"path\":\"fresh.py\",\"line\":1,\"kind\":\"new 0\""
+            ),
+        "{output}"
+    );
+    let exact = answer(fixture.impact(&["--exact"])?)?;
+    assert!(
+        !exact.contains("\"path\":\"old.py\",\"line\":1,\"kind\":\"removed\""),
+        "{exact}"
+    );
+    assert!(
+        exact.contains("\"path\":\"old.go\"") && exact.contains("\"kind\":\"removed\""),
+        "{exact}"
+    );
+    Ok(())
+}
+
+#[test]
+fn an_incomplete_revision_does_not_fabricate_new_definitions() -> TestResult {
+    let fixture = Fixture::new()?;
+    fixture.write("bad.py", "def broken(\n")?;
+    fixture.write(
+        "good.go",
+        "package fixture\nfunc Good(value int) int { return value }\n",
+    )?;
+    fixture.commit()?;
+    fixture.write("bad.py", "def broken(value):\n    return value\n")?;
+    fixture.write(
+        "good.go",
+        "package fixture\nfunc Good(value int64) int64 { return value }\n",
+    )?;
+    let output = answer(fixture.impact(&[])?)?;
+    assert!(
+        output.contains("\"t\":\"note\"")
+            && output.contains("\"path\":\"bad.py\"")
+            && output.contains("incomplete revision"),
+        "{output}"
+    );
+    let python =
+        line_for(&output, "bad.py", "broken").ok_or_else(|| io::Error::other(output.clone()))?;
+    assert!(
+        python.contains("\"kind\":\"uncertain\"") && !python.contains("\"kind\":\"new\""),
+        "{output}"
+    );
+    let go =
+        line_for(&output, "good.go", "Good").ok_or_else(|| io::Error::other(output.clone()))?;
+    assert!(go.contains("\"kind\":\"sig\""), "{output}");
     Ok(())
 }

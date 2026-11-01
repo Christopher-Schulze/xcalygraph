@@ -64,6 +64,7 @@ struct RevisionFile {
     package: Option<String>,
     content: Vec<u8>,
     symbols: Vec<Definition>,
+    incomplete: bool,
 }
 
 struct CurrentFile {
@@ -73,6 +74,7 @@ struct CurrentFile {
     package: Option<String>,
     hash: Option<u128>,
     symbols: Vec<Definition>,
+    incomplete: bool,
 }
 
 struct Change {
@@ -93,6 +95,14 @@ struct Move<'a> {
     path: &'a str,
     line: u32,
     signature_changed: bool,
+}
+
+#[derive(Default)]
+struct DiffOutput<'a> {
+    removed: &'a [RevisionLocation<'a>],
+    moved: &'a [Move<'a>],
+    survivors: &'a [u32],
+    incomplete: &'a [(&'a str, &'a str)],
 }
 
 pub struct ImpactOptions<'a> {
@@ -132,7 +142,7 @@ pub fn render_names(
             seeds: Vec::new(),
         })
         .collect();
-    render(index, filter, &targets, &[], &[], &[], options)
+    render(index, filter, &targets, DiffOutput::default(), options)
 }
 
 /// Targets from `git diff REV` (work tree included) with exported signature changes.
@@ -150,6 +160,43 @@ pub fn render_diff(
             && previous.package == current.package
         {
             match_local(&mut previous.symbols, &mut current.symbols);
+        }
+    }
+    // An incomplete same-language file may hide a move, so unmatched identities stay uncertain.
+    let incomplete_current: BTreeSet<_> = changes
+        .iter()
+        .filter_map(|change| {
+            change
+                .current
+                .as_ref()
+                .filter(|file| file.incomplete)
+                .map(|file| file.file_type)
+        })
+        .collect();
+    let incomplete_revision: BTreeSet<_> = changes
+        .iter()
+        .filter_map(|change| {
+            change
+                .previous
+                .as_ref()
+                .filter(|file| file.incomplete)
+                .map(|file| file.file_type)
+        })
+        .collect();
+    for change in &mut changes {
+        if let Some(previous) = &mut change.previous
+            && (previous.incomplete || incomplete_current.contains(&previous.file_type))
+        {
+            for symbol in previous.symbols.iter_mut().filter(|symbol| !symbol.matched) {
+                symbol.ambiguous = true;
+            }
+        }
+        if let Some(current) = &mut change.current
+            && (current.incomplete || incomplete_revision.contains(&current.file_type))
+        {
+            for symbol in current.symbols.iter_mut().filter(|symbol| !symbol.matched) {
+                symbol.ambiguous = true;
+            }
         }
     }
     let moves = match_moves(&mut changes, options.root, rev)?;
@@ -224,8 +271,30 @@ pub fn render_diff(
         });
     }
     let survivors = surviving_references(index, filter, options.store, &removed_names);
+    let mut incomplete = Vec::new();
+    for change in &changes {
+        if let Some(previous) = &change.previous
+            && previous.incomplete
+        {
+            incomplete.push((previous.path.as_str(), "revision"));
+        }
+        if let Some(current) = &change.current
+            && current.incomplete
+        {
+            incomplete.push((current.path.as_str(), "current"));
+        }
+    }
     Ok(render(
-        index, filter, &targets, &removed, &moved, &survivors, options,
+        index,
+        filter,
+        &targets,
+        DiffOutput {
+            removed: &removed,
+            moved: &moved,
+            survivors: &survivors,
+            incomplete: &incomplete,
+        },
+        options,
     ))
 }
 
@@ -383,11 +452,6 @@ fn revision_file(
         file_type,
     };
     let parsed = extract::extract_with_identities(&record, &content);
-    if parsed.incomplete {
-        return Err(AppError::Invalid(format!(
-            "cannot verify revision definitions in '{path}': extraction incomplete"
-        )));
-    }
     let facts = parsed.facts;
     Ok(Some(RevisionFile {
         path: path.to_owned(),
@@ -397,6 +461,7 @@ fn revision_file(
             AppError::Invalid(format!("invalid revision definitions in '{path}'"))
         })?,
         content: if keep_content { content } else { Vec::new() },
+        incomplete: parsed.incomplete,
     }))
 }
 
@@ -461,7 +526,7 @@ fn collect_changes(
                     | crate::domain::role::Role::Test
                     | crate::domain::role::Role::Gen
             ) && record.file_type().is_some_and(FileType::is_code);
-            let (symbols, hash) = if facts.is_some() || verify_empty {
+            let (symbols, hash, incomplete) = if facts.is_some() || verify_empty {
                 let source = records
                     .binary_search_by(|entry| entry.path.as_str().cmp(diff.path.as_str()))
                     .ok()
@@ -487,12 +552,6 @@ fn collect_changes(
                     )));
                 }
                 let parsed = extract::extract_with_identities(source, &content);
-                if parsed.incomplete {
-                    return Err(AppError::Invalid(format!(
-                        "cannot verify current definitions in '{}': extraction incomplete",
-                        diff.path
-                    )));
-                }
                 let symbols = match facts {
                     Some(facts)
                         if parsed.facts.symbols == facts.symbols
@@ -510,9 +569,9 @@ fn collect_changes(
                         )));
                     }
                 };
-                (symbols, Some(source.hash))
+                (symbols, Some(source.hash), parsed.incomplete)
             } else {
-                (Vec::new(), None)
+                (Vec::new(), None, false)
             };
             if symbols.len() != record.symbol_count as usize {
                 return Err(AppError::Invalid(format!(
@@ -562,6 +621,7 @@ fn collect_changes(
                 package: facts.and_then(|facts| facts.package.clone()),
                 hash,
                 symbols,
+                incomplete,
             })
         } else {
             None
@@ -915,6 +975,9 @@ fn changed_targets(index: &Index, filter: &Filter, changes: &[Change]) -> Vec<Ta
         let Some(current) = &change.current else {
             continue;
         };
+        if current.incomplete {
+            continue;
+        }
         let record = &index.derived.files()[current.file as usize];
         if !filter.file(index, record) {
             continue;
@@ -967,12 +1030,35 @@ fn render(
     index: &Index,
     filter: &Filter,
     targets: &[Target],
-    removed: &[RevisionLocation<'_>],
-    moved: &[Move<'_>],
-    survivors: &[u32],
+    diff: DiffOutput<'_>,
     options: &ImpactOptions,
 ) -> String {
+    let DiffOutput {
+        removed,
+        moved,
+        survivors,
+        incomplete,
+    } = diff;
     let mut writer = Writer::new(options.json, options.budget);
+    let incomplete_current: BTreeSet<&str> = incomplete
+        .iter()
+        .filter_map(|(path, side)| (*side == "current").then_some(*path))
+        .collect();
+    for (shown, &(path, side)) in incomplete.iter().enumerate() {
+        if shown >= CHANGED_LINES {
+            more(&mut writer, incomplete.len() - shown, "incomplete files");
+            break;
+        }
+        let message = format!("incomplete {side}");
+        writer.line(
+            &format!("! {message} {path}"),
+            &[
+                ("t", Value::Str("note")),
+                ("name", Value::Str(&message)),
+                ("path", Value::Str(path)),
+            ],
+        );
+    }
     let target_nodes: BTreeSet<u32> = targets
         .iter()
         .flat_map(|target| std::iter::once(target.node).chain(target.seeds.iter().copied()))
@@ -1088,6 +1174,9 @@ fn render(
         // Surviving references to removed definitions are inferred direct dependents.
         if depth == 1 {
             for &node in survivors {
+                if incomplete_current.contains(index.path_of(node)) {
+                    continue;
+                }
                 if let std::collections::hash_map::Entry::Vacant(slot) = depth_of.entry(node) {
                     slot.insert(1);
                     exact_of.insert(node, false);
@@ -1098,6 +1187,9 @@ fn render(
         for &node in &frontier {
             let chain_exact = exact_of[&node];
             for edge in index.derived.incoming(node) {
+                if incomplete_current.contains(index.path_of(edge.node)) {
+                    continue;
+                }
                 if edge.kind() == EdgeKind::Tests {
                     if filter.edge(edge) && filter.includes(index, edge.node) {
                         tests.insert(edge.node);
