@@ -1,0 +1,3044 @@
+{
+  "binary_sha256": "603b095be35c146a8cd6eae6b5ba18e107f7b19afd5796666dcecc166415cb22",
+  "corpora": {
+    "bulletproof-react/apps/react-vite": {
+      "metrics": {
+        "ctx-json-1200": {
+          "complete": 22,
+          "complete5": 20,
+          "complete95": [
+            0.633,
+            0.9182
+          ],
+          "covered": 29,
+          "file5": 24,
+          "file_any": 25,
+          "mean_positive_tokens": 1170.8,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 5,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-json-200": {
+          "complete": 16,
+          "complete5": 16,
+          "complete95": [
+            0.4073,
+            0.7549
+          ],
+          "covered": 23,
+          "file5": 23,
+          "file_any": 23,
+          "mean_positive_tokens": 173.3,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-json-600": {
+          "complete": 20,
+          "complete5": 19,
+          "complete95": [
+            0.5532,
+            0.8683
+          ],
+          "covered": 27,
+          "file5": 24,
+          "file_any": 25,
+          "mean_positive_tokens": 570.4,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-text-1200": {
+          "complete": 24,
+          "complete5": 21,
+          "complete95": [
+            0.7194,
+            0.9615
+          ],
+          "covered": 31,
+          "file5": 24,
+          "file_any": 25,
+          "mean_positive_tokens": 1191.6,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 7,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-text-200": {
+          "complete": 20,
+          "complete5": 19,
+          "complete95": [
+            0.5532,
+            0.8683
+          ],
+          "covered": 27,
+          "file5": 24,
+          "file_any": 25,
+          "mean_positive_tokens": 191.5,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-text-600": {
+          "complete": 24,
+          "complete5": 21,
+          "complete95": [
+            0.7194,
+            0.9615
+          ],
+          "covered": 31,
+          "file5": 24,
+          "file_any": 25,
+          "mean_positive_tokens": 591.4,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 6,
+          "positive": 27,
+          "required": 36
+        },
+        "find-json-1200": {
+          "complete": 20,
+          "complete5": 19,
+          "complete95": [
+            0.5532,
+            0.8683
+          ],
+          "covered": 27,
+          "file5": 25,
+          "file_any": 26,
+          "mean_positive_tokens": 1165.4,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 36
+        },
+        "find-json-200": {
+          "complete": 16,
+          "complete5": 16,
+          "complete95": [
+            0.4073,
+            0.7549
+          ],
+          "covered": 23,
+          "file5": 23,
+          "file_any": 23,
+          "mean_positive_tokens": 177.2,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 5,
+          "positive": 27,
+          "required": 36
+        },
+        "find-json-600": {
+          "complete": 20,
+          "complete5": 19,
+          "complete95": [
+            0.5532,
+            0.8683
+          ],
+          "covered": 27,
+          "file5": 25,
+          "file_any": 26,
+          "mean_positive_tokens": 570.1,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 36
+        },
+        "find-text-1200": {
+          "complete": 22,
+          "complete5": 19,
+          "complete95": [
+            0.633,
+            0.9182
+          ],
+          "covered": 29,
+          "file5": 25,
+          "file_any": 26,
+          "mean_positive_tokens": 1028.0,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 36
+        },
+        "find-text-200": {
+          "complete": 20,
+          "complete5": 19,
+          "complete95": [
+            0.5532,
+            0.8683
+          ],
+          "covered": 27,
+          "file5": 25,
+          "file_any": 26,
+          "mean_positive_tokens": 188.3,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 36
+        },
+        "find-text-600": {
+          "complete": 20,
+          "complete5": 19,
+          "complete95": [
+            0.5532,
+            0.8683
+          ],
+          "covered": 27,
+          "file5": 25,
+          "file_any": 26,
+          "mean_positive_tokens": 584.1,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-1200": {
+          "complete": 16,
+          "complete5": 7,
+          "complete95": [
+            0.4073,
+            0.7549
+          ],
+          "covered": 22,
+          "file5": 18,
+          "file_any": 27,
+          "mean_positive_tokens": 1659.6,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 0,
+          "negative_total": 3,
+          "over_budget": 27,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-200": {
+          "complete": 7,
+          "complete5": 7,
+          "complete95": [
+            0.1317,
+            0.4468
+          ],
+          "covered": 13,
+          "file5": 18,
+          "file_any": 20,
+          "mean_positive_tokens": 377.6,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 0,
+          "negative_total": 3,
+          "over_budget": 27,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-600": {
+          "complete": 11,
+          "complete5": 7,
+          "complete95": [
+            0.2451,
+            0.5927
+          ],
+          "covered": 17,
+          "file5": 18,
+          "file_any": 26,
+          "mean_positive_tokens": 799.0,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 0,
+          "negative_total": 3,
+          "over_budget": 27,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-legacy-2000": {
+          "complete": 20,
+          "complete5": 7,
+          "complete95": [
+            0.5532,
+            0.8683
+          ],
+          "covered": 28,
+          "file5": 18,
+          "file_any": 27,
+          "mean_positive_tokens": 3074.9,
+          "multi_complete": 5,
+          "multi_total": 6,
+          "negative_false_positive": 0,
+          "negative_total": 3,
+          "over_budget": 26,
+          "positive": 27,
+          "required": 36
+        }
+      },
+      "paired_complete": {
+        "ctx-json-1200": {
+          "False/False": 3,
+          "False/True": 2,
+          "True/False": 8,
+          "True/True": 14
+        },
+        "ctx-json-200": {
+          "False/False": 11,
+          "True/False": 9,
+          "True/True": 7
+        },
+        "ctx-json-600": {
+          "False/False": 5,
+          "False/True": 2,
+          "True/False": 11,
+          "True/True": 9
+        },
+        "ctx-text-1200": {
+          "False/False": 2,
+          "False/True": 1,
+          "True/False": 9,
+          "True/True": 15
+        },
+        "ctx-text-200": {
+          "False/False": 7,
+          "True/False": 13,
+          "True/True": 7
+        },
+        "ctx-text-600": {
+          "False/False": 2,
+          "False/True": 1,
+          "True/False": 14,
+          "True/True": 10
+        },
+        "find-json-1200": {
+          "False/False": 5,
+          "False/True": 2,
+          "True/False": 6,
+          "True/True": 14
+        },
+        "find-json-200": {
+          "False/False": 11,
+          "True/False": 9,
+          "True/True": 7
+        },
+        "find-json-600": {
+          "False/False": 6,
+          "False/True": 1,
+          "True/False": 10,
+          "True/True": 10
+        },
+        "find-text-1200": {
+          "False/False": 5,
+          "True/False": 6,
+          "True/True": 16
+        },
+        "find-text-200": {
+          "False/False": 7,
+          "True/False": 13,
+          "True/True": 7
+        },
+        "find-text-600": {
+          "False/False": 6,
+          "False/True": 1,
+          "True/False": 10,
+          "True/True": 10
+        }
+      }
+    },
+    "graphify": {
+      "metrics": {
+        "ctx-json-1200": {
+          "complete": 21,
+          "complete5": 19,
+          "complete95": [
+            0.5924,
+            0.8939
+          ],
+          "covered": 30,
+          "file5": 23,
+          "file_any": 25,
+          "mean_positive_tokens": 1166.6,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-json-200": {
+          "complete": 13,
+          "complete5": 13,
+          "complete95": [
+            0.3074,
+            0.6601
+          ],
+          "covered": 21,
+          "file5": 23,
+          "file_any": 23,
+          "mean_positive_tokens": 165.9,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 5,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-json-600": {
+          "complete": 17,
+          "complete5": 16,
+          "complete95": [
+            0.4423,
+            0.7847
+          ],
+          "covered": 26,
+          "file5": 24,
+          "file_any": 25,
+          "mean_positive_tokens": 565.3,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-text-1200": {
+          "complete": 21,
+          "complete5": 18,
+          "complete95": [
+            0.5924,
+            0.8939
+          ],
+          "covered": 30,
+          "file5": 22,
+          "file_any": 25,
+          "mean_positive_tokens": 1184.6,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-text-200": {
+          "complete": 13,
+          "complete5": 13,
+          "complete95": [
+            0.3074,
+            0.6601
+          ],
+          "covered": 22,
+          "file5": 23,
+          "file_any": 23,
+          "mean_positive_tokens": 171.6,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-text-600": {
+          "complete": 21,
+          "complete5": 19,
+          "complete95": [
+            0.5924,
+            0.8939
+          ],
+          "covered": 30,
+          "file5": 23,
+          "file_any": 25,
+          "mean_positive_tokens": 585.4,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 36
+        },
+        "find-json-1200": {
+          "complete": 19,
+          "complete5": 15,
+          "complete95": [
+            0.5152,
+            0.8415
+          ],
+          "covered": 28,
+          "file5": 25,
+          "file_any": 27,
+          "mean_positive_tokens": 1167.5,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 1,
+          "positive": 27,
+          "required": 36
+        },
+        "find-json-200": {
+          "complete": 12,
+          "complete5": 12,
+          "complete95": [
+            0.2759,
+            0.6269
+          ],
+          "covered": 20,
+          "file5": 23,
+          "file_any": 23,
+          "mean_positive_tokens": 169.8,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 36
+        },
+        "find-json-600": {
+          "complete": 18,
+          "complete5": 15,
+          "complete95": [
+            0.4782,
+            0.8136
+          ],
+          "covered": 27,
+          "file5": 25,
+          "file_any": 27,
+          "mean_positive_tokens": 566.3,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 1,
+          "positive": 27,
+          "required": 36
+        },
+        "find-text-1200": {
+          "complete": 22,
+          "complete5": 15,
+          "complete95": [
+            0.633,
+            0.9182
+          ],
+          "covered": 31,
+          "file5": 25,
+          "file_any": 27,
+          "mean_positive_tokens": 1185.0,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 5,
+          "positive": 27,
+          "required": 36
+        },
+        "find-text-200": {
+          "complete": 17,
+          "complete5": 15,
+          "complete95": [
+            0.4423,
+            0.7847
+          ],
+          "covered": 26,
+          "file5": 25,
+          "file_any": 26,
+          "mean_positive_tokens": 187.4,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 36
+        },
+        "find-text-600": {
+          "complete": 19,
+          "complete5": 15,
+          "complete95": [
+            0.5152,
+            0.8415
+          ],
+          "covered": 28,
+          "file5": 25,
+          "file_any": 27,
+          "mean_positive_tokens": 586.7,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-1200": {
+          "complete": 9,
+          "complete5": 5,
+          "complete95": [
+            0.1864,
+            0.5218
+          ],
+          "covered": 13,
+          "file5": 13,
+          "file_any": 21,
+          "mean_positive_tokens": 1554.7,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 30,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-200": {
+          "complete": 6,
+          "complete5": 5,
+          "complete95": [
+            0.1061,
+            0.4076
+          ],
+          "covered": 9,
+          "file5": 13,
+          "file_any": 14,
+          "mean_positive_tokens": 587.6,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 30,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-600": {
+          "complete": 7,
+          "complete5": 5,
+          "complete95": [
+            0.1317,
+            0.4468
+          ],
+          "covered": 11,
+          "file5": 13,
+          "file_any": 16,
+          "mean_positive_tokens": 870.4,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 30,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-legacy-2000": {
+          "complete": 11,
+          "complete5": 5,
+          "complete95": [
+            0.2451,
+            0.5927
+          ],
+          "covered": 17,
+          "file5": 13,
+          "file_any": 21,
+          "mean_positive_tokens": 2370.6,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 30,
+          "positive": 27,
+          "required": 36
+        }
+      },
+      "paired_complete": {
+        "ctx-json-1200": {
+          "False/False": 6,
+          "True/False": 12,
+          "True/True": 9
+        },
+        "ctx-json-200": {
+          "False/False": 13,
+          "False/True": 1,
+          "True/False": 8,
+          "True/True": 5
+        },
+        "ctx-json-600": {
+          "False/False": 9,
+          "False/True": 1,
+          "True/False": 11,
+          "True/True": 6
+        },
+        "ctx-text-1200": {
+          "False/False": 6,
+          "True/False": 12,
+          "True/True": 9
+        },
+        "ctx-text-200": {
+          "False/False": 13,
+          "False/True": 1,
+          "True/False": 8,
+          "True/True": 5
+        },
+        "ctx-text-600": {
+          "False/False": 6,
+          "True/False": 14,
+          "True/True": 7
+        },
+        "find-json-1200": {
+          "False/False": 6,
+          "False/True": 2,
+          "True/False": 12,
+          "True/True": 7
+        },
+        "find-json-200": {
+          "False/False": 14,
+          "False/True": 1,
+          "True/False": 7,
+          "True/True": 5
+        },
+        "find-json-600": {
+          "False/False": 8,
+          "False/True": 1,
+          "True/False": 12,
+          "True/True": 6
+        },
+        "find-text-1200": {
+          "False/False": 4,
+          "False/True": 1,
+          "True/False": 14,
+          "True/True": 8
+        },
+        "find-text-200": {
+          "False/False": 9,
+          "False/True": 1,
+          "True/False": 12,
+          "True/True": 5
+        },
+        "find-text-600": {
+          "False/False": 7,
+          "False/True": 1,
+          "True/False": 13,
+          "True/True": 6
+        }
+      }
+    },
+    "hono": {
+      "metrics": {
+        "ctx-json-1200": {
+          "complete": 23,
+          "complete5": 19,
+          "complete95": [
+            0.6752,
+            0.9408
+          ],
+          "covered": 32,
+          "file5": 23,
+          "file_any": 26,
+          "mean_positive_tokens": 1174.7,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 37
+        },
+        "ctx-json-200": {
+          "complete": 15,
+          "complete5": 15,
+          "complete95": [
+            0.3731,
+            0.7241
+          ],
+          "covered": 21,
+          "file5": 24,
+          "file_any": 24,
+          "mean_positive_tokens": 166.2,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 0,
+          "positive": 27,
+          "required": 37
+        },
+        "ctx-json-600": {
+          "complete": 17,
+          "complete5": 16,
+          "complete95": [
+            0.4423,
+            0.7847
+          ],
+          "covered": 25,
+          "file5": 24,
+          "file_any": 26,
+          "mean_positive_tokens": 574.7,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 5,
+          "positive": 27,
+          "required": 37
+        },
+        "ctx-text-1200": {
+          "complete": 25,
+          "complete5": 20,
+          "complete95": [
+            0.7663,
+            0.9794
+          ],
+          "covered": 34,
+          "file5": 22,
+          "file_any": 26,
+          "mean_positive_tokens": 1193.8,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 37
+        },
+        "ctx-text-200": {
+          "complete": 17,
+          "complete5": 17,
+          "complete95": [
+            0.4423,
+            0.7847
+          ],
+          "covered": 24,
+          "file5": 25,
+          "file_any": 25,
+          "mean_positive_tokens": 186.0,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 37
+        },
+        "ctx-text-600": {
+          "complete": 23,
+          "complete5": 19,
+          "complete95": [
+            0.6752,
+            0.9408
+          ],
+          "covered": 32,
+          "file5": 22,
+          "file_any": 26,
+          "mean_positive_tokens": 587.7,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 37
+        },
+        "find-json-1200": {
+          "complete": 18,
+          "complete5": 17,
+          "complete95": [
+            0.4782,
+            0.8136
+          ],
+          "covered": 26,
+          "file5": 25,
+          "file_any": 26,
+          "mean_positive_tokens": 1175.5,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 37
+        },
+        "find-json-200": {
+          "complete": 16,
+          "complete5": 16,
+          "complete95": [
+            0.4073,
+            0.7549
+          ],
+          "covered": 22,
+          "file5": 24,
+          "file_any": 24,
+          "mean_positive_tokens": 169.9,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 5,
+          "positive": 27,
+          "required": 37
+        },
+        "find-json-600": {
+          "complete": 17,
+          "complete5": 17,
+          "complete95": [
+            0.4423,
+            0.7847
+          ],
+          "covered": 24,
+          "file5": 25,
+          "file_any": 26,
+          "mean_positive_tokens": 575.6,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 37
+        },
+        "find-text-1200": {
+          "complete": 20,
+          "complete5": 17,
+          "complete95": [
+            0.5532,
+            0.8683
+          ],
+          "covered": 29,
+          "file5": 25,
+          "file_any": 27,
+          "mean_positive_tokens": 1158.7,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 1,
+          "positive": 27,
+          "required": 37
+        },
+        "find-text-200": {
+          "complete": 17,
+          "complete5": 17,
+          "complete95": [
+            0.4423,
+            0.7847
+          ],
+          "covered": 24,
+          "file5": 25,
+          "file_any": 25,
+          "mean_positive_tokens": 183.9,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 37
+        },
+        "find-text-600": {
+          "complete": 18,
+          "complete5": 17,
+          "complete95": [
+            0.4782,
+            0.8136
+          ],
+          "covered": 27,
+          "file5": 25,
+          "file_any": 27,
+          "mean_positive_tokens": 587.1,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 5,
+          "positive": 27,
+          "required": 37
+        },
+        "graphify-1200": {
+          "complete": 15,
+          "complete5": 7,
+          "complete95": [
+            0.3731,
+            0.7241
+          ],
+          "covered": 21,
+          "file5": 18,
+          "file_any": 20,
+          "mean_positive_tokens": 1658.9,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 28,
+          "positive": 27,
+          "required": 37
+        },
+        "graphify-200": {
+          "complete": 10,
+          "complete5": 7,
+          "complete95": [
+            0.2153,
+            0.5577
+          ],
+          "covered": 13,
+          "file5": 18,
+          "file_any": 19,
+          "mean_positive_tokens": 391.9,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 30,
+          "positive": 27,
+          "required": 37
+        },
+        "graphify-600": {
+          "complete": 14,
+          "complete5": 7,
+          "complete95": [
+            0.3399,
+            0.6926
+          ],
+          "covered": 19,
+          "file5": 18,
+          "file_any": 20,
+          "mean_positive_tokens": 771.7,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 28,
+          "positive": 27,
+          "required": 37
+        },
+        "graphify-legacy-2000": {
+          "complete": 17,
+          "complete5": 7,
+          "complete95": [
+            0.4423,
+            0.7847
+          ],
+          "covered": 24,
+          "file5": 18,
+          "file_any": 21,
+          "mean_positive_tokens": 2627.9,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 27,
+          "positive": 27,
+          "required": 37
+        }
+      },
+      "paired_complete": {
+        "ctx-json-1200": {
+          "False/False": 2,
+          "False/True": 2,
+          "True/False": 10,
+          "True/True": 13
+        },
+        "ctx-json-200": {
+          "False/False": 10,
+          "False/True": 2,
+          "True/False": 7,
+          "True/True": 8
+        },
+        "ctx-json-600": {
+          "False/False": 7,
+          "False/True": 3,
+          "True/False": 6,
+          "True/True": 11
+        },
+        "ctx-text-1200": {
+          "False/False": 1,
+          "False/True": 1,
+          "True/False": 11,
+          "True/True": 14
+        },
+        "ctx-text-200": {
+          "False/False": 9,
+          "False/True": 1,
+          "True/False": 8,
+          "True/True": 9
+        },
+        "ctx-text-600": {
+          "False/False": 3,
+          "False/True": 1,
+          "True/False": 10,
+          "True/True": 13
+        },
+        "find-json-1200": {
+          "False/False": 5,
+          "False/True": 4,
+          "True/False": 7,
+          "True/True": 11
+        },
+        "find-json-200": {
+          "False/False": 9,
+          "False/True": 2,
+          "True/False": 8,
+          "True/True": 8
+        },
+        "find-json-600": {
+          "False/False": 7,
+          "False/True": 3,
+          "True/False": 6,
+          "True/True": 11
+        },
+        "find-text-1200": {
+          "False/False": 4,
+          "False/True": 3,
+          "True/False": 8,
+          "True/True": 12
+        },
+        "find-text-200": {
+          "False/False": 9,
+          "False/True": 1,
+          "True/False": 8,
+          "True/True": 9
+        },
+        "find-text-600": {
+          "False/False": 6,
+          "False/True": 3,
+          "True/False": 7,
+          "True/True": 11
+        }
+      }
+    },
+    "httpx": {
+      "metrics": {
+        "ctx-json-1200": {
+          "complete": 23,
+          "complete5": 18,
+          "complete95": [
+            0.6752,
+            0.9408
+          ],
+          "covered": 30,
+          "file5": 23,
+          "file_any": 26,
+          "mean_positive_tokens": 1141.4,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-json-200": {
+          "complete": 16,
+          "complete5": 16,
+          "complete95": [
+            0.4073,
+            0.7549
+          ],
+          "covered": 22,
+          "file5": 24,
+          "file_any": 24,
+          "mean_positive_tokens": 170.6,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 6,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-json-600": {
+          "complete": 18,
+          "complete5": 18,
+          "complete95": [
+            0.4782,
+            0.8136
+          ],
+          "covered": 24,
+          "file5": 26,
+          "file_any": 26,
+          "mean_positive_tokens": 555.7,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-text-1200": {
+          "complete": 24,
+          "complete5": 18,
+          "complete95": [
+            0.7194,
+            0.9615
+          ],
+          "covered": 32,
+          "file5": 22,
+          "file_any": 26,
+          "mean_positive_tokens": 1143.0,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-text-200": {
+          "complete": 18,
+          "complete5": 18,
+          "complete95": [
+            0.4782,
+            0.8136
+          ],
+          "covered": 24,
+          "file5": 26,
+          "file_any": 26,
+          "mean_positive_tokens": 186.3,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 5,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-text-600": {
+          "complete": 24,
+          "complete5": 18,
+          "complete95": [
+            0.7194,
+            0.9615
+          ],
+          "covered": 32,
+          "file5": 23,
+          "file_any": 26,
+          "mean_positive_tokens": 568.0,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 36
+        },
+        "find-json-1200": {
+          "complete": 21,
+          "complete5": 17,
+          "complete95": [
+            0.5924,
+            0.8939
+          ],
+          "covered": 28,
+          "file5": 27,
+          "file_any": 27,
+          "mean_positive_tokens": 1103.2,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 36
+        },
+        "find-json-200": {
+          "complete": 17,
+          "complete5": 17,
+          "complete95": [
+            0.4423,
+            0.7847
+          ],
+          "covered": 24,
+          "file5": 27,
+          "file_any": 27,
+          "mean_positive_tokens": 171.1,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 36
+        },
+        "find-json-600": {
+          "complete": 19,
+          "complete5": 17,
+          "complete95": [
+            0.5152,
+            0.8415
+          ],
+          "covered": 26,
+          "file5": 27,
+          "file_any": 27,
+          "mean_positive_tokens": 570.4,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 36
+        },
+        "find-text-1200": {
+          "complete": 24,
+          "complete5": 17,
+          "complete95": [
+            0.7194,
+            0.9615
+          ],
+          "covered": 31,
+          "file5": 27,
+          "file_any": 27,
+          "mean_positive_tokens": 956.7,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 1,
+          "positive": 27,
+          "required": 36
+        },
+        "find-text-200": {
+          "complete": 18,
+          "complete5": 17,
+          "complete95": [
+            0.4782,
+            0.8136
+          ],
+          "covered": 25,
+          "file5": 27,
+          "file_any": 27,
+          "mean_positive_tokens": 178.9,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 36
+        },
+        "find-text-600": {
+          "complete": 23,
+          "complete5": 17,
+          "complete95": [
+            0.6752,
+            0.9408
+          ],
+          "covered": 30,
+          "file5": 27,
+          "file_any": 27,
+          "mean_positive_tokens": 543.7,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-1200": {
+          "complete": 18,
+          "complete5": 14,
+          "complete95": [
+            0.4782,
+            0.8136
+          ],
+          "covered": 24,
+          "file5": 19,
+          "file_any": 27,
+          "mean_positive_tokens": 1416.3,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 0,
+          "negative_total": 3,
+          "over_budget": 27,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-200": {
+          "complete": 14,
+          "complete5": 14,
+          "complete95": [
+            0.3399,
+            0.6926
+          ],
+          "covered": 19,
+          "file5": 19,
+          "file_any": 23,
+          "mean_positive_tokens": 437.5,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 0,
+          "negative_total": 3,
+          "over_budget": 27,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-600": {
+          "complete": 16,
+          "complete5": 14,
+          "complete95": [
+            0.4073,
+            0.7549
+          ],
+          "covered": 21,
+          "file5": 19,
+          "file_any": 24,
+          "mean_positive_tokens": 817.6,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 0,
+          "negative_total": 3,
+          "over_budget": 27,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-legacy-2000": {
+          "complete": 19,
+          "complete5": 14,
+          "complete95": [
+            0.5152,
+            0.8415
+          ],
+          "covered": 25,
+          "file5": 19,
+          "file_any": 27,
+          "mean_positive_tokens": 3148.7,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 0,
+          "negative_total": 3,
+          "over_budget": 27,
+          "positive": 27,
+          "required": 36
+        }
+      },
+      "paired_complete": {
+        "ctx-json-1200": {
+          "False/False": 3,
+          "False/True": 1,
+          "True/False": 6,
+          "True/True": 17
+        },
+        "ctx-json-200": {
+          "False/False": 9,
+          "False/True": 2,
+          "True/False": 4,
+          "True/True": 12
+        },
+        "ctx-json-600": {
+          "False/False": 6,
+          "False/True": 3,
+          "True/False": 5,
+          "True/True": 13
+        },
+        "ctx-text-1200": {
+          "False/False": 2,
+          "False/True": 1,
+          "True/False": 7,
+          "True/True": 17
+        },
+        "ctx-text-200": {
+          "False/False": 7,
+          "False/True": 2,
+          "True/False": 6,
+          "True/True": 12
+        },
+        "ctx-text-600": {
+          "False/False": 2,
+          "False/True": 1,
+          "True/False": 9,
+          "True/True": 15
+        },
+        "find-json-1200": {
+          "False/False": 3,
+          "False/True": 3,
+          "True/False": 6,
+          "True/True": 15
+        },
+        "find-json-200": {
+          "False/False": 8,
+          "False/True": 2,
+          "True/False": 5,
+          "True/True": 12
+        },
+        "find-json-600": {
+          "False/False": 5,
+          "False/True": 3,
+          "True/False": 6,
+          "True/True": 13
+        },
+        "find-text-1200": {
+          "False/False": 2,
+          "False/True": 1,
+          "True/False": 7,
+          "True/True": 17
+        },
+        "find-text-200": {
+          "False/False": 8,
+          "False/True": 1,
+          "True/False": 5,
+          "True/True": 13
+        },
+        "find-text-600": {
+          "False/False": 3,
+          "False/True": 1,
+          "True/False": 8,
+          "True/True": 15
+        }
+      }
+    },
+    "ripgrep": {
+      "metrics": {
+        "ctx-json-1200": {
+          "complete": 21,
+          "complete5": 17,
+          "complete95": [
+            0.5924,
+            0.8939
+          ],
+          "covered": 28,
+          "file5": 21,
+          "file_any": 25,
+          "mean_positive_tokens": 1184.2,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-json-200": {
+          "complete": 10,
+          "complete5": 10,
+          "complete95": [
+            0.2153,
+            0.5577
+          ],
+          "covered": 13,
+          "file5": 21,
+          "file_any": 21,
+          "mean_positive_tokens": 170.4,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-json-600": {
+          "complete": 18,
+          "complete5": 17,
+          "complete95": [
+            0.4782,
+            0.8136
+          ],
+          "covered": 25,
+          "file5": 25,
+          "file_any": 25,
+          "mean_positive_tokens": 569.8,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-text-1200": {
+          "complete": 24,
+          "complete5": 18,
+          "complete95": [
+            0.7194,
+            0.9615
+          ],
+          "covered": 32,
+          "file5": 21,
+          "file_any": 26,
+          "mean_positive_tokens": 1189.6,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-text-200": {
+          "complete": 11,
+          "complete5": 11,
+          "complete95": [
+            0.2451,
+            0.5927
+          ],
+          "covered": 17,
+          "file5": 24,
+          "file_any": 24,
+          "mean_positive_tokens": 182.8,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-text-600": {
+          "complete": 24,
+          "complete5": 18,
+          "complete95": [
+            0.7194,
+            0.9615
+          ],
+          "covered": 31,
+          "file5": 21,
+          "file_any": 25,
+          "mean_positive_tokens": 589.9,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 36
+        },
+        "find-json-1200": {
+          "complete": 14,
+          "complete5": 13,
+          "complete95": [
+            0.3399,
+            0.6926
+          ],
+          "covered": 21,
+          "file5": 25,
+          "file_any": 27,
+          "mean_positive_tokens": 1181.9,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 10,
+          "positive": 27,
+          "required": 36
+        },
+        "find-json-200": {
+          "complete": 10,
+          "complete5": 10,
+          "complete95": [
+            0.2153,
+            0.5577
+          ],
+          "covered": 14,
+          "file5": 22,
+          "file_any": 22,
+          "mean_positive_tokens": 178.0,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 5,
+          "positive": 27,
+          "required": 36
+        },
+        "find-json-600": {
+          "complete": 13,
+          "complete5": 13,
+          "complete95": [
+            0.3074,
+            0.6601
+          ],
+          "covered": 20,
+          "file5": 25,
+          "file_any": 27,
+          "mean_positive_tokens": 577.6,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 5,
+          "positive": 27,
+          "required": 36
+        },
+        "find-text-1200": {
+          "complete": 15,
+          "complete5": 13,
+          "complete95": [
+            0.3731,
+            0.7241
+          ],
+          "covered": 23,
+          "file5": 25,
+          "file_any": 27,
+          "mean_positive_tokens": 1175.5,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 0,
+          "positive": 27,
+          "required": 36
+        },
+        "find-text-200": {
+          "complete": 13,
+          "complete5": 13,
+          "complete95": [
+            0.3074,
+            0.6601
+          ],
+          "covered": 19,
+          "file5": 25,
+          "file_any": 25,
+          "mean_positive_tokens": 187.4,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 5,
+          "positive": 27,
+          "required": 36
+        },
+        "find-text-600": {
+          "complete": 15,
+          "complete5": 13,
+          "complete95": [
+            0.3731,
+            0.7241
+          ],
+          "covered": 23,
+          "file5": 25,
+          "file_any": 27,
+          "mean_positive_tokens": 586.4,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-1200": {
+          "complete": 8,
+          "complete5": 5,
+          "complete95": [
+            0.1585,
+            0.4848
+          ],
+          "covered": 8,
+          "file5": 17,
+          "file_any": 18,
+          "mean_positive_tokens": 1327.3,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 28,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-200": {
+          "complete": 5,
+          "complete5": 5,
+          "complete95": [
+            0.0818,
+            0.367
+          ],
+          "covered": 5,
+          "file5": 17,
+          "file_any": 17,
+          "mean_positive_tokens": 402.9,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 30,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-600": {
+          "complete": 6,
+          "complete5": 5,
+          "complete95": [
+            0.1061,
+            0.4076
+          ],
+          "covered": 6,
+          "file5": 17,
+          "file_any": 18,
+          "mean_positive_tokens": 778.0,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 29,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-legacy-2000": {
+          "complete": 11,
+          "complete5": 5,
+          "complete95": [
+            0.2451,
+            0.5927
+          ],
+          "covered": 14,
+          "file5": 17,
+          "file_any": 19,
+          "mean_positive_tokens": 2621.9,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 28,
+          "positive": 27,
+          "required": 36
+        }
+      },
+      "paired_complete": {
+        "ctx-json-1200": {
+          "False/False": 6,
+          "True/False": 13,
+          "True/True": 8
+        },
+        "ctx-json-200": {
+          "False/False": 15,
+          "False/True": 2,
+          "True/False": 7,
+          "True/True": 3
+        },
+        "ctx-json-600": {
+          "False/False": 8,
+          "False/True": 1,
+          "True/False": 13,
+          "True/True": 5
+        },
+        "ctx-text-1200": {
+          "False/False": 3,
+          "True/False": 16,
+          "True/True": 8
+        },
+        "ctx-text-200": {
+          "False/False": 15,
+          "False/True": 1,
+          "True/False": 7,
+          "True/True": 4
+        },
+        "ctx-text-600": {
+          "False/False": 3,
+          "True/False": 18,
+          "True/True": 6
+        },
+        "find-json-1200": {
+          "False/False": 11,
+          "False/True": 2,
+          "True/False": 8,
+          "True/True": 6
+        },
+        "find-json-200": {
+          "False/False": 15,
+          "False/True": 2,
+          "True/False": 7,
+          "True/True": 3
+        },
+        "find-json-600": {
+          "False/False": 13,
+          "False/True": 1,
+          "True/False": 8,
+          "True/True": 5
+        },
+        "find-text-1200": {
+          "False/False": 10,
+          "False/True": 2,
+          "True/False": 9,
+          "True/True": 6
+        },
+        "find-text-200": {
+          "False/False": 13,
+          "False/True": 1,
+          "True/False": 9,
+          "True/True": 4
+        },
+        "find-text-600": {
+          "False/False": 11,
+          "False/True": 1,
+          "True/False": 10,
+          "True/True": 5
+        }
+      }
+    },
+    "svelte-realworld": {
+      "metrics": {
+        "ctx-json-1200": {
+          "complete": 14,
+          "complete5": 10,
+          "complete95": [
+            0.3399,
+            0.6926
+          ],
+          "covered": 22,
+          "file5": 19,
+          "file_any": 21,
+          "mean_positive_tokens": 1174.1,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 37
+        },
+        "ctx-json-200": {
+          "complete": 8,
+          "complete5": 8,
+          "complete95": [
+            0.1585,
+            0.4848
+          ],
+          "covered": 13,
+          "file5": 20,
+          "file_any": 20,
+          "mean_positive_tokens": 165.6,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 37
+        },
+        "ctx-json-600": {
+          "complete": 13,
+          "complete5": 10,
+          "complete95": [
+            0.3074,
+            0.6601
+          ],
+          "covered": 20,
+          "file5": 19,
+          "file_any": 20,
+          "mean_positive_tokens": 581.3,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 6,
+          "positive": 27,
+          "required": 37
+        },
+        "ctx-text-1200": {
+          "complete": 14,
+          "complete5": 9,
+          "complete95": [
+            0.3399,
+            0.6926
+          ],
+          "covered": 23,
+          "file5": 19,
+          "file_any": 25,
+          "mean_positive_tokens": 685.7,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 0,
+          "positive": 27,
+          "required": 37
+        },
+        "ctx-text-200": {
+          "complete": 13,
+          "complete5": 10,
+          "complete95": [
+            0.3074,
+            0.6601
+          ],
+          "covered": 20,
+          "file5": 19,
+          "file_any": 20,
+          "mean_positive_tokens": 195.9,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 5,
+          "positive": 27,
+          "required": 37
+        },
+        "ctx-text-600": {
+          "complete": 14,
+          "complete5": 10,
+          "complete95": [
+            0.3399,
+            0.6926
+          ],
+          "covered": 23,
+          "file5": 19,
+          "file_any": 23,
+          "mean_positive_tokens": 561.8,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 1,
+          "positive": 27,
+          "required": 37
+        },
+        "find-json-1200": {
+          "complete": 16,
+          "complete5": 12,
+          "complete95": [
+            0.4073,
+            0.7549
+          ],
+          "covered": 23,
+          "file5": 20,
+          "file_any": 27,
+          "mean_positive_tokens": 1097.0,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 0,
+          "positive": 27,
+          "required": 37
+        },
+        "find-json-200": {
+          "complete": 9,
+          "complete5": 9,
+          "complete95": [
+            0.1864,
+            0.5218
+          ],
+          "covered": 14,
+          "file5": 20,
+          "file_any": 20,
+          "mean_positive_tokens": 181.3,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 37
+        },
+        "find-json-600": {
+          "complete": 13,
+          "complete5": 12,
+          "complete95": [
+            0.3074,
+            0.6601
+          ],
+          "covered": 19,
+          "file5": 20,
+          "file_any": 25,
+          "mean_positive_tokens": 562.1,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 5,
+          "positive": 27,
+          "required": 37
+        },
+        "find-text-1200": {
+          "complete": 17,
+          "complete5": 12,
+          "complete95": [
+            0.4423,
+            0.7847
+          ],
+          "covered": 26,
+          "file5": 20,
+          "file_any": 27,
+          "mean_positive_tokens": 789.3,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 37
+        },
+        "find-text-200": {
+          "complete": 13,
+          "complete5": 12,
+          "complete95": [
+            0.3074,
+            0.6601
+          ],
+          "covered": 19,
+          "file5": 20,
+          "file_any": 24,
+          "mean_positive_tokens": 192.7,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 5,
+          "positive": 27,
+          "required": 37
+        },
+        "find-text-600": {
+          "complete": 16,
+          "complete5": 12,
+          "complete95": [
+            0.4073,
+            0.7549
+          ],
+          "covered": 25,
+          "file5": 20,
+          "file_any": 27,
+          "mean_positive_tokens": 527.4,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 1,
+          "positive": 27,
+          "required": 37
+        },
+        "graphify-1200": {
+          "complete": 7,
+          "complete5": 4,
+          "complete95": [
+            0.1317,
+            0.4468
+          ],
+          "covered": 16,
+          "file5": 15,
+          "file_any": 23,
+          "mean_positive_tokens": 1487.6,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 0,
+          "negative_total": 3,
+          "over_budget": 19,
+          "positive": 27,
+          "required": 37
+        },
+        "graphify-200": {
+          "complete": 4,
+          "complete5": 4,
+          "complete95": [
+            0.0592,
+            0.3248
+          ],
+          "covered": 8,
+          "file5": 14,
+          "file_any": 14,
+          "mean_positive_tokens": 373.7,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 0,
+          "negative_total": 3,
+          "over_budget": 27,
+          "positive": 27,
+          "required": 37
+        },
+        "graphify-600": {
+          "complete": 7,
+          "complete5": 4,
+          "complete95": [
+            0.1317,
+            0.4468
+          ],
+          "covered": 16,
+          "file5": 15,
+          "file_any": 17,
+          "mean_positive_tokens": 730.6,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 0,
+          "negative_total": 3,
+          "over_budget": 22,
+          "positive": 27,
+          "required": 37
+        },
+        "graphify-legacy-2000": {
+          "complete": 7,
+          "complete5": 4,
+          "complete95": [
+            0.1317,
+            0.4468
+          ],
+          "covered": 16,
+          "file5": 15,
+          "file_any": 23,
+          "mean_positive_tokens": 3219.4,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 0,
+          "negative_total": 3,
+          "over_budget": 19,
+          "positive": 27,
+          "required": 37
+        }
+      },
+      "paired_complete": {
+        "ctx-json-1200": {
+          "False/False": 13,
+          "True/False": 7,
+          "True/True": 7
+        },
+        "ctx-json-200": {
+          "False/False": 17,
+          "False/True": 2,
+          "True/False": 6,
+          "True/True": 2
+        },
+        "ctx-json-600": {
+          "False/False": 14,
+          "True/False": 6,
+          "True/True": 7
+        },
+        "ctx-text-1200": {
+          "False/False": 13,
+          "True/False": 7,
+          "True/True": 7
+        },
+        "ctx-text-200": {
+          "False/False": 14,
+          "True/False": 9,
+          "True/True": 4
+        },
+        "ctx-text-600": {
+          "False/False": 13,
+          "True/False": 7,
+          "True/True": 7
+        },
+        "find-json-1200": {
+          "False/False": 11,
+          "True/False": 9,
+          "True/True": 7
+        },
+        "find-json-200": {
+          "False/False": 16,
+          "False/True": 2,
+          "True/False": 7,
+          "True/True": 2
+        },
+        "find-json-600": {
+          "False/False": 13,
+          "False/True": 1,
+          "True/False": 7,
+          "True/True": 6
+        },
+        "find-text-1200": {
+          "False/False": 10,
+          "True/False": 10,
+          "True/True": 7
+        },
+        "find-text-200": {
+          "False/False": 13,
+          "False/True": 1,
+          "True/False": 10,
+          "True/True": 3
+        },
+        "find-text-600": {
+          "False/False": 11,
+          "True/False": 9,
+          "True/True": 7
+        }
+      }
+    },
+    "taxonomy": {
+      "metrics": {
+        "ctx-json-1200": {
+          "complete": 21,
+          "complete5": 20,
+          "complete95": [
+            0.5924,
+            0.8939
+          ],
+          "covered": 29,
+          "file5": 22,
+          "file_any": 24,
+          "mean_positive_tokens": 1132.9,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 0,
+          "positive": 27,
+          "required": 37
+        },
+        "ctx-json-200": {
+          "complete": 15,
+          "complete5": 15,
+          "complete95": [
+            0.3731,
+            0.7241
+          ],
+          "covered": 22,
+          "file5": 22,
+          "file_any": 22,
+          "mean_positive_tokens": 164.9,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 37
+        },
+        "ctx-json-600": {
+          "complete": 21,
+          "complete5": 20,
+          "complete95": [
+            0.5924,
+            0.8939
+          ],
+          "covered": 28,
+          "file5": 22,
+          "file_any": 23,
+          "mean_positive_tokens": 555.8,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 37
+        },
+        "ctx-text-1200": {
+          "complete": 24,
+          "complete5": 20,
+          "complete95": [
+            0.7194,
+            0.9615
+          ],
+          "covered": 33,
+          "file5": 22,
+          "file_any": 26,
+          "mean_positive_tokens": 1145.1,
+          "multi_complete": 5,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 1,
+          "positive": 27,
+          "required": 37
+        },
+        "ctx-text-200": {
+          "complete": 21,
+          "complete5": 21,
+          "complete95": [
+            0.5924,
+            0.8939
+          ],
+          "covered": 28,
+          "file5": 23,
+          "file_any": 23,
+          "mean_positive_tokens": 184.2,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 37
+        },
+        "ctx-text-600": {
+          "complete": 21,
+          "complete5": 20,
+          "complete95": [
+            0.5924,
+            0.8939
+          ],
+          "covered": 29,
+          "file5": 22,
+          "file_any": 24,
+          "mean_positive_tokens": 570.6,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 8,
+          "positive": 27,
+          "required": 37
+        },
+        "find-json-1200": {
+          "complete": 23,
+          "complete5": 18,
+          "complete95": [
+            0.6752,
+            0.9408
+          ],
+          "covered": 32,
+          "file5": 23,
+          "file_any": 27,
+          "mean_positive_tokens": 1150.0,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 37
+        },
+        "find-json-200": {
+          "complete": 14,
+          "complete5": 14,
+          "complete95": [
+            0.3399,
+            0.6926
+          ],
+          "covered": 21,
+          "file5": 22,
+          "file_any": 22,
+          "mean_positive_tokens": 173.9,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 1,
+          "positive": 27,
+          "required": 37
+        },
+        "find-json-600": {
+          "complete": 22,
+          "complete5": 18,
+          "complete95": [
+            0.633,
+            0.9182
+          ],
+          "covered": 31,
+          "file5": 23,
+          "file_any": 27,
+          "mean_positive_tokens": 571.9,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 37
+        },
+        "find-text-1200": {
+          "complete": 23,
+          "complete5": 18,
+          "complete95": [
+            0.6752,
+            0.9408
+          ],
+          "covered": 33,
+          "file5": 23,
+          "file_any": 27,
+          "mean_positive_tokens": 1002.9,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 3,
+          "positive": 27,
+          "required": 37
+        },
+        "find-text-200": {
+          "complete": 21,
+          "complete5": 18,
+          "complete95": [
+            0.5924,
+            0.8939
+          ],
+          "covered": 29,
+          "file5": 23,
+          "file_any": 26,
+          "mean_positive_tokens": 187.4,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 1,
+          "positive": 27,
+          "required": 37
+        },
+        "find-text-600": {
+          "complete": 23,
+          "complete5": 18,
+          "complete95": [
+            0.6752,
+            0.9408
+          ],
+          "covered": 32,
+          "file5": 23,
+          "file_any": 27,
+          "mean_positive_tokens": 572.3,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 8,
+          "positive": 27,
+          "required": 37
+        },
+        "graphify-1200": {
+          "complete": 16,
+          "complete5": 10,
+          "complete95": [
+            0.4073,
+            0.7549
+          ],
+          "covered": 21,
+          "file5": 15,
+          "file_any": 19,
+          "mean_positive_tokens": 1468.1,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 0,
+          "negative_total": 3,
+          "over_budget": 22,
+          "positive": 27,
+          "required": 37
+        },
+        "graphify-200": {
+          "complete": 11,
+          "complete5": 10,
+          "complete95": [
+            0.2451,
+            0.5927
+          ],
+          "covered": 14,
+          "file5": 15,
+          "file_any": 15,
+          "mean_positive_tokens": 375.7,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 0,
+          "negative_total": 3,
+          "over_budget": 26,
+          "positive": 27,
+          "required": 37
+        },
+        "graphify-600": {
+          "complete": 14,
+          "complete5": 10,
+          "complete95": [
+            0.3399,
+            0.6926
+          ],
+          "covered": 18,
+          "file5": 15,
+          "file_any": 16,
+          "mean_positive_tokens": 758.1,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 0,
+          "negative_total": 3,
+          "over_budget": 22,
+          "positive": 27,
+          "required": 37
+        },
+        "graphify-legacy-2000": {
+          "complete": 17,
+          "complete5": 10,
+          "complete95": [
+            0.4423,
+            0.7847
+          ],
+          "covered": 22,
+          "file5": 15,
+          "file_any": 19,
+          "mean_positive_tokens": 3284.6,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 0,
+          "negative_total": 3,
+          "over_budget": 20,
+          "positive": 27,
+          "required": 37
+        }
+      },
+      "paired_complete": {
+        "ctx-json-1200": {
+          "False/False": 5,
+          "False/True": 1,
+          "True/False": 6,
+          "True/True": 15
+        },
+        "ctx-json-200": {
+          "False/False": 10,
+          "False/True": 2,
+          "True/False": 6,
+          "True/True": 9
+        },
+        "ctx-json-600": {
+          "False/False": 6,
+          "True/False": 7,
+          "True/True": 14
+        },
+        "ctx-text-1200": {
+          "False/False": 3,
+          "True/False": 8,
+          "True/True": 16
+        },
+        "ctx-text-200": {
+          "False/False": 6,
+          "True/False": 10,
+          "True/True": 11
+        },
+        "ctx-text-600": {
+          "False/False": 6,
+          "True/False": 7,
+          "True/True": 14
+        },
+        "find-json-1200": {
+          "False/False": 4,
+          "True/False": 7,
+          "True/True": 16
+        },
+        "find-json-200": {
+          "False/False": 11,
+          "False/True": 2,
+          "True/False": 5,
+          "True/True": 9
+        },
+        "find-json-600": {
+          "False/False": 4,
+          "False/True": 1,
+          "True/False": 9,
+          "True/True": 13
+        },
+        "find-text-1200": {
+          "False/False": 4,
+          "True/False": 7,
+          "True/True": 16
+        },
+        "find-text-200": {
+          "False/False": 6,
+          "True/False": 10,
+          "True/True": 11
+        },
+        "find-text-600": {
+          "False/False": 4,
+          "True/False": 9,
+          "True/True": 14
+        }
+      }
+    },
+    "xcalygraph": {
+      "metrics": {
+        "ctx-json-1200": {
+          "complete": 19,
+          "complete5": 18,
+          "complete95": [
+            0.5152,
+            0.8415
+          ],
+          "covered": 25,
+          "file5": 22,
+          "file_any": 25,
+          "mean_positive_tokens": 1180.2,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 6,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-json-200": {
+          "complete": 15,
+          "complete5": 15,
+          "complete95": [
+            0.3731,
+            0.7241
+          ],
+          "covered": 19,
+          "file5": 21,
+          "file_any": 21,
+          "mean_positive_tokens": 173.3,
+          "multi_complete": 0,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 1,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-json-600": {
+          "complete": 17,
+          "complete5": 17,
+          "complete95": [
+            0.4423,
+            0.7847
+          ],
+          "covered": 22,
+          "file5": 23,
+          "file_any": 25,
+          "mean_positive_tokens": 576.3,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-text-1200": {
+          "complete": 22,
+          "complete5": 17,
+          "complete95": [
+            0.633,
+            0.9182
+          ],
+          "covered": 30,
+          "file5": 20,
+          "file_any": 25,
+          "mean_positive_tokens": 1192.1,
+          "multi_complete": 3,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-text-200": {
+          "complete": 16,
+          "complete5": 16,
+          "complete95": [
+            0.4073,
+            0.7549
+          ],
+          "covered": 20,
+          "file5": 23,
+          "file_any": 24,
+          "mean_positive_tokens": 178.8,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 36
+        },
+        "ctx-text-600": {
+          "complete": 19,
+          "complete5": 18,
+          "complete95": [
+            0.5152,
+            0.8415
+          ],
+          "covered": 26,
+          "file5": 21,
+          "file_any": 25,
+          "mean_positive_tokens": 590.2,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 36
+        },
+        "find-json-1200": {
+          "complete": 16,
+          "complete5": 16,
+          "complete95": [
+            0.4073,
+            0.7549
+          ],
+          "covered": 21,
+          "file5": 24,
+          "file_any": 26,
+          "mean_positive_tokens": 1172.6,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 4,
+          "positive": 27,
+          "required": 36
+        },
+        "find-json-200": {
+          "complete": 16,
+          "complete5": 16,
+          "complete95": [
+            0.4073,
+            0.7549
+          ],
+          "covered": 20,
+          "file5": 22,
+          "file_any": 22,
+          "mean_positive_tokens": 175.9,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 36
+        },
+        "find-json-600": {
+          "complete": 16,
+          "complete5": 16,
+          "complete95": [
+            0.4073,
+            0.7549
+          ],
+          "covered": 21,
+          "file5": 24,
+          "file_any": 24,
+          "mean_positive_tokens": 580.2,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 5,
+          "positive": 27,
+          "required": 36
+        },
+        "find-text-1200": {
+          "complete": 19,
+          "complete5": 16,
+          "complete95": [
+            0.5152,
+            0.8415
+          ],
+          "covered": 24,
+          "file5": 24,
+          "file_any": 26,
+          "mean_positive_tokens": 1133.0,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 36
+        },
+        "find-text-200": {
+          "complete": 16,
+          "complete5": 16,
+          "complete95": [
+            0.4073,
+            0.7549
+          ],
+          "covered": 20,
+          "file5": 24,
+          "file_any": 24,
+          "mean_positive_tokens": 189.9,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 6,
+          "positive": 27,
+          "required": 36
+        },
+        "find-text-600": {
+          "complete": 17,
+          "complete5": 16,
+          "complete95": [
+            0.4423,
+            0.7847
+          ],
+          "covered": 22,
+          "file5": 24,
+          "file_any": 26,
+          "mean_positive_tokens": 585.4,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 2,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-1200": {
+          "complete": 13,
+          "complete5": 8,
+          "complete95": [
+            0.3074,
+            0.6601
+          ],
+          "covered": 18,
+          "file5": 19,
+          "file_any": 22,
+          "mean_positive_tokens": 1394.4,
+          "multi_complete": 2,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 30,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-200": {
+          "complete": 8,
+          "complete5": 8,
+          "complete95": [
+            0.1585,
+            0.4848
+          ],
+          "covered": 10,
+          "file5": 19,
+          "file_any": 20,
+          "mean_positive_tokens": 402.1,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 30,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-600": {
+          "complete": 10,
+          "complete5": 8,
+          "complete95": [
+            0.2153,
+            0.5577
+          ],
+          "covered": 14,
+          "file5": 19,
+          "file_any": 20,
+          "mean_positive_tokens": 793.1,
+          "multi_complete": 1,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 30,
+          "positive": 27,
+          "required": 36
+        },
+        "graphify-legacy-2000": {
+          "complete": 19,
+          "complete5": 8,
+          "complete95": [
+            0.5152,
+            0.8415
+          ],
+          "covered": 24,
+          "file5": 19,
+          "file_any": 23,
+          "mean_positive_tokens": 2313.0,
+          "multi_complete": 4,
+          "multi_total": 6,
+          "negative_false_positive": 3,
+          "negative_total": 3,
+          "over_budget": 30,
+          "positive": 27,
+          "required": 36
+        }
+      },
+      "paired_complete": {
+        "ctx-json-1200": {
+          "False/False": 6,
+          "False/True": 2,
+          "True/False": 8,
+          "True/True": 11
+        },
+        "ctx-json-200": {
+          "False/False": 11,
+          "False/True": 1,
+          "True/False": 8,
+          "True/True": 7
+        },
+        "ctx-json-600": {
+          "False/False": 9,
+          "False/True": 1,
+          "True/False": 8,
+          "True/True": 9
+        },
+        "ctx-text-1200": {
+          "False/False": 4,
+          "False/True": 1,
+          "True/False": 10,
+          "True/True": 12
+        },
+        "ctx-text-200": {
+          "False/False": 11,
+          "True/False": 8,
+          "True/True": 8
+        },
+        "ctx-text-600": {
+          "False/False": 7,
+          "False/True": 1,
+          "True/False": 10,
+          "True/True": 9
+        },
+        "find-json-1200": {
+          "False/False": 8,
+          "False/True": 3,
+          "True/False": 6,
+          "True/True": 10
+        },
+        "find-json-200": {
+          "False/False": 11,
+          "True/False": 8,
+          "True/True": 8
+        },
+        "find-json-600": {
+          "False/False": 9,
+          "False/True": 2,
+          "True/False": 8,
+          "True/True": 8
+        },
+        "find-text-1200": {
+          "False/False": 7,
+          "False/True": 1,
+          "True/False": 7,
+          "True/True": 12
+        },
+        "find-text-200": {
+          "False/False": 11,
+          "True/False": 8,
+          "True/True": 8
+        },
+        "find-text-600": {
+          "False/False": 8,
+          "False/True": 2,
+          "True/False": 9,
+          "True/True": 8
+        }
+      }
+    }
+  },
+  "evaluator_commit": "169306a",
+  "first_evaluation": true,
+  "limitations": {
+    "authorship": "Questions authored by the same agent that maintains retrieval. Sources and labels frozen before further retrieval edits; no retrieval on these questions before freeze. Not author-blinded.",
+    "exposure": "This evaluation consumes final eligibility. These questions are development data after inspection.",
+    "negative": "Absent exact-name probes of semantic search; irrelevant locators do not prove fabricated underlying facts.",
+    "sampling": "Deliberately authored and correlated questions, not a random or author-blinded sample. Wilson intervals are descriptive.",
+    "scope": "Source locator retrieval, not final agent-answer correctness or causal before/after gain.",
+    "tokens": "Estimated as ceil(output bytes / 3), measured from complete rendered output."
+  },
+  "manifest_sha256": "239014b6fc5471faf8f861fc706a61acbcce8dc7b71bc6644718727283362809",
+  "phase": "first final evaluation",
+  "schema": 1
+}

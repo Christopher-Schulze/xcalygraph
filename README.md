@@ -115,7 +115,7 @@ NAME accepts `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get
 
 ## Benchmarks
 
-All measurements use the same three public corpora:
+The development comparisons below use three public corpora:
 
 | corpus | language | files | why |
 |---|---|---|---|
@@ -136,6 +136,14 @@ Each question describes code in plain words ("compare two secrets in constant ti
 | xcalygraph source | 32 | 96 %, 590 tokens | 75 %, 2,573 tokens | 100 %, 20,283 tokens |
 
 On these development questions, xcalygraph uses 23 to 27 % of Graphify's output tokens. Counted anywhere in its 600-token answer, xcalygraph reaches 87 %, 100 % and 96 %. These questions have been used for tuning and do not establish generalization or real-agent token savings. Earlier comparisons using a stale xcalygraph source copy are superseded by these same-snapshot results; their held-out superiority claims are withdrawn. `impact` finds all 10 expected dependents and tests on the xcalygraph impact set, at 343 tokens per answer.
+
+### Frozen source-locator evaluation
+
+A separate [frozen suite](scripts/benchmarks/questions/sealed/manifest.json) covers eight public corpora with 240 source-verified questions, including 216 positive questions and 24 absent-symbol probes. Source and question identities were fixed before this evaluation. The same agent authored the questions; this is a deliberately selected, correlated sample, not a blinded or random generalization proof. [Full aggregate observations](scripts/benchmarks/questions/sealed/observations.json) retain paired outcomes, descriptive intervals and requested-budget curves.
+
+At a requested 600 tokens, `find` text returns every required definition for 151/216 positive questions, averaging 572 estimated tokens; Graphify at its legacy 2000 setting reaches 121/216 at 2833 tokens. For the 48 questions requiring multiple locations, `find` completes 18, `ctx` at 600 completes 26, and Graphify at 2000 completes 21. These measure emitted source locators, not an agent's final answer or total work.
+
+Universal superiority is not established: on React the legacy file hit is 25/27 against Graphify's 27/27, on Svelte 20/27 against 23/27, and on httpx both reach 27/27. `find` returns irrelevant locations for all 24 absent exact-symbol probes; Graphify does so for 12. Requested budgets are also exceeded in some answers: at 600 the observed maximum excess is 3 estimated tokens for `find` text and 7 for JSON. After inspection this suite is development data; reruns cannot be called unseen final evaluations.
 
 ### Building and updating the index
 
