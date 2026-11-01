@@ -419,6 +419,26 @@ mod tests {
     }
 
     #[test]
+    fn read_only_rejects_a_different_extraction_version() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let dir = TestDir::new("refresh-read-only-extraction")?;
+        dir.write("root/a.go", "package a\n")?;
+        let workspace = workspace(&dir);
+        refresh(&workspace, Mode::Write)?;
+        let mut meta = workspace
+            .store
+            .read_meta()
+            .map_err(|error| error.to_string())?;
+        meta.extraction_version += 1;
+        workspace.store.write_meta(&meta)?;
+        assert!(matches!(
+            refresh(&workspace, Mode::ReadOnly),
+            Err(AppError::Stale("index missing"))
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn changes_rewrite_only_affected_shards_and_read_only_sees_staleness()
     -> Result<(), Box<dyn std::error::Error>> {
         let dir = TestDir::new("refresh-change")?;

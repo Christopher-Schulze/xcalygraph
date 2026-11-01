@@ -200,7 +200,7 @@ fn writable_query_and_index_recover_every_corrupt_derived_image() -> TestResult 
             let before = snapshot(&fixture.work.0)?;
             let read_only =
                 fixture.run(&["find", "recoverable_marker", "--read-only"], Some(&base))?;
-            assert!(!read_only.status.success(), "{recovery} {kind}");
+            assert_eq!(read_only.status.code(), Some(5), "{recovery} {kind}");
             assert!(
                 String::from_utf8_lossy(&read_only.stderr).contains("xcalygraph index"),
                 "{recovery} {kind}: {}",
@@ -259,7 +259,7 @@ fn corrupt_default_index_read_only_changes_nothing() -> TestResult {
     corrupt(&derived(&base)?, "payload")?;
     let before = snapshot(&fixture.work.0)?;
     let output = fixture.run(&["find", "recoverable_marker", "--read-only"], None)?;
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(5));
     assert!(String::from_utf8_lossy(&output.stderr).contains("xcalygraph index"));
     assert!(
         snapshot(&fixture.work.0)? == before,
@@ -297,6 +297,76 @@ fn read_only_discovers_a_local_index_without_probing_or_creating_a_shared_base()
         "local read-only query wrote files"
     );
     Ok(())
+}
+
+#[test]
+fn every_read_only_command_and_state_leaves_the_filesystem_untouched() -> TestResult {
+    let fixture = Fixture::new()?;
+    fs::write(
+        fixture.root.join("lib.rs"),
+        "pub fn recoverable_marker() -> usize { 42 }\npub fn caller() -> usize { recoverable_marker() }\n",
+    )?;
+    assert_success(&fixture.run(&["index"], None)?);
+    let commands: [&[&str]; 7] = [
+        &["map"],
+        &["find", "marker"],
+        &["ctx", "marker"],
+        &["show", "caller"],
+        &["impact", "recoverable_marker"],
+        &["path", "caller", "recoverable_marker"],
+        &["audit"],
+    ];
+    let read_only = |args: &[&str], index: Option<&Path>| -> io::Result<(Option<i32>, bool)> {
+        let before = snapshot(&fixture.work.0)?;
+        let mut all = args.to_vec();
+        all.push("--read-only");
+        let output = fixture.run(&all, index)?;
+        Ok((output.status.code(), snapshot(&fixture.work.0)? == before))
+    };
+    // Fresh default index, then the same index without write permission.
+    for args in commands {
+        assert_eq!(read_only(args, None)?, (Some(0), true), "fresh {args:?}");
+    }
+    let base = fixture.temp.join("xcalygraph-xcalygraph-recovery-test");
+    set_writable(&base, false)?;
+    let denied: Vec<_> = commands
+        .iter()
+        .map(|args| read_only(args, None))
+        .collect::<io::Result<_>>()?;
+    set_writable(&base, true)?;
+    for (args, result) in commands.iter().zip(denied) {
+        assert_eq!(result, (Some(0), true), "non-writable {args:?}");
+    }
+    // Explicit location that does not exist: stale, nothing created.
+    let explicit = fixture.work.0.join("explicit");
+    assert_eq!(
+        read_only(&["find", "marker"], Some(&explicit))?,
+        (Some(5), true)
+    );
+    assert!(!explicit.exists());
+    // Changed source: stale for every command, nothing written.
+    fs::write(fixture.root.join("added.rs"), "pub fn added() {}\n")?;
+    for args in commands {
+        assert_eq!(read_only(args, None)?, (Some(5), true), "stale {args:?}");
+    }
+    Ok(())
+}
+
+fn set_writable(path: &Path, writable: bool) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.is_dir() {
+        for child in fs::read_dir(path)? {
+            set_writable(&child?.path(), writable)?;
+        }
+    }
+    let mode = metadata.permissions().mode();
+    let mode = if writable {
+        mode | 0o200
+    } else {
+        mode & !0o222
+    };
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
 }
 
 #[test]

@@ -147,6 +147,7 @@ fn prepare_index(
 }
 
 /// Opens the derived image and, only for writable operations, repairs it once from facts.
+/// Under `--read-only` a missing or invalid image needs a rebuild, so it is stale (exit 5).
 fn open_index(workspace: &Workspace, mode: Mode) -> Result<query::Index, AppError> {
     match query::open(&workspace.store) {
         Ok(index) => Ok(index),
@@ -154,6 +155,7 @@ fn open_index(workspace: &Workspace, mode: Mode) -> Result<query::Index, AppErro
             refresh::rederive(workspace)?;
             query::open(&workspace.store)
         }
+        Err(AppError::Invalid(_)) => Err(AppError::Stale("index corrupt; run 'xcalygraph index'")),
         Err(error) => Err(error),
     }
 }

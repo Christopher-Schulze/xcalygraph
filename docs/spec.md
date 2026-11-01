@@ -54,7 +54,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | 2 | usage error |
 | 3 | ambiguous NAME; candidates listed |
 | 4 | no match |
-| 5 | index missing or stale under `--read-only` |
+| 5 | index missing, stale, corrupt or written by another extraction, resolver or binary version under `--read-only` |
 
 ## 3. Corpus model
 
