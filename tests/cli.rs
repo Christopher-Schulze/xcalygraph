@@ -571,27 +571,17 @@ fn update_check_compares_with_the_latest_release() -> TestResult {
     Ok(())
 }
 
-/// A release directory for `update` whose binary reports version 99.0.0 and runs `install`
-/// through `delegate` (a shell command line receiving the arguments).
-fn fake_release(dir: &TempDir, delegate: &str) -> Result<PathBuf, Box<dyn Error>> {
+/// A release directory whose binary reports `reported_version` and runs `install` through
+/// `delegate` (a shell command line receiving the arguments).
+fn fake_release(
+    dir: &TempDir,
+    delegate: &str,
+    reported_version: &str,
+) -> Result<PathBuf, Box<dyn Error>> {
     use sha2::Digest;
     let script = format!(
-        "#!/bin/sh\nif [ \"$1\" = version ]; then echo 'xcalygraph 99.0.0'; exit 0; fi\n{delegate}\n"
+        "#!/bin/sh\nif [ \"$1\" = version ]; then echo 'xcalygraph {reported_version}'; exit 0; fi\n{delegate}\n"
     );
-    let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
-        Vec::new(),
-        flate2::Compression::default(),
-    ));
-    let mut header = tar::Header::new_gnu();
-    header.set_size(script.len() as u64);
-    header.set_mode(0o755);
-    header.set_cksum();
-    builder.append_data(
-        &mut header,
-        "xcalygraph-99.0.0/xcalygraph",
-        script.as_bytes(),
-    )?;
-    let archive = builder.into_inner()?.finish()?;
     let os = if std::env::consts::OS == "macos" {
         "darwin"
     } else {
@@ -602,6 +592,20 @@ fn fake_release(dir: &TempDir, delegate: &str) -> Result<PathBuf, Box<dyn Error>
         "x86_64" => "amd64",
         other => other,
     };
+    let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+        Vec::new(),
+        flate2::Compression::default(),
+    ));
+    let mut header = tar::Header::new_gnu();
+    header.set_size(script.len() as u64);
+    header.set_mode(0o755);
+    header.set_cksum();
+    builder.append_data(
+        &mut header,
+        format!("xcalygraph-99.0.0-{os}-{arch}/xcalygraph"),
+        script.as_bytes(),
+    )?;
+    let archive = builder.into_inner()?.finish()?;
     let name = format!("xcalygraph-99.0.0-{os}-{arch}.tar.gz");
     let release = dir.0.join("release");
     fs::create_dir_all(&release)?;
@@ -619,6 +623,124 @@ fn fake_release(dir: &TempDir, delegate: &str) -> Result<PathBuf, Box<dyn Error>
         ),
     )?;
     Ok(release.join("latest.json"))
+}
+
+fn installer_release(dir: &TempDir, reported_version: &str) -> TestResult {
+    let latest = fake_release(dir, "exit 0", reported_version)?;
+    let release = latest
+        .parent()
+        .ok_or_else(|| io::Error::other("release directory"))?;
+    let tagged = release.join("v99.0.0");
+    fs::create_dir(&tagged)?;
+    for entry in fs::read_dir(release)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() && entry.file_name() != "latest.json" {
+            fs::copy(entry.path(), tagged.join(entry.file_name()))?;
+        }
+    }
+    fs::create_dir(dir.0.join("tmp"))?;
+    Ok(())
+}
+
+fn install_without_skill(dir: &TempDir) -> io::Result<Output> {
+    Command::new("bash")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/utils/install.sh"))
+        .args(["--version", "99.0.0", "--no-skill"])
+        .env(
+            "XCALYGRAPH_RELEASE_BASE",
+            format!("file://{}", dir.0.join("release").display()),
+        )
+        .env("XCALYGRAPH_INSTALL_DIR", dir.0.join("bin"))
+        .env("HOME", dir.0.join("home"))
+        .env("TMPDIR", dir.0.join("tmp"))
+        .output()
+}
+
+#[cfg(unix)]
+#[test]
+fn installer_without_skill_preserves_foreign_temporary_entries() -> TestResult {
+    use std::os::unix::fs::symlink;
+
+    for linked in [true, false] {
+        let dir = TempDir::new(if linked {
+            "installer-temp-link"
+        } else {
+            "installer-temp-file"
+        })?;
+        installer_release(&dir, "99.0.0")?;
+        fs::create_dir(dir.0.join("bin"))?;
+        let temporary = dir.0.join("bin/.xcalygraph.new");
+        let foreign = dir.0.join("foreign");
+        fs::write(&foreign, b"preserve foreign target")?;
+        if linked {
+            symlink(&foreign, &temporary)?;
+        } else {
+            fs::write(&temporary, b"preserve foreign temporary")?;
+        }
+        fs::write(dir.0.join("bin/xcalygraph"), b"old binary")?;
+        let output = install_without_skill(&dir)?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(fs::read_to_string(dir.0.join("bin/xcalygraph"))?.contains("xcalygraph 99.0.0"));
+        assert_eq!(fs::read(&foreign)?, b"preserve foreign target");
+        if linked {
+            assert!(fs::symlink_metadata(&temporary)?.file_type().is_symlink());
+        } else {
+            assert_eq!(fs::read(&temporary)?, b"preserve foreign temporary");
+        }
+        for entry in fs::read_dir(dir.0.join("bin"))? {
+            assert!(
+                !entry?
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".xcalygraph.new.")
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn installer_without_skill_preserves_existing_output_on_failure() -> TestResult {
+    for case in ["checksum", "smoke", "directory"] {
+        let dir = TempDir::new(&format!("installer-failure-{case}"))?;
+        installer_release(&dir, if case == "smoke" { "0.0.1" } else { "99.0.0" })?;
+        fs::create_dir(dir.0.join("bin"))?;
+        let binary = dir.0.join("bin/xcalygraph");
+        let temporary = dir.0.join("bin/.xcalygraph.new");
+        fs::write(&temporary, b"keep temporary")?;
+        if case == "directory" {
+            fs::create_dir(&binary)?;
+            fs::write(binary.join("keep"), b"keep directory")?;
+        } else {
+            fs::write(&binary, b"old binary")?;
+        }
+        if case == "checksum" {
+            let sums = dir.0.join("release/v99.0.0/SHA256SUMS");
+            let original = fs::read_to_string(&sums)?;
+            let (_, name) = original
+                .split_once(' ')
+                .ok_or_else(|| io::Error::other("checksum"))?;
+            fs::write(sums, format!("{} {name}", "0".repeat(64)))?;
+        }
+        let output = install_without_skill(&dir)?;
+        assert!(
+            !output.status.success(),
+            "{case}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_eq!(fs::read(&temporary)?, b"keep temporary");
+        if case == "directory" {
+            assert_eq!(fs::read(binary.join("keep"))?, b"keep directory");
+            assert_eq!(fs::read_dir(&binary)?.count(), 1);
+        } else {
+            assert_eq!(fs::read(&binary)?, b"old binary");
+        }
+    }
+    Ok(())
 }
 
 #[test]
@@ -642,7 +764,7 @@ fn update_reports_a_failed_skill_phase_after_replacing_the_binary() -> TestResul
     ];
     for (name, delegate, read_only, code) in cases {
         let dir = TempDir::new(&format!("update-skill-{}", name.replace(' ', "-")))?;
-        let latest = fake_release(&dir, &delegate)?;
+        let latest = fake_release(&dir, &delegate, "99.0.0")?;
         let exe = dir.0.join("bin/xcalygraph");
         fs::create_dir_all(dir.0.join("bin"))?;
         fs::copy(BINARY, &exe)?;

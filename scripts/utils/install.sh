@@ -52,7 +52,8 @@ fi
 name="xcalygraph-${version}-${os}-${arch}"
 base="${RELEASE_BASE}/v${version}"
 work="$(mktemp -d)"
-trap 'rm -rf "${work}"' EXIT
+temporary=""
+trap '[[ -z "${temporary}" ]] || rm -f -- "${temporary}"; rm -rf -- "${work}"' EXIT
 
 say "downloading ${name}.tar.gz"
 curl -fSL --progress-bar -o "${work}/${name}.tar.gz" "${base}/${name}.tar.gz" \
@@ -83,8 +84,11 @@ if (( skill )); then
   XCALYGRAPH_INSTALL_DIR="${BIN_DIR}" "${candidate}" install
 else
   mkdir -p "${BIN_DIR}"
-  install -m 0755 "${candidate}" "${BIN_DIR}/.xcalygraph.new"
-  mv "${BIN_DIR}/.xcalygraph.new" "${BIN_DIR}/xcalygraph"
+  [[ ! -d "${BIN_DIR}/xcalygraph" ]] || die "installation target is a directory: ${BIN_DIR}/xcalygraph"
+  temporary="$(mktemp "${BIN_DIR}/.xcalygraph.new.XXXXXXXX")" || die "cannot create a temporary binary in ${BIN_DIR}"
+  install -m 0755 "${candidate}" "${temporary}"
+  mv "${temporary}" "${BIN_DIR}/xcalygraph"
+  temporary=""
   echo "binary ${BIN_DIR}/xcalygraph installed"
   case ":${PATH}:" in
     *":${BIN_DIR}:"*) ;;
