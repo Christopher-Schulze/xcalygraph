@@ -18,11 +18,14 @@ pub struct WriterLock {
 impl WriterLock {
     /// Waits up to `wait` for the lock; times out with `ErrorKind::TimedOut`.
     pub fn acquire(index_dir: &Path, wait: Duration) -> io::Result<Self> {
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(index_dir.join("lock"))?;
+        let path = index_dir.join("lock");
+        let file = match OpenOptions::new().create_new(true).write(true).open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                super::file_access::open_existing_regular(&path, true)?
+            }
+            Err(error) => return Err(error),
+        };
         let deadline = Instant::now() + wait;
         loop {
             match file.try_lock() {

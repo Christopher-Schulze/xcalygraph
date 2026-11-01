@@ -203,32 +203,38 @@ impl Store {
         container::write(&self.path(name), image)
     }
 
-    /// Deletes the whole index directory.
     /// Stamps the last use (for `ls`), at most once an hour so queries stay write-free.
     pub fn mark_used(&self) {
         let stamp = self.path("used");
-        let recent = fs::metadata(&stamp)
-            .and_then(|meta| meta.modified())
-            .is_ok_and(|modified| {
-                modified
-                    .elapsed()
-                    .is_ok_and(|age| age < std::time::Duration::from_secs(3600))
-            });
-        if !recent {
-            let _ = fs::write(&stamp, b"");
+        match fs::symlink_metadata(&stamp) {
+            Ok(metadata) if valid_stamp(&metadata) => {
+                let recent = metadata.modified().is_ok_and(|modified| {
+                    modified
+                        .elapsed()
+                        .is_ok_and(|age| age < std::time::Duration::from_secs(3600))
+                });
+                if !recent {
+                    #[cfg(unix)]
+                    let _ = touch_stamp(&stamp, &metadata);
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let _ = fs::File::create_new(&stamp);
+            }
+            _ => {}
         }
     }
 
     /// Last use: the newer of the use stamp and the last index write.
     pub fn last_used(&self) -> Option<std::time::SystemTime> {
-        ["used", "meta"]
-            .iter()
-            .filter_map(|name| {
-                fs::metadata(self.path(name))
-                    .and_then(|meta| meta.modified())
-                    .ok()
-            })
-            .max()
+        let used = fs::symlink_metadata(self.path("used"))
+            .ok()
+            .filter(valid_stamp)
+            .and_then(|metadata| metadata.modified().ok());
+        let written = fs::metadata(self.path("meta"))
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        used.into_iter().chain(written).max()
     }
 
     pub fn drop_all(&self) -> io::Result<bool> {
@@ -238,6 +244,25 @@ impl Store {
             Err(error) => Err(error),
         }
     }
+}
+
+fn valid_stamp(metadata: &fs::Metadata) -> bool {
+    metadata.len() == 0 && super::file_access::is_unshared_regular(metadata)
+}
+
+#[cfg(unix)]
+fn touch_stamp(path: &Path, previous: &fs::Metadata) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    if previous.nlink() != 1 {
+        return Ok(());
+    }
+    let file = super::file_access::open_existing_regular(path, false)?;
+    let current = file.metadata()?;
+    if valid_stamp(&current) && (current.dev(), current.ino()) == (previous.dev(), previous.ino()) {
+        file.set_modified(std::time::SystemTime::now())?;
+    }
+    Ok(())
 }
 
 fn deflate(bytes: &[u8]) -> io::Result<Vec<u8>> {
@@ -380,5 +405,33 @@ mod tests {
     fn common_prefix_respects_char_boundaries() {
         assert_eq!(common_prefix("src/é", "src/è"), 4);
         assert_eq!(common_prefix("abc", "abd"), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn last_used_ignores_foreign_symlink_and_hard_link() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::symlink;
+
+        let dir = TestDir::new("store-last-used-links")?;
+        let store = Store::new(dir.path().join("index"));
+        store.create_dirs()?;
+        let meta = Meta {
+            extraction_version: 1,
+            binary_version: "test".to_owned(),
+            root: "/root".to_owned(),
+            write_time_ns: 0,
+        };
+        store.write_meta(&meta)?;
+        let expected = fs::metadata(store.dir.join("meta"))?.modified()?;
+        let target = dir.path().join("foreign");
+        fs::File::create_new(&target)?
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(7200))?;
+        let used = store.dir.join("used");
+        symlink(&target, &used)?;
+        assert_eq!(store.last_used(), Some(expected));
+        fs::remove_file(&used)?;
+        fs::hard_link(&target, &used)?;
+        assert_eq!(store.last_used(), Some(expected));
+        Ok(())
     }
 }

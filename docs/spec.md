@@ -141,7 +141,7 @@ Freshness:
 3. New, changed and deleted files form the change set; an empty change set answers from the existing index without writes.
 4. A format or extraction version mismatch triggers a full rebuild.
 
-- Locking: writers hold an exclusive advisory lock on `<index>/lock`, waiting at most 30 s before exit 1; readers never lock and map the files current at open time.
+- Locking: writers hold an exclusive advisory lock on an unshared regular `<index>/lock` file, waiting at most 30 s before exit 1; symlinks and hard-linked lock files are rejected; readers never lock and map the files current at open time.
 - Parallelism: walk, hashing, extraction and per-file resolution run on a work-stealing pool sized to the available cores; one parser and one reusable arena per worker, reset per file.
 - IO: files up to 1 MiB are read into a per-worker reusable buffer; larger files are memory-mapped; index files are memory-mapped for reading.
 

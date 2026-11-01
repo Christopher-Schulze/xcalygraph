@@ -712,3 +712,173 @@ fn source_read_failure_does_not_fall_back_to_a_local_index() -> TestResult {
     assert!(!fixture.root.join(".xcalygraph").exists());
     Ok(())
 }
+
+#[test]
+fn last_use_symlink_never_truncates_or_modifies_its_target() -> TestResult {
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new()?;
+    let base = fixture.work.0.join("index");
+    assert_success(&fixture.run(&["index"], Some(&base))?);
+    let path = derived(&base)?;
+    let stamp = path.parent().ok_or("missing index store")?.join("used");
+    let target = fixture.work.0.join("foreign");
+    fs::write(&target, b"preserve foreign content")?;
+    fs::File::open(&target)?
+        .set_modified(SystemTime::now() - std::time::Duration::from_secs(7200))?;
+    fs::remove_file(&stamp)?;
+    symlink(&target, &stamp)?;
+    let target_before = fs::metadata(&target)?;
+    let link_before = fs::symlink_metadata(&stamp)?;
+    assert_success(&fixture.run(&["find", "recoverable_marker"], Some(&base))?);
+    let target_after = fs::metadata(&target)?;
+    let link_after = fs::symlink_metadata(&stamp)?;
+    assert_eq!(fs::read(&target)?, b"preserve foreign content");
+    assert_eq!(
+        (target_after.ino(), target_after.modified()?),
+        (target_before.ino(), target_before.modified()?)
+    );
+    assert_eq!(
+        (link_after.ino(), link_after.modified()?),
+        (link_before.ino(), link_before.modified()?)
+    );
+    Ok(())
+}
+
+#[test]
+fn last_use_of_an_ordinary_index_still_advances() -> TestResult {
+    let fixture = Fixture::new()?;
+    let base = fixture.work.0.join("index");
+    assert_success(&fixture.run(&["index"], Some(&base))?);
+    let path = derived(&base)?;
+    let stamp = path.parent().ok_or("missing index store")?.join("used");
+    let old = SystemTime::now() - std::time::Duration::from_secs(7200);
+    fs::File::open(&stamp)?.set_modified(old)?;
+    let before = fs::metadata(&stamp)?;
+    assert_success(&fixture.run(&["find", "recoverable_marker"], Some(&base))?);
+    let after = fs::metadata(&stamp)?;
+    assert_eq!(before.ino(), after.ino());
+    assert!(after.modified()? > old);
+    assert!(fs::read(&stamp)?.is_empty());
+    Ok(())
+}
+
+#[test]
+fn last_use_does_not_modify_an_external_hard_link() -> TestResult {
+    let fixture = Fixture::new()?;
+    let base = fixture.work.0.join("index");
+    assert_success(&fixture.run(&["index"], Some(&base))?);
+    let path = derived(&base)?;
+    let stamp = path.parent().ok_or("missing index store")?.join("used");
+    let target = fixture.work.0.join("foreign");
+    fs::File::create_new(&target)?;
+    fs::File::open(&target)?
+        .set_modified(SystemTime::now() - std::time::Duration::from_secs(7200))?;
+    fs::remove_file(&stamp)?;
+    fs::hard_link(&target, &stamp)?;
+    let before = fs::metadata(&target)?;
+    assert_success(&fixture.run(&["find", "recoverable_marker"], Some(&base))?);
+    let after = fs::metadata(&target)?;
+    assert_eq!(
+        (after.ino(), after.modified()?),
+        (before.ino(), before.modified()?)
+    );
+    Ok(())
+}
+
+#[test]
+fn writer_lock_never_follows_a_dangling_symlink() -> TestResult {
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new()?;
+    let base = fixture.work.0.join("index");
+    assert_success(&fixture.run(&["index"], Some(&base))?);
+    let path = derived(&base)?;
+    let lock = path.parent().ok_or("missing index store")?.join("lock");
+    let target = fixture.work.0.join("foreign");
+    fs::remove_file(&lock)?;
+    symlink(&target, &lock)?;
+    let before = fs::symlink_metadata(&lock)?;
+    let output = fixture.run(&["find", "recoverable_marker"], Some(&base))?;
+    let after = fs::symlink_metadata(&lock)?;
+    assert!(
+        !output.status.success(),
+        "a symlink cannot be an index writer lock"
+    );
+    assert!(
+        !target.exists(),
+        "the lock created a file outside the index"
+    );
+    assert_eq!(
+        (after.ino(), after.modified()?),
+        (before.ino(), before.modified()?)
+    );
+    Ok(())
+}
+
+#[test]
+fn writer_lock_does_not_lock_a_foreign_hard_link() -> TestResult {
+    let fixture = Fixture::new()?;
+    let base = fixture.work.0.join("index");
+    assert_success(&fixture.run(&["index"], Some(&base))?);
+    let path = derived(&base)?;
+    let lock = path.parent().ok_or("missing index store")?.join("lock");
+    let target = fixture.work.0.join("foreign");
+    fs::write(&target, b"preserve")?;
+    fs::remove_file(&lock)?;
+    fs::hard_link(&target, &lock)?;
+    let before = fs::metadata(&target)?;
+    let output = fixture.run(&["find", "recoverable_marker"], Some(&base))?;
+    let after = fs::metadata(&target)?;
+    assert!(
+        !output.status.success(),
+        "a hard link cannot be an index writer lock"
+    );
+    assert_eq!(fs::read(&target)?, b"preserve");
+    assert_eq!(
+        (after.ino(), after.modified()?),
+        (before.ino(), before.modified()?)
+    );
+    Ok(())
+}
+
+#[test]
+fn invalid_default_lock_falls_back_without_touching_its_target() -> TestResult {
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.run(&["index"], None)?);
+    let base = fixture.temp.join("xcalygraph-xcalygraph-recovery-test");
+    let path = derived(&base)?;
+    let lock = path.parent().ok_or("missing index store")?.join("lock");
+    let target = fixture.work.0.join("foreign");
+    fs::remove_file(&lock)?;
+    symlink(&target, &lock)?;
+    let output = fixture.run(&["find", "recoverable_marker"], None)?;
+    assert_success(&output);
+    assert!(String::from_utf8_lossy(&output.stderr).contains(".xcalygraph"));
+    assert!(!target.exists());
+    assert!(lock.is_symlink());
+    Ok(())
+}
+
+#[test]
+fn last_use_does_not_overwrite_a_nonempty_stamp() -> TestResult {
+    let fixture = Fixture::new()?;
+    let base = fixture.work.0.join("index");
+    assert_success(&fixture.run(&["index"], Some(&base))?);
+    let path = derived(&base)?;
+    let stamp = path.parent().ok_or("missing index store")?.join("used");
+    fs::write(&stamp, b"preserve")?;
+    fs::File::open(&stamp)?
+        .set_modified(SystemTime::now() - std::time::Duration::from_secs(7200))?;
+    let before = fs::metadata(&stamp)?;
+    assert_success(&fixture.run(&["find", "recoverable_marker"], Some(&base))?);
+    let after = fs::metadata(&stamp)?;
+    assert_eq!(fs::read(&stamp)?, b"preserve");
+    assert_eq!(
+        (after.ino(), after.modified()?),
+        (before.ino(), before.modified()?)
+    );
+    Ok(())
+}
