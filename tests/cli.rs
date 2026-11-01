@@ -104,13 +104,22 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(label: &str) -> io::Result<Self> {
-        let path =
-            std::env::temp_dir().join(format!("xcalygraph-it-{}-{label}", std::process::id()));
-        if path.exists() {
-            fs::remove_dir_all(&path)?;
+        let base = std::env::temp_dir().canonicalize()?;
+        let prefix = format!("xcalygraph-it-{}-{label}", std::process::id());
+        for sequence in 0..1000 {
+            let name = if sequence == 0 {
+                prefix.clone()
+            } else {
+                format!("{prefix}-{sequence}")
+            };
+            let path = base.join(name);
+            match fs::create_dir(&path) {
+                Ok(()) => return Ok(Self(path)),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
         }
-        fs::create_dir_all(&path)?;
-        Ok(Self(path.canonicalize()?))
+        Err(io::Error::other("no unused test directory"))
     }
 
     fn write_bytes(&self, relative: &str, content: &[u8]) -> io::Result<()> {
@@ -134,6 +143,60 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+#[test]
+fn temporary_directory_preserves_colliding_entries() -> TestResult {
+    if std::env::var_os("XCALYGRAPH_CLI_COLLISION_CHILD").is_some() {
+        let root = std::env::temp_dir();
+        let prefix = format!("xcalygraph-it-{}-collision", std::process::id());
+        let directory = root.join(&prefix);
+        let file = root.join(format!("{prefix}-1"));
+        fs::create_dir(&directory)?;
+        fs::write(directory.join("keep"), b"directory sentinel")?;
+        fs::write(&file, b"file sentinel")?;
+        #[cfg(unix)]
+        {
+            let link = root.join(format!("{prefix}-2"));
+            std::os::unix::fs::symlink(&directory, link)?;
+            std::os::unix::fs::symlink(root.join("missing"), root.join(format!("{prefix}-3")))?;
+        }
+        let owned = TempDir::new("collision")?;
+        assert_ne!(owned.0, directory);
+        drop(owned);
+        assert_eq!(fs::read(directory.join("keep"))?, b"directory sentinel");
+        assert_eq!(fs::read(file)?, b"file sentinel");
+        #[cfg(unix)]
+        for sequence in [2, 3] {
+            assert!(
+                fs::symlink_metadata(root.join(format!("{prefix}-{sequence}")))?
+                    .file_type()
+                    .is_symlink()
+            );
+        }
+        return Ok(());
+    }
+
+    let cache = Path::new(env!("CARGO_MANIFEST_DIR")).join(".cache");
+    fs::create_dir_all(&cache)?;
+    if fs::symlink_metadata(&cache)?.file_type().is_symlink() {
+        return Err(io::Error::other("test cache must not be a symlink").into());
+    }
+    let path = cache.join(format!("cli-collision-fixture-{}", std::process::id()));
+    fs::create_dir(&path)?;
+    let fixture = TempDir(path);
+    let output = Command::new(std::env::current_exe()?)
+        .args(["--exact", "temporary_directory_preserves_colliding_entries"])
+        .env("TMPDIR", &fixture.0)
+        .env("XCALYGRAPH_CLI_COLLISION_CHILD", "1")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
 }
 
 fn run_in(root: &Path, index: &Path, args: &[&str]) -> io::Result<Output> {
