@@ -10,7 +10,8 @@ else
   echo "usage: cargo-artifact.sh [--test --passthrough]" >&2
   exit 2
 fi
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 python3 -I -c '
 import json
 import os

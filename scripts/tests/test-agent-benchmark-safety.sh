@@ -3,7 +3,8 @@
 # Usage: scripts/tests/test-agent-benchmark-safety.sh [BINARY]
 set -euo pipefail
 (( $# <= 1 )) || { echo "usage: test-agent-benchmark-safety.sh [BINARY]" >&2; exit 2; }
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 [[ ! -L "${REPO_ROOT}/.cache" ]] || { echo "test cache must not be a symlink" >&2; exit 1; }
 mkdir -p "${REPO_ROOT}/.cache"
 python3 -I - "${REPO_ROOT}" "${1:-}" <<'PYTHON'
@@ -67,12 +68,14 @@ first="$(create_run)"
 second="$(create_run)"
 home1="$(prepare_home none "$first")"
 home2="$(prepare_home none "$first")"
-printf '%s\n' "$first" "$second" "$home1" "$home2"
+printf '%s\0' "$first" "$second" "$home1" "$home2"
 '''
     prepared = subprocess.run(["bash", "-c", setup, "setup", str(runner)],
-                              env=environment, capture_output=True, text=True)
+                              env=environment, capture_output=True)
     assert prepared.returncode == 0, prepared.stderr
-    first, second, home1, home2 = map(Path, prepared.stdout.splitlines())
+    values = prepared.stdout.split(b"\0")
+    assert len(values) == 5 and values[-1] == b"", prepared.stdout
+    first, second, home1, home2 = (Path(os.fsdecode(value)) for value in values[:-1])
     assert first != second and first.parent == second.parent == base
     assert home1 != home2 and home1.parent == home2.parent == first
     assert (home1 / ".claude").is_dir() and (home2 / ".claude").is_dir()
@@ -108,18 +111,19 @@ verify_arm "$home" "$3" "$4" --content
 xcalygraph() { return 77; }
 export -f xcalygraph
 export BASH_ENV="$5"
-invoke_agent xcalygraph "$home" "$3" bash -c 'printf "CONFIG\t%s\n" "$CLAUDE_CONFIG_DIR"; command -v xcalygraph; xcalygraph version'
-printf 'HOME\t%s\n' "$home"
+invoke_agent xcalygraph "$home" "$3" bash -c 'printf "%s\0%s\0" "$CLAUDE_CONFIG_DIR" "$(command -v xcalygraph)"; xcalygraph version >&2'
+printf '%s\0' "$home"
 '''
     bound_env = dict(environment, PATH=str(foreign) + os.pathsep + environment["PATH"],
                      CLAUDE_CONFIG_DIR=str(foreign_config))
     bound = subprocess.run(["bash", "-c", bind, "binding", str(runner), str(run_dir), str(captured),
-                            str(identity), str(startup)], env=bound_env, capture_output=True, text=True)
+                            str(identity), str(startup)], env=bound_env, capture_output=True)
     assert bound.returncode == 0, bound.stderr
-    lines = bound.stdout.splitlines()
-    assert lines[1] == str(captured) and any(line.startswith("xcalygraph ") for line in lines), bound.stdout
-    installed_home = Path(next(line.removeprefix("HOME\t") for line in lines if line.startswith("HOME\t")))
-    assert lines[0] == "CONFIG\t" + str(installed_home / ".claude")
+    values = bound.stdout.split(b"\0")
+    assert len(values) == 4 and values[-1] == b"", bound.stdout
+    config, selected, installed_home = (Path(os.fsdecode(value)) for value in values[:-1])
+    assert selected == captured and b"xcalygraph " in bound.stderr, bound.stderr
+    assert config == installed_home / ".claude"
     failed = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; invoke_agent xcalygraph "$2" "$3" false',
                              "failed", str(runner), str(installed_home), str(captured)],
                             env=bound_env, capture_output=True, text=True)
@@ -127,7 +131,7 @@ printf 'HOME\t%s\n' "$home"
     graphify = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; prepare_home graphify "$2"',
                                "graphify", str(runner), str(run_dir)], env=bound_env, capture_output=True, text=True)
     assert graphify.returncode == 0, graphify.stderr
-    graphify_home = Path(graphify.stdout.strip())
+    graphify_home = Path(graphify.stdout.removesuffix("\n"))
     assert (graphify_home / ".claude/skills/graphify/SKILL.md").is_file() and not list(foreign_config.iterdir())
     refused = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; invoke_agent xcalygraph "$2" "$3" true',
                               "refuse", str(runner), str(installed_home), str(work / "bad:path/xcalygraph")],

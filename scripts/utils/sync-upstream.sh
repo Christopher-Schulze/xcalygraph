@@ -4,7 +4,8 @@
 set -euo pipefail
 
 readonly UPSTREAM_URL="https://github.com/Graphify-Labs/graphify"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 readonly TARGET_DIR="${REPO_ROOT}/research/upstream/graphify"
 

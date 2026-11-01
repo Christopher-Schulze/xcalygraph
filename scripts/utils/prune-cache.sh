@@ -4,7 +4,8 @@
 # Unknown entries, candidate symlinks, incomplete runs, snapshots and .keep-protected runs stay.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 readonly CACHE="${REPO_ROOT}/.cache"
 readonly AGE_HOURS="${1:-24}"
@@ -63,7 +64,7 @@ if [[ ! -e "${CACHE}/.keep" && ! -L "${CACHE}/.keep" ]]; then
   prune_children "${CACHE}/evaluation" 'run.*' 'sealed.*'
 fi
 
-if ! size_kib="$(du -sk "${CACHE}" | awk '{ print $1 }')"; then
+if ! size_kib="$(du -sk "${CACHE}" | awk 'NR == 1 { print $1 }')"; then
   echo "prune-cache.sh: cannot measure cache size" >&2
   exit 1
 fi

@@ -3,7 +3,8 @@
 # Usage: scripts/tests/test-corpus-snapshots.sh [BINARY]
 # Requires git, python3, graphify and a development xcalygraph binary.
 set -euo pipefail
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 (( $# <= 1 )) || { echo "usage: test-corpus-snapshots.sh [BINARY]" >&2; exit 2; }
 [[ ! -L "${REPO_ROOT}/.cache" ]] || { echo "test cache must not be a symlink" >&2; exit 1; }

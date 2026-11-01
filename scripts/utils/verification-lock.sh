@@ -3,7 +3,8 @@
 # Usage: scripts/utils/verification-lock.sh
 set -euo pipefail
 (( $# == 0 )) || exit 2
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 python3 -I - "${REPO_ROOT}" <<'PYTHON'
 import fcntl
 import hashlib

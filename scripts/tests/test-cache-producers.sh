@@ -2,7 +2,8 @@
 # Exercise a real completed benchmark, failed run and safe pruning in an isolated project.
 # Usage: scripts/tests/test-cache-producers.sh [BINARY]
 set -euo pipefail
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 (( $# <= 1 )) || { echo "usage: test-cache-producers.sh [BINARY]" >&2; exit 2; }
 [[ ! -L "${REPO_ROOT}/.cache" ]] || { echo "test cache must not be a symlink" >&2; exit 1; }
 mkdir -p "${REPO_ROOT}/.cache"
@@ -56,7 +57,9 @@ with tempfile.TemporaryDirectory(prefix="cache-producers.", dir=repo / ".cache")
                               env=environment, capture_output=True, text=True)
 
     def evidence(result):
-        return Path(result.stdout.splitlines()[-1].removeprefix("evidence: "))
+        marker = "evidence: " + str(benchmark_dir) + "/"
+        assert marker in result.stdout, result.stdout
+        return benchmark_dir / result.stdout.rsplit(marker, 1)[1].removesuffix("\n")
 
     first = run(binary)
     assert first.returncode == 0, first.stderr + first.stdout

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Exercise cache pruning only in an exclusively created fixture.
 set -euo pipefail
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 python3 -I - "${REPO_ROOT}" <<'PYTHON'
 import os
 from pathlib import Path

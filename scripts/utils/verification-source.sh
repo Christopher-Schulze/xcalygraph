@@ -5,7 +5,8 @@ set -euo pipefail
 export_lock=0
 if [[ "${1:-}" == --export-lock ]]; then export_lock=1; shift; fi
 (( $# > 0 )) || { echo "usage: verification-source.sh [--export-lock] COMMAND [ARG...]" >&2; exit 2; }
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 cd "${REPO_ROOT}"
 python3 -I - "${REPO_ROOT}" "${export_lock}" "$@" <<'PYTHON'
 import fcntl

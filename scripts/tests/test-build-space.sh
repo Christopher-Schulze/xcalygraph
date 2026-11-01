@@ -3,7 +3,8 @@
 # Usage: scripts/tests/test-build-space.sh
 set -euo pipefail
 (( $# == 0 )) || { echo "usage: test-build-space.sh" >&2; exit 2; }
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 [[ ! -L "${REPO_ROOT}/.cache" ]] || { echo "test cache must not be a symlink" >&2; exit 1; }
 mkdir -p "${REPO_ROOT}/.cache"
 python3 -I - "${REPO_ROOT}" <<'PYTHON'

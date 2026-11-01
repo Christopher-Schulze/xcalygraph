@@ -901,13 +901,22 @@ fn installer_release(dir: &TempDir, reported_version: &str) -> TestResult {
 }
 
 fn install_without_skill(dir: &TempDir) -> io::Result<Output> {
+    let release = dir.0.join("release");
+    let mut release_url = String::from("file://");
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for &byte in release.as_os_str().as_encoded_bytes() {
+        if byte.is_ascii_alphanumeric() || b"/-._~".contains(&byte) {
+            release_url.push(char::from(byte));
+        } else {
+            release_url.push('%');
+            release_url.push(char::from(HEX[usize::from(byte >> 4)]));
+            release_url.push(char::from(HEX[usize::from(byte & 15)]));
+        }
+    }
     support::command("bash", &dir.0)
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/utils/install.sh"))
         .args(["--version", "99.0.0", "--no-skill"])
-        .env(
-            "XCALYGRAPH_RELEASE_BASE",
-            format!("file://{}", dir.0.join("release").display()),
-        )
+        .env("XCALYGRAPH_RELEASE_BASE", release_url)
         .env("XCALYGRAPH_INSTALL_DIR", dir.0.join("bin"))
         .env("HOME", dir.0.join("home"))
         .env("TMPDIR", dir.0.join("tmp"))
@@ -919,12 +928,13 @@ fn install_without_skill(dir: &TempDir) -> io::Result<Output> {
 fn installer_without_skill_preserves_foreign_temporary_entries() -> TestResult {
     use std::os::unix::fs::symlink;
 
-    for linked in [true, false] {
-        let dir = TempDir::new(if linked {
-            "installer-temp-link"
-        } else {
-            "installer-temp-file"
-        })?;
+    for (linked, label) in [
+        (true, "installer-temp-link"),
+        (false, "installer-temp-file"),
+        (true, "installer-temp-link \n"),
+        (false, "installer-temp-file#%\n\n"),
+    ] {
+        let dir = TempDir::new(label)?;
         installer_release(&dir, "99.0.0")?;
         fs::create_dir(dir.0.join("bin"))?;
         let temporary = dir.0.join("bin/.xcalygraph.new");

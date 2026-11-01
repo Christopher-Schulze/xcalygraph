@@ -6,7 +6,8 @@ if (( $# != 2 )) || [[ "$1" != --debug && "$1" != --release ]]; then
   echo "usage: capture-benchmark-binary.sh --debug|--release NEW_DESTINATION" >&2
   exit 2
 fi
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 if ! bash "${REPO_ROOT}/scripts/utils/verification-lock.sh"; then
   echo "capture-benchmark-binary.sh: verification lock is required" >&2
   exit 1

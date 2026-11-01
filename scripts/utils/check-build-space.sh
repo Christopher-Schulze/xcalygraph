@@ -3,7 +3,8 @@
 # Usage: scripts/utils/check-build-space.sh [MIN_BUILD_KIB]
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 readonly MIN_FREE_KIB=$((2 * 1024 * 1024))
 readonly FRESH_BUILD_KIB=$((4 * 1024 * 1024))

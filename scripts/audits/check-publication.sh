@@ -7,7 +7,8 @@
 #   scripts/audits/private-patterns.txt; a missing file fails the check.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 readonly PATTERN_FILE="${REPO_ROOT}/scripts/audits/private-patterns.txt"
 readonly LOCAL_ONLY_PATTERN='^(AGENTS\.md|CLAUDE\.md|docs/decisions\.md|docs/tasks\.md|docs/tasks/|research/|scripts/benchmarks/questions/private/|scripts/audits/private-patterns\.txt)'

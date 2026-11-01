@@ -5,7 +5,8 @@
 #   pinned commit with a depth-1 fetch; existing corpora at the pinned commit are left as is.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 readonly LIST="${REPO_ROOT}/scripts/benchmarks/corpora.tsv"
 readonly TARGET="${REPO_ROOT}/research/corpora"

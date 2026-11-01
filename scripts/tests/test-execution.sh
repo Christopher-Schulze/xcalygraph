@@ -4,7 +4,8 @@
 set -euo pipefail
 (( $# == 1 )) || { echo "usage: test-execution.sh WORK_DIRECTORY" >&2; exit 2; }
 readonly work="$1"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 cd "${REPO_ROOT}"
 cargo fmt --all --check
@@ -38,6 +39,7 @@ bash "${REPO_ROOT}/scripts/tests/test-verification-target.sh"
 bash "${REPO_ROOT}/scripts/tests/test-verification-source.sh"
 bash "${REPO_ROOT}/scripts/tests/test-verification-inputs.sh"
 bash "${REPO_ROOT}/scripts/tests/test-guard-benchmark.sh"
+bash "${REPO_ROOT}/scripts/tests/test-checkout-root.sh"
 bash "${REPO_ROOT}/scripts/tests/test-release-provenance.sh"
 bash "${REPO_ROOT}/scripts/tests/test-cache-producers.sh" "${binary}"
 bash "${REPO_ROOT}/scripts/tests/test-corpus-snapshots.sh" "${binary}"

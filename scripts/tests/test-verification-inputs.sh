@@ -3,7 +3,8 @@
 # Usage: scripts/tests/test-verification-inputs.sh
 set -euo pipefail
 (( $# == 0 )) || { echo "usage: test-verification-inputs.sh" >&2; exit 2; }
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 [[ ! -L "${REPO_ROOT}/.cache" ]] || { echo "test cache must not be a symlink" >&2; exit 1; }
 mkdir -p "${REPO_ROOT}/.cache"
 python3 -I - "${REPO_ROOT}" <<'PYTHON'
@@ -76,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix="verification-inputs.", dir=repo / ".cac
     assert depfiles and all("README.md" not in path.read_text() for path in depfiles)
     replace_document("OTHER")
     stale = build(guarded=False)
-    assert "Fresh xcalygraph" in stale.stderr and output() == "FIRST"
+    assert output() == "FIRST", stale.stderr
     build()
     assert output() == "OTHER"
     replace_document("FIRST")

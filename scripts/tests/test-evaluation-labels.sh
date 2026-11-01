@@ -2,7 +2,8 @@
 # Exercise the real sealed evaluator, binary and Graphify on an exclusive temporary git corpus.
 # Usage: scripts/tests/test-evaluation-labels.sh [BINARY]
 set -euo pipefail
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 (( $# <= 1 )) || { echo "usage: test-evaluation-labels.sh [BINARY]" >&2; exit 2; }
 [[ ! -L "${REPO_ROOT}/.cache" ]] || { echo "test cache must not be a symlink" >&2; exit 1; }
 mkdir -p "${REPO_ROOT}/.cache"
@@ -94,10 +95,16 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
     manifest_path.write_text(json.dumps(manifest))
     (root / "scripts/benchmarks/questions").mkdir()
     entry = root / "scripts/benchmarks/run-evaluation.sh"
+    def evidence(result):
+        directory = root / ".cache/evaluation"
+        marker = "evidence: " + str(directory) + "/"
+        assert marker in result.stdout, result.stdout
+        return directory / result.stdout.rsplit(marker, 1)[1].removesuffix("\n")
+
     validation_args = ["bash", str(entry), "--set", "../../../.cache/cases", "--validate"]
     entry_validation = subprocess.run(validation_args, env=environment, capture_output=True, text=True)
     assert entry_validation.returncode == 0, entry_validation.stderr + entry_validation.stdout
-    validation_evidence = Path(entry_validation.stdout.strip().rsplit("evidence: ", 1)[-1])
+    validation_evidence = evidence(entry_validation)
     assert json.loads((validation_evidence / "identity.json").read_text())["binary_sha256"] is None
     original_entry = entry.read_text()
     mutated_entry = original_entry.replace('    BINARY=""\n', '    BINARY="$(build_binary)"\n', 1)
@@ -110,16 +117,16 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
     arguments = ["bash", str(runner), str(manifest_path), "final", str(binary)]
     run = subprocess.run(arguments, env=environment, capture_output=True, text=True)
     assert run.returncode == 0, run.stderr + run.stdout
-    evidence = Path(run.stdout.splitlines()[-1].removeprefix("evidence: "))
-    assert (evidence / ".xcalygraph-disposable").read_bytes() == b"xcalygraph-cache-v1\n"
-    report = json.loads((evidence / "report.json").read_text())
-    public = json.loads((evidence / "public-report.json").read_text())
+    final_evidence = evidence(run)
+    assert (final_evidence / ".xcalygraph-disposable").read_bytes() == b"xcalygraph-cache-v1\n"
+    report = json.loads((final_evidence / "report.json").read_text())
+    public = json.loads((final_evidence / "public-report.json").read_text())
     assert public["manifest_sha256"] == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     assert public["binary_sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
     assert public["corpora"] == report["corpora"] and str(root) not in json.dumps(public)
     assert report["exposure"]["xcalygraph"]["first_evaluation"]
     for arm in ("find-text", "find-json"):
-        scores = [json.loads(line) for line in (evidence / "xcalygraph" / (arm + "-600.scores.jsonl")).read_text().splitlines()]
+        scores = [json.loads(line) for line in (final_evidence / "xcalygraph" / (arm + "-600.scores.jsonl")).read_text().splitlines()]
         correct, wrong, partial, relationship, negative = scores
         assert correct["complete"] and correct["complete5"], scores
         assert wrong["file5"] and not wrong["complete"], scores
@@ -129,9 +136,9 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
     metrics = report["corpora"]["xcalygraph"]["metrics"]
     assert metrics["find-text-600"]["multi_total"] == 1
     assert metrics["find-text-600"]["multi_location_total"] == 2
-    finds = [json.loads(line) for line in (evidence / "xcalygraph/find-text-600.scores.jsonl").read_text().splitlines()]
-    contexts = [json.loads(line) for line in (evidence / "xcalygraph/ctx-text-600.scores.jsonl").read_text().splitlines()]
-    workflow = [json.loads(line) for line in (evidence / "xcalygraph/workflow-text-600.scores.jsonl").read_text().splitlines()]
+    finds = [json.loads(line) for line in (final_evidence / "xcalygraph/find-text-600.scores.jsonl").read_text().splitlines()]
+    contexts = [json.loads(line) for line in (final_evidence / "xcalygraph/ctx-text-600.scores.jsonl").read_text().splitlines()]
+    workflow = [json.loads(line) for line in (final_evidence / "xcalygraph/workflow-text-600.scores.jsonl").read_text().splitlines()]
     assert finds[0] != contexts[0] and finds[2] != contexts[2]
     assert workflow == [context if find["required"] > 1 else find for find, context in zip(finds, contexts)]
     assert metrics["workflow-text-600"]["multi_location_total"] == 2
@@ -146,14 +153,14 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
     validation = subprocess.run(arguments[:3] + ["validate", arguments[4]], env=environment,
                                 capture_output=True, text=True)
     assert validation.returncode == 0, validation.stderr + validation.stdout
-    validated = Path(validation.stdout.strip().rsplit("evidence: ", 1)[-1])
+    validated = evidence(validation)
     assert (validated / ".xcalygraph-disposable").read_bytes() == b"xcalygraph-cache-v1\n"
     assert not (root / ".cache/evaluation/exposure/.xcalygraph-disposable").exists()
     focused = subprocess.run(arguments[:3] + ["development", arguments[4], "--budget", "600",
-                                              "--reuse-graphify", str(evidence)],
+                                              "--reuse-graphify", str(final_evidence)],
                              env=environment, capture_output=True, text=True)
     assert focused.returncode == 0, focused.stderr + focused.stdout
-    focused_evidence = Path(focused.stdout.splitlines()[-1].removeprefix("evidence: "))
+    focused_evidence = evidence(focused)
     assert (focused_evidence / ".xcalygraph-disposable").read_bytes() == b"xcalygraph-cache-v1\n"
     identity = json.loads((focused_evidence / "identity.json").read_text())
     focused_report = json.loads((focused_evidence / "report.json").read_text())
@@ -165,7 +172,7 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
     metrics = focused_report["corpora"]["xcalygraph"]["metrics"]
     assert "find-text-600" in metrics and "find-text-200" not in metrics
     assert "graphify-legacy-2000" in metrics
-    baseline = evidence / "xcalygraph/correct/graphify-legacy.stdout"
+    baseline = final_evidence / "xcalygraph/correct/graphify-legacy.stdout"
     reused = focused_evidence / "xcalygraph/correct/graphify-legacy.stdout"
     observation = json.loads(reused.with_suffix(".json").read_text())
     assert reused.read_bytes() == baseline.read_bytes()

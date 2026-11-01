@@ -3,7 +3,8 @@
 # Usage: scripts/tests/test-benchmark-inputs.sh
 set -euo pipefail
 (( $# == 0 )) || { echo "usage: test-benchmark-inputs.sh" >&2; exit 2; }
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && printf '%s.' "$PWD")"
+REPO_ROOT="${REPO_ROOT%.}"
 [[ ! -L "${REPO_ROOT}/.cache" ]] || { echo "test cache must not be a symlink" >&2; exit 1; }
 mkdir -p "${REPO_ROOT}/.cache"
 python3 -I - "${REPO_ROOT}" <<'PYTHON'
@@ -47,7 +48,11 @@ with tempfile.TemporaryDirectory(prefix="benchmark-inputs.", dir=repo / ".cache"
     private.mkdir()
     private_list = root / "scripts/benchmarks/questions/private/corpora.tsv"
     private_list.parent.mkdir(parents=True)
-    private_list.write_text(f"private-name\t{private}\nabsent\t{work / 'missing'}\n")
+    private_path, missing_path = str(private), str(work / "missing")
+    if "\n" in private_path or "\n" in missing_path:
+        private_path = os.path.relpath(private, root)
+        missing_path = os.path.relpath(work / "missing", root)
+    private_list.write_text(f"private-name\t{private_path}\nabsent\t{missing_path}\n")
     questions = root / "scripts/benchmarks/questions/xcalygraph.tsv"
     questions.write_text("question\texpected\n")
 
