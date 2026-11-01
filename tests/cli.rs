@@ -1571,6 +1571,167 @@ fn final_tree_decides_the_index_regardless_of_change_order_and_threads() -> Test
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn git_diff_handles_special_paths_from_a_subdirectory() -> TestResult {
+    let dir = TempDir::new("git-special-diff")?;
+    let repo = dir.0.join("repo");
+    let root = repo.join(" \tü\n");
+    fs::create_dir_all(&root)?;
+    let changed = [
+        ("space file.go", "BySpace", "space file.go"),
+        ("üñ.go", "ByUnicode", "üñ.go"),
+        ("tab\tfile.go", "ByTab", "tab\\tfile.go"),
+        ("line\nfile.go", "ByNewline", "line\\nfile.go"),
+        (
+            "quote\"back\\slash.go",
+            "ByQuote",
+            "quote\\\"back\\\\slash.go",
+        ),
+    ];
+    for (path, name, _) in changed {
+        fs::write(
+            root.join(path),
+            format!("package sample\nfunc {name}() int {{ return 1 }}\n"),
+        )?;
+    }
+    fs::write(root.join("delete\t.go"), "package sample\nfunc Gone() {}\n")?;
+    fs::write(root.join("type.go"), "package sample\nfunc GoneType() {}\n")?;
+    fs::write(
+        root.join("binary.go"),
+        b"package sample\nfunc GoneBinary() {}\n\0",
+    )?;
+    fs::write(
+        root.join("plus.ts"),
+        "export function First() {\nlet x = 1;\n++ x;\nreturn x;\n}\nexport function Later() { return 1; }\n",
+    )?;
+    fs::write(
+        root.join("before ü.go"),
+        "package sample\nfunc Moved() {}\n",
+    )?;
+    fs::write(
+        repo.join("outside.go"),
+        "package outside\nfunc Outside() {}\n",
+    )?;
+    git(&repo, &["init", "-q"])?;
+    git(&repo, &["config", "core.quotePath", "true"])?;
+    git(&repo, &["add", "."])?;
+    git(&repo, &["commit", "-q", "-m", "initial"])?;
+    for (path, name, _) in changed {
+        fs::write(
+            root.join(path),
+            format!("package sample\nfunc {name}() int {{ return 2 }}\n"),
+        )?;
+    }
+    fs::remove_file(root.join("delete\t.go"))?;
+    fs::remove_file(root.join("type.go"))?;
+    std::os::unix::fs::symlink("target", root.join("type.go"))?;
+    fs::remove_file(root.join("binary.go"))?;
+    fs::write(
+        root.join("plus.ts"),
+        "export function First() {\nlet x = 1;\n++ y;\nreturn x;\n}\nexport function Later() { return 2; }\n",
+    )?;
+    fs::rename(root.join("before ü.go"), root.join("after ü.go"))?;
+    fs::write(root.join("added\t.go"), "package sample\nfunc Added() {}\n")?;
+    fs::write(
+        repo.join("outside.go"),
+        "package outside\nfunc ChangedOutside() {}\n",
+    )?;
+    git(&repo, &["add", "-A"])?;
+    fs::write(
+        root.join("untracked\n.go"),
+        "package sample\nfunc Untracked() {}\n",
+    )?;
+    let output = run_in(&root, &dir.0.join("index"), &["impact", "--diff", "--json"])?;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout)?;
+    for (_, name, escaped_path) in changed {
+        assert!(
+            text.contains(&format!("\"path\":\"{escaped_path}\"")),
+            "missing {name}: {text}"
+        );
+        assert!(text.contains(name), "missing {name}: {text}");
+    }
+    for escaped_path in [
+        "delete\\t.go",
+        "after ü.go",
+        "added\\t.go",
+        "untracked\\n.go",
+    ] {
+        assert!(
+            text.contains(&format!("\"path\":\"{escaped_path}\"")),
+            "missing {escaped_path}: {text}"
+        );
+    }
+    assert!(
+        text.contains("\"name\":\"Gone\"") && text.contains("\"kind\":\"removed\""),
+        "{text}"
+    );
+    assert!(
+        text.contains("GoneType") && text.contains("GoneBinary"),
+        "{text}"
+    );
+    assert!(text.contains("First") && text.contains("Later"), "{text}");
+    assert!(
+        !text.contains("\"name\":\"Moved\",\"path\":\"before ü.go\",\"kind\":\"removed\""),
+        "{text}"
+    );
+    assert!(!text.contains("Outside"), "{text}");
+    git(&repo, &["config", "core.quotePath", "false"])?;
+    let unquoted = run_in(&root, &dir.0.join("index"), &["impact", "--diff", "--json"])?;
+    assert_eq!(unquoted.status.code(), Some(0));
+    assert_eq!(String::from_utf8(unquoted.stdout)?, text);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn git_history_handles_special_paths_from_a_subdirectory() -> TestResult {
+    let dir = TempDir::new("git-special-history")?;
+    let repo = dir.0.join("repo");
+    let root = repo.join(" \tü\n");
+    fs::create_dir_all(&root)?;
+    git(&repo, &["init", "-q"])?;
+    git(&repo, &["config", "core.quotePath", "true"])?;
+    for version in 0..4 {
+        fs::write(
+            root.join("tab\t.go"),
+            format!("package sample\nfunc One() int {{ return {version} }}\n"),
+        )?;
+        fs::write(
+            root.join("üñ\n.go"),
+            format!("package sample\nfunc Two() int {{ return {version} }}\n"),
+        )?;
+        fs::write(
+            repo.join("\nroot.go"),
+            format!("package outside\nfunc Outside() int {{ return {version} }}\n"),
+        )?;
+        git(&repo, &["add", "."])?;
+        git(&repo, &["commit", "-q", "-m", "change"])?;
+    }
+    let output = run_in(&root, &dir.0.join("index"), &["audit", "--json"])?;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout)?;
+    assert!(text.contains("tab\\t.go 4 commits"), "{text}");
+    assert!(text.contains("üñ\\n.go 4 commits"), "{text}");
+    assert!(text.contains("tab\\t.go üñ\\n.go 4"), "{text}");
+    assert!(!text.contains("root.go"), "{text}");
+    let top = run_in(&repo, &dir.0.join("top-index"), &["audit", "--json"])?;
+    assert_eq!(top.status.code(), Some(0));
+    assert!(String::from_utf8(top.stdout)?.contains("\\nroot.go 4 commits"));
+    Ok(())
+}
+
 #[test]
 fn impact_of_removed_files_and_symbols_names_their_surviving_dependents() -> TestResult {
     const OPEN: &str =

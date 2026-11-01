@@ -259,14 +259,14 @@ fn run_query(
     }
 }
 
-/// Git history analyses cached by HEAD in the `git` store file; computed from the last 1000
+/// Git history analyses cached by HEAD and analysis version; computed from the last 1000
 /// non-merge commits on a miss and stored unless read-only. `None` without git.
 fn audit_history(
     root: &std::path::Path,
     store: &crate::infra::store::Store,
     read_only: bool,
 ) -> Option<crate::domain::history::History> {
-    let head = crate::infra::git::head(root)?;
+    let head = format!("2:{}", crate::infra::git::head(root)?);
     if let Some(history) = store.read_history(&head) {
         return Some(history);
     }
@@ -296,4 +296,48 @@ fn version() -> String {
         out.push_str(&install::mismatch_line(&home));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::fs;
+    use std::process::Command;
+
+    use super::audit_history;
+    use crate::domain::history::History;
+    use crate::infra::{git, store::Store, testdir::TestDir};
+
+    #[test]
+    fn audit_recomputes_old_history_cache_without_writing_in_read_only_mode()
+    -> Result<(), Box<dyn Error>> {
+        let dir = TestDir::new("history-cache-version")?;
+        let root = dir.path().join("repo");
+        dir.write("repo/ü.go", "package sample\nfunc One() {}\n")?;
+        for args in [
+            &["init", "-q"][..],
+            &["add", "."],
+            &["commit", "-q", "-m", "initial"],
+        ] {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+                .args(args)
+                .status()?;
+            assert!(status.success(), "git {args:?}");
+        }
+        let store = Store::new(dir.path().join("index"));
+        fs::create_dir_all(&store.dir)?;
+        let head = git::head(&root).ok_or("missing HEAD")?;
+        store.write_history(&head, &History::default())?;
+        let before = fs::read(store.dir.join("git"))?;
+        let history = audit_history(&root, &store, true).ok_or("missing read-only history")?;
+        assert_eq!(history.churn.get("ü.go"), Some(&1));
+        assert_eq!(fs::read(store.dir.join("git"))?, before);
+        let history = audit_history(&root, &store, false).ok_or("missing writable history")?;
+        assert_eq!(history.churn.get("ü.go"), Some(&1));
+        assert_ne!(fs::read(store.dir.join("git"))?, before);
+        Ok(())
+    }
 }

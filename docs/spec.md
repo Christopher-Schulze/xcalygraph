@@ -284,7 +284,7 @@ Card order: header (path:start-end, kind, qualified name) -> signature -> doc ->
 
 ### 7.5 impact
 
-1. Targets: NAME symbols, or symbols whose line ranges intersect the `--diff` ranges (`git diff --no-renames`, deleted files kept). Exported signature changes: extract the REV version of each changed or deleted file (`git show REV:path`) and compare signatures. A REV definition absent from every changed current file is `removed`; current symbols whose unresolved call, type, inheritance or value reference names it are inferred depth-1 dependents (fact shards, no revision index).
+1. Targets: NAME symbols, or symbols whose line ranges intersect the `--diff` ranges (`git diff --no-renames`, NUL-delimited raw paths and decoded patch paths, deleted files kept). Untracked and historical paths are NUL-delimited; non-UTF-8 paths are skipped. Exported signature changes: extract the REV version of each changed or deleted file (`git show REV:path`) and compare signatures. A REV definition absent from every changed current file is `removed`; current symbols whose unresolved call, type, inheritance or value reference names it are inferred depth-1 dependents (fact shards, no revision index).
 2. Affected: reverse BFS over `calls`, `uses`, `inherits`, `implements`, `references`, `queries` up to `--depth`, ordered by depth, then rank. A dependent is exact only when a shortest chain to a target consists of exact edges; otherwise it is inferred, also on every later hop.
 3. Tests: tests reaching any target or affected symbol (test map). Run lines get their budget reserved first (package-level form, at most half the budget); a run line is precise (test names) only while every later run line still fits in its package-level form (`go test ./pkg`, `cargo test -p crate`, `./gradlew test`, `mvn test`, `swift test`, `dotnet test`, the bare runner); a line fitting in neither form is counted in `+<n> more`.
 4. Run lines: Go `go test ./<pkg> -run '^(<names>)$'` per package; Rust `cargo test -p <crate> -- <names>` per crate; Python `pytest <path>::<name> ...`; Java, Kotlin, Scala, Groovy with Gradle `./gradlew test --tests <class>`, with Maven `mvn test -Dtest=<class>`; C#, VB.NET `dotnet test --filter FullyQualifiedName~<name>`; Ruby `bundle exec rspec <path>` or `bundle exec ruby -Itest <path>`; PHP `vendor/bin/phpunit --filter <name>`; Swift `swift test --filter <name>`; Elixir `mix test <path>`; Dart `dart test <path>`; Zig `zig build test`; other languages list test files only.
@@ -346,7 +346,7 @@ Location: `<index-dir>/<root basename>-<XXH3-64 hex of the canonical root path>/
 | `facts/NN` (64 shards by path hash) | fact records of the shard's files, shard-local string table | a file of the shard changes |
 | `derived` | interned strings, symbol table, CSR graph, ranks, modules, search index, test map, audit data | derived content changes |
 | `used` | empty; its mtime is the last use for `ls` | a writing query when older than an hour |
-| `git` | churn, co-change, hotspots keyed by HEAD | HEAD changes and git data is requested |
+| `git` | churn, co-change, hotspots keyed by HEAD and analysis version | key changes and git data is requested |
 | `lock` | writer lock | never |
 
 - Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum; fact shard sections deflated; search postings as delta-varint (node, term frequencies) pairs.
