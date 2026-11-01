@@ -108,16 +108,63 @@ select_corpora() {
 }
 
 score_answer() {
-  local path="$1" answer="$2" status
+  local path="$1" answer="$2" root="$3" status
   [[ -n "${path//[[:space:]]/}" ]] || { echo "run-agent-benchmark.sh: empty expected path" >&2; return 2; }
-  if grep -q -F -- "${path}" <<< "${answer}"; then
-    printf '1'
+  if python3 -I -c '
+import os
+import re
+import sys
+
+expected, root = sys.argv[1:]
+answer = sys.stdin.read()
+opening = "([{<\"`" + chr(39)
+closing = ")]}>\"`" + chr(39)
+line_suffix = re.compile(r":[0-9]+(?::[0-9]+)?")
+
+def boundary(position):
+    if position == len(answer) or answer[position].isspace() or answer[position] in closing:
+        return True
+    following = position + 1
+    return (answer[position] in ".,;!?" and
+            (following == len(answer) or answer[following].isspace() or answer[following] in closing))
+
+def end_boundary(position):
+    if boundary(position) or answer.startswith("::", position):
+        return True
+    if answer[position] != ":":
+        return False
+    if boundary(position + 1):
+        return True
+    line = line_suffix.match(answer, position)
+    return line is not None and boundary(line.end())
+
+candidates = [expected]
+if not os.path.isabs(expected):
+    if not expected.startswith("./"):
+        candidates.append("./" + expected)
+    for base in {os.path.abspath(root), os.path.realpath(root)}:
+        absolute = os.path.join(base, expected)
+        if os.path.commonpath((base, os.path.abspath(absolute))) == base:
+            candidates.append(absolute)
+
+matched = False
+for candidate in candidates:
+    start = 0
+    while (start := answer.find(candidate, start)) != -1:
+        left = start == 0 or answer[start - 1].isspace() or answer[start - 1] in opening
+        if left and end_boundary(start + len(candidate)):
+            matched = True
+            break
+        start += 1
+    if matched:
+        break
+print(int(matched), end="")
+' "${path}" "${root}" <<< "${answer}"; then
+    return 0
   else
     status=$?
-    if (( status == 1 )); then printf '0'; else
-      echo "run-agent-benchmark.sh: answer matcher failed" >&2
-      return "${status}"
-    fi
+    echo "run-agent-benchmark.sh: answer matcher failed" >&2
+    return "${status}"
   fi
 }
 
@@ -244,7 +291,7 @@ for corpus in "${selected_corpora[@]}"; do
         fi
         if [[ "${arm}" == xcalygraph ]]; then verify_arm "${home}" "${BINARY}" "${IDENTITY}"; fi
         answer="$(jq -r '.result // ""' <<<"${output}")"
-        success="$(score_answer "${path}" "${answer}")" || exit 1
+        success="$(score_answer "${path}" "${answer}" "${root}")" || exit 1
         tokens="$(jq -r '((.usage.input_tokens // 0) + (.usage.output_tokens // 0) + (.usage.cache_read_input_tokens // 0) + (.usage.cache_creation_input_tokens // 0))' <<<"${output}")"
         turns="$(jq -r '.num_turns // 0' <<<"${output}")"
         ms="$(jq -r '.duration_ms // 0' <<<"${output}")"

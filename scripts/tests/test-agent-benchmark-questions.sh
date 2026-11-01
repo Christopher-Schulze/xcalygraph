@@ -86,12 +86,13 @@ with tempfile.TemporaryDirectory(prefix="agent-benchmark-questions.", dir=repo /
     unknown = invoke("--runs", "1", "unknown-corpus")
     assert unknown.returncode != 0 and not unknown.stdout
 
-    def score(path, answer, path_override=None):
+    def score(path, answer, path_override=None, corpus=None):
         command = 'source "$1" xcalygraph >/dev/null; '
         if path_override is not None:
             command += 'PATH="$4"; '
-        command += 'score_answer "$2" "$3"'
-        return subprocess.run([shell, "-c", command, "score", str(runner), path, answer, str(path_override or tools)],
+        command += 'score_answer "$2" "$3" "$5"'
+        return subprocess.run([shell, "-c", command, "score", str(runner), path, answer, str(path_override or tools),
+                               str(corpus or root)],
                               cwd=root, env=environment, capture_output=True)
 
     for path, answer, expected in (("main.go", "See main.go for the function.", b"1"),
@@ -100,10 +101,49 @@ with tempfile.TemporaryDirectory(prefix="agent-benchmark-questions.", dir=repo /
                                    ("missing.rs", "No matching path here.", b"0")):
         result = score(path, answer)
         assert result.returncode == 0 and result.stdout == expected, (path, result.stdout, result.stderr)
+    corpus = work / "corpus ü\n"
+    corpus.mkdir()
+    alias = work / "corpus-alias"
+    alias.symlink_to(corpus, target_is_directory=True)
+    path_cases = (
+        ("src/user.rs", "src/user.rs", b"1"),
+        ("src/user.rs", "See `src/user.rs`.", b"1"),
+        ("src/user.rs", "See [src/user.rs](details).", b"1"),
+        ("src/user.rs", "See (src/user.rs), then inspect it.", b"1"),
+        ("src/user.rs", "See src/user.rs:42:3.", b"1"),
+        ("src/user.rs", "See src/user.rs::create.", b"1"),
+        ("src/user.rs", "See ./src/user.rs.", b"1"),
+        ("src/user.rs", f"See {corpus / 'src/user.rs'}.", b"1"),
+        ("src/user.rs", "See src/user.rs.bak.", b"0"),
+        ("src/user.rs", "See other/src/user.rs.", b"0"),
+        ("src/user.rs", "See prefixsrc/user.rs.", b"0"),
+        ("src/user.rs", "See src/user.rs/child.", b"0"),
+        ("src/user.rs", "See src/user.rs-other.", b"0"),
+        ("src/user.rs", "See src/user.rs_2.", b"0"),
+        ("src/user.rs", "See src/user.rs2.", b"0"),
+        ("src/user.rs", "See src/user.rs,other.", b"0"),
+        ("src/user.rs", "See src/user.rs:extra.", b"0"),
+        ("src/user.rs", f"See {work / 'elsewhere/src/user.rs'}.", b"0"),
+        ("../outside.rs", f"See {corpus / '../outside.rs'}.", b"0"),
+        ("src/user.rs", "See other/src/user.rs and src/user.rs.", b"1"),
+        ("-Afile.rs", "See `-Afile.rs`.", b"1"),
+        ("dir/weiß name,[1].rs", "See `dir/weiß name,[1].rs`.", b"1"),
+        ("dir/weiß name,[1].rs", "See `dir/weiß name,[1].rs.bak`.", b"0"),
+    )
+    for path, answer, expected in path_cases:
+        result = score(path, answer, corpus=corpus)
+        assert result.returncode == 0 and result.stdout == expected, (path, answer, result.stdout, result.stderr)
+    resolved = score("src/user.rs", f"See {corpus / 'src/user.rs'}.", corpus=alias)
+    assert resolved.returncode == 0 and resolved.stdout == b"1", resolved.stderr
+    large = subprocess.run([shell, "-c", 'source "$1" xcalygraph >/dev/null; IFS= read -r answer; '
+                            'score_answer "$2" "$answer" "$3"', "large", str(runner), "src/user.rs", str(corpus)],
+                           cwd=root, env=environment, input=b"src/user.rs.bak " * 20000 + b"src/user.rs\n",
+                           capture_output=True)
+    assert large.returncode == 0 and large.stdout == b"1", large.stderr
     assert score("", "unrelated answer").returncode != 0
     assert score("   ", "unrelated answer").returncode != 0
     failed_matcher = score("main.go", "main.go", empty_path)
     assert failed_matcher.returncode != 0 and b"matcher" in failed_matcher.stderr
     assert not canary.exists() and not (root / ".cache").exists()
-    print("PASS: invalid questions and run counts fail before work; final rows and literal scorer verified without agents")
+    print("PASS: question preflight and complete-path scoring verified without agents or release builds")
 PYTHON
