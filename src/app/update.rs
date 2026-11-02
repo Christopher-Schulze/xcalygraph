@@ -9,6 +9,8 @@ use std::process::Command;
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 
+use crate::extract::json::{self, Value};
+
 use super::error::AppError;
 use super::install::VERSION;
 use super::progress::Progress;
@@ -79,49 +81,24 @@ fn fetch(url: &str, progress: Option<&Progress>) -> Result<Vec<u8>, AppError> {
     Ok(bytes)
 }
 
-/// Reads `tag_name` and every `browser_download_url` of a GitHub release object.
+/// Reads a release tag and asset URLs from a complete JSON GitHub release object.
 pub fn parse_release(json: &str) -> Option<Release> {
-    let tag = json_strings(json, "tag_name").into_iter().next()?;
-    let assets = json_strings(json, "browser_download_url")
-        .into_iter()
-        .filter_map(|url| Some((url.rsplit('/').next()?.to_owned(), url)))
-        .collect();
+    let metadata = json::parse_strict(json)?;
+    let tag = metadata.get("tag_name")?.as_str()?;
+    let Value::Array(asset_values) = metadata.get("assets")? else {
+        return None;
+    };
+    let assets = asset_values
+        .iter()
+        .map(|asset| {
+            let url = asset.get("browser_download_url")?.as_str()?;
+            Some((url.rsplit('/').next()?.to_owned(), url.to_owned()))
+        })
+        .collect::<Option<Vec<_>>>()?;
     Some(Release {
         version: tag.trim_start_matches('v').to_owned(),
         assets,
     })
-}
-
-/// Every string value of `key` in a JSON text (keys of nested objects included).
-fn json_strings(json: &str, key: &str) -> Vec<String> {
-    let needle = format!("\"{key}\"");
-    let mut values = Vec::new();
-    let mut rest = json;
-    while let Some(found) = rest.find(&needle) {
-        rest = &rest[found + needle.len()..];
-        let Some(after_colon) = rest.trim_start().strip_prefix(':') else {
-            continue;
-        };
-        let Some(body) = after_colon.trim_start().strip_prefix('"') else {
-            continue;
-        };
-        let mut value = String::new();
-        let mut chars = body.chars();
-        while let Some(ch) = chars.next() {
-            match ch {
-                '"' => break,
-                '\\' => match chars.next() {
-                    Some('n') => value.push('\n'),
-                    Some('t') => value.push('\t'),
-                    Some(other) => value.push(other),
-                    None => break,
-                },
-                other => value.push(other),
-            }
-        }
-        values.push(value);
-    }
-    values
 }
 
 /// `major.minor.patch` comparison; non-numeric parts compare as 0.
@@ -156,9 +133,15 @@ pub fn asset_name(version: &str) -> String {
 pub fn update(check: bool, progress: &mut Progress) -> Result<String, AppError> {
     progress.start("Release");
     let metadata = fetch(&latest_url(), None).inspect_err(|_| progress.fail("unreachable"))?;
-    let release = parse_release(&String::from_utf8_lossy(&metadata)).ok_or_else(|| {
-        progress.fail("no release metadata");
-        AppError::Invalid("release metadata without tag_name".to_owned())
+    let metadata = std::str::from_utf8(&metadata).map_err(|_| {
+        progress.fail("invalid metadata");
+        AppError::Invalid("release metadata is not UTF-8 JSON".to_owned())
+    })?;
+    let release = parse_release(metadata).ok_or_else(|| {
+        progress.fail("invalid metadata");
+        AppError::Invalid(
+            "release metadata is invalid JSON or has invalid required fields".to_owned(),
+        )
     })?;
     let available = newer(&release.version, VERSION);
     progress.pass(&if available {
@@ -493,5 +476,40 @@ mod tests {
         assert!(!newer("0.1.0", "0.1.0"));
         assert!(!newer("0.0.9", "0.1.0"));
         assert!(parse_release("{}").is_none());
+    }
+
+    #[test]
+    fn release_metadata_uses_root_fields_and_typed_asset_urls() {
+        let json = r#"{"notes":"escaped \"tag_name\":\"v99.0.0\"","release":{"tag_name":"v88.0.0"},"tag_name":"v1.2.3","assets":[{"name":"archive","browser_download_url":"https:\/\/x.invalid/releases/xcalygraph-1.2.3-darwin-arm64.tar.gz"},{"browser_download_url":"file:///tmp/release\nwith-newline/SHA256SUMS"}]}"#;
+        assert_eq!(
+            parse_release(json),
+            Some(Release {
+                version: "1.2.3".to_owned(),
+                assets: vec![
+                    (
+                        "xcalygraph-1.2.3-darwin-arm64.tar.gz".to_owned(),
+                        "https://x.invalid/releases/xcalygraph-1.2.3-darwin-arm64.tar.gz"
+                            .to_owned()
+                    ),
+                    (
+                        "SHA256SUMS".to_owned(),
+                        "file:///tmp/release\nwith-newline/SHA256SUMS".to_owned()
+                    ),
+                ],
+            })
+        );
+
+        for invalid in [
+            r#"{"assets":[]}"#,
+            r#"{"tag_name":99,"assets":[]}"#,
+            r#"{"tag_name":"v1.2.3"}"#,
+            r#"{"tag_name":"v1.2.3","assets":null}"#,
+            r#"{"tag_name":"v1.2.3","assets":[{"browser_download_url":false}]}"#,
+            r#"{"release":{"tag_name":"v99.0.0"},"assets":[]}"#,
+            r#"{"notes":"\"tag_name\":\"v99.0.0\"","assets":[]}"#,
+            r#"{"tag_name":"v99.0.0","assets":[]"#,
+        ] {
+            assert!(parse_release(invalid).is_none(), "accepted {invalid}");
+        }
     }
 }

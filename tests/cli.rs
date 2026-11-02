@@ -829,10 +829,98 @@ fn update_check_compares_with_the_latest_release() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn update_check_rejects_malformed_metadata_and_decodes_escaped_fields() -> TestResult {
+    let dir = TempDir::new("update-json")?;
+    let metadata = dir.0.join("latest.json");
+    let home = dir.0.join("home");
+    let check_metadata = |contents: &[u8]| -> io::Result<Output> {
+        fs::write(&metadata, contents)?;
+        support::command(BINARY, &dir.0)
+            .args(["update", "--check"])
+            .env("HOME", &home)
+            .env(
+                "XCALYGRAPH_UPDATE_URL",
+                format!("file://{}", metadata.display()),
+            )
+            .output()
+    };
+
+    let truncated = check_metadata(br#"{"tag_name":"v99.0.0","assets":[]"#)?;
+    assert_eq!(truncated.status.code(), Some(1));
+    assert!(truncated.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&truncated.stderr).contains("release metadata"));
+    assert!(!home.exists());
+
+    let invalid_utf8 = check_metadata(b"{\"tag_name\":\"v99.0.0\",\"assets\":[]}\xff")?;
+    assert_eq!(invalid_utf8.status.code(), Some(1));
+    assert!(invalid_utf8.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&invalid_utf8.stderr).contains("UTF-8"));
+    assert!(!home.exists());
+
+    for json in [
+        br#"{"tag_name":"v\u0039\u0039.0.0","assets":[]}"#.as_slice(),
+        br#"{"tag\u005fname":"v99.0.0","assets":[]}"#.as_slice(),
+    ] {
+        let decoded = check_metadata(json)?;
+        assert_eq!(decoded.status.code(), Some(0));
+        let text = String::from_utf8(decoded.stdout)?;
+        assert!(
+            text.contains(&format!(
+                "update available: {} -> 99.0.0",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "{text}"
+        );
+    }
+
+    for json in [
+        br#"{"release":{"tag_name":"v99.0.0"},"assets":[]}"#.as_slice(),
+        br#"{"notes":"\"tag_name\":\"v99.0.0\"","assets":[]}"#.as_slice(),
+    ] {
+        let unrelated = check_metadata(json)?;
+        assert_eq!(unrelated.status.code(), Some(1));
+        assert!(unrelated.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&unrelated.stderr).contains("release metadata"));
+        assert!(!home.exists());
+    }
+    Ok(())
+}
+
 /// A release directory whose binary reports `reported_version` and runs `install` through
 /// `delegate` (a shell command line receiving the arguments).
 fn fake_release(
     dir: &TempDir,
+    delegate: &str,
+    reported_version: &str,
+) -> Result<PathBuf, Box<dyn Error>> {
+    fake_release_at(&dir.0.join("release"), delegate, reported_version)
+}
+
+fn json_string(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len() + 2);
+    encoded.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => encoded.push_str("\\\""),
+            '\\' => encoded.push_str("\\\\"),
+            '\u{08}' => encoded.push_str("\\b"),
+            '\u{0c}' => encoded.push_str("\\f"),
+            '\n' => encoded.push_str("\\n"),
+            '\r' => encoded.push_str("\\r"),
+            '\t' => encoded.push_str("\\t"),
+            control if control <= '\u{1f}' => {
+                encoded.push_str(&format!("\\u{:04x}", u32::from(control)));
+            }
+            other => encoded.push(other),
+        }
+    }
+    encoded.push('"');
+    encoded
+}
+
+fn fake_release_at(
+    release: &Path,
     delegate: &str,
     reported_version: &str,
 ) -> Result<PathBuf, Box<dyn Error>> {
@@ -865,19 +953,19 @@ fn fake_release(
     )?;
     let archive = builder.into_inner()?.finish()?;
     let name = format!("xcalygraph-99.0.0-{os}-{arch}.tar.gz");
-    let release = dir.0.join("release");
-    fs::create_dir_all(&release)?;
+    fs::create_dir_all(release)?;
     fs::write(release.join(&name), &archive)?;
     let sum: String = sha2::Sha256::digest(&archive)
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
     fs::write(release.join("SHA256SUMS"), format!("{sum}  {name}\n"))?;
+    let archive_url = json_string(&format!("file://{}", release.join(&name).display()));
+    let sums_url = json_string(&format!("file://{}", release.join("SHA256SUMS").display()));
     fs::write(
         release.join("latest.json"),
         format!(
-            "{{\"tag_name\": \"v99.0.0\", \"assets\": [{{\"browser_download_url\": \"file://{0}/{name}\"}}, {{\"browser_download_url\": \"file://{0}/SHA256SUMS\"}}]}}",
-            release.display()
+            "{{\"tag_name\":\"v99.0.0\",\"assets\":[{{\"browser_download_url\":{archive_url}}},{{\"browser_download_url\":{sums_url}}}]}}"
         ),
     )?;
     Ok(release.join("latest.json"))
@@ -1264,7 +1352,12 @@ fn update_reports_a_failed_skill_phase_after_replacing_the_binary() -> TestResul
     ];
     for (name, delegate, read_only, code) in cases {
         let dir = TempDir::new(&format!("update-skill-{}", name.replace(' ', "-")))?;
-        let latest = fake_release(&dir, &delegate, "99.0.0")?;
+        let release = if name == "success" {
+            dir.0.join("release\nwith-newline")
+        } else {
+            dir.0.join("release")
+        };
+        let latest = fake_release_at(&release, &delegate, "99.0.0")?;
         let exe = dir.0.join("bin/xcalygraph");
         fs::create_dir_all(dir.0.join("bin"))?;
         fs::copy(BINARY, &exe)?;
