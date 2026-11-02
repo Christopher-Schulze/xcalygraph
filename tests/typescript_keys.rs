@@ -385,8 +385,182 @@ fn equivalent_interface_property_spellings_merge_only_when_compatible() -> Resul
     assert!(impact.contains("valid.readValue"), "{impact}");
     let filtered = fixture.run(&["show", "Strings", "--read-only", "-p", "invalid.ts"])?;
     assert_eq!(filtered.status.code(), Some(4));
-    let unknown = fixture.run(&["show", "valid.EscapedIdentifier", "--read-only"])?;
-    assert_eq!(unknown.status.code(), Some(3));
+    let distinct = fixture.run(&["show", "valid.EscapedIdentifier", "--read-only"])?;
+    assert!(distinct.status.success());
+    let distinct = String::from_utf8(distinct.stdout)?;
+    assert!(
+        distinct.contains("valid.ts:8") && distinct.contains("valid.ts:9"),
+        "{distinct}"
+    );
+    assert!(distinct.lines().any(|line| line == "f a"), "{distinct}");
+    assert!(
+        distinct
+            .lines()
+            .any(|line| line.starts_with("f ") && line.contains("u0061")),
+        "{distinct}"
+    );
+    Ok(())
+}
+
+#[test]
+fn escaped_identifier_keys_normalize_across_fields_members_and_references()
+-> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    for (name, source) in [
+        (
+            "escaped.ts",
+            &include_bytes!("fixtures/typescript-escaped-identifiers-valid.ts")[..],
+        ),
+        (
+            "conflict.ts",
+            &include_bytes!("fixtures/typescript-escaped-identifiers-conflict.ts")[..],
+        ),
+    ] {
+        fs::write(root.join(name), source)?;
+    }
+    let indexed = fixture.run(&["index"])?;
+    assert!(
+        indexed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&indexed.stderr)
+    );
+
+    let escaped = fixture.run(&["show", "escaped.EscapedField", "--exact", "--read-only"])?;
+    assert!(
+        escaped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&escaped.stderr)
+    );
+    let escaped = String::from_utf8(escaped.stdout)?;
+    assert!(
+        escaped.contains("escaped.ts:7") && escaped.contains("escaped.ts:11"),
+        "{escaped}"
+    );
+    assert!(escaped.lines().any(|line| line == "f a"), "{escaped}");
+
+    for (caller, target) in [
+        ("escaped.useEscapedField", "escaped.Service.run"),
+        ("escaped.useUnicodeField", "escaped.Service.run"),
+        ("escaped.useClassField", "escaped.Service.run"),
+    ] {
+        let output = fixture.run(&["show", caller, "--exact", "--read-only"])?;
+        let text = String::from_utf8(output.stdout)?;
+        assert!(output.status.success(), "{caller}: {text}");
+        assert!(text.contains(target), "{caller}: {text}");
+        assert!(!text.contains("ambiguous references"), "{caller}: {text}");
+        let repeated = fixture.run(&["show", caller, "--exact", "--read-only"])?;
+        assert_eq!(repeated.stdout, text.as_bytes(), "{caller}");
+    }
+    let method = fixture.run(&["show", "escaped.useEscapedMethod", "--read-only"])?;
+    let method_text = String::from_utf8(method.stdout)?;
+    assert!(method.status.success(), "{method_text}");
+    assert!(
+        method_text.contains("escaped.EscapedMethod.do"),
+        "{method_text}"
+    );
+    let repeated = fixture.run(&["show", "escaped.useEscapedMethod", "--read-only"])?;
+    assert_eq!(repeated.stdout, method_text.as_bytes());
+
+    let unicode = fixture.run(&["show", "escaped.UnicodeField", "--exact", "--read-only"])?;
+    assert!(
+        unicode.status.success(),
+        "{}",
+        String::from_utf8_lossy(&unicode.stderr)
+    );
+    let unicode = String::from_utf8(unicode.stdout)?;
+    assert!(unicode.lines().any(|line| line == "f α"), "{unicode}");
+    let distinct = fixture.run(&["show", "escaped.DistinctKeys", "--exact", "--read-only"])?;
+    assert!(
+        distinct.status.success(),
+        "{}",
+        String::from_utf8_lossy(&distinct.stderr)
+    );
+    let distinct = String::from_utf8(distinct.stdout)?;
+    assert!(
+        distinct.contains("f a,") && distinct.contains("u0061"),
+        "{distinct}"
+    );
+
+    let malformed_fixture = Fixture::new()?;
+    let malformed_root = malformed_fixture.0.join("repo");
+    fs::create_dir(&malformed_root)?;
+    fs::write(
+        malformed_root.join("malformed.ts"),
+        include_bytes!("fixtures/typescript-escaped-identifiers-invalid.ts"),
+    )?;
+    let indexed = malformed_fixture.run(&["index"])?;
+    assert!(
+        indexed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&indexed.stderr)
+    );
+    for name in ["MalformedClass", "MalformedInterface"] {
+        let output = malformed_fixture.run(&[
+            "show",
+            &format!("malformed.{name}"),
+            "--json",
+            "--read-only",
+        ])?;
+        let text = String::from_utf8(output.stdout)?;
+        assert!(output.status.success(), "{name}: {text}");
+        assert!(!text.contains("\"rel\":\"fields\""), "{name}: {text}");
+    }
+    assert_eq!(
+        fixture
+            .run(&["show", "conflict.Conflict", "--exact", "--read-only"])?
+            .status
+            .code(),
+        Some(3)
+    );
+
+    let filtered = fixture.run(&[
+        "show",
+        "escaped.useEscapedField",
+        "--exact",
+        "--read-only",
+        "-p",
+        "escaped.ts",
+    ])?;
+    assert!(filtered.status.success());
+    assert!(String::from_utf8(filtered.stdout)?.contains("escaped.Service.run"));
+    assert_eq!(
+        fixture
+            .run(&[
+                "show",
+                "escaped.useEscapedField",
+                "--read-only",
+                "-p",
+                "malformed.ts",
+            ])?
+            .status
+            .code(),
+        Some(4)
+    );
+
+    let impact = fixture.run(&["impact", "escaped.Service.run", "--exact", "--read-only"])?;
+    assert!(
+        impact.status.success(),
+        "{}",
+        String::from_utf8_lossy(&impact.stderr)
+    );
+    let impact = String::from_utf8(impact.stdout)?;
+    for caller in ["useEscapedField", "useUnicodeField", "useClassField"] {
+        assert!(impact.contains(caller), "{impact}");
+    }
+    let method_impact =
+        fixture.run(&["impact", "escaped.EscapedMethod", "--exact", "--read-only"])?;
+    assert!(
+        method_impact.status.success(),
+        "{}",
+        String::from_utf8_lossy(&method_impact.stderr)
+    );
+    let method_impact = String::from_utf8(method_impact.stdout)?;
+    assert!(
+        method_impact.contains("useEscapedMethod"),
+        "{method_impact}"
+    );
     Ok(())
 }
 
@@ -1326,6 +1500,10 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         include_bytes!("fixtures/typescript-index-signature-valid.ts"),
     )?;
     fs::write(
+        root.join("escaped.ts"),
+        include_bytes!("fixtures/typescript-escaped-identifiers-valid.ts"),
+    )?;
+    fs::write(
         root.join("base.ts"),
         include_bytes!("fixtures/typescript-cross-base-valid.ts"),
     )?;
@@ -1343,6 +1521,7 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
     )?;
     let mut images = Vec::new();
     let mut answers = Vec::new();
+    let mut escaped_answers = Vec::new();
     for workers in ["1", "4"] {
         let index = fixture.0.join(format!("index-{workers}"));
         let run = |args: &[&str]| -> Result<Output, Box<dyn Error>> {
@@ -1402,6 +1581,17 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
             "--read-only",
         ])?;
         assert!(indexed.status.success());
+        let escaped = run(&["show", "escaped.EscapedField", "--json", "--read-only"])?;
+        assert!(escaped.status.success());
+        let escaped_caller = run(&[
+            "show",
+            "escaped.useEscapedField",
+            "--json",
+            "--exact",
+            "--read-only",
+        ])?;
+        assert!(escaped_caller.status.success());
+        escaped_answers.push((escaped.stdout, escaped_caller.stdout));
         answers.push((
             answer.stdout,
             equivalent.stdout,
@@ -1419,6 +1609,7 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
     }
     assert_eq!(images[0], images[1]);
     assert_eq!(answers[0], answers[1]);
+    assert_eq!(escaped_answers[0], escaped_answers[1]);
     Ok(())
 }
 

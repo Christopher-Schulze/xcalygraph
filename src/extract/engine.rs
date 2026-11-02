@@ -259,10 +259,13 @@ fn collect(
         let line = row(primary_node);
         if let Some(kind) = primary.strip_prefix("definition.") {
             let Some(name) = get("name") else { continue };
+            let Some(name_text) = normalize_captured_name(path, name, text(name)) else {
+                continue;
+            };
             let entry = defs.entry(key).or_default();
             entry.node = Some(primary_node);
             entry.kind = def_kind(kind);
-            entry.name = text(name).to_owned();
+            entry.name = name_text;
             entry.source_identity =
                 source_definition_identity(path, primary_node, &entry.name, source);
             entry.name_node = name.id();
@@ -275,6 +278,9 @@ fn collect(
             }
         } else if let Some(kind) = primary.strip_prefix("reference.") {
             let Some(name) = get("name") else { continue };
+            let Some(name_text) = normalize_captured_name(path, name, text(name)) else {
+                continue;
+            };
             if path.ends_with(".rs") && kind == "path" {
                 let Some(module) = rust_path_module(primary_node, source) else {
                     continue;
@@ -336,7 +342,7 @@ fn collect(
                 path,
                 primary_node,
                 kind,
-                text(name),
+                &name_text,
                 source,
                 reference.arity,
             );
@@ -356,8 +362,23 @@ fn collect(
             };
             reference.line = row(name);
             if let Some(qualifier) = get("qualifier") {
+                let qualifier_text = {
+                    #[cfg(feature = "lang-typescript")]
+                    if super::lang::typescript::is_typescript_path(path)
+                        && let Some(normalized) =
+                            super::lang::typescript::normalize_member_qualifier(qualifier, source)
+                    {
+                        normalized
+                    } else {
+                        text(qualifier).to_owned()
+                    }
+                    #[cfg(not(feature = "lang-typescript"))]
+                    {
+                        text(qualifier).to_owned()
+                    }
+                };
                 reference.qualifier =
-                    Some(facts::clip(&facts::normalize_space(text(qualifier)), 80));
+                    Some(facts::clip(&facts::normalize_space(&qualifier_text), 80));
             }
             if path.ends_with(".jl")
                 && kind == Some(RefKind::Call)
@@ -461,7 +482,8 @@ fn collect(
                             #[cfg(not(feature = "lang-typescript"))]
                             let _ = literal;
                         } else {
-                            entry.name = Some(FieldName::Text(text(node).to_owned()));
+                            entry.name = normalize_captured_name(path, node, text(node))
+                                .map(FieldName::Text);
                         }
                     }
                     if let Some(node) = get("field.type") {
@@ -1052,6 +1074,15 @@ fn is_primary(name: &str) -> bool {
             name,
             "impl" | "import" | "binding" | "return" | "field" | "env" | "package"
         )
+}
+
+fn normalize_captured_name(path: &str, node: Node, name: &str) -> Option<String> {
+    #[cfg(feature = "lang-typescript")]
+    if super::lang::typescript::is_typescript_path(path) && node.kind() == "property_identifier" {
+        return super::lang::typescript::normalize_identifier_name(name);
+    }
+    let _ = (path, node);
+    Some(name.to_owned())
 }
 
 fn def_kind(kind: &str) -> Option<SymKind> {

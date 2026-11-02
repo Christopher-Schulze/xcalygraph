@@ -230,6 +230,57 @@ pub(in crate::extract) fn simple_property_key(
     }
 }
 
+/// Decode and validate a TypeScript identifier while retaining ordinary Unicode spelling.
+#[cfg(feature = "lang-typescript")]
+pub(in crate::extract) fn normalize_identifier_name(name: &str) -> Option<String> {
+    if !name.contains('\\') {
+        return Some(name.to_owned());
+    }
+    let decoded = decode_identifier_name(name)?;
+    static IDENTIFIER: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+    let identifier = IDENTIFIER
+        .get_or_init(|| {
+            regex::Regex::new(r"\A[$_\p{ID_Start}][$\p{ID_Continue}\u{200C}\u{200D}_]*\z").ok()
+        })
+        .as_ref()?;
+    identifier.is_match(&decoded).then_some(decoded)
+}
+
+/// Normalize escaped names in the dotted receiver chains accepted by the resolver.
+#[cfg(feature = "lang-typescript")]
+pub(in crate::extract) fn normalize_member_qualifier(
+    node: tree_sitter::Node,
+    source: &[u8],
+) -> Option<String> {
+    fn member_chain(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+        match node.kind() {
+            "identifier" | "property_identifier" => {
+                normalize_identifier_name(node.utf8_text(source).ok()?)
+            }
+            "this" | "super" => node.utf8_text(source).ok().map(str::to_owned),
+            "member_expression" => {
+                let object = node.child_by_field_name("object")?;
+                let property = node.child_by_field_name("property")?;
+                if source.get(object.end_byte()..property.start_byte())? != b"." {
+                    return None;
+                }
+                Some(format!(
+                    "{}.{}",
+                    member_chain(object, source)?,
+                    normalize_identifier_name(property.utf8_text(source).ok()?)?
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    let text = node.utf8_text(source).ok()?;
+    if !text.contains('\\') {
+        return Some(text.to_owned());
+    }
+    member_chain(node, source)
+}
+
 /// Complete supported member syntax; unknown or computed members are not merge evidence.
 #[cfg(feature = "lang-typescript")]
 pub(in crate::extract) fn interface_member_identity(
@@ -282,22 +333,15 @@ pub(in crate::extract) fn interface_member_identity(
         };
         let name_node = member.child_by_field_name("name")?;
         let name = match name_node.kind() {
-            "property_identifier" => {
-                let name = name_node.utf8_text(source).ok()?;
-                if name.contains('\\') {
-                    return None;
-                }
-                FieldName::Text(name.to_owned())
-            }
+            "property_identifier" => FieldName::Text(normalize_identifier_name(
+                name_node.utf8_text(source).ok()?,
+            )?),
             "string" | "number" => simple_property_key(name_node, source)?,
             _ => return None,
         };
         let name = name.token();
-        let signature = if tag == 'p' {
-            crate::extract::engine::signature_identity_without_node(member, source, name_node)?
-        } else {
-            crate::extract::engine::signature_identity(member, source)?
-        };
+        let signature =
+            crate::extract::engine::signature_identity_without_node(member, source, name_node)?;
         let _ = write!(
             identity,
             "{tag}{}:{name}{}:{signature}",
@@ -935,9 +979,9 @@ fn instantiated_generic_properties(
         if let Some((parameter, actual)) = substitution {
             let name_node = member.child_by_field_name("name")?;
             let name = match name_node.kind() {
-                "property_identifier" => {
-                    FieldName::Text(name_node.utf8_text(source).ok()?.to_owned())
-                }
+                "property_identifier" => FieldName::Text(normalize_identifier_name(
+                    name_node.utf8_text(source).ok()?,
+                )?),
                 "string" | "number" => simple_property_key(name_node, source)?,
                 _ => return None,
             };
@@ -1258,6 +1302,43 @@ fn decode_string_content(content: &str) -> Option<Vec<u16>> {
         }
     }
     Some(units)
+}
+
+#[cfg(feature = "lang-typescript")]
+fn decode_identifier_name(name: &str) -> Option<String> {
+    let mut chars = name.chars().peekable();
+    let mut decoded = String::with_capacity(name.len());
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            decoded.push(character);
+            continue;
+        }
+        if chars.next()? != 'u' {
+            return None;
+        }
+        let value = if chars.peek() == Some(&'{') {
+            chars.next();
+            let mut value = 0u32;
+            let mut digits = 0;
+            while chars.peek() != Some(&'}') {
+                if digits == 6 {
+                    return None;
+                }
+                value = value
+                    .checked_mul(16)?
+                    .checked_add(chars.next()?.to_digit(16)?)?;
+                digits += 1;
+            }
+            if digits == 0 || chars.next() != Some('}') {
+                return None;
+            }
+            value
+        } else {
+            read_hex(&mut chars, 4)?
+        };
+        decoded.push(char::from_u32(value)?);
+    }
+    Some(decoded)
 }
 
 #[cfg(feature = "lang-typescript")]
@@ -1791,6 +1872,33 @@ mod tests {
         );
         for invalid in ["\\", "\\x0", "\\u12", "\\u{}", "\\u{110000}", "\\01", "\\8"] {
             assert_eq!(decode_string_content(invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "lang-typescript")]
+    fn identifier_escape_decoding_preserves_valid_unicode_and_rejects_invalid_names() {
+        for (source, expected) in [
+            ("\\u0061", "a"),
+            ("a\\u{03B1}", "aα"),
+            ("\\u2118", "℘"),
+            ("a\\u200Cb", "a\u{200C}b"),
+            ("é", "é"),
+        ] {
+            assert_eq!(normalize_identifier_name(source).as_deref(), Some(expected));
+        }
+        for invalid in [
+            "\\u002D",
+            "\\u0301a",
+            "\\u{1F600}",
+            "\\uD800",
+            "\\u{}",
+            "\\u{110000}",
+            "\\u{1234567}",
+            "\\u12",
+            "\\x61",
+        ] {
+            assert_eq!(normalize_identifier_name(invalid), None, "{invalid}");
         }
     }
 
