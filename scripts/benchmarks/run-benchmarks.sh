@@ -81,12 +81,53 @@ if previous is not None:
 PYTHON
 }
 
-# Preserve the selected pathname exactly and fail if enumeration fails.
-select_source_path() {
+# Preserve every candidate pathname exactly and fail if enumeration fails.
+enumerate_source_paths() {
   local copy="$1" record="$2"
   ( set -o noclobber
-    find "${copy}" -type f \( -name '*.go' -o -name '*.rs' -o -name '*.py' -o -name '*.ts' -o -name '*.java' -o -name '*.kt' -o -name '*.cs' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.m' -o -name '*.swift' \) -print0 -quit > "${record}"
+    find "${copy}" -type f \( -name '*.go' -o -name '*.rs' -o -name '*.py' -o -name '*.ts' -o -name '*.java' -o -name '*.kt' -o -name '*.cs' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.m' -o -name '*.swift' \) -print0 > "${record}"
   )
+}
+
+# Return success only when NAME resolves to this file and its extracted symbols are indexed.
+source_has_symbols() {
+  python3 -I - "$@" <<'PYTHON'
+import json
+import subprocess
+import sys
+
+binary, root, index, path = sys.argv[1:]
+try:
+    path.encode("utf-8")
+except UnicodeEncodeError:
+    raise SystemExit(1)
+try:
+    result = subprocess.run(
+        [binary, "show", "--json", "--read-only", "-b", "65536", "-d", "0", "-C", root,
+         "--index-dir", index, "--", path],
+        capture_output=True,
+    )
+except OSError as error:
+    print(f"run-benchmarks.sh: could not run source query: {error}", file=sys.stderr)
+    raise SystemExit(2)
+if result.returncode in (3, 4):
+    raise SystemExit(1)
+if result.returncode != 0:
+    sys.stderr.buffer.write(result.stderr)
+    print("run-benchmarks.sh: could not verify selected source", file=sys.stderr)
+    raise SystemExit(2)
+try:
+    records = [json.loads(line) for line in result.stdout.splitlines()]
+except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    print(f"run-benchmarks.sh: invalid source query output: {error}", file=sys.stderr)
+    raise SystemExit(2)
+if not all(isinstance(record, dict) for record in records):
+    print("run-benchmarks.sh: invalid source query record", file=sys.stderr)
+    raise SystemExit(2)
+if (not records or records[0].get("t") != "file" or records[0].get("path") != path
+        or not any(record.get("t") == "sym" and record.get("path") == path for record in records[1:])):
+    raise SystemExit(1)
+PYTHON
 }
 
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
@@ -211,10 +252,9 @@ mean_ms() {
   jq -er '.results[0].summary.time_wall_clock.mean * 10000 | round / 10' "${json}"
 }
 
-# Graphify full build and single-file update on the copy, appended to the result line as
-# "up_build_ms up_rss_mb up_out_kb up_change_ms"; runs before the copy gets xcalygraph changes.
-upstream_columns() {
-  local copy="$1" target="$2" edit="$3" build change upstream_kb
+# Measure Graphify's full build before the verified edit; return its three result columns.
+upstream_build_columns() {
+  local copy="$1" build upstream_kb
   if ! build="$( { cd "${copy}" && /usr/bin/time -l env HOME="${BENCHMARK_HOME}" PYTHONHASHSEED=0 PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 graphify update . >/dev/null ; } 2>&1 )"; then
     printf '%s\n' "${build}" > "${copy}.upstream-full.time"
     echo "run-benchmarks.sh: upstream extraction failed; inspect ${copy}.upstream-full.time" >&2
@@ -226,7 +266,11 @@ upstream_columns() {
     "$(awk '/ real / { printf "%.0f", $1 * 1000 }' <<<"${build}")" \
     "$(awk '/maximum resident set size/ { printf "%.0f", $1 / 1048576 }' <<<"${build}")" \
     "${upstream_kb}"
-  printf '%s' "${edit}" >> "${target}"
+}
+
+# Measure Graphify's incremental refresh after the xcalygraph probe proves the same edit.
+upstream_change_column() {
+  local copy="$1" change
   if ! change="$( { cd "${copy}" && /usr/bin/time -l env HOME="${BENCHMARK_HOME}" PYTHONHASHSEED=0 PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 graphify update . >/dev/null ; } 2>&1 )"; then
     printf '%s\n' "${change}" > "${copy}.upstream-change.time"
     echo "run-benchmarks.sh: upstream refresh failed; inspect ${copy}.upstream-change.time" >&2
@@ -276,16 +320,46 @@ PYTHON
     rsync -a "${path}/" "${copy}/"
     "${BINARY}" index -C "${copy}" --index-dir "${copy_index}" >/dev/null
     source_record="${WORK}/source-${corpus_number}.path"
-    select_source_path "${copy}" "${source_record}"
+    candidate_record="${WORK}/source-${corpus_number}.candidates"
+    enumerate_source_paths "${copy}" "${candidate_record}"
     target=""
-    if ! IFS= read -r -d '' target < "${source_record}"; then
-      [[ -z "${target}" ]] || { echo "run-benchmarks.sh: invalid source path record" >&2; exit 1; }
+    while IFS= read -r -d '' candidate; do
+      case "${candidate}" in
+        "${copy}/"*) relative="${candidate#"${copy}/"}" ;;
+        *) echo "run-benchmarks.sh: source candidate escaped its copy" >&2; exit 1 ;;
+      esac
+      if source_has_symbols "${BINARY}" "${copy}" "${copy_index}" "${relative}"; then
+        target="${candidate}"
+        break
+      else
+        source_status=$?
+        (( source_status == 1 )) || exit "${source_status}"
+      fi
+    done < "${candidate_record}"
+    if [[ -n "${target}" ]]; then
+      ( set -o noclobber; printf '%s\0' "${target}" > "${source_record}" )
+    else
+      ( set -o noclobber; : > "${source_record}" )
     fi
     if [[ -n "${target}" ]]; then
-      # A comment line valid in the file's language, so both tools see a parseable change.
-      edit=$'\n// bench\n'
-      [[ "${target}" == *.py ]] && edit=$'\n# bench\n'
-      if (( upstream )); then upstream_line="$(upstream_columns "${copy}" "${target}" "${edit}")" || exit 1; fi
+      # A trailing newline is syntax-neutral across the supported source languages.
+      edit=$'\n'
+      if (( upstream )); then
+        upstream_line="$(upstream_build_columns "${copy}")" || exit 1
+      fi
+      printf '%s' "${edit}" >> "${target}"
+      probe_output="$("${BINARY}" index -C "${copy}" --index-dir "${copy_index}")"
+      if [[ ! "${probe_output}" =~ ^files[[:space:]][0-9]+[[:space:]]changed[[:space:]]1[[:space:]]deleted[[:space:]]0$ ]]; then
+        echo "run-benchmarks.sh: selected source did not trigger exactly one index change" >&2
+        exit 1
+      fi
+      ( set -o noclobber; printf '%s\n' "${probe_output}" > "${WORK}/probe-${corpus_number}.txt" )
+      relative="${target#"${copy}/"}"
+      source_has_symbols "${BINARY}" "${copy}" "${copy_index}" "${relative}" || {
+        echo "run-benchmarks.sh: selected source lost its extracted symbols after the probe" >&2
+        exit 1
+      }
+      if (( upstream )); then upstream_line+="$(upstream_change_column "${copy}")" || exit 1; fi
       sleep 2
       prepare_command="$(hyperfine_append_command "${edit}" "${target}")"
       change_command="$(hyperfine_command "${BINARY}" index -C "${copy}" --index-dir "${copy_index}")"
@@ -295,8 +369,15 @@ PYTHON
       measure_index_files snapshot "${copy_index}" "${snapshot}"
       printf '%s' "${edit}" >> "${target}"
       "${BINARY}" index -C "${copy}" --index-dir "${copy_index}" >/dev/null
+      source_has_symbols "${BINARY}" "${copy}" "${copy_index}" "${relative}" || {
+        echo "run-benchmarks.sh: selected source lost its extracted symbols after timing" >&2
+        exit 1
+      }
       rewritten_bytes="$(measure_index_files bytes "${copy_index}" "${snapshot}")"
       write_kb="$((rewritten_bytes / 1024))"
+    else
+      echo "run-benchmarks.sh: no indexed source with extracted symbols; refresh not measured" >&2
+      (( upstream )) && upstream_line="$(printf ' %12s %9s %9s %12s' - - - -)"
     fi
     rm -rf "${copy}" "${copy_index}"
   fi

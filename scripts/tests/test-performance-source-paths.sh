@@ -8,6 +8,7 @@ REPO_ROOT="${REPO_ROOT%.}"
 [[ ! -L "${REPO_ROOT}/.cache" ]] || { echo "test cache must not be a symlink" >&2; exit 1; }
 mkdir -p "${REPO_ROOT}/.cache"
 python3 -I - "${REPO_ROOT}" "$1" <<'PYTHON'
+import json
 import os
 from pathlib import Path
 import shutil
@@ -23,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix="performance-source-paths.", dir=repo / 
     home, direct = work / "home", work / "direct"
     home.mkdir()
     direct.mkdir()
-    odd = "strange\\name\tpart\nline.rs"
+    odd = "strange name é\\part\tline\n.rs"
     content = b"pub fn unusual() {}\n"
     (direct / odd).write_bytes(content)
     (direct / "decoy.txt").write_bytes(b"preserve\n")
@@ -38,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix="performance-source-paths.", dir=repo / 
                        GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
 
     def select(directory, record, env=environment):
-        return subprocess.run([shell, "-c", 'source "$1"; select_source_path "$2" "$3"',
+        return subprocess.run([shell, "-c", 'source "$1"; enumerate_source_paths "$2" "$3"',
                                "selection", str(runner_source), str(directory), str(record)],
                               cwd=work, env=env, capture_output=True)
 
@@ -85,10 +86,28 @@ with tempfile.TemporaryDirectory(prefix="performance-source-paths.", dir=repo / 
     corpus = invocation / "source-repo"
     corpus.mkdir()
     subprocess.run(["git", "init", "-q", str(corpus)], env=environment, check=True)
+    (corpus / ".xcalygraphignore").write_text("aaa-ignored.rs\n")
+    (corpus / "aaa-ignored.rs").write_bytes(b"pub fn ignored() {}\n")
+    (corpus / "testdata").mkdir()
+    (corpus / "testdata/fixture.rs").write_bytes(b"pub fn fixture() {}\n")
+    (corpus / "id_rsa.rs").write_bytes(b"pub fn sensitive() {}\n")
+    (corpus / "large.rs").write_bytes(b"pub fn large() {}\n" + b" " * (8 * 1024 * 1024))
     (corpus / odd).write_bytes(content)
     (corpus / "decoy.txt").write_bytes(b"preserve\n")
     subprocess.run(["git", "-C", str(corpus), "add", "--", odd], env=environment, check=True)
-    (project / "scripts/benchmarks/questions/private/corpora.tsv").write_text("weird\tsource-repo\n")
+    ignored_corpus = invocation / "ignored-repo"
+    ignored_corpus.mkdir()
+    subprocess.run(["git", "init", "-q", str(ignored_corpus)], env=environment, check=True)
+    (ignored_corpus / ".xcalygraphignore").write_text("only-ignored.rs\n")
+    (ignored_corpus / "only-ignored.rs").write_bytes(b"pub fn ignored_only() {}\n")
+    path_only_corpus = invocation / "path-only-repo"
+    (path_only_corpus / "testdata").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(path_only_corpus)], env=environment, check=True)
+    (path_only_corpus / "testdata/fixture.rs").write_bytes(b"pub fn fixture() {}\n")
+    (path_only_corpus / "id_rsa.rs").write_bytes(b"pub fn sensitive() {}\n")
+    (path_only_corpus / "large.rs").write_bytes(b"pub fn large() {}\n" + b" " * (8 * 1024 * 1024))
+    (project / "scripts/benchmarks/questions/private/corpora.tsv").write_text(
+        "weird\tsource-repo\nignored-only\tignored-repo\npath-only\tpath-only-repo\n")
     prepared = subprocess.run(["bash", str(project / "scripts/utils/prepare-corpus.sh"), str(corpus),
                                str(project / ".cache/corpus-snapshots")], env=environment, capture_output=True, check=True)
     assert prepared.stdout.endswith(b"\n")
@@ -100,6 +119,16 @@ with tempfile.TemporaryDirectory(prefix="performance-source-paths.", dir=repo / 
     exact = subprocess.run(["git", "-C", str(snapshot), "ls-files", "-z", "--", "*.rs"], env=environment,
                            capture_output=True, check=True).stdout
     assert exact == os.fsencode(odd) + b"\0" and legacy != os.fsencode(odd) + b"\n"
+    ignored_prepared = subprocess.run(["bash", str(project / "scripts/utils/prepare-corpus.sh"), str(ignored_corpus),
+                                       str(project / ".cache/corpus-snapshots")], env=environment,
+                                      capture_output=True, check=True)
+    assert ignored_prepared.stdout.endswith(b"\n")
+    ignored_snapshot = Path(os.fsdecode(ignored_prepared.stdout[:-1]))
+    path_only_prepared = subprocess.run(["bash", str(project / "scripts/utils/prepare-corpus.sh"),
+                                         str(path_only_corpus), str(project / ".cache/corpus-snapshots")],
+                                        env=environment, capture_output=True, check=True)
+    assert path_only_prepared.stdout.endswith(b"\n")
+    path_only_snapshot = Path(os.fsdecode(path_only_prepared.stdout[:-1]))
 
     source = runner_source.read_text()
     build = ('BINARY="$(cargo build --release --locked --bin xcalygraph --message-format=json -q \\\n'
@@ -110,7 +139,7 @@ with tempfile.TemporaryDirectory(prefix="performance-source-paths.", dir=repo / 
     measured_runner.write_text(source.replace(build, 'BINARY="${PERFORMANCE_TEST_BINARY}"', 1)
                                .replace(cleanup, '    : # Retain the exclusively test-owned copy for inspection.', 1))
     environment["PERFORMANCE_TEST_BINARY"] = str(binary)
-    measured = subprocess.run([shell, str(measured_runner), "weird"], cwd=invocation, env=environment,
+    measured = subprocess.run([shell, str(measured_runner), "weird", "ignored-only", "path-only"], cwd=invocation, env=environment,
                               capture_output=True, timeout=180)
     assert measured.returncode == 0, measured.stderr + measured.stdout
     start = measured.stdout.rfind(b"evidence: ")
@@ -118,11 +147,50 @@ with tempfile.TemporaryDirectory(prefix="performance-source-paths.", dir=repo / 
     assert start >= 0 and end >= 0, measured.stdout
     run = Path(os.fsdecode(measured.stdout[start + len(b"evidence: "):end]))
     copied = run / "copy-1"
+    ignored_copy = run / "copy-2"
+    path_only_copy = run / "copy-3"
     assert (run / "source-1.path").read_bytes() == os.fsencode(str(copied / odd)) + b"\0"
+    candidates = (run / "source-1.candidates").read_bytes().split(b"\0")
+    assert all(os.fsencode(str(copied / path)) in candidates for path in
+               ("aaa-ignored.rs", "testdata/fixture.rs", "id_rsa.rs", "large.rs", odd))
+    assert (run / "probe-1.txt").read_text().strip() == "files 6 changed 1 deleted 0"
+    assert (run / "source-2.path").read_bytes() == b""
+    assert (run / "source-2.candidates").read_bytes() == os.fsencode(str(ignored_copy / "only-ignored.rs")) + b"\0"
+    assert (run / "source-3.path").read_bytes() == b""
+    path_only_candidates = (run / "source-3.candidates").read_bytes().split(b"\0")
+    assert all(os.fsencode(str(path_only_copy / path)) in path_only_candidates
+               for path in ("testdata/fixture.rs", "id_rsa.rs", "large.rs"))
+    assert measured.stderr.count(b"no indexed source with extracted symbols; refresh not measured") == 2
+    rows = [line.split() for line in measured.stdout.splitlines()
+            if line.startswith((b"weird ", b"ignored-only ", b"path-only "))]
+    assert len(rows) == 3 and rows[0][0] == b"weird" and rows[0][5] != b"-"
+    assert rows[1][0] == b"ignored-only" and rows[1][5] == b"-" and rows[1][7] == b"-", (rows, measured.stderr)
+    assert rows[2][0] == b"path-only" and rows[2][5] == b"-" and rows[2][7] == b"-", (rows, measured.stderr)
     edited = (copied / odd).read_bytes()
     assert edited.startswith(content) and len(edited) > len(content)
     assert (copied / "decoy.txt").read_bytes() == b"preserve\n"
-    assert {path.relative_to(copied) for path in copied.rglob("*") if path.is_file()} == {Path(odd), Path("decoy.txt")}
+    assert (copied / "aaa-ignored.rs").read_bytes() == b"pub fn ignored() {}\n"
+    assert (copied / "testdata/fixture.rs").read_bytes() == b"pub fn fixture() {}\n"
+    assert (copied / "id_rsa.rs").read_bytes() == b"pub fn sensitive() {}\n"
+    assert len((copied / "large.rs").read_bytes()) == 8 * 1024 * 1024 + len(b"pub fn large() {}\n")
+    for path in ("testdata/fixture.rs", "id_rsa.rs", "large.rs"):
+        query = subprocess.run([str(binary), "show", "--json", "--read-only", "-b", "65536", "-d", "0",
+                                "-C", str(copied), "--index-dir", str(run / "index-copy-1"), "--", path],
+                               env=environment, capture_output=True)
+        records = [json.loads(line) for line in query.stdout.splitlines()]
+        assert query.returncode == 0 and records[0].get("t") == "file"
+        assert not any(record.get("t") == "sym" for record in records), (path, records)
+    assert (ignored_copy / "only-ignored.rs").read_bytes() == b"pub fn ignored_only() {}\n"
+    assert (path_only_copy / "testdata/fixture.rs").read_bytes() == b"pub fn fixture() {}\n"
+    assert (path_only_copy / "id_rsa.rs").read_bytes() == b"pub fn sensitive() {}\n"
+    assert len((path_only_copy / "large.rs").read_bytes()) == 8 * 1024 * 1024 + len(b"pub fn large() {}\n")
+    expected = {Path(odd), Path("decoy.txt"), Path("aaa-ignored.rs"), Path("testdata/fixture.rs"),
+                Path("id_rsa.rs"), Path("large.rs"), Path(".xcalygraphignore")}
+    assert {path.relative_to(copied) for path in copied.rglob("*") if path.is_file()} == expected
     assert (corpus / odd).read_bytes() == content and (corpus / "decoy.txt").read_bytes() == b"preserve\n"
-    print("PASS: real Git and debug benchmark preserve the exact unusual source path and neighboring data")
+    assert (ignored_corpus / "only-ignored.rs").read_bytes() == b"pub fn ignored_only() {}\n"
+    assert (path_only_corpus / "id_rsa.rs").read_bytes() == b"pub fn sensitive() {}\n"
+    assert (ignored_snapshot / "only-ignored.rs").is_file()
+    assert (path_only_snapshot / "large.rs").is_file()
+    print("PASS: real debug benchmark measures an extracted change and skips ignored-only and path-only corpora")
 PYTHON

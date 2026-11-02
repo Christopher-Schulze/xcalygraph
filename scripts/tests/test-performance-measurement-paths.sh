@@ -124,7 +124,7 @@ with tempfile.TemporaryDirectory(prefix="performance-measurements.", dir=repo / 
         finally:
             unreadable.chmod(0o700)
     source = runner.read_text()
-    start = source.index("upstream_columns() {\n")
+    start = source.index("upstream_build_columns() {\n")
     end = source.index("\n}\n", start) + 3
     function = source[start:end]
     tools, upstream_home, copy = work / "upstream-tools", work / "upstream-home", work / "upstream-copy\n"
@@ -141,8 +141,8 @@ with tempfile.TemporaryDirectory(prefix="performance-measurements.", dir=repo / 
     assert shutil.which("du", path=str(tools)) is None
     upstream_env = dict(environment, HOME=str(upstream_home), PATH=str(tools), XDG_CONFIG_HOME=str(upstream_home / "config"))
     code = ('source "$1"; BENCHMARK_HOME="$2"\n' + function +
-            '\nif upstream_columns "$3" "$4" $\'\\n// bench\\n\'; then exit 0; else exit $?; fi')
-    upstream = subprocess.run([shells[0], "-c", code, "upstream", str(runner), str(upstream_home), str(copy), str(target)],
+            '\nif upstream_build_columns "$3"; then exit 0; else exit $?; fi')
+    upstream = subprocess.run([shells[0], "-c", code, "upstream", str(runner), str(upstream_home), str(copy)],
                               cwd=work, env=upstream_env, capture_output=True, timeout=120)
     assert upstream.returncode != 0 and not upstream.stdout and b"du:" in upstream.stderr, upstream.stderr
     assert (copy / "graphify-out/graph.json").is_file() and target.read_text() == content
