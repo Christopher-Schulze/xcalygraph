@@ -29,7 +29,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 78;
+pub const RESOLVE_VERSION: u32 = 79;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -80,6 +80,8 @@ struct Index<'a> {
     returns: HashMap<u32, &'a str>,
     /// Field types per (type symbol, field name).
     field_types: HashMap<(u32, &'a str), &'a str>,
+    /// Declaration file for a field contributed by a cross-file TypeScript augmentation.
+    augmentation_field_files: HashMap<(u32, &'a str), u32>,
     /// Every (type symbol, field name), typed or not.
     field_names: HashSet<(u32, String)>,
     /// Implementations of abstract types and supertypes of concrete ones.
@@ -134,21 +136,14 @@ pub fn build(input: &Input) -> Graph {
         .collect();
     index.file_imports = imports;
     #[cfg(feature = "lang-typescript")]
-    if index.link_typescript_imported_groups() {
-        index.by_module.clear();
-        index.methods.clear();
-        index.types.clear();
-        index.by_name.clear();
-        index.returns.clear();
-        index.field_types.clear();
-        index.field_names.clear();
-        index.global_usings.clear();
-        index.tables.clear();
-        index.build_tables();
-        index.file_imports = (0..input.files.len())
-            .into_par_iter()
-            .map(|file| index.imports(file as u32))
-            .collect();
+    {
+        let augmentations = index.link_typescript_augmentations();
+        if augmentations == Some(true) {
+            index.rebuild_tables_and_imports();
+        }
+        if augmentations.is_some() && index.link_typescript_imported_groups() {
+            index.rebuild_tables_and_imports();
+        }
     }
     index.link_implementations();
     let resolved: Vec<Resolved> = (0..input.files.len())
@@ -159,6 +154,25 @@ pub fn build(input: &Input) -> Graph {
 }
 
 impl<'a> Index<'a> {
+    #[cfg(feature = "lang-typescript")]
+    fn rebuild_tables_and_imports(&mut self) {
+        self.by_module.clear();
+        self.methods.clear();
+        self.types.clear();
+        self.by_name.clear();
+        self.returns.clear();
+        self.field_types.clear();
+        self.augmentation_field_files.clear();
+        self.field_names.clear();
+        self.global_usings.clear();
+        self.tables.clear();
+        self.build_tables();
+        self.file_imports = (0..self.input.files.len())
+            .into_par_iter()
+            .map(|file| self.imports(file as u32))
+            .collect();
+    }
+
     fn new(input: &'a Input<'a>) -> Self {
         let modules = modules::assign(input.files, input.facts);
         let mut rust_generic_parameters = HashSet::default();
@@ -352,6 +366,7 @@ impl<'a> Index<'a> {
             by_name: HashMap::default(),
             returns: HashMap::default(),
             field_types: HashMap::default(),
+            augmentation_field_files: HashMap::default(),
             field_names: HashSet::default(),
             implementations: HashMap::default(),
             supertypes: HashMap::default(),
@@ -374,6 +389,135 @@ impl<'a> Index<'a> {
         index
     }
 
+    /// Link only complete, uniquely targeted relative module augmentations.
+    #[cfg(feature = "lang-typescript")]
+    fn link_typescript_augmentations(&mut self) -> Option<bool> {
+        let mut groups: HashMap<u32, Vec<u32>> = HashMap::default();
+        for (file, record) in self.input.files.iter().enumerate() {
+            match record.file_type {
+                Some(FileType::Vue | FileType::Svelte | FileType::Astro) => return None,
+                Some(FileType::TypeScript) => {}
+                _ => continue,
+            }
+            let facts = self.facts(file as u32)?;
+            match facts.source_identity(SourceIdentityKind::TypeScriptScope, 0)? {
+                "clear" => continue,
+                "augmentations" => {}
+                _ => return None,
+            }
+            for identity in facts
+                .source_identities
+                .as_deref()?
+                .iter()
+                .filter(|identity| identity.kind == SourceIdentityKind::TypeScriptAugmentation)
+            {
+                let augmentation = facts.symbols.get(identity.index as usize)?;
+                let directory = modules::parent_dir(&record.path);
+                let mut depth = directory.split('/').filter(|part| !part.is_empty()).count();
+                for part in identity.identity.split('/') {
+                    match part {
+                        "" | "." => {}
+                        ".." => depth = depth.checked_sub(1)?,
+                        _ => depth += 1,
+                    }
+                }
+                let module = self.js_module(directory, &identity.identity)?;
+                let mut candidates = Vec::new();
+                for (other, &other_module) in self.modules.file_module.iter().enumerate() {
+                    if other_module != module {
+                        continue;
+                    }
+                    let other_facts = self.facts(other as u32)?;
+                    for (local, symbol) in other_facts.symbols.iter().enumerate() {
+                        if symbol.parent.is_none()
+                            && crate::extract::lang::typescript::declaration_name_may_match(
+                                &symbol.name,
+                                &augmentation.name,
+                            )
+                        {
+                            candidates.push(self.base[other] + u32::try_from(local).ok()?);
+                        }
+                    }
+                }
+                let [target] = candidates.as_slice() else {
+                    return None;
+                };
+                let original = self.symbols.get(*target as usize)?;
+                if original.file == file as u32
+                    || original.kind != SymKind::Iface
+                    || original.parent != NONE
+                    || !original.exported
+                    || self.file_type(original.file) != Some(FileType::TypeScript)
+                    || original.flags & facts::FLAG_TYPESCRIPT_AUGMENTATION != 0
+                    || self.interface_canonical.contains_key(target)
+                {
+                    return None;
+                }
+                let expected = format!(
+                    "interface_declaration:9:interface:{}:{}",
+                    augmentation.name.len(),
+                    augmentation.name
+                );
+                if facts.source_identity(SourceIdentityKind::InterfaceHeader, identity.index)
+                    != Some(expected.as_str())
+                {
+                    return None;
+                }
+                groups
+                    .entry(*target)
+                    .or_default()
+                    .push(self.base[file] + identity.index);
+            }
+        }
+        for (&target, parts) in &groups {
+            let original = &self.symbols[target as usize];
+            let local = target.checked_sub(self.base[original.file as usize])?;
+            let original_facts = self.facts(original.file)?;
+            let expected = format!(
+                "interface_declaration:9:interface:{}:{}",
+                original.name.len(),
+                original.name
+            );
+            if original_facts.source_identity(SourceIdentityKind::InterfaceHeader, local)
+                != Some(expected.as_str())
+            {
+                return None;
+            }
+            let original_members =
+                original_facts.source_identity(SourceIdentityKind::InterfaceMembers, local)?;
+            let mut members = Vec::new();
+            for &part in parts {
+                let symbol = &self.symbols[part as usize];
+                let local = part.checked_sub(self.base[symbol.file as usize])?;
+                members.push(
+                    self.facts(symbol.file)?
+                        .source_identity(SourceIdentityKind::InterfaceMembers, local)?,
+                );
+            }
+            if !crate::extract::lang::typescript::imported_base_members_are_disjoint(
+                original_members,
+                &members,
+            ) {
+                return None;
+            }
+            for (index, member) in members.iter().enumerate() {
+                if !crate::extract::lang::typescript::imported_base_members_are_disjoint(
+                    member,
+                    &members[index + 1..],
+                ) {
+                    return None;
+                }
+            }
+        }
+        for (&target, parts) in &groups {
+            self.interface_canonical.insert(target, target);
+            for &part in parts {
+                self.interface_canonical.insert(part, target);
+            }
+        }
+        Some(!groups.is_empty())
+    }
+
     /// Add same-file groups only after all TypeScript scope and imported base evidence is known.
     #[cfg(feature = "lang-typescript")]
     fn link_typescript_imported_groups(&mut self) -> bool {
@@ -384,11 +528,10 @@ impl<'a> Index<'a> {
             .enumerate()
             .any(|(file, record)| match record.file_type {
                 Some(FileType::Vue | FileType::Svelte | FileType::Astro) => true,
-                Some(FileType::TypeScript) => {
-                    self.facts(file as u32).and_then(|facts| {
-                        facts.source_identity(SourceIdentityKind::TypeScriptScope, 0)
-                    }) != Some("clear")
-                }
+                Some(FileType::TypeScript) => self
+                    .facts(file as u32)
+                    .and_then(|facts| facts.source_identity(SourceIdentityKind::TypeScriptScope, 0))
+                    .is_none_or(|scope| !matches!(scope, "clear" | "augmentations")),
                 _ => false,
             })
         {
@@ -557,6 +700,22 @@ impl<'a> Index<'a> {
         ) {
             return None;
         }
+        for (&part, &canonical) in &self.interface_canonical {
+            if canonical != *target || part == *target {
+                continue;
+            }
+            let symbol = self.symbols.get(part as usize)?;
+            let local = part.checked_sub(self.base[symbol.file as usize])?;
+            let members = self
+                .facts(symbol.file)?
+                .source_identity(SourceIdentityKind::InterfaceMembers, local)?;
+            if !crate::extract::lang::typescript::imported_base_members_are_disjoint(
+                members,
+                &child_members,
+            ) {
+                return None;
+            }
+        }
         Some(
             parts
                 .iter()
@@ -637,8 +796,18 @@ impl<'a> Index<'a> {
                             || kind.is_callable()
                             || kind == SymKind::Const =>
                     {
+                        let method_scope = symbol
+                            .parent
+                            .map(|parent| self.canonical_interface(base + parent))
+                            .filter(|&parent| {
+                                symbol.parent.is_some_and(|local| parent != base + local)
+                            })
+                            .map_or(scope, |parent| {
+                                self.scope_ids
+                                    [self.module_of(self.symbols[parent as usize].file) as usize]
+                            });
                         self.methods
-                            .entry((scope, owner_base(owner), name))
+                            .entry((method_scope, owner_base(owner), name))
                             .or_default()
                             .push(id);
                     }
@@ -692,6 +861,17 @@ impl<'a> Index<'a> {
                         && let Some(name) = name.text()
                     {
                         self.field_types.insert((owner, name), kind.as_str());
+                        if facts
+                            .symbols
+                            .get(fields.owner as usize)
+                            .is_some_and(|symbol| {
+                                symbol.flags & facts::FLAG_TYPESCRIPT_AUGMENTATION != 0
+                            })
+                            && owner != base + fields.owner
+                        {
+                            self.augmentation_field_files
+                                .insert((owner, name), file as u32);
+                        }
                     }
                 }
             }
@@ -4479,7 +4659,7 @@ impl<'a> Index<'a> {
             }) else {
                 return Receiver::Unknown;
             };
-            let owner_file = self.symbols[type_symbol as usize].file;
+            let mut owner_file = self.symbols[type_symbol as usize].file;
             let concrete = if types.len() == 1 {
                 let group = types[0];
                 let group_file = self.symbols[group as usize].file;
@@ -4518,6 +4698,36 @@ impl<'a> Index<'a> {
                 )
             }) {
                 return Receiver::External;
+            }
+            if concrete.is_none()
+                && let Some(&augmentation_file) =
+                    self.augmentation_field_files.get(&(type_symbol, *field))
+            {
+                if field_type.contains('.') || field_type.contains("::") {
+                    return Receiver::Unknown;
+                }
+                let module = self.module_of(owner_file);
+                let exported = self
+                    .module_symbol(module, field_type, Some(SymKind::is_type))
+                    .into_iter()
+                    .any(|candidate| self.symbols[candidate as usize].exported);
+                if !exported {
+                    if self.input.facts.iter().enumerate().any(|(file, facts)| {
+                        self.module_of(file as u32) == module
+                            && facts.as_ref().is_some_and(|facts| {
+                                facts
+                                    .source_identity(
+                                        SourceIdentityKind::TypeScriptComplexExports,
+                                        0,
+                                    )
+                                    .is_some()
+                                    || facts.imports.iter().any(|import| import.reexport)
+                            })
+                    }) {
+                        return Receiver::Unknown;
+                    }
+                    owner_file = augmentation_file;
+                }
             }
             match self.resolve_type(owner_file, None, None, concrete.unwrap_or(field_type)) {
                 Some((next, next_confidence))
@@ -5173,7 +5383,17 @@ impl Index<'_> {
         let mut pairs: Vec<(u32, u32)> = Vec::new();
         for (&(scope, owner, _), methods) in &self.methods {
             for &type_symbol in types_by_scope.get(&(scope, owner)).into_iter().flatten() {
-                pairs.extend(methods.iter().map(|&method| (type_symbol, method)));
+                pairs.extend(methods.iter().filter_map(|&method| {
+                    let parent = self.symbols[method as usize].parent;
+                    if parent != NONE
+                        && self.symbols[parent as usize].flags & facts::FLAG_TYPESCRIPT_AUGMENTATION
+                            != 0
+                        && self.canonical_interface(parent) != parent
+                    {
+                        return None;
+                    }
+                    Some((type_symbol, method))
+                }));
             }
         }
         for (id, symbol) in self.symbols.iter().enumerate() {

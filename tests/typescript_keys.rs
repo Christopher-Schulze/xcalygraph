@@ -365,6 +365,164 @@ fn imported_interface_bases_require_cross_file_compatibility() -> Result<(), Box
 }
 
 #[test]
+fn augmented_imported_base_preserves_members_and_invalidates_compatibility()
+-> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("base.ts"),
+        include_bytes!("fixtures/typescript-cross-base-valid.ts"),
+    )?;
+    fs::write(
+        root.join("child.ts"),
+        include_bytes!("fixtures/typescript-cross-child-augmented.ts"),
+    )?;
+    fs::write(
+        root.join("augment.ts"),
+        include_bytes!("fixtures/typescript-cross-augmentation-benign.ts"),
+    )?;
+    let child = fixture.run(&["show", "child.Child"])?;
+    let text = String::from_utf8(child.stdout)?;
+    assert!(child.status.success(), "{text}");
+    assert!(
+        text.contains("child.ts:2") && text.contains("child.ts:3"),
+        "{text}"
+    );
+    let call = fixture.run(&["show", "child.callExtra", "--exact", "--read-only"])?;
+    assert!(call.status.success());
+    let text = String::from_utf8(call.stdout)?;
+    assert!(
+        text.contains("augment.Base.extra") && text.contains("augment.ts:2"),
+        "{text}"
+    );
+    let impact = fixture.run(&["impact", "augment.Base.extra", "--exact", "--read-only"])?;
+    assert!(impact.status.success());
+    let text = String::from_utf8(impact.stdout)?;
+    assert!(text.contains("child.callExtra"), "{text}");
+    let base = fixture.run(&["show", "base.Base", "--read-only"])?;
+    assert!(base.status.success());
+    let text = String::from_utf8(base.stdout)?;
+    assert!(
+        text.contains("extra") && text.contains("augment.ts:2"),
+        "{text}"
+    );
+    assert_eq!(text.matches("m extra(): number").count(), 1, "{text}");
+    let entries = fs::read_dir(fixture.0.join("index"))?.collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(entries.len(), 1);
+    let derived = entries[0].path().join("derived");
+    let mut image = fs::read(&derived)?;
+    let section = 64 + 20 * 16;
+    let offset = u64::from_le_bytes(image[section..section + 8].try_into()?) as usize;
+    let length = u64::from_le_bytes(image[section + 8..section + 16].try_into()?) as usize;
+    assert!(length >= 8 && length.is_multiple_of(8) && offset + length <= image.len());
+    let entry = (offset..offset + length)
+        .step_by(8)
+        .find(|&entry| {
+            let part = u32::from_le_bytes(image[entry..entry + 4].try_into().unwrap_or_default());
+            let canonical =
+                u32::from_le_bytes(image[entry + 4..entry + 8].try_into().unwrap_or_default());
+            part < canonical
+        })
+        .ok_or("missing cross-file augmentation group")?;
+    let part = image[entry..entry + 4].to_vec();
+    image[entry + 4..entry + 8].copy_from_slice(&part);
+    let checksum = xxhash_rust::xxh3::xxh3_64(&image[64..]);
+    image[32..40].copy_from_slice(&checksum.to_le_bytes());
+    fs::write(&derived, image)?;
+    assert!(
+        !fixture
+            .run(&["show", "base.Base", "--read-only"])?
+            .status
+            .success()
+    );
+    assert!(fixture.run(&["show", "base.Base"])?.status.success());
+    fs::write(
+        root.join("augment.ts"),
+        include_bytes!("fixtures/typescript-cross-augmentation-after.ts"),
+    )?;
+    assert_eq!(
+        fixture.run(&["show", "child.Child"])?.status.code(),
+        Some(3)
+    );
+    fs::write(
+        root.join("augment.ts"),
+        include_bytes!("fixtures/typescript-cross-augmentation-benign.ts"),
+    )?;
+    assert!(fixture.run(&["show", "child.Child"])?.status.success());
+    fs::write(
+        root.join("other.ts"),
+        "export interface Other { id: string }",
+    )?;
+    fs::write(
+        root.join("otheraugment.ts"),
+        "import './other'; declare module './other' { interface Other { value: number } }",
+    )?;
+    assert!(fixture.run(&["show", "child.Child"])?.status.success());
+    let unknown = root.join("global.ts");
+    fs::write(
+        &unknown,
+        "export {}; declare global { interface Window { x: number } }",
+    )?;
+    assert_eq!(
+        fixture.run(&["show", "child.Child"])?.status.code(),
+        Some(3)
+    );
+    fs::remove_file(unknown)?;
+    fs::write(
+        root.join("augment.ts"),
+        "import './missing'; declare module './missing' { interface Base { extra(): number; } }",
+    )?;
+    assert_eq!(
+        fixture.run(&["show", "child.Child"])?.status.code(),
+        Some(3)
+    );
+    Ok(())
+}
+
+#[test]
+fn augmented_field_types_use_the_declaration_file() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("base.ts"),
+        "class Service { run(): number { return 1; } }\nexport interface Base { id: string; }\n",
+    )?;
+    fs::write(
+        root.join("augment.ts"),
+        "import './base';\nexport class Service { run(): number { return 2; } }\ndeclare module './base' { interface Base { extra: Service; } }\n",
+    )?;
+    fs::write(
+        root.join("child.ts"),
+        "import type { Base } from './base';\ninterface Child extends Base { left: string }\ninterface Child extends Base { right: number }\nexport function call(value: Child): number { return value.extra.run(); }\n",
+    )?;
+    let output = fixture.run(&["show", "child.call", "--exact"])?;
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout)?;
+    assert!(text.contains("augment.Service.run"), "{text}");
+    assert!(!text.contains("base.Service"), "{text}");
+    fs::write(
+        root.join("base.ts"),
+        "export class Service { run(): number { return 1; } }\nexport interface Base { id: string; }\n",
+    )?;
+    let output = fixture.run(&["show", "child.call", "--exact"])?;
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout)?;
+    assert!(text.contains("base.Service.run"), "{text}");
+    assert!(!text.contains("augment.Service.run"), "{text}");
+    fs::write(
+        root.join("base.ts"),
+        "class Service { run(): number { return 1; } } export { Service }; export interface Base { id: string; }",
+    )?;
+    let output = fixture.run(&["show", "child.call", "--exact"])?;
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout)?;
+    assert!(!text.contains("augment.Service.run"), "{text}");
+    Ok(())
+}
+
+#[test]
 fn generic_defaults_preserve_substitution_and_reject_conflicts() -> Result<(), Box<dyn Error>> {
     let fixture = Fixture::new()?;
     let root = fixture.0.join("repo");
@@ -952,6 +1110,14 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         root.join("child.ts"),
         include_bytes!("fixtures/typescript-cross-child-valid.ts"),
     )?;
+    fs::write(
+        root.join("augment.ts"),
+        include_bytes!("fixtures/typescript-cross-augmentation-benign.ts"),
+    )?;
+    fs::write(
+        root.join("augchild.ts"),
+        include_bytes!("fixtures/typescript-cross-child-augmented.ts"),
+    )?;
     let mut images = Vec::new();
     let mut answers = Vec::new();
     for workers in ["1", "4"] {
@@ -995,6 +1161,8 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         assert!(transitive.status.success());
         let imported = run(&["show", "child.Child", "--json", "--read-only"])?;
         assert!(imported.status.success());
+        let augmented = run(&["show", "augchild.Child", "--json", "--read-only"])?;
+        assert!(augmented.status.success());
         answers.push((
             answer.stdout,
             equivalent.stdout,
@@ -1005,6 +1173,7 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
             defaults.stdout,
             transitive.stdout,
             imported.stdout,
+            augmented.stdout,
         ));
     }
     assert_eq!(images[0], images[1]);

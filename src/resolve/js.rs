@@ -147,7 +147,7 @@ impl Index<'_> {
         }
     }
 
-    fn js_module(&self, dir: &str, spec: &str) -> Option<u32> {
+    pub(super) fn js_module(&self, dir: &str, spec: &str) -> Option<u32> {
         let tables = &self.js_tables;
         let mut bases: Vec<String> = Vec::new();
         if spec.starts_with('.') {

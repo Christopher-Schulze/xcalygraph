@@ -102,6 +102,105 @@ pub(in crate::extract) fn file_scope(
     "clear"
 }
 
+/// Capture every supported relative module augmentation, or leave the file unproven.
+#[cfg(feature = "lang-typescript")]
+pub(in crate::extract) fn augmentation_evidence(
+    root: tree_sitter::Node,
+    source: &[u8],
+    parsed: &crate::extract::engine::Parsed,
+) -> Option<Vec<crate::domain::facts::SourceIdentity>> {
+    use crate::domain::facts::{SourceIdentity, SourceIdentityKind};
+
+    let mut walker = root.walk();
+    if !root
+        .named_children(&mut walker)
+        .any(|node| matches!(node.kind(), "import_statement" | "export_statement"))
+    {
+        return None;
+    }
+    let mut pending = vec![root];
+    let mut evidence = Vec::new();
+    while let Some(node) = pending.pop() {
+        if node.kind() == "ambient_declaration" {
+            let mut cursor = node.walk();
+            if node
+                .children(&mut cursor)
+                .any(|child| child.kind() == "global")
+            {
+                return None;
+            }
+        }
+        if node.kind() == "module"
+            && node
+                .child_by_field_name("name")
+                .is_some_and(|name| name.kind() == "string")
+        {
+            if node.parent().is_none_or(|parent| {
+                parent.kind() != "ambient_declaration" || parent.parent() != Some(root)
+            }) {
+                return None;
+            }
+            let literal = node.child_by_field_name("name")?.utf8_text(source).ok()?;
+            let quote = literal.chars().next()?;
+            if !matches!(quote, '\'' | '"') {
+                return None;
+            }
+            let spec = literal.strip_prefix(quote)?.strip_suffix(quote)?;
+            if !(spec.starts_with("./") || spec.starts_with("../"))
+                || spec.contains('\\')
+                || spec.chars().any(char::is_control)
+            {
+                return None;
+            }
+            let body = node.child_by_field_name("body")?;
+            let mut cursor = body.walk();
+            for interface in body.named_children(&mut cursor) {
+                if interface.kind().contains("comment") {
+                    continue;
+                }
+                if interface.kind() != "interface_declaration" {
+                    return None;
+                }
+                let mut matching = parsed.spans.iter().enumerate().filter(|(_, span)| {
+                    span.0 == interface.start_byte() && span.1 == interface.end_byte()
+                });
+                let (index, _) = matching.next()?;
+                if matching.next().is_some() {
+                    return None;
+                }
+                let symbol = parsed.facts.symbols.get(index)?;
+                if symbol.kind != Some(SymKind::Iface) || symbol.parent.is_some() {
+                    return None;
+                }
+                let index = u32::try_from(index).ok()?;
+                let header = crate::extract::engine::signature_identity(interface, source)?;
+                let members = interface_member_identity(interface, source)?;
+                for (kind, identity) in [
+                    (SourceIdentityKind::InterfaceHeader, header),
+                    (SourceIdentityKind::InterfaceMembers, members),
+                    (SourceIdentityKind::TypeScriptAugmentation, spec.to_owned()),
+                ] {
+                    if let Some(existing) = parsed.facts.source_identity(kind, index) {
+                        if existing != identity {
+                            return None;
+                        }
+                    } else {
+                        evidence.push(SourceIdentity {
+                            kind,
+                            index,
+                            identity,
+                        });
+                    }
+                }
+            }
+            continue;
+        }
+        let mut cursor = node.walk();
+        pending.extend(node.named_children(&mut cursor));
+    }
+    (!evidence.is_empty()).then_some(evidence)
+}
+
 /// Direct literal keys representable without ambiguous field-list rendering.
 #[cfg(feature = "lang-typescript")]
 pub(in crate::extract) fn simple_property_key(
@@ -222,6 +321,22 @@ pub(in crate::extract) fn interface_groups(
         .collect();
     let mut groups = Vec::new();
     for parts in names.values().filter(|parts| parts.len() > 1) {
+        if parts.iter().any(|&part| {
+            let mut current = nodes.get(part as usize).copied().flatten();
+            while let Some(node) = current {
+                if node.kind() == "module"
+                    && node
+                        .child_by_field_name("name")
+                        .is_some_and(|name| name.kind() == "string")
+                {
+                    return true;
+                }
+                current = node.parent();
+            }
+            false
+        }) {
+            continue;
+        }
         let first = &symbols[parts[0] as usize];
         if first.name.contains('\\') || escaped_name_may_match(&first.name, &escaped_names) {
             continue;
@@ -1212,6 +1327,19 @@ mod tests {
                 "augmentation",
             ),
             (
+                &b"import './base'; declare module './base' { interface Base { extra(): number } }"
+                    [..],
+                "augmentations",
+            ),
+            (
+                &b"import './base'; declare module './base' { type Extra = string }"[..],
+                "augmentation",
+            ),
+            (
+                &b"import './base'; declare module './base' { interface Base { id: number } } declare global { interface Window { x: number } }"[..],
+                "augmentation",
+            ),
+            (
                 &b"export {}; declare global { interface Window { id: number } }"[..],
                 "augmentation",
             ),
@@ -1235,6 +1363,44 @@ mod tests {
                 .source_identity(SourceIdentityKind::InterfaceMembers, index)
                 .is_some()
         }));
+        let distinct = crate::extract::extract(
+            &record,
+            b"export {}; interface Base { local: string } declare module './base' { interface Base { remote: number } }",
+        );
+        let interfaces: Vec<_> = distinct
+            .symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, symbol)| symbol.kind == Some(SymKind::Iface) && symbol.name == "Base")
+            .map(|(index, _)| index as u32)
+            .collect();
+        assert_eq!(interfaces.len(), 2);
+        assert!(interfaces.iter().all(|&index| {
+            distinct
+                .source_identity(SourceIdentityKind::InterfaceGroup, index)
+                .is_none()
+        }));
+        let augmented = crate::extract::extract(
+            &record,
+            b"import './base'; declare module './base' { interface Base { extra(): number } }",
+        );
+        let index = augmented
+            .symbols
+            .iter()
+            .position(|symbol| symbol.name == "Base")
+            .map(|index| index as u32);
+        assert!(index.is_some_and(|index| {
+            augmented.source_identity(SourceIdentityKind::TypeScriptAugmentation, index)
+                == Some("./base")
+                && augmented
+                    .source_identity(SourceIdentityKind::InterfaceMembers, index)
+                    .is_some()
+        }));
+        let exports = crate::extract::extract(&record, b"class A {} export { A };");
+        assert_eq!(
+            exports.source_identity(SourceIdentityKind::TypeScriptComplexExports, 0),
+            Some("complex")
+        );
     }
 
     #[test]

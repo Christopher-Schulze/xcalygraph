@@ -508,18 +508,45 @@ fn collect(
     }
     #[cfg(feature = "lang-typescript")]
     if super::lang::typescript::is_typescript_path(path) {
-        let scope =
+        let mut scope =
             super::lang::typescript::file_scope(root, source, cursor.did_exceed_match_limit());
+        let augmentations = if scope == "augmentation" {
+            super::lang::typescript::augmentation_evidence(root, source, &parsed)
+        } else {
+            None
+        };
+        if augmentations.is_some() {
+            scope = "augmentations";
+        }
+        if let Some(entries) = &augmentations {
+            for entry in entries {
+                if entry.kind == SourceIdentityKind::TypeScriptAugmentation {
+                    parsed.facts.symbols[entry.index as usize].flags |=
+                        facts::FLAG_TYPESCRIPT_AUGMENTATION;
+                }
+            }
+        }
         let mut identities = parsed
             .facts
             .source_identities
             .take()
             .map_or_else(Vec::new, |items| items.into_vec());
+        identities.extend(augmentations.into_iter().flatten());
         identities.push(SourceIdentity {
             kind: SourceIdentityKind::TypeScriptScope,
             index: 0,
             identity: scope.to_owned(),
         });
+        let mut walker = root.walk();
+        if root.named_children(&mut walker).any(|node| {
+            node.kind() == "export_statement" && node.child_by_field_name("declaration").is_none()
+        }) {
+            identities.push(SourceIdentity {
+                kind: SourceIdentityKind::TypeScriptComplexExports,
+                index: 0,
+                identity: "complex".to_owned(),
+            });
+        }
         identities.sort_unstable_by_key(|identity| (identity.kind, identity.index));
         parsed.facts.source_identities = Some(identities.into_boxed_slice());
     }

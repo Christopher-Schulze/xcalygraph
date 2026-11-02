@@ -411,9 +411,10 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             | SourceIdentityKind::InterfaceHeader
             | SourceIdentityKind::InterfaceMembers
             | SourceIdentityKind::InterfaceGroup
-            | SourceIdentityKind::InterfaceGenericFields => facts.symbols.len(),
+            | SourceIdentityKind::InterfaceGenericFields
+            | SourceIdentityKind::TypeScriptAugmentation => facts.symbols.len(),
             SourceIdentityKind::Reference => facts.refs.len(),
-            SourceIdentityKind::TypeScriptScope => 1,
+            SourceIdentityKind::TypeScriptScope | SourceIdentityKind::TypeScriptComplexExports => 1,
         };
         if usize::try_from(index).map_or(true, |index| index >= limit)
             || previous.is_some_and(|previous| previous >= key)
@@ -423,6 +424,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
                     | SourceIdentityKind::InterfaceMembers
                     | SourceIdentityKind::InterfaceGroup
                     | SourceIdentityKind::InterfaceGenericFields
+                    | SourceIdentityKind::TypeScriptAugmentation
             ) && facts
                 .symbols
                 .get(index as usize)
@@ -435,9 +437,23 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             return Err(DecodeError("empty source identity"));
         }
         if kind == SourceIdentityKind::TypeScriptScope
-            && !matches!(identity.as_str(), "clear" | "augmentation" | "incomplete")
+            && !matches!(
+                identity.as_str(),
+                "clear" | "augmentation" | "augmentations" | "incomplete"
+            )
         {
             return Err(DecodeError("TypeScript scope"));
+        }
+        if kind == SourceIdentityKind::TypeScriptAugmentation
+            && (!(identity.starts_with("./") || identity.starts_with("../"))
+                || identity.contains('\\')
+                || identity.chars().any(char::is_control)
+                || facts.symbols[index as usize].parent.is_some())
+        {
+            return Err(DecodeError("TypeScript augmentation"));
+        }
+        if kind == SourceIdentityKind::TypeScriptComplexExports && identity != "complex" {
+            return Err(DecodeError("TypeScript exports"));
         }
         if kind == SourceIdentityKind::InterfaceGroup {
             let canonical = identity
@@ -486,6 +502,38 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             identity,
         });
         previous = Some(key);
+    }
+    let complete_augmentations = identities.iter().any(|entry| {
+        entry.kind == SourceIdentityKind::TypeScriptScope && entry.identity == "augmentations"
+    });
+    let augmentations: Vec<_> = identities
+        .iter()
+        .filter(|entry| entry.kind == SourceIdentityKind::TypeScriptAugmentation)
+        .collect();
+    if complete_augmentations == augmentations.is_empty()
+        || augmentations.iter().any(|augmentation| {
+            facts.symbols[augmentation.index as usize].flags
+                & crate::domain::facts::FLAG_TYPESCRIPT_AUGMENTATION
+                == 0
+                || ![
+                    SourceIdentityKind::InterfaceHeader,
+                    SourceIdentityKind::InterfaceMembers,
+                ]
+                .iter()
+                .all(|kind| {
+                    identities
+                        .iter()
+                        .any(|entry| entry.kind == *kind && entry.index == augmentation.index)
+                })
+        })
+        || facts.symbols.iter().enumerate().any(|(index, symbol)| {
+            symbol.flags & crate::domain::facts::FLAG_TYPESCRIPT_AUGMENTATION != 0
+                && !augmentations
+                    .iter()
+                    .any(|entry| entry.index as usize == index)
+        })
+    {
+        return Err(DecodeError("TypeScript augmentation evidence"));
     }
     if !identities.is_empty() {
         facts.source_identities = Some(identities.into_boxed_slice());
@@ -704,6 +752,80 @@ mod tests {
             .first_mut()
             .ok_or(DecodeError("identity"))?;
         marker.identity = "unknown".to_owned();
+        let mut invalid = Encoder::default();
+        encode(&mut invalid, &facts);
+        assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
+        let marker = facts
+            .source_identities
+            .as_mut()
+            .ok_or(DecodeError("identities"))?
+            .first_mut()
+            .ok_or(DecodeError("identity"))?;
+        marker.kind = SourceIdentityKind::TypeScriptComplexExports;
+        marker.identity = "complex".to_owned();
+        let mut valid = Encoder::default();
+        encode(&mut valid, &facts);
+        assert_eq!(decode(&mut Decoder::new(&valid.bytes))?, facts);
+        let marker = facts
+            .source_identities
+            .as_mut()
+            .ok_or(DecodeError("identities"))?
+            .first_mut()
+            .ok_or(DecodeError("identity"))?;
+        marker.identity = "unknown".to_owned();
+        let mut invalid = Encoder::default();
+        encode(&mut invalid, &facts);
+        assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn typescript_augmentation_requires_complete_owned_evidence() -> DecodeResult<()> {
+        let mut facts = sample();
+        facts.symbols[0].kind = Some(SymKind::Iface);
+        facts.symbols[0].flags |= crate::domain::facts::FLAG_TYPESCRIPT_AUGMENTATION;
+        facts.source_identities = Some(
+            vec![
+                SourceIdentity {
+                    kind: SourceIdentityKind::InterfaceHeader,
+                    index: 0,
+                    identity: "header".to_owned(),
+                },
+                SourceIdentity {
+                    kind: SourceIdentityKind::InterfaceMembers,
+                    index: 0,
+                    identity: "interface_members:".to_owned(),
+                },
+                SourceIdentity {
+                    kind: SourceIdentityKind::TypeScriptScope,
+                    index: 0,
+                    identity: "augmentations".to_owned(),
+                },
+                SourceIdentity {
+                    kind: SourceIdentityKind::TypeScriptAugmentation,
+                    index: 0,
+                    identity: "./base".to_owned(),
+                },
+            ]
+            .into_boxed_slice(),
+        );
+        let mut encoder = Encoder::default();
+        encode(&mut encoder, &facts);
+        assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
+        facts
+            .source_identities
+            .as_mut()
+            .ok_or(DecodeError("identities"))?[3]
+            .identity = "external".to_owned();
+        let mut invalid = Encoder::default();
+        encode(&mut invalid, &facts);
+        assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
+        let identities = facts
+            .source_identities
+            .as_mut()
+            .ok_or(DecodeError("identities"))?;
+        identities[3].identity = "./base".to_owned();
+        identities[2].identity = "clear".to_owned();
         let mut invalid = Encoder::default();
         encode(&mut invalid, &facts);
         assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());

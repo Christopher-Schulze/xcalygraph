@@ -101,6 +101,8 @@ pub const FLAG_GENERATED: u8 = 4;
 /// A declaration without body (C prototype, C++ in-class method declaration): references prefer
 /// the definition.
 pub const FLAG_DECLARATION: u8 = 8;
+/// A TypeScript interface whose complete relative module-augmentation evidence was captured.
+pub const FLAG_TYPESCRIPT_AUGMENTATION: u8 = 16;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Symbol {
@@ -256,6 +258,10 @@ pub enum SourceIdentityKind {
     InterfaceGenericFields,
     /// File-level TypeScript parsing and module-augmentation coverage.
     TypeScriptScope,
+    /// Relative module specifier of a source-proven TypeScript interface augmentation.
+    TypeScriptAugmentation,
+    /// Export forms that do not directly mark the underlying declaration.
+    TypeScriptComplexExports,
 }
 
 impl SourceIdentityKind {
@@ -270,6 +276,12 @@ impl SourceIdentityKind {
                 Some(Self::InterfaceGenericFields)
             }
             value if value == Self::TypeScriptScope as u8 => Some(Self::TypeScriptScope),
+            value if value == Self::TypeScriptAugmentation as u8 => {
+                Some(Self::TypeScriptAugmentation)
+            }
+            value if value == Self::TypeScriptComplexExports as u8 => {
+                Some(Self::TypeScriptComplexExports)
+            }
             _ => None,
         }
     }

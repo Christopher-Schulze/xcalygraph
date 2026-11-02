@@ -6,7 +6,7 @@ use rayon::prelude::*;
 
 use super::codec::{Decoder, Encoder};
 use super::container::{self, Container, Kind};
-use crate::domain::facts::SymKind;
+use crate::domain::facts::{FLAG_TYPESCRIPT_AUGMENTATION, SymKind};
 use crate::domain::filetype::FileType;
 use crate::domain::graph::{Confidence, EdgeKind, Graph};
 use crate::domain::hash::FastMap;
@@ -716,14 +716,23 @@ impl Derived {
             else {
                 return false;
             };
-            canonical <= part
+            let same_file = part_symbol.file == canonical_symbol.file;
+            let valid_origin = if same_file {
+                canonical <= part
+                    && part_symbol.flags & FLAG_TYPESCRIPT_AUGMENTATION == 0
+                    && canonical_symbol.flags & FLAG_TYPESCRIPT_AUGMENTATION == 0
+                    && part_symbol.exported == canonical_symbol.exported
+            } else {
+                part_symbol.flags & FLAG_TYPESCRIPT_AUGMENTATION != 0
+                    && canonical_symbol.flags & FLAG_TYPESCRIPT_AUGMENTATION == 0
+                    && canonical_symbol.exported == 1
+            };
+            valid_origin
                 && part_symbol.kind == SymKind::Iface as u8
                 && canonical_symbol.kind == SymKind::Iface as u8
                 && part_symbol.parent == u32::MAX
                 && canonical_symbol.parent == u32::MAX
-                && part_symbol.file == canonical_symbol.file
                 && part_symbol.name == canonical_symbol.name
-                && part_symbol.exported == canonical_symbol.exported
                 && groups
                     .binary_search_by_key(&canonical, |pair| pair[0])
                     .ok()
