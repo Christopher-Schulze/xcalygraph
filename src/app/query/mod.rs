@@ -61,17 +61,13 @@ impl Filter {
         })
     }
 
-    /// Path and test-role rules for a path absent from the index (a file deleted since REV).
-    pub fn removed_path(&self, path: &str) -> bool {
-        if self.no_tests
-            && crate::domain::role::classify(&crate::domain::role::FileFacts {
-                path,
-                size: 0,
-                head: None,
-                cpp_sibling: false,
-            })
-            .role
-                == Role::Test
+    /// File rules for a path absent from the index (a file deleted since REV).
+    pub fn removed_file(&self, path: &str, file_type: Option<FileType>, role: Role) -> bool {
+        if self.no_tests && matches!(role, Role::Test | Role::Gen | Role::Fixture) {
+            return false;
+        }
+        if !self.langs.is_empty()
+            && !file_type.is_some_and(|file_type| self.langs.contains(&file_type))
         {
             return false;
         }
@@ -79,6 +75,12 @@ impl Filter {
             Some(paths) => paths.matched_path_or_any_parents(path, false).is_ignore(),
             None => true,
         }
+    }
+
+    /// Symbol rules for a definition parsed from a revision rather than the current index.
+    pub fn removed_symbol(&self, kind: SymKind, flags: u8) -> bool {
+        (!self.no_tests || flags & (FLAG_TEST | FLAG_GENERATED) == 0)
+            && (self.kinds.is_empty() || self.kinds.contains(&kind))
     }
 
     pub fn file(&self, index: &Index, file: &FileRecord) -> bool {

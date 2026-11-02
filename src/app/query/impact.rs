@@ -50,6 +50,7 @@ struct DefinitionKey {
 
 struct Definition {
     key: DefinitionKey,
+    flags: u8,
     signature: Option<String>,
     line: u32,
     matched: bool,
@@ -61,6 +62,7 @@ struct Definition {
 struct RevisionFile {
     path: String,
     file_type: Option<FileType>,
+    role: crate::domain::role::Role,
     package: Option<String>,
     content: Vec<u8>,
     symbols: Vec<Definition>,
@@ -207,11 +209,13 @@ pub fn render_diff(
         let Some(previous) = &change.previous else {
             continue;
         };
-        if !filter.removed_path(&previous.path) {
+        if !filter.removed_file(&previous.path, previous.file_type, previous.role) {
             continue;
         }
         for symbol in previous.symbols.iter().filter(|symbol| !symbol.matched) {
-            if symbol.ambiguous && filter.exact {
+            if !filter.removed_symbol(symbol.key.kind, symbol.flags)
+                || (symbol.ambiguous && filter.exact)
+            {
                 continue;
             }
             removed.push(RevisionLocation {
@@ -240,11 +244,30 @@ pub fn render_diff(
         else {
             continue;
         };
-        if !filter.removed_path(&previous.path) {
+        if !filter.removed_file(&previous.path, previous.file_type, previous.role) {
             continue;
         }
         let old = &previous.symbols[old_symbol];
         let new = &current.symbols[new_symbol];
+        if !filter.removed_symbol(old.key.kind, old.flags) {
+            continue;
+        }
+        let current_node =
+            index.derived.files()[current.file as usize].first_symbol + new_symbol as u32;
+        if !filter.symbol(index, &index.derived.symbols()[current_node as usize]) {
+            if !filter.exact {
+                removed.push(RevisionLocation {
+                    name: old.key.parts.join("."),
+                    path: &previous.path,
+                    line: old.line,
+                    ambiguous: false,
+                });
+                if let Some(name) = old.key.parts.last() {
+                    removed_names.insert(name.to_owned());
+                }
+            }
+            continue;
+        }
         if !filter.exact
             && !same_scope(previous, current)
             && let Some(name) = old.key.parts.last()
@@ -389,14 +412,20 @@ fn surviving_references(
 
 /// Symbols whose range intersects a changed range; an enclosing symbol is dropped when one of
 /// its children is hit.
-fn innermost_hits(index: &Index, symbols: &[u32], ranges: &[(u32, u32)]) -> Vec<u32> {
+fn innermost_hits(
+    index: &Index,
+    filter: &Filter,
+    symbols: &[u32],
+    ranges: &[(u32, u32)],
+) -> Vec<u32> {
     let all = index.derived.symbols();
     let hit: Vec<u32> = symbols
         .iter()
         .copied()
         .filter(|&s| {
             let symbol = &all[s as usize];
-            symbol.kind() != SymKind::Mod
+            filter.symbol(index, symbol)
+                && symbol.kind() != SymKind::Mod
                 && ranges
                     .iter()
                     .any(|&(start, end)| symbol.line <= end && start <= symbol.end_line)
@@ -439,6 +468,7 @@ fn definitions(facts: &Facts, identities: &[Option<String>]) -> Option<Vec<Defin
                     kind: symbol.kind(),
                     parts: parents.into_iter().map(str::to_owned).collect(),
                 },
+                flags: symbol.flags,
                 signature: identities.get(index).cloned().flatten(),
                 line: symbol.line,
                 matched: false,
@@ -461,15 +491,13 @@ fn revision_file(
         return Ok(None);
     };
     // A file deleted since REV has no current record; classify it from its REV content.
-    let file_type = file_type.or_else(|| {
-        crate::domain::role::classify(&crate::domain::role::FileFacts {
-            path,
-            size: content.len() as u64,
-            head: Some(&content[..content.len().min(crate::domain::role::HEAD_LEN)]),
-            cpp_sibling: false,
-        })
-        .file_type
+    let classification = crate::domain::role::classify(&crate::domain::role::FileFacts {
+        path,
+        size: content.len() as u64,
+        head: Some(&content[..content.len().min(crate::domain::role::HEAD_LEN)]),
+        cpp_sibling: false,
     });
+    let file_type = file_type.or(classification.file_type);
     let record = CorpusRecord {
         path: path.to_owned(),
         size: content.len() as u64,
@@ -484,6 +512,7 @@ fn revision_file(
     Ok(Some(RevisionFile {
         path: path.to_owned(),
         file_type,
+        role: classification.role,
         package: facts.package.clone(),
         symbols: definitions(&facts, &parsed.identities).ok_or_else(|| {
             AppError::Invalid(format!("invalid revision definitions in '{path}'"))
@@ -1027,14 +1056,19 @@ fn changed_targets(index: &Index, filter: &Filter, changes: &[Change]) -> Vec<Ta
             (record.first_symbol..record.first_symbol + record.symbol_count).collect();
         let file_node = index.symbol_count() + current.file;
         if change.previous.is_none() {
+            let seeds: Vec<u32> = symbols
+                .iter()
+                .copied()
+                .filter(|&node| filter.symbol(index, &index.derived.symbols()[node as usize]))
+                .collect();
             targets.push(Target {
                 node: file_node,
-                note: format!("new {}", symbols.len()),
-                seeds: symbols,
+                note: format!("new {}", seeds.len()),
+                seeds,
             });
             continue;
         }
-        let hit = innermost_hits(index, &symbols, &change.diff.ranges);
+        let hit = innermost_hits(index, filter, &symbols, &change.diff.ranges);
         for &node in &hit {
             let definition = &current.symbols[(node - record.first_symbol) as usize];
             let note = if definition.ambiguous && filter.exact {

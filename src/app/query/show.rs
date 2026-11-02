@@ -40,7 +40,7 @@ pub fn render(index: &Index, filter: &Filter, node: u32, options: &ShowOptions) 
     } else {
         SECTION_LINES
     };
-    header(index, &mut writer, node);
+    header(index, filter, &mut writer, node);
     if let Node::Symbol(_) = index.node(node) {
         members(index, filter, &mut writer, node, cap);
         let supertypes = edges(
@@ -77,7 +77,7 @@ pub fn render(index: &Index, filter: &Filter, node: u32, options: &ShowOptions) 
         Direction::Out,
     );
     tests(index, filter, &mut writer, node, cap);
-    envs(index, &mut writer, node, cap);
+    envs(index, filter, &mut writer, node, cap);
     let ambiguous = index.file_of(node).ambiguous;
     if ambiguous > 0 {
         let text = format!(
@@ -92,7 +92,7 @@ pub fn render(index: &Index, filter: &Filter, node: u32, options: &ShowOptions) 
     writer.finish()
 }
 
-fn header(index: &Index, writer: &mut Writer, node: u32) {
+fn header(index: &Index, filter: &Filter, writer: &mut Writer, node: u32) {
     match index.node(node) {
         Node::Symbol(symbol) => {
             let path = index.path_of(node);
@@ -149,7 +149,10 @@ fn header(index: &Index, writer: &mut Writer, node: u32) {
             }
             let symbols = index.derived.symbols();
             let top: Vec<u32> = (file.first_symbol..file.first_symbol + file.symbol_count)
-                .filter(|&s| symbols[s as usize].parent == u32::MAX)
+                .filter(|&s| {
+                    symbols[s as usize].parent == u32::MAX
+                        && filter.symbol(index, &symbols[s as usize])
+                })
                 .collect();
             for (shown, symbol) in top.iter().enumerate() {
                 if shown >= SECTION_LINES * 3 {
@@ -394,6 +397,9 @@ fn tests(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: us
         .iter()
         .filter(|edge| edge.kind() == EdgeKind::Calls)
     {
+        if !filter.edge(caller) || !filter.includes(index, caller.node) {
+            continue;
+        }
         for edge in index.derived.incoming(caller.node) {
             if edge.kind() == EdgeKind::Tests
                 && filter.edge(edge)
@@ -414,7 +420,7 @@ fn tests(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: us
     }
 }
 
-fn envs(index: &Index, writer: &mut Writer, node: u32, cap: usize) {
+fn envs(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: usize) {
     let symbol_end = match index.node(node) {
         Node::Symbol(symbol) => Some((symbol.file, symbol.line, symbol.end_line)),
         Node::File(_) => None,
@@ -424,6 +430,7 @@ fn envs(index: &Index, writer: &mut Writer, node: u32, cap: usize) {
         .envs()
         .iter()
         .filter(|env| env.source == 0)
+        .filter(|env| filter.includes(index, env.node))
         .filter(|env| {
             env.node == node
                 || symbol_end.is_some_and(|(file, start, end)| {

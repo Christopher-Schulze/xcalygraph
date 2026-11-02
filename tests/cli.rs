@@ -1781,6 +1781,254 @@ fn every_query_stage_obeys_the_shared_filters() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn show_and_audit_results_obey_shared_filters() -> TestResult {
+    let dir = TempDir::new("remaining-filters-show-audit")?;
+    let root = dir.0.join("repo");
+    let index = dir.0.join("index");
+    dir.write("repo/.gitignore", "!.env*\n")?;
+    dir.write("repo/go.mod", "module example.com/app\n\ngo 1.23\n")?;
+    dir.write("repo/a/.env.example", "UNUSED_FLAG=1\n")?;
+    dir.write(
+        "repo/a/a.go",
+        "package a\n\nimport (\n\t\"os\"\n\t\"example.com/app/b\"\n)\n\ntype Box struct { Value string }\n\nfunc Read() { _ = os.Getenv(\"A_MISSING\") }\n\nfunc Call() { b.Caller() }\n",
+    )?;
+    dir.write(
+        "repo/b/b.go",
+        "package b\n\nimport (\n\t\"os\"\n\t\"example.com/app/a\"\n)\n\nfunc Caller() {\n\ta.Read()\n\t_ = os.Getenv(\"B_MISSING\")\n\t_ = \"UNUSED_FLAG\"\n}\n",
+    )?;
+    dir.write(
+        "repo/a/a_test.go",
+        "package a\n\nimport (\n\t\"os\"\n\t\"testing\"\n\t\"example.com/app/b\"\n)\n\nfunc TestIndirect(t *testing.T) {\n\tb.Caller()\n\t_ = os.Getenv(\"TEST_MISSING\")\n}\n",
+    )?;
+    git(&root, &["init", "-q"])?;
+    git(&root, &["add", "."])?;
+    git(&root, &["commit", "-q", "-m", "initial"])?;
+
+    for (args, required, forbidden) in [
+        (
+            &["show", "a/a.go", "-k", "fn"][..],
+            &["Read", "Call"][..],
+            &["Box"][..],
+        ),
+        (
+            &["show", "a/a.go", "-k", "fn", "--json"][..],
+            &["Read", "Call"][..],
+            &["Box"][..],
+        ),
+        (
+            &["show", "a/a.go", "-k", "struct"][..],
+            &["Box"][..],
+            &["Read", "Call"][..],
+        ),
+        (
+            &["show", "a/a.go", "-k", "struct", "--json"][..],
+            &["\"name\":\"a.Box\""][..],
+            &["\"name\":\"a.Read\"", "\"name\":\"a.Call\""][..],
+        ),
+    ] {
+        let output = run_in(&root, &index, args)?;
+        let text = String::from_utf8(output.stdout)?;
+        if output.status.code() != Some(0)
+            || required.iter().any(|needle| !text.contains(needle))
+            || forbidden.iter().any(|needle| text.contains(needle))
+        {
+            return Err(format!("{args:?}: status {:?}\n{text}", output.status.code()).into());
+        }
+    }
+
+    for json in [false, true] {
+        let mut unfiltered = vec!["show", "a.Read"];
+        let mut path_filtered = vec!["show", "a.Read", "-p", "a/"];
+        let mut audit_path = vec!["audit", "-p", "a/"];
+        let mut audit_language = vec!["audit", "-l", "python"];
+        let mut audit_no_tests = vec!["audit", "--no-tests"];
+        let mut audit_kind = vec!["audit", "-k", "struct"];
+        if json {
+            unfiltered.push("--json");
+            path_filtered.push("--json");
+            audit_path.push("--json");
+            audit_language.push("--json");
+            audit_no_tests.push("--json");
+            audit_kind.push("--json");
+        }
+        let show_unfiltered = run_in(&root, &index, &unfiltered)?;
+        let show_unfiltered = String::from_utf8(show_unfiltered.stdout)?;
+        assert!(
+            show_unfiltered.contains("TestIndirect"),
+            "{show_unfiltered}"
+        );
+        let show_path_filtered = run_in(&root, &index, &path_filtered)?;
+        let show_path_filtered = String::from_utf8(show_path_filtered.stdout)?;
+        assert!(
+            !show_path_filtered.contains("TestIndirect"),
+            "{show_path_filtered}"
+        );
+
+        let audit_path = run_in(&root, &index, &audit_path)?;
+        let audit_path = String::from_utf8(audit_path.stdout)?;
+        assert!(audit_path.contains("A_MISSING"), "{audit_path}");
+        assert!(!audit_path.contains("B_MISSING"), "{audit_path}");
+        assert!(!audit_path.contains("cycles"), "{audit_path}");
+        assert!(audit_path.contains("defined UNUSED_FLAG"), "{audit_path}");
+
+        let audit_language = run_in(&root, &index, &audit_language)?;
+        let audit_language = String::from_utf8(audit_language.stdout)?;
+        assert!(!audit_language.contains("cycles"), "{audit_language}");
+        assert!(!audit_language.contains("A_MISSING"), "{audit_language}");
+        assert!(!audit_language.contains("B_MISSING"), "{audit_language}");
+
+        let audit_no_tests = run_in(&root, &index, &audit_no_tests)?;
+        let audit_no_tests = String::from_utf8(audit_no_tests.stdout)?;
+        assert!(audit_no_tests.contains("A_MISSING"), "{audit_no_tests}");
+        assert!(!audit_no_tests.contains("TEST_MISSING"), "{audit_no_tests}");
+
+        let audit_kind = run_in(&root, &index, &audit_kind)?;
+        let audit_kind = String::from_utf8(audit_kind.stdout)?;
+        assert!(audit_kind.contains("cycles"), "{audit_kind}");
+        assert!(!audit_kind.contains("A_MISSING"), "{audit_kind}");
+        assert!(!audit_kind.contains("B_MISSING"), "{audit_kind}");
+    }
+    Ok(())
+}
+
+#[test]
+fn impact_diff_respects_symbol_file_and_test_filters() -> TestResult {
+    let dir = TempDir::new("remaining-filters-impact-diff")?;
+    let root = dir.0.join("repo");
+    let index = dir.0.join("index");
+    dir.write("repo/go.mod", "module example.com/app\n\ngo 1.23\n")?;
+    dir.write(
+        "repo/a/a.go",
+        "package a\n\ntype Box struct { A int }\n\ntype RetiredType struct {}\n\nfunc Retired() {}\n\nfunc Changed() {}\n",
+    )?;
+    dir.write(
+        "repo/a/obsolete.go",
+        "package a\n\ntype ObsoleteType struct {}\n\nfunc Obsolete() {}\n",
+    )?;
+    dir.write(
+        "repo/a/a_test.go",
+        "package a\n\nimport \"testing\"\n\nfunc TestChanged(t *testing.T) { Changed() }\n",
+    )?;
+    dir.write(
+        "repo/b/b.go",
+        "package b\n\nimport \"example.com/app/a\"\n\nfunc Caller() { a.Retired() }\n",
+    )?;
+    dir.write(
+        "repo/b/b_test.go",
+        "package b\n\nimport \"testing\"\n\nfunc TestCaller(t *testing.T) { Caller() }\n",
+    )?;
+    git(&root, &["init", "-q"])?;
+    git(&root, &["add", "."])?;
+    git(&root, &["commit", "-q", "-m", "initial"])?;
+
+    dir.write(
+        "repo/a/a.go",
+        "package a\n\ntype Box struct { A int; B int }\n\nfunc Changed() { _ = 1 }\n",
+    )?;
+    dir.write(
+        "repo/a/new.go",
+        "package a\n\ntype AddedType struct{}\n\nfunc AddedFunction() {}\n",
+    )?;
+    dir.write(
+        "repo/a/new_test.go",
+        "package a\n\nimport \"testing\"\n\nfunc TestAdded(t *testing.T) { AddedFunction(); _ = AddedType{} }\n",
+    )?;
+    fs::remove_file(root.join("a/obsolete.go"))?;
+    fs::remove_file(root.join("b/b_test.go"))?;
+
+    for json in [false, true] {
+        let mut args = vec!["impact", "--diff"];
+        if json {
+            args.push("--json");
+        }
+        let cases: &[(&[&str], &[&str], &[&str])] = &[
+            (
+                &[],
+                &[
+                    "Changed",
+                    "Retired",
+                    "RetiredType",
+                    "Obsolete",
+                    "ObsoleteType",
+                    "TestAdded",
+                    "TestCaller",
+                ],
+                &[],
+            ),
+            (
+                &["-k", "fn"],
+                &["Changed", "Retired", "Obsolete", "TestAdded", "new 1"],
+                &["Box", "RetiredType", "ObsoleteType"],
+            ),
+            (
+                &["-k", "struct"],
+                &["Box", "RetiredType", "ObsoleteType", "new 1"],
+                &[],
+            ),
+            (
+                &["-l", "python"],
+                &[],
+                &[
+                    "Changed",
+                    "Retired",
+                    "RetiredType",
+                    "Obsolete",
+                    "ObsoleteType",
+                    "Box",
+                ],
+            ),
+            (
+                &["-p", "a/"],
+                &["Retired", "Obsolete", "TestAdded"],
+                &["Caller", "TestCaller"],
+            ),
+            (
+                &["-p", "b/"],
+                &["TestCaller"],
+                &["Retired", "Obsolete", "Changed", "TestAdded"],
+            ),
+            (
+                &["--no-tests"],
+                &["Changed", "Retired", "Obsolete"],
+                &["TestChanged", "TestAdded", "TestCaller", "go test"],
+            ),
+        ];
+        for (filters, required, forbidden) in cases {
+            let mut query = args.clone();
+            query.extend_from_slice(filters);
+            let output = run_in(&root, &index, &query)?;
+            let text = String::from_utf8(output.stdout)?;
+            if output.status.code() != Some(0)
+                || required.iter().any(|needle| !text.contains(needle))
+                || forbidden.iter().any(|needle| text.contains(needle))
+                || (filters == &["-k", "struct"]
+                    && if json {
+                        [
+                            "\"name\":\"Changed\"",
+                            "\"name\":\"Retired\"",
+                            "\"name\":\"Obsolete\"",
+                            "\"name\":\"TestAdded\"",
+                        ]
+                        .iter()
+                        .any(|needle| text.contains(needle))
+                    } else {
+                        ["~ Changed ", "~ Retired ", "~ Obsolete ", "~ TestAdded "]
+                            .iter()
+                            .any(|needle| text.contains(needle))
+                    })
+            {
+                return Err(format!(
+                    "json={json} filters={filters:?}: status {:?}\n{text}",
+                    output.status.code()
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The single derived image below an index base.
 fn derived_image(base: &Path) -> io::Result<Vec<u8>> {
     let mut stores = fs::read_dir(base)?.collect::<io::Result<Vec<_>>>()?;
@@ -2421,6 +2669,36 @@ fn impact_diff_identifies_a_renamed_file_with_edits() -> TestResult {
     )?;
     assert_eq!(exact.status.code(), Some(0));
     assert!(!String::from_utf8(exact.stdout)?.contains("\"kind\":\"moved\""));
+
+    for json in [false, true] {
+        let mut old_path = vec!["impact", "--diff"];
+        let mut new_path = vec!["impact", "--diff"];
+        if json {
+            old_path.push("--json");
+            new_path.push("--json");
+        }
+        old_path.extend_from_slice(&["-p", "old.py"]);
+        new_path.extend_from_slice(&["-p", "new.py"]);
+
+        let old_output = run_in(&root, &dir.0.join("index"), &old_path)?;
+        assert_eq!(old_output.status.code(), Some(0));
+        let old_output = String::from_utf8(old_output.stdout)?;
+        let old_match = if json {
+            old_output
+                .contains("\"name\":\"moved\",\"path\":\"old.py\",\"line\":1,\"kind\":\"removed\"")
+        } else {
+            old_output.contains("~ moved old.py:1 removed")
+        };
+        assert!(old_match, "{old_output}");
+        assert!(!old_output.contains("new.py"), "{old_output}");
+
+        let new_output = run_in(&root, &dir.0.join("index"), &new_path)?;
+        assert_eq!(new_output.status.code(), Some(0));
+        let new_output = String::from_utf8(new_output.stdout)?;
+        assert!(new_output.contains("new.py"), "{new_output}");
+        assert!(new_output.contains("new 1"), "{new_output}");
+        assert!(!new_output.contains("old.py"), "{new_output}");
+    }
 
     let loose = TempDir::new("impact-untracked-rename")?;
     let loose_root = loose.0.join("repo");

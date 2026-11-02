@@ -394,7 +394,7 @@ fn hubs(index: &Index, filter: &Filter) -> Vec<(String, String)> {
 
 /// Per module: whether any of its files passes the filter. Module-level sections (cycles,
 /// layers, externals) show only these modules, so a path restriction never exposes others.
-fn included_modules(index: &Index, filter: &Filter) -> Vec<bool> {
+pub(super) fn included_modules(index: &Index, filter: &Filter) -> Vec<bool> {
     let mut included = vec![false; index.derived.modules().len()];
     for file in index.derived.files() {
         if let Some(flag) = included.get_mut(file.module as usize)

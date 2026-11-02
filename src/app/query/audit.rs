@@ -80,9 +80,9 @@ pub fn render(
             .map(|&node| symbol_line(index, node))
             .collect(),
     );
-    section(&mut writer, "cycles", cycles(index));
+    section(&mut writer, "cycles", cycles(index, filter));
     section(&mut writer, "stale", stale(index, filter, root));
-    section(&mut writer, "drift", drift(index, root));
+    section(&mut writer, "drift", drift(index, filter, root));
     section(&mut writer, "assets", unreferenced_assets(index, filter));
     match history {
         Some(history) => {
@@ -291,9 +291,13 @@ fn implements_supertype(index: &Index, node: u32, owners: &HashMap<u32, u32>) ->
         })
 }
 
-fn cycles(index: &Index) -> Vec<String> {
+fn cycles(index: &Index, filter: &Filter) -> Vec<String> {
     let mut groups: BTreeMap<u32, Vec<&str>> = BTreeMap::new();
-    for module in index.derived.modules() {
+    let included = super::map::included_modules(index, filter);
+    for (id, module) in index.derived.modules().iter().enumerate() {
+        if !included[id] {
+            continue;
+        }
         groups
             .entry(module.cycle)
             .or_default()
@@ -376,11 +380,11 @@ fn unreferenced_assets(index: &Index, filter: &Filter) -> Vec<String> {
 
 /// Variables read without a definition site and defined without a read site; only when the
 /// root defines any environment variable (otherwise every read would be listed).
-fn drift(index: &Index, root: &std::path::Path) -> Vec<String> {
+fn drift(index: &Index, filter: &Filter, root: &std::path::Path) -> Vec<String> {
     let envs = index.derived.envs();
     let defined: BTreeSet<&str> = envs
         .iter()
-        .filter(|env| env.source != 0)
+        .filter(|env| env.source != 0 && filter.includes(index, env.node))
         .map(|env| index.string(env.name))
         .collect();
     if defined.is_empty() {
@@ -388,11 +392,14 @@ fn drift(index: &Index, root: &std::path::Path) -> Vec<String> {
     }
     let read: BTreeSet<&str> = envs
         .iter()
-        .filter(|env| env.source == 0)
+        .filter(|env| env.source == 0 && filter.includes(index, env.node))
         .map(|env| index.string(env.name))
         .collect();
     let mut lines = Vec::new();
-    for env in envs.iter().filter(|env| env.source == 0) {
+    for env in envs
+        .iter()
+        .filter(|env| env.source == 0 && filter.includes(index, env.node))
+    {
         let name = index.string(env.name);
         if !defined.contains(name) {
             lines.push(format!(
@@ -417,12 +424,15 @@ fn drift(index: &Index, root: &std::path::Path) -> Vec<String> {
     };
     let unread: BTreeSet<&str> = envs
         .iter()
-        .filter(|env| runtime(env.source))
+        .filter(|env| runtime(env.source) && filter.includes(index, env.node))
         .map(|env| index.string(env.name))
         .filter(|name| !read.contains(name))
         .collect();
-    let wrapped = quoted_in_code(index, root, &unread);
-    for env in envs.iter().filter(|env| runtime(env.source)) {
+    let wrapped = quoted_in_code(index, filter, root, &unread);
+    for env in envs
+        .iter()
+        .filter(|env| runtime(env.source) && filter.includes(index, env.node))
+    {
         let name = index.string(env.name);
         if unread.contains(name) && !wrapped.contains(name) {
             lines.push(format!(
@@ -445,6 +455,7 @@ fn drift(index: &Index, root: &std::path::Path) -> Vec<String> {
 /// through a wrapper (`mustMapEnv(&x, "NAME")`, `config["NAME"]`) the extractor cannot see.
 fn quoted_in_code<'a>(
     index: &Index,
+    filter: &Filter,
     root: &std::path::Path,
     candidates: &BTreeSet<&'a str>,
 ) -> BTreeSet<&'a str> {
@@ -456,7 +467,7 @@ fn quoted_in_code<'a>(
         .derived
         .files()
         .iter()
-        .filter(|file| matches!(file.role(), Role::Src | Role::Test))
+        .filter(|file| matches!(file.role(), Role::Src | Role::Test) && filter.file(index, file))
         .map(|file| index.string(file.path))
         .collect();
     paths
