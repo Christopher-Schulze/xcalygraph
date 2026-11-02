@@ -18,6 +18,42 @@
 (impl_item trait: (_) @impl.trait type: (_) @impl.type) @impl
 (trait_item bounds: (trait_bounds [(type_identifier) (scoped_type_identifier)] @name) @reference.inherit)
 
+; Generic parameter names are scoped markers; bounded references connect each parameter to its
+; source trait without treating it as a concrete implementation.
+(function_item
+  type_parameters: (type_parameters
+    (type_parameter name: (type_identifier) @name) @reference.implement))
+(function_item
+  type_parameters: (type_parameters
+    (type_parameter
+      name: (type_identifier) @qualifier
+      bounds: (trait_bounds [(type_identifier) (scoped_type_identifier) (generic_type)] @name)
+        @reference.implement)))
+(function_item
+  (where_clause
+    (where_predicate
+      left: (type_identifier) @qualifier
+      bounds: (trait_bounds [(type_identifier) (scoped_type_identifier) (generic_type)] @name)
+        @reference.implement)))
+(impl_item
+  type_parameters: (type_parameters
+    (type_parameter name: (type_identifier) @name) @reference.implement)
+  body: (declaration_list (function_item name: (identifier) @generic.scope)))
+(impl_item
+  type_parameters: (type_parameters
+    (type_parameter
+      name: (type_identifier) @qualifier
+      bounds: (trait_bounds [(type_identifier) (scoped_type_identifier) (generic_type)] @name)
+        @reference.implement))
+  body: (declaration_list (function_item name: (identifier) @generic.scope)))
+(impl_item
+  (where_clause
+    (where_predicate
+      left: (type_identifier) @qualifier
+      bounds: (trait_bounds [(type_identifier) (scoped_type_identifier) (generic_type)] @name)
+        @reference.implement))
+  body: (declaration_list (function_item name: (identifier) @generic.scope)))
+
 (use_declaration (visibility_modifier) @import.reexport argument: (_) @import.tree) @import
 (use_declaration argument: (_) @import.tree) @import
 (extern_crate_declaration name: (identifier) @import.path) @import

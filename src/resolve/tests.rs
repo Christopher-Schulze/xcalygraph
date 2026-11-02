@@ -677,3 +677,112 @@ fn julia_base_extensions_dispatch_on_typed_arguments() -> std::io::Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn rust_closure_calls_follow_generic_trait_bounds_and_shadowing() -> std::io::Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/resolve/rust-closure-trait-bounds");
+    let graph = graph_of(&root)?;
+    let calls = crate::domain::graph::EdgeKind::Calls;
+    let targets = |caller_suffix: &str, line: u32| {
+        graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == calls && edge.line == line)
+            .filter(|edge| {
+                graph
+                    .symbols
+                    .get(edge.source as usize)
+                    .is_some_and(|source| source.qualified.ends_with(caller_suffix))
+            })
+            .filter_map(|edge| {
+                graph
+                    .symbols
+                    .get(edge.target as usize)
+                    .map(|target| (edge.confidence, target))
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let bounded = targets("bounded", 20);
+    assert_eq!(bounded.len(), 2, "bounded closure targets: {bounded:?}");
+    assert!(bounded.iter().any(|(confidence, target)| {
+        *confidence == Confidence::Exact
+            && target.qualified.ends_with("Readable::value")
+            && target.line == 2
+    }));
+    assert!(bounded.iter().any(|(confidence, target)| {
+        *confidence == Confidence::Inferred
+            && target.qualified.ends_with("Concrete::value")
+            && target.line == 58
+    }));
+    assert!(
+        bounded
+            .iter()
+            .all(|(_, target)| !target.qualified.ends_with("Unrelated::value"))
+    );
+
+    let where_bounded = targets("where_bounded", 39);
+    assert_eq!(
+        where_bounded.len(),
+        2,
+        "where-bounded closure target: {where_bounded:?}"
+    );
+    assert!(where_bounded.iter().any(|(confidence, target)| {
+        *confidence == Confidence::Exact
+            && target.qualified.ends_with("Readable::value")
+            && target.line == 2
+    }));
+    assert!(where_bounded.iter().any(|(confidence, target)| {
+        *confidence == Confidence::Inferred
+            && target.qualified.ends_with("Concrete::value")
+            && target.line == 58
+    }));
+
+    let impl_bounded = targets("Wrapper::read", 67);
+    assert_eq!(
+        impl_bounded.len(),
+        2,
+        "impl-bounded closure targets: {impl_bounded:?}"
+    );
+    assert!(impl_bounded.iter().any(|(confidence, target)| {
+        *confidence == Confidence::Exact
+            && target.qualified.ends_with("Readable::value")
+            && target.line == 2
+    }));
+    assert!(impl_bounded.iter().any(|(confidence, target)| {
+        *confidence == Confidence::Inferred
+            && target.qualified.ends_with("Concrete::value")
+            && target.line == 58
+    }));
+
+    let impl_where_bounded = targets("WhereWrapper::read", 79);
+    assert_eq!(
+        impl_where_bounded.len(),
+        2,
+        "impl where-bounded closure targets: {impl_where_bounded:?}"
+    );
+    assert!(impl_where_bounded.iter().any(|(confidence, target)| {
+        *confidence == Confidence::Exact
+            && target.qualified.ends_with("Readable::value")
+            && target.line == 2
+    }));
+    assert!(impl_where_bounded.iter().any(|(confidence, target)| {
+        *confidence == Confidence::Inferred
+            && target.qualified.ends_with("Concrete::value")
+            && target.line == 58
+    }));
+
+    let shadowed = targets("shadowed", 26);
+    assert_eq!(shadowed.len(), 1, "shadowed closure target: {shadowed:?}");
+    assert_eq!(shadowed[0].0, Confidence::Exact);
+    assert!(shadowed[0].1.qualified.ends_with("Other::value"));
+    assert_eq!(shadowed[0].1.line, 14);
+
+    let unbounded = targets("unbounded", 31);
+    assert!(
+        unbounded.is_empty(),
+        "unbounded closure target: {unbounded:?}"
+    );
+    Ok(())
+}

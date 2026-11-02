@@ -41,7 +41,7 @@ Flags: `-p GLOB` (paths, gitignore syntax, repeatable), `-l go,rust` (languages)
 - Decode escaped paths/commands before use.
 - Map JSON adds counts, task runs, API sig/handlers, cycle/layer members and env path/line; audit separates name/path/line and adds drift kind/status.
 - Card markers: `m` member, `f` fields, `^` supertype, `v` implementation, `<` incoming (caller site), `>` outgoing (definition), `t` test, `t2` test through one caller, `e` env read, `!` notice.
-- `?`=inferred edges/indirect impact; Julia Base needs compatible typed direct args; `--exact` drops edges/runs.
+- `?`=inferred edges/impact; Julia Base uses typed args; Rust closure calls use generic trait bounds; `--exact` drops inferred edges/runs.
 - `impact` run lines retain Go module/package, Cargo manifest and pytest node-ID context; args are quoted. Unsupported runners emit `t`, no `r`.
 - `impact --diff`: removals cite REV path:line; `moved?` gives both locations; `sig?`=inferred signature change; `uncertain?`=ambiguous/unavailable identity; sensitive, oversized or non-regular sides get path-only notes; missing known REV blobs error; inspect paths beyond filters.
 - Truncation: `+N more`, `+N`, `+` or JSON `{}`; narrow with `-p`, `-k`, `-l` or raise `-b`.

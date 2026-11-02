@@ -312,9 +312,20 @@ fn collect(
                 source,
                 reference.arity,
             );
-            reference.name = reference_name;
+            reference.name = if path.ends_with(".rs")
+                && kind == Some(RefKind::Implement)
+                && primary_node.kind() == "trait_bounds"
+            {
+                type_name(&reference_name)
+            } else {
+                reference_name
+            };
             reference.source_identity = source_identity;
-            reference.position = name.start_byte();
+            reference.position = if path.ends_with(".rs") && kind == Some(RefKind::Implement) {
+                get("generic.scope").map_or(name.start_byte(), |scope| scope.start_byte())
+            } else {
+                name.start_byte()
+            };
             reference.line = row(name);
             if let Some(qualifier) = get("qualifier") {
                 reference.qualifier =

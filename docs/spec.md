@@ -156,7 +156,7 @@ Freshness:
 |------|--------|
 | symbol | kind, name, parent symbol, line start, line end, signature (one line, whitespace-normalized, body removed, max 160 chars), doc (first sentence of the attached doc comment, max 120 chars), visibility (exported or private), flags (test, entry, generated) |
 | import | module specifier, alias, imported names, line |
-| ref | name (identifier or last two segments of a member chain), kind (call, type, inherit, implement), enclosing symbol, line, call arity; Julia also stores sparse positional direct-variable arguments and marks retained unqualified builtins |
+| ref | name (identifier or last two segments of a member chain), kind (call, type, inherit, implement), enclosing symbol, line, call arity; Rust records function and impl generic parameters and their source-backed trait bounds; Julia also stores sparse positional direct-variable arguments and marks retained unqualified builtins |
 | binding | variable name, declared type as written, enclosing symbol, line; Julia typed parameters retain their full annotation |
 | env | variable name, enclosing symbol, line |
 | fields | owning type, field names (card content only, no graph nodes) |
@@ -215,7 +215,7 @@ Resolution order for a reference, first hit wins:
 2. Name bound by an import, use, include or require -> exported symbol of the resolved module -> exact.
 3. Qualified name (`pkg.Name`, `Type::name`, `Namespace.Type`, `Module:fun`) through the module map -> exact.
 4. Same module unit visible without import (Go package, Java package, C# namespace, Swift module, Ruby and PHP autoload roots) -> exact.
-5. Member call `x.m()`: receiver type from `self`, `this`, `super`; declared types of parameters, fields and variables; constructor and factory expressions (`new T`, `T(...)`, `T::new`, `T.init`, functions with a declared return type) -> method of the type or its supertypes; exact for declared types, inferred for factory return types.
+5. Member call `x.m()`: receiver type from `self`, `this`, `super`; declared types of parameters, fields and variables; constructor and factory expressions (`new T`, `T(...)`, `T::new`, `T.init`, functions with a declared return type) -> method of the type or its supertypes; exact for declared types, inferred for factory return types. Rust function and impl type parameters use source-backed inline or `where` trait bounds for receiver lookup, including calls inside closures; an unbounded or unresolved generic does not fall back to a same-named nominal type.
 6. Method of an interface, trait, protocol or abstract type -> edges to every implementation, inferred, max 10 targets, else one ambiguity notice.
 7. Unique name among the modules the file imports, then unique name in the root (non-test preferred) -> inferred.
 8. Otherwise no edge; counted per file as ambiguous.

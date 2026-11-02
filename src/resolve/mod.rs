@@ -29,7 +29,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 67;
+pub const RESOLVE_VERSION: u32 = 68;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -68,6 +68,10 @@ struct Index<'a> {
     name_index: HashMap<&'a str, Vec<u32>>,
     /// Types per (module, name).
     types: HashMap<(u32, &'a str), Vec<u32>>,
+    /// Rust function type parameters, keyed by file, function scope and parameter name.
+    rust_generic_parameters: HashSet<(u32, u32, &'a str)>,
+    /// Source-backed trait bounds for Rust function type parameters.
+    rust_generic_bounds: HashMap<(u32, u32, &'a str), Vec<&'a str>>,
     /// Every symbol per name, for the unique-name fallback.
     by_name: HashMap<&'a str, Vec<u32>>,
     /// Declared result type of callables (bindings named "").
@@ -138,6 +142,33 @@ pub fn build(input: &Input) -> Graph {
 impl<'a> Index<'a> {
     fn new(input: &'a Input<'a>) -> Self {
         let modules = modules::assign(input.files, input.facts);
+        let mut rust_generic_parameters = HashSet::default();
+        let mut rust_generic_bounds = HashMap::default();
+        for (file, facts) in input.facts.iter().enumerate() {
+            if input.files[file].file_type != Some(FileType::Rust) {
+                continue;
+            }
+            let Some(facts) = facts else { continue };
+            for reference in &facts.refs {
+                if reference.kind != RefKind::Implement {
+                    continue;
+                }
+                let Some(scope) = reference.scope else {
+                    continue;
+                };
+                let file = file as u32;
+                if let Some(parameter) = reference.qualifier.as_deref() {
+                    let bounds = rust_generic_bounds
+                        .entry((file, scope, parameter))
+                        .or_insert_with(Vec::new);
+                    if !bounds.contains(&reference.name.as_str()) {
+                        bounds.push(reference.name.as_str());
+                    }
+                } else {
+                    rust_generic_parameters.insert((file, scope, reference.name.as_str()));
+                }
+            }
+        }
         let mut base = Vec::with_capacity(input.files.len());
         let mut symbols = Vec::new();
         for (file, facts) in input.facts.iter().enumerate() {
@@ -281,6 +312,8 @@ impl<'a> Index<'a> {
             by_module: HashMap::default(),
             methods: HashMap::default(),
             types: HashMap::default(),
+            rust_generic_parameters,
+            rust_generic_bounds,
             by_name: HashMap::default(),
             returns: HashMap::default(),
             field_types: HashMap::default(),
@@ -4097,6 +4130,10 @@ impl<'a> Index<'a> {
         } else {
             Confidence::Inferred
         };
+        if let Some(types) = self.rust_generic_bound_types(file, imports, scope, &binding.type_name)
+        {
+            return (!types.is_empty()).then_some((types, Confidence::Exact));
+        }
         if let Some(collection) = binding.type_name.strip_prefix("range:") {
             // The element of a ranged collection: the collection binding's (element) type.
             let source = self.binding(file, scope, collection, binding.line)?;
@@ -4164,6 +4201,42 @@ impl<'a> Index<'a> {
         let (types, type_confidence) =
             self.resolve_type(file, Some(imports), scope, &binding.type_name)?;
         Some((types, confidence.max(type_confidence)))
+    }
+
+    /// Resolves a Rust function type parameter only through its source-backed trait bounds.
+    /// `Some(empty)` means the binding is generic but no local trait target is provable, which
+    /// prevents a same-named concrete type elsewhere in the crate from becoming a false target.
+    fn rust_generic_bound_types(
+        &self,
+        file: u32,
+        imports: &Imports,
+        scope: Option<u32>,
+        parameter: &str,
+    ) -> Option<Vec<u32>> {
+        if self.file_type(file) != Some(FileType::Rust) {
+            return None;
+        }
+        let scope = scope?;
+        let key = (file, scope, parameter);
+        if !self.rust_generic_parameters.contains(&key) {
+            return None;
+        }
+        let mut traits = Vec::new();
+        for bound in self.rust_generic_bounds.get(&key).into_iter().flatten() {
+            let Some((types, Confidence::Exact)) =
+                self.resolve_type(file, Some(imports), Some(scope), bound)
+            else {
+                continue;
+            };
+            for trait_symbol in types {
+                if self.symbols[trait_symbol as usize].kind == SymKind::Trait
+                    && !traits.contains(&trait_symbol)
+                {
+                    traits.push(trait_symbol);
+                }
+            }
+        }
+        Some(traits)
     }
 
     /// Closest binding of `name` visible from `scope` at or before `line`.
@@ -4274,6 +4347,11 @@ impl<'a> Index<'a> {
             let file = file as u32;
             for reference in &facts.refs {
                 if reference.kind != RefKind::Implement {
+                    continue;
+                }
+                // Scoped Rust implementation refs encode generic parameter bounds, not a
+                // concrete `impl Trait for Type` declaration.
+                if self.file_type(file) == Some(FileType::Rust) && reference.scope.is_some() {
                     continue;
                 }
                 // `class C implements I` names the implementing type by scope; Rust
