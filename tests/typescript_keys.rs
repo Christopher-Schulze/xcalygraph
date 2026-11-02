@@ -365,6 +365,66 @@ fn imported_interface_bases_require_cross_file_compatibility() -> Result<(), Box
 }
 
 #[test]
+fn generic_defaults_preserve_substitution_and_reject_conflicts() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("valid.ts"),
+        include_bytes!("fixtures/typescript-generic-default-valid.ts"),
+    )?;
+    fs::write(
+        root.join("invalid.ts"),
+        include_bytes!("fixtures/typescript-generic-default-invalid.ts"),
+    )?;
+    for name in [
+        "valid.Child",
+        "valid.Explicit",
+        "valid.Defaulted",
+        "valid.BareDefault",
+    ] {
+        let result = fixture.run(&["show", name])?;
+        assert!(
+            result.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        let text = String::from_utf8(result.stdout)?;
+        let base = if name == "valid.Child" {
+            "valid.Pair"
+        } else if name == "valid.BareDefault" {
+            "valid.DefaultBox"
+        } else {
+            "valid.Concrete"
+        };
+        assert!(text.contains(base), "{name}: {text}");
+    }
+    for name in [
+        "invalid.Conflict",
+        "invalid.Missing",
+        "invalid.Unproven",
+        "invalid.BadDefault",
+    ] {
+        assert_eq!(
+            fixture.run(&["show", name, "--read-only"])?.status.code(),
+            Some(3),
+            "{name}"
+        );
+    }
+    for name in ["valid.call", "valid.callDefault", "valid.callBare"] {
+        let result = fixture.run(&["show", name, "--read-only", "--exact"])?;
+        assert!(result.status.success());
+        let text = String::from_utf8(result.stdout)?;
+        assert!(text.contains("valid.Service.execute"), "{name}: {text}");
+    }
+    let impact = fixture.run(&["impact", "valid.Pair", "--read-only", "--exact"])?;
+    assert!(impact.status.success());
+    let text = String::from_utf8(impact.stdout)?;
+    assert!(text.contains("valid.call"), "{text}");
+    Ok(())
+}
+
+#[test]
 fn generic_bases_have_source_backed_inheritance_edges() -> Result<(), Box<dyn Error>> {
     let fixture = Fixture::new()?;
     let root = fixture.0.join("repo");
@@ -815,6 +875,10 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         include_bytes!("fixtures/typescript-inherited-generic-valid.ts"),
     )?;
     fs::write(
+        root.join("defaults.ts"),
+        include_bytes!("fixtures/typescript-generic-default-valid.ts"),
+    )?;
+    fs::write(
         root.join("base.ts"),
         include_bytes!("fixtures/typescript-cross-base-valid.ts"),
     )?;
@@ -859,6 +923,8 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         assert!(complex.status.success());
         let generic = run(&["show", "generic.Child", "--json", "--read-only"])?;
         assert!(generic.status.success());
+        let defaults = run(&["show", "defaults.Child", "--json", "--read-only"])?;
+        assert!(defaults.status.success());
         let imported = run(&["show", "child.Child", "--json", "--read-only"])?;
         assert!(imported.status.success());
         answers.push((
@@ -868,6 +934,7 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
             overrides.stdout,
             complex.stdout,
             generic.stdout,
+            defaults.stdout,
             imported.stdout,
         ));
     }
