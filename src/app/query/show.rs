@@ -1,6 +1,6 @@
 //! `show`: the card of one symbol or file (`docs/spec.md` section 7.4).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::output::{Value, Writer};
 use super::{Filter, Index, Node};
@@ -9,6 +9,14 @@ use crate::infra::store::derived::EdgeRecord;
 
 /// Lines per section unless `--all`.
 const SECTION_LINES: usize = 10;
+
+struct EdgeDisplay<'a> {
+    marker: &'a str,
+    relation: &'a str,
+    depth: usize,
+    site: bool,
+    exact: bool,
+}
 
 pub struct ShowOptions {
     pub depth: usize,
@@ -267,28 +275,36 @@ fn relation(
             writer.skip(list.len() - shown);
             break;
         }
-        write_edge(index, writer, marker, rel, edge, 0, site);
+        write_edge(
+            index,
+            writer,
+            edge,
+            EdgeDisplay {
+                marker,
+                relation: rel,
+                depth: 0,
+                site,
+                exact: edge.is_exact(),
+            },
+        );
     }
 }
 
 fn write_edge(
     index: &Index,
     writer: &mut Writer,
-    marker: &str,
-    rel: &str,
     edge: &EdgeRecord,
-    depth: usize,
-    site: bool,
+    display: EdgeDisplay<'_>,
 ) -> bool {
     let path = index.path_of(edge.node);
-    let line = if site {
+    let line = if display.site {
         edge.line
     } else {
         index.line_of(edge.node)
     };
     let label = index.label(edge.node);
-    let inferred = if edge.is_exact() { "" } else { "?" };
-    let indent = "  ".repeat(depth);
+    let inferred = if display.exact { "" } else { "?" };
+    let indent = "  ".repeat(display.depth);
     let kind = match edge.kind() {
         EdgeKind::Calls | EdgeKind::Tests | EdgeKind::Inherits | EdgeKind::Implements => {
             String::new()
@@ -296,24 +312,27 @@ fn write_edge(
         other => format!(" {}", other.id()),
     };
     let text = if index.path_of(edge.node) == label {
-        format!("{indent}{marker} {path}:{line}{kind}{inferred}")
+        format!("{indent}{} {path}:{line}{kind}{inferred}", display.marker)
     } else {
-        format!("{indent}{marker} {label} {path}:{line}{kind}{inferred}")
+        format!(
+            "{indent}{} {label} {path}:{line}{kind}{inferred}",
+            display.marker
+        )
     };
     writer.line(
         &text,
         &[
             ("t", Value::Str("edge")),
-            ("rel", Value::Str(rel)),
+            ("rel", Value::Str(display.relation)),
             ("kind", Value::Str(edge.kind().id())),
             ("name", Value::Str(&label)),
             ("path", Value::Str(path)),
             ("line", Value::Int(u64::from(line))),
             (
                 "conf",
-                Value::Str(if edge.is_exact() { "exact" } else { "inferred" }),
+                Value::Str(if display.exact { "exact" } else { "inferred" }),
             ),
-            ("n", Value::Int(depth as u64 + 1)),
+            ("n", Value::Int(display.depth as u64 + 1)),
         ],
     )
 }
@@ -363,11 +382,14 @@ fn traverse(
             write_edge(
                 index,
                 writer,
-                marker,
-                rel,
                 edge,
-                level,
-                direction == Direction::In,
+                EdgeDisplay {
+                    marker,
+                    relation: rel,
+                    depth: level,
+                    site: direction == Direction::In,
+                    exact: edge.is_exact(),
+                },
             );
             written += 1;
             children.push(edge.node);
@@ -381,16 +403,20 @@ fn traverse(
 
 /// Tests reaching the node directly or through one caller (test map, two `calls` hops).
 fn tests(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: usize) {
-    let mut found: Vec<(&EdgeRecord, bool)> = index
-        .derived
-        .incoming(node)
-        .iter()
-        .filter(|edge| {
-            edge.kind() == EdgeKind::Tests && filter.edge(edge) && filter.includes(index, edge.node)
-        })
-        .map(|edge| (edge, false))
-        .collect();
-    let mut seen: HashSet<u32> = found.iter().map(|(edge, _)| edge.node).collect();
+    let mut found: Vec<(&EdgeRecord, bool, bool)> = Vec::new();
+    let mut positions: HashMap<u32, usize> = HashMap::new();
+    for edge in index.derived.incoming(node).iter().filter(|edge| {
+        edge.kind() == EdgeKind::Tests && filter.edge(edge) && filter.includes(index, edge.node)
+    }) {
+        if let Some(&position) = positions.get(&edge.node) {
+            if edge.is_exact() && !found[position].2 {
+                found[position] = (edge, false, true);
+            }
+        } else {
+            positions.insert(edge.node, found.len());
+            found.push((edge, false, edge.is_exact()));
+        }
+    }
     for caller in index
         .derived
         .incoming(node)
@@ -404,19 +430,37 @@ fn tests(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: us
             if edge.kind() == EdgeKind::Tests
                 && filter.edge(edge)
                 && filter.includes(index, edge.node)
-                && seen.insert(edge.node)
             {
-                found.push((edge, true));
+                let exact = caller.is_exact() && edge.is_exact();
+                if let Some(&position) = positions.get(&edge.node) {
+                    if exact && !found[position].2 {
+                        found[position] = (edge, true, true);
+                    }
+                } else {
+                    positions.insert(edge.node, found.len());
+                    found.push((edge, true, exact));
+                }
             }
         }
     }
-    for (shown, (edge, indirect)) in found.iter().enumerate() {
+    for (shown, (edge, indirect, exact)) in found.iter().enumerate() {
         if shown >= cap {
             writer.skip(found.len() - shown);
             break;
         }
         let marker = if *indirect { "t2" } else { "t" };
-        write_edge(index, writer, marker, "test", edge, 0, true);
+        write_edge(
+            index,
+            writer,
+            edge,
+            EdgeDisplay {
+                marker,
+                relation: "test",
+                depth: 0,
+                site: true,
+                exact: *exact,
+            },
+        );
     }
 }
 

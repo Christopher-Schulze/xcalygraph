@@ -1551,6 +1551,179 @@ fn path_and_impact_keep_inferred_dispatch_inferred_on_every_hop() -> TestResult 
     Ok(())
 }
 
+#[test]
+fn show_indirect_test_confidence_includes_the_caller_edge() -> TestResult {
+    let dir = TempDir::new("show-test-confidence")?;
+    let root = dir.0.join("repo");
+    let index = dir.0.join("index");
+    dir.write("repo/go.mod", "module example.com/app\n\ngo 1.23\n")?;
+    dir.write("repo/app.go", DISPATCH_GO)?;
+    dir.write(
+        "repo/app_test.go",
+        "package app\n\nimport \"testing\"\n\nfunc TestSend(t *testing.T) {\n\tSend(&FileStore{})\n}\n\nfunc TestDirect(t *testing.T) {\n\tDirect()\n}\n\nfunc TestBoth(t *testing.T) {\n\tSend(&FileStore{})\n\tDirect()\n}\n",
+    )?;
+    git(&root, &["init", "-q"])?;
+
+    for json in [false, true] {
+        let mut ordinary = vec!["show", "FileStore.Write"];
+        let mut exact = vec!["show", "FileStore.Write", "--exact"];
+        if json {
+            ordinary.push("--json");
+            exact.push("--json");
+        }
+        let ordinary = run_in(&root, &index, &ordinary)?;
+        assert_eq!(ordinary.status.code(), Some(0));
+        let ordinary = String::from_utf8(ordinary.stdout)?;
+        if json {
+            assert!(
+                ordinary.lines().any(|line| {
+                    line.contains("TestSend")
+                        && line.contains("app_test.go")
+                        && line.contains("\"conf\":\"inferred\"")
+                }),
+                "{ordinary}"
+            );
+            assert!(
+                ordinary.lines().any(|line| {
+                    line.contains("TestDirect")
+                        && line.contains("app_test.go")
+                        && line.contains("\"conf\":\"exact\"")
+                }),
+                "{ordinary}"
+            );
+            assert!(
+                ordinary.lines().any(|line| {
+                    line.contains("TestBoth") && line.contains("\"conf\":\"exact\"")
+                }),
+                "{ordinary}"
+            );
+        } else {
+            assert!(
+                ordinary
+                    .lines()
+                    .any(|line| { line.contains("TestSend") && line.contains("app_test.go:6?") }),
+                "{ordinary}"
+            );
+            assert!(
+                ordinary.lines().any(|line| {
+                    line.contains("TestDirect")
+                        && line.contains("app_test.go:10")
+                        && !line.ends_with('?')
+                }),
+                "{ordinary}"
+            );
+            assert!(
+                ordinary
+                    .lines()
+                    .any(|line| { line.contains("TestBoth") && !line.ends_with('?') }),
+                "{ordinary}"
+            );
+        }
+
+        let exact = run_in(&root, &index, &exact)?;
+        assert_eq!(exact.status.code(), Some(0));
+        let exact = String::from_utf8(exact.stdout)?;
+        assert!(exact.contains("TestDirect"), "{exact}");
+        assert!(exact.contains("TestBoth"), "{exact}");
+        assert!(!exact.contains("TestSend"), "{exact}");
+    }
+    Ok(())
+}
+
+#[test]
+fn impact_diff_exact_drops_inferred_removed_test_chains() -> TestResult {
+    let dir = TempDir::new("impact-removed-test-confidence")?;
+    let root = dir.0.join("repo");
+    let index = dir.0.join("index");
+    dir.write("repo/go.mod", "module example.com/app\n\ngo 1.23\n")?;
+    dir.write(
+        "repo/a/removed.go",
+        "package a\n\nfunc Removed() int { return 1 }\n",
+    )?;
+    dir.write(
+        "repo/a/change.go",
+        "package a\n\ntype Changeable interface { Changed() int }\n\ntype FileStore struct{}\n\nfunc (*FileStore) Changed() int { return 1 }\n\nfunc Send(store Changeable) int { return store.Changed() }\n\nfunc Direct() int {\n\tstore := &FileStore{}\n\treturn store.Changed()\n}\n",
+    )?;
+    dir.write(
+        "repo/b/use.go",
+        "package b\n\nimport \"example.com/app/a\"\n\nfunc UsesRemoved() int { return a.Removed() }\n",
+    )?;
+    dir.write(
+        "repo/b/use_test.go",
+        "package b\n\nimport \"testing\"\n\nfunc TestUsesRemoved(t *testing.T) { _ = UsesRemoved() }\n",
+    )?;
+    dir.write(
+        "repo/c/use.go",
+        "package c\n\nimport \"example.com/app/a\"\n\nfunc UsesChanged() int {\n\tstore := &a.FileStore{}\n\t_ = a.Send(store)\n\treturn a.Direct()\n}\n",
+    )?;
+    dir.write(
+        "repo/c/use_test.go",
+        "package c\n\nimport \"testing\"\n\nfunc TestUsesChanged(t *testing.T) { _ = UsesChanged() }\n",
+    )?;
+    git(&root, &["init", "-q"])?;
+    git(&root, &["add", "."])?;
+    git(&root, &["commit", "-q", "-m", "initial"])?;
+    dir.write(
+        "repo/a/change.go",
+        "package a\n\ntype Changeable interface { Changed() int }\n\ntype FileStore struct{}\n\nfunc (*FileStore) Changed() int { return 2 }\n\nfunc Send(store Changeable) int { return store.Changed() }\n\nfunc Direct() int {\n\tstore := &FileStore{}\n\treturn store.Changed()\n}\n",
+    )?;
+    fs::remove_file(root.join("a/removed.go"))?;
+
+    for json in [false, true] {
+        let mut ordinary = vec!["impact", "--diff"];
+        let mut exact = vec!["impact", "--diff", "--exact"];
+        if json {
+            ordinary.push("--json");
+            exact.push("--json");
+        }
+        let exact = run_in(&root, &index, &exact)?;
+        assert_eq!(exact.status.code(), Some(0));
+        let exact = String::from_utf8(exact.stdout)?;
+        assert!(exact.contains("TestUsesChanged"), "{exact}");
+        assert!(exact.contains("go test ./c"), "{exact}");
+        assert!(!exact.contains("b.UsesRemoved"), "{exact}");
+        assert!(!exact.contains("TestUsesRemoved"), "{exact}");
+        assert!(!exact.contains("go test ./b"), "{exact}");
+
+        let ordinary = run_in(&root, &index, &ordinary)?;
+        assert_eq!(ordinary.status.code(), Some(0));
+        let ordinary = String::from_utf8(ordinary.stdout)?;
+        assert!(ordinary.contains("Removed"), "{ordinary}");
+        assert!(ordinary.contains("UsesRemoved"), "{ordinary}");
+        assert!(ordinary.contains("go test ./b"), "{ordinary}");
+        assert!(ordinary.contains("TestUsesChanged"), "{ordinary}");
+        assert!(ordinary.contains("go test ./c"), "{ordinary}");
+        if json {
+            assert!(
+                ordinary.lines().any(|line| {
+                    line.contains("TestUsesRemoved") && line.contains("\"conf\":\"inferred\"")
+                }),
+                "{ordinary}"
+            );
+            assert!(
+                ordinary.lines().any(|line| {
+                    line.contains("TestUsesChanged") && line.contains("\"conf\":\"exact\"")
+                }),
+                "{ordinary}"
+            );
+        } else {
+            assert!(
+                ordinary
+                    .lines()
+                    .any(|line| { line.contains("TestUsesRemoved") && line.ends_with('?') }),
+                "{ordinary}"
+            );
+            assert!(
+                ordinary
+                    .lines()
+                    .any(|line| { line.contains("TestUsesChanged") && !line.ends_with('?') }),
+                "{ordinary}"
+            );
+        }
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 #[test]
 fn literal_indexed_paths_precede_name_syntax_in_shared_queries() -> TestResult {
@@ -2860,7 +3033,7 @@ fn impact_of_removed_files_and_symbols_names_their_surviving_dependents() -> Tes
     let text = impact(&["impact", "--diff"])?;
     assert_eq!(
         text,
-        "~ Close store/open.go:7 removed\n~ Open store/open.go:3 removed\n< 1 store.Warm store/use.go:3?\n< 1 store.Stop store/use.go:7?\nt store.TestOpen store/open_test.go:5\nr go test ./store -run '^(TestOpen)$'\n"
+        "~ Close store/open.go:7 removed\n~ Open store/open.go:3 removed\n< 1 store.Warm store/use.go:3?\n< 1 store.Stop store/use.go:7?\nt store.TestOpen store/open_test.go:5?\nr go test ./store -run '^(TestOpen)$'\n"
     );
     let json = impact(&["impact", "--diff", "--json"])?;
     assert!(
@@ -2868,6 +3041,7 @@ fn impact_of_removed_files_and_symbols_names_their_surviving_dependents() -> Tes
         "{json}"
     );
     assert!(json.contains("\"name\":\"store.Warm\",\"path\":\"store/use.go\",\"line\":3,\"n\":1,\"conf\":\"inferred\""), "{json}");
+    assert!(json.contains("\"name\":\"store.TestOpen\",\"path\":\"store/open_test.go\",\"line\":5,\"conf\":\"inferred\""), "{json}");
     let text = impact(&["impact", "--diff", "--no-tests"])?;
     assert!(
         !text.contains("TestOpen") && !text.contains("go test"),

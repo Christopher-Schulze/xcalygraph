@@ -293,7 +293,11 @@ pub fn render_diff(
                 .is_some_and(|(before, after)| before != after),
         });
     }
-    let survivors = surviving_references(index, filter, options.store, &removed_names)?;
+    let survivors = if filter.exact {
+        Vec::new()
+    } else {
+        surviving_references(index, filter, options.store, &removed_names)?
+    };
     let mut incomplete = Vec::new();
     for change in &changes {
         if let Some(previous) = &change.previous
@@ -1130,7 +1134,7 @@ fn render(
     let mut exact_of: HashMap<u32, bool> = target_nodes.iter().map(|&node| (node, true)).collect();
     let mut frontier: Vec<u32> = target_nodes.iter().copied().collect();
     let mut affected: Vec<(usize, u32, bool)> = Vec::new();
-    let mut tests: BTreeSet<u32> = BTreeSet::new();
+    let mut tests: BTreeMap<u32, bool> = BTreeMap::new();
     for depth in 1..=options.depth.max(1) {
         let mut layer = Vec::new();
         // Surviving references to removed definitions are inferred direct dependents.
@@ -1154,7 +1158,13 @@ fn render(
                 }
                 if edge.kind() == EdgeKind::Tests {
                     if filter.edge(edge) && filter.includes(index, edge.node) {
-                        tests.insert(edge.node);
+                        let exact = chain_exact && edge.is_exact();
+                        if !filter.exact || exact {
+                            tests
+                                .entry(edge.node)
+                                .and_modify(|previous| *previous |= exact)
+                                .or_insert(exact);
+                        }
                     }
                     continue;
                 }
@@ -1180,8 +1190,12 @@ fn render(
         let mut next = Vec::new();
         for node in layer {
             if is_test(index, node) {
-                if filter.includes(index, node) {
-                    tests.insert(node);
+                let exact = exact_of[&node];
+                if filter.includes(index, node) && (!filter.exact || exact) {
+                    tests
+                        .entry(node)
+                        .and_modify(|previous| *previous |= exact)
+                        .or_insert(exact);
                 }
                 continue;
             }
@@ -1259,7 +1273,7 @@ fn render(
             ],
         );
     }
-    for (shown, &test) in tests.iter().enumerate() {
+    for (shown, (&test, &exact)) in tests.iter().enumerate() {
         if shown >= TEST_LINES {
             more(&mut writer, tests.len() - shown, "tests");
             break;
@@ -1267,14 +1281,16 @@ fn render(
         let label = index.label(test);
         let path = index.path_of(test);
         let line = index.line_of(test);
+        let mark = if exact { "" } else { "?" };
         writer.line(
-            &format!("t {label} {path}:{line}"),
+            &format!("t {label} {path}:{line}{mark}"),
             &[
                 ("t", Value::Str("edge")),
                 ("rel", Value::Str("test")),
                 ("name", Value::Str(&label)),
                 ("path", Value::Str(path)),
                 ("line", Value::Int(u64::from(line))),
+                ("conf", Value::Str(if exact { "exact" } else { "inferred" })),
             ],
         );
     }
@@ -1455,7 +1471,7 @@ fn is_test(index: &Index, node: u32) -> bool {
 /// per Gradle or Maven project, test files otherwise (section 7.5).
 /// Run commands as (precise, package-level): the second is shorter and still correct, running
 /// the whole package, crate, project or suite; it replaces the first when the budget is short.
-fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<(String, String)> {
+fn run_lines(index: &Index, root: &Path, tests: &BTreeMap<u32, bool>) -> Vec<(String, String)> {
     let mut go: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     let mut rust: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     // (build tool, project directory) -> test classes.
@@ -1475,7 +1491,7 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeSet<u32>) -> Vec<(String, 
         .iter()
         .map(|file| index.string(file.path))
         .collect();
-    for &test in tests {
+    for &test in tests.keys() {
         let path = index.path_of(test);
         let runner = if path.ends_with("_spec.rb") {
             Some("bundle exec rspec")
