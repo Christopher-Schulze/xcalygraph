@@ -29,7 +29,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 79;
+pub const RESOLVE_VERSION: u32 = 80;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -2374,10 +2374,38 @@ impl<'a> Index<'a> {
             return found;
         }
         let scope = self.scope_ids[self.module_of(symbol.file) as usize];
-        self.methods
+        let methods = self
+            .methods
             .get(&(scope, symbol.name.as_str(), name))
             .cloned()
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if self.file_type(symbol.file) != Some(FileType::TypeScript) {
+            return methods;
+        }
+        let owner = self.canonical_interface(type_symbol);
+        let candidates: HashSet<_> = if methods
+            .iter()
+            .any(|&method| self.symbols[method as usize].parent == NONE)
+        {
+            self.types
+                .get(&(self.module_of(symbol.file), symbol.name.as_str()))
+                .into_iter()
+                .flatten()
+                .map(|&candidate| self.canonical_interface(candidate))
+                .collect()
+        } else {
+            HashSet::default()
+        };
+        methods
+            .into_iter()
+            .filter(|&method| {
+                let parent = self.symbols[method as usize].parent;
+                if parent == NONE {
+                    return candidates.len() == 1 && candidates.contains(&owner);
+                }
+                self.canonical_interface(parent) == owner
+            })
+            .collect()
     }
 
     /// Members `name` declared in the body of `type_symbol`: JVM types of one package may share a
@@ -2449,17 +2477,58 @@ impl<'a> Index<'a> {
             return (!types.is_empty()).then_some((types, Confidence::Exact));
         }
         if let Some(facts) = self.facts(file) {
-            let mut local: Vec<u32> = facts
-                .symbols
-                .iter()
-                .enumerate()
-                .filter(|(_, symbol)| symbol.name == name && symbol.kind().is_type())
-                .map(|(local, _)| self.canonical_interface(self.base[file as usize] + local as u32))
-                .collect();
-            local.sort_unstable();
-            local.dedup();
-            if !local.is_empty() {
-                return Some((local, Confidence::Exact));
+            if self.file_type(file) == Some(FileType::TypeScript) {
+                if !matches!(
+                    facts.source_identity(SourceIdentityKind::TypeScriptScope, 0),
+                    Some("clear" | "augmentations")
+                ) {
+                    return None;
+                }
+                let chain = scope_chain(facts, scope);
+                if chain.iter().any(|&scope| {
+                    facts
+                        .symbols
+                        .get(scope as usize)
+                        .is_some_and(|symbol| typescript_generic_parameter_may_shadow(symbol, name))
+                }) {
+                    return None;
+                }
+                for parent in chain.iter().copied().map(Some).chain(std::iter::once(None)) {
+                    let mut local: Vec<u32> = facts
+                        .symbols
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, symbol)| {
+                            symbol.parent == parent
+                                && symbol.name == name
+                                && symbol.kind().is_type()
+                                && symbol.flags & facts::FLAG_TYPESCRIPT_AUGMENTATION == 0
+                        })
+                        .map(|(local, _)| {
+                            self.canonical_interface(self.base[file as usize] + local as u32)
+                        })
+                        .collect();
+                    local.sort_unstable();
+                    local.dedup();
+                    if !local.is_empty() {
+                        return Some((local, Confidence::Exact));
+                    }
+                }
+            } else {
+                let mut local: Vec<u32> = facts
+                    .symbols
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, symbol)| symbol.name == name && symbol.kind().is_type())
+                    .map(|(local, _)| {
+                        self.canonical_interface(self.base[file as usize] + local as u32)
+                    })
+                    .collect();
+                local.sort_unstable();
+                local.dedup();
+                if !local.is_empty() {
+                    return Some((local, Confidence::Exact));
+                }
             }
         }
         if let Some(imports) = imports
@@ -2468,24 +2537,65 @@ impl<'a> Index<'a> {
             let types: Vec<u32> = symbols
                 .iter()
                 .copied()
-                .filter(|&s| self.symbols[s as usize].kind.is_type())
+                .filter(|&s| {
+                    let symbol = &self.symbols[s as usize];
+                    symbol.kind.is_type()
+                        && (self.file_type(file) != Some(FileType::TypeScript)
+                            || (symbol.exported
+                                && symbol.flags & facts::FLAG_TYPESCRIPT_AUGMENTATION == 0))
+                })
                 .collect();
             if !types.is_empty() {
                 return Some((types, Confidence::Exact));
             }
         }
         if let Some(types) = self.types.get(&(module, name)) {
-            return Some((types.clone(), Confidence::Exact));
+            let visible: Vec<_> = types
+                .iter()
+                .copied()
+                .filter(|&symbol| {
+                    self.file_type(file) != Some(FileType::TypeScript)
+                        || (self.symbols[symbol as usize].parent == NONE
+                            && self.symbols[symbol as usize].flags
+                                & facts::FLAG_TYPESCRIPT_AUGMENTATION
+                                == 0
+                            && self
+                                .facts(self.symbols[symbol as usize].file)
+                                .and_then(|facts| {
+                                    facts.source_identity(SourceIdentityKind::TypeScriptScope, 0)
+                                })
+                                .is_some_and(|scope| matches!(scope, "clear" | "augmentations")))
+                })
+                .collect();
+            if !visible.is_empty() {
+                return Some((visible, Confidence::Exact));
+            }
         }
         if let Some(imports) = imports {
             for &glob in &imports.globs {
                 if let Some(types) = self.types.get(&(glob, name)) {
-                    return Some((types.clone(), Confidence::Exact));
+                    let visible: Vec<_> = types
+                        .iter()
+                        .copied()
+                        .filter(|&symbol| {
+                            self.file_type(file) != Some(FileType::TypeScript)
+                                || (self.symbols[symbol as usize].parent == NONE
+                                    && self.symbols[symbol as usize].exported
+                                    && self.symbols[symbol as usize].flags
+                                        & facts::FLAG_TYPESCRIPT_AUGMENTATION
+                                        == 0)
+                        })
+                        .collect();
+                    if !visible.is_empty() {
+                        return Some((visible, Confidence::Exact));
+                    }
                 }
             }
         }
-        // JVM types come only from the package, imports and `java.lang`: no root-wide guess.
-        if jvm::is_class_based(self.file_type(file)) {
+        // TypeScript and JVM types are not made visible by unrelated root-wide declarations.
+        if self.file_type(file) == Some(FileType::TypeScript)
+            || jvm::is_class_based(self.file_type(file))
+        {
             return None;
         }
         let candidates: Vec<u32> = self
@@ -4729,7 +4839,16 @@ impl<'a> Index<'a> {
                     owner_file = augmentation_file;
                 }
             }
-            match self.resolve_type(owner_file, None, None, concrete.unwrap_or(field_type)) {
+            let field_scope = (self.file_type(owner_file) == Some(FileType::TypeScript)
+                && concrete.is_none()
+                && self.symbols[type_symbol as usize].file == owner_file)
+                .then(|| type_symbol - self.base[owner_file as usize]);
+            match self.resolve_type(
+                owner_file,
+                None,
+                field_scope,
+                concrete.unwrap_or(field_type),
+            ) {
                 Some((next, next_confidence))
                     if concrete.is_some()
                         && (next.len() != 1
@@ -5793,6 +5912,53 @@ fn unique(candidates: &[u32], is_test: impl Fn(u32) -> bool) -> Option<u32> {
             (non_test.len() == 1).then(|| non_test[0])
         }
     }
+}
+
+/// A clipped or complex generic header cannot prove that a type name is not shadowed.
+fn typescript_generic_parameter_may_shadow(symbol: &facts::Symbol, name: &str) -> bool {
+    let signature = symbol.signature.as_str();
+    let Some((position, _)) = signature.match_indices(&symbol.name).find(|(position, _)| {
+        let before = signature[..*position].chars().next_back();
+        let after = signature[*position + symbol.name.len()..].chars().next();
+        let identifier = |ch: char| ch.is_alphanumeric() || ch == '_' || ch == '$';
+        !before.is_some_and(identifier) && !after.is_some_and(identifier)
+    }) else {
+        return true;
+    };
+    let mut rest = signature[position + symbol.name.len()..].trim_start();
+    if let Some(after) = rest.strip_prefix('=') {
+        let after = after.trim_start();
+        rest = after
+            .strip_prefix("async")
+            .filter(|tail| tail.starts_with('<') || tail.starts_with(' '))
+            .unwrap_or(after)
+            .trim_start();
+    }
+    let Some(parameters) = rest.strip_prefix('<') else {
+        return rest.contains('…')
+            && !rest.starts_with('(')
+            && !rest.starts_with(':')
+            && !rest.starts_with("extends ")
+            && !rest.starts_with("implements ");
+    };
+    let mut depth = 1usize;
+    for (index, ch) in parameters.char_indices() {
+        match ch {
+            '\'' | '"' | '`' | '\\' => return true,
+            '<' => depth += 1,
+            '>' if index > 0 && parameters.as_bytes()[index - 1] == b'=' => {}
+            '>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return parameters[..index]
+                        .split(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '$'))
+                        .any(|part| part == name);
+                }
+            }
+            _ => {}
+        }
+    }
+    true
 }
 
 /// Local indices of `scope` and its enclosing symbols, innermost first.

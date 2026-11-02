@@ -45,6 +45,146 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn typescript_type_names_respect_lexical_visibility() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    for (name, source) in [
+        (
+            "valid.ts",
+            &include_bytes!("fixtures/typescript-lexical-valid.ts")[..],
+        ),
+        (
+            "invalid.ts",
+            &include_bytes!("fixtures/typescript-lexical-invalid.ts")[..],
+        ),
+        (
+            "inherited.ts",
+            &include_bytes!("fixtures/typescript-inherited-ambiguous.ts")[..],
+        ),
+        (
+            "provider.ts",
+            &include_bytes!("fixtures/typescript-lexical-provider.ts")[..],
+        ),
+        (
+            "consumer.ts",
+            &include_bytes!("fixtures/typescript-lexical-consumer.ts")[..],
+        ),
+        (
+            "private-import.ts",
+            &include_bytes!("fixtures/typescript-lexical-private-import.ts")[..],
+        ),
+        (
+            "scope-augment.ts",
+            &include_bytes!("fixtures/typescript-lexical-augmentation.ts")[..],
+        ),
+    ] {
+        fs::write(root.join(name), source)?;
+    }
+    let long_names: Vec<_> = [140, 145, 150, 190]
+        .into_iter()
+        .enumerate()
+        .map(|(index, length)| {
+            (
+                format!("long{index}"),
+                format!("function{}", "x".repeat(length)),
+            )
+        })
+        .collect();
+    for (file, long_name) in &long_names {
+        let source = format!(
+            "export class Service {{ run(): number {{ return 1; }} }}\nexport function {long_name}<Service extends {{ run(): number }}>(value: Service): number {{ return value.run(); }}\n"
+        );
+        fs::write(root.join(format!("{file}.ts")), source)?;
+    }
+    for (caller, expected, wrong) in [
+        (
+            "valid.outside",
+            "valid.Service.run",
+            "valid.Area.Service.run",
+        ),
+        (
+            "valid.Area.inside",
+            "valid.Area.Service.run",
+            "valid.Service.run",
+        ),
+        (
+            "inherited.run",
+            "inherited.Service.execute",
+            "inherited.OtherService.execute",
+        ),
+        (
+            "consumer.viaImport",
+            "provider.Imported.run",
+            "consumer.Other.Imported.run",
+        ),
+    ] {
+        let result = fixture.run(&["show", caller, "--exact"])?;
+        assert!(result.status.success());
+        let text = String::from_utf8(result.stdout)?;
+        assert!(
+            text.contains(expected) && !text.contains(wrong),
+            "{caller}: {text}"
+        );
+    }
+    let result = fixture.run(&["show", "invalid.outside", "--exact", "--read-only"])?;
+    assert!(result.status.success());
+    let text = String::from_utf8(result.stdout)?;
+    assert!(!text.contains("invalid.Other.Hidden.run"), "{text}");
+    let result = fixture.run(&[
+        "show",
+        "private-import.usePrivate",
+        "--exact",
+        "--read-only",
+    ])?;
+    assert!(result.status.success());
+    let text = String::from_utf8(result.stdout)?;
+    assert!(!text.contains("provider.Private.run"), "{text}");
+    let result = fixture.run(&[
+        "show",
+        "scope-augment.outsideAugmentation",
+        "--exact",
+        "--read-only",
+    ])?;
+    assert!(result.status.success());
+    let text = String::from_utf8(result.stdout)?;
+    assert!(!text.contains("scope-augment.Imported.extra"), "{text}");
+    for caller in [
+        "valid.generic",
+        "valid.genericArrow",
+        "valid.arrow",
+        "valid.asyncArrow",
+        "valid.genericField",
+    ] {
+        let result = fixture.run(&["show", caller, "--exact", "--read-only"])?;
+        assert!(result.status.success());
+        let text = String::from_utf8(result.stdout)?;
+        assert!(!text.contains("valid.Service.run"), "{text}");
+    }
+    for (file, name) in &long_names {
+        let result = fixture.run(&["show", &format!("{file}.{name}"), "--exact", "--read-only"])?;
+        assert!(result.status.success());
+        let text = String::from_utf8(result.stdout)?;
+        assert!(!text.contains(&format!("{file}.Service.run")), "{text}");
+    }
+    let impact = fixture.run(&["impact", "valid.Service.run", "--exact", "--read-only"])?;
+    assert!(impact.status.success());
+    let text = String::from_utf8(impact.stdout)?;
+    assert!(
+        text.contains("valid.outside") && !text.contains("valid.Area.inside"),
+        "{text}"
+    );
+    assert_eq!(
+        fixture
+            .run(&["show", "valid.outside", "-p", "invalid.ts", "--read-only"])?
+            .status
+            .code(),
+        Some(4)
+    );
+    Ok(())
+}
+
+#[test]
 fn typescript_field_lists_are_lossless_and_budgeted() -> Result<(), Box<dyn Error>> {
     let fixture = Fixture::new()?;
     fs::create_dir(fixture.0.join("repo"))?;
@@ -262,7 +402,14 @@ fn inherited_interfaces_merge_without_hiding_incompatible_base_members()
     let ambiguous = fixture.run(&["show", "ambiguous.run", "--read-only", "--exact"])?;
     assert!(ambiguous.status.success());
     let ambiguous = String::from_utf8(ambiguous.stdout)?;
-    assert!(!ambiguous.contains("Service.execute"), "{ambiguous}");
+    assert!(
+        ambiguous.contains("ambiguous.Service.execute"),
+        "{ambiguous}"
+    );
+    assert!(
+        !ambiguous.contains("ambiguous.OtherService.execute"),
+        "{ambiguous}"
+    );
     Ok(())
 }
 
@@ -1103,6 +1250,10 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         include_bytes!("fixtures/typescript-generic-default-valid.ts"),
     )?;
     fs::write(
+        root.join("lexical.ts"),
+        include_bytes!("fixtures/typescript-lexical-valid.ts"),
+    )?;
+    fs::write(
         root.join("base.ts"),
         include_bytes!("fixtures/typescript-cross-base-valid.ts"),
     )?;
@@ -1163,6 +1314,14 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         assert!(imported.status.success());
         let augmented = run(&["show", "augchild.Child", "--json", "--read-only"])?;
         assert!(augmented.status.success());
+        let lexical = run(&[
+            "show",
+            "lexical.outside",
+            "--json",
+            "--exact",
+            "--read-only",
+        ])?;
+        assert!(lexical.status.success());
         answers.push((
             answer.stdout,
             equivalent.stdout,
@@ -1174,6 +1333,7 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
             transitive.stdout,
             imported.stdout,
             augmented.stdout,
+            lexical.stdout,
         ));
     }
     assert_eq!(images[0], images[1]);
