@@ -14,7 +14,17 @@ pub fn lookup(index: &Index, filter: &Filter, name: &str) -> Vec<u32> {
 }
 
 fn lookup_unfiltered(index: &Index, filter: &Filter, name: &str) -> Vec<u32> {
+    // A literal indexed path wins before whitespace trimming or locator syntax.
+    let raw_name = name;
+    if let Some(file) = file_index(index, raw_name) {
+        return vec![index.symbol_count() + file];
+    }
     let name = name.trim();
+    if name != raw_name
+        && let Some(file) = file_index(index, name)
+    {
+        return vec![index.symbol_count() + file];
+    }
     if let Some((path, line)) = name.rsplit_once(':')
         && !path.ends_with(':')
         && let Ok(line) = line.parse::<u32>()
@@ -26,9 +36,6 @@ fn lookup_unfiltered(index: &Index, filter: &Filter, name: &str) -> Vec<u32> {
         && file_index(index, path).is_some()
     {
         return in_file(index, filter, path, symbol);
-    }
-    if let Some(file) = file_index(index, name) {
-        return vec![index.symbol_count() + file];
     }
     let normalized = name.replace("::", ".");
     let symbols = index.derived.symbols();

@@ -29,7 +29,7 @@ Local, deterministic index of the repository (symbols, calls, type uses, imports
 | `xcalygraph install`, `update [--check]`, `version` | install or repair binary and skill; self-update with skill refresh; versions |
 | `xcalygraph help [COMMAND]` | full syntax of every command and flag |
 
-NAME: `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get`), `path:line`, `path::name`, a file path, or a unique bare name.
+NAME: `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get`), `path:line`, `path::name`, a file path, or a unique bare name. A file-path match wins locator collisions, including through the existing `./` alias; xcalygraph checks the input spelling first, then its surrounding-whitespace-trimmed form before locator syntax.
 
 Flags: `-p GLOB` (paths, gitignore syntax, repeatable), `-l go,rust` (languages), `-k fn,method,struct` (kinds), `--no-tests`, `--exact` (drop inferred edges), `-d N` (show depth), `--all` (show without caps), `-b N` (token budget, hard cap), `--json`, `--read-only` (never write; exit 5 when stale), `-C DIR` (root).
 

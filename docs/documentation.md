@@ -41,7 +41,7 @@ Implemented commands; the full target surface is `docs/spec.md` section 2. `xcal
 
 - Search also looks up related query-only forms (`validation`/`validate`, `token`/`tokenize`, `retrieval`/`get`) at half the original term's weight. Exact terms remain indexed and are never replaced; the higher contribution per query term is used.
 - Query flags: `-C, --root PATH`, `-b, --budget N` (tokens, bytes / 3), `--json`, `--read-only`, `--index-dir PATH`, `-p, --path GLOB` (gitignore syntax, repeatable), `-l, --lang LIST`, `-k, --kind LIST`, `--exact`, `--no-tests`; `show` adds `-d, --depth N` and `--all`. One inclusion rule (`Filter::includes`, `src/app/query/mod.rs`) governs every stage: NAME resolution in all forms, `path` hops (induced subgraph), `impact` dependents, tests and run lines (traversal itself crosses excluded nodes), `show` tests and `map` module sections; `-k` limits symbols only, so files stay resolvable. Text output includes control characters literally; use `--json` for paths containing them.
-- NAME forms: `qualified.name` or `qualified::name`, a qualified suffix (`Store.Get`), `path:line` (innermost symbol containing the line), `path::name`, a file path, or a bare name.
+- NAME forms: `qualified.name` or `qualified::name`, a qualified suffix (`Store.Get`), `path:line` (innermost symbol containing the line), `path::name`, a file path, or a bare name. A file-path match wins a locator collision, including through the existing `./` alias; xcalygraph checks the input spelling first, then its surrounding-whitespace-trimmed form before locator syntax.
 - Query commands refresh the index first; `--read-only` never creates, probes or writes anything under the root, HOME or index base (also for a non-writable index) and exits 5 whenever a rebuild would be needed: index missing, sources changed, derived image corrupt, or another extraction, resolver or binary version.
 - Exit codes: 0 answer, 1 runtime error, 2 usage error, 3 ambiguous NAME (candidates on stdout), 4 no match, 5 index missing or stale under `--read-only`.
 - Usage errors print one stderr line `xcalygraph: <error>; run 'xcalygraph help'` and nothing on stdout. A reader that closes stdout early (`| head`) is not an error.
@@ -105,7 +105,7 @@ Resolution order for all of them is `docs/spec.md` section 6: lexical scope, imp
 
 ## Agent skill
 
-`skills/xcalygraph/SKILL.md` is embedded in the binary, so skill version equals binary version. It states when to use xcalygraph and when `rg` or direct reads are better, the command table with every command (housekeeping included; a unit test checks that `help` and the skill list every CLI command), NAME forms, flags, output markers, exit codes and three rules (verify at the cited line before editing, `--read-only` in read-only tasks, `show` instead of whole-file reads). Size: 3.5 KB, about 1,000 tokens (limit 1500, enforced by a unit test).
+`skills/xcalygraph/SKILL.md` is embedded in the binary, so skill version equals binary version. It states when to use xcalygraph and when `rg` or direct reads are better, the command table with every command (housekeeping included; a unit test checks that `help` and the skill list every CLI command), NAME forms, flags, output markers, exit codes and three rules (verify at the cited line before editing, `--read-only` in read-only tasks, `show` instead of whole-file reads). Size: 4.1 KB, about 1,000 tokens (limit 1500, enforced by a unit test).
 
 ## Installation and releases
 

@@ -1455,6 +1455,137 @@ fn path_and_impact_keep_inferred_dispatch_inferred_on_every_hop() -> TestResult 
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn literal_indexed_paths_precede_name_syntax_in_shared_queries() -> TestResult {
+    let dir = TempDir::new("literal-name-precedence")?;
+    let root = dir.0.join("repo");
+    for (path, source) in [
+        ("  spaced.rs", "pub fn leading_literal() {}\n"),
+        ("spaced.rs", "pub fn leading_decoy() {}\n"),
+        ("trailing.rs ", "literal file\n"),
+        ("trailing.rs", "pub fn trailing_decoy() {}\n"),
+        ("prefix.rs", "pub fn copy() {}\n"),
+        ("prefix.rs::copy", "literal file\n"),
+        ("line.rs", "pub fn line_symbol() {}\n"),
+        ("line.rs:1", "literal file\n"),
+        ("control\t.rs", "literal file\n"),
+        ("control\u{0001}.rs", "literal file\n"),
+        ("newline\n.rs", "literal file\n"),
+        ("雪.rs", "literal file\n"),
+        ("syntax.rs", "pub fn first() {}\npub fn second() {}\n"),
+    ] {
+        dir.write(&format!("repo/{path}"), source)?;
+    }
+    let index = dir.0.join("index");
+    let indexed = run_in(&root, &index, &["index"])?;
+    assert_eq!(
+        indexed.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&indexed.stderr)
+    );
+    let query = |args: &[&str]| -> io::Result<Output> { run_in(&root, &index, args) };
+
+    for name in [
+        "  spaced.rs",
+        "trailing.rs ",
+        "prefix.rs::copy",
+        "line.rs:1",
+        "control\t.rs",
+        "control\u{0001}.rs",
+        "newline\n.rs",
+        "雪.rs",
+    ] {
+        let output = query(&["show", name, "--read-only"])?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "show {name:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8(output.stdout)?;
+        assert!(
+            text.starts_with(&format!("{name} ")),
+            "show {name:?}: {text:?}"
+        );
+    }
+    for name in ["spaced.rs", "trailing.rs"] {
+        let output = query(&["show", name, "--read-only"])?;
+        let text = String::from_utf8(output.stdout)?;
+        assert!(
+            text.starts_with(&format!("{name} ")),
+            "show {name:?}: {text:?}"
+        );
+    }
+
+    for name in [
+        "  spaced.rs",
+        "trailing.rs ",
+        "prefix.rs::copy",
+        "line.rs:1",
+    ] {
+        let output = query(&["impact", name, "--json", "--read-only"])?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "impact {name:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let json = String::from_utf8(output.stdout)?;
+        assert!(
+            json.contains(&format!("\"name\":\"{name}\"")),
+            "impact {name:?}: {json}"
+        );
+
+        let output = query(&["path", name, name, "--json", "--read-only"])?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "path {name:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let json = String::from_utf8(output.stdout)?;
+        assert!(
+            json.contains(&format!("\"name\":\"{name}\"")),
+            "path {name:?}: {json}"
+        );
+    }
+
+    for (name, symbol) in [
+        ("crate::copy", "crate::copy"),
+        ("crate.copy", "crate::copy"),
+        ("syntax.rs::second", "crate::second"),
+        ("syntax.rs:2", "crate::second"),
+    ] {
+        let output = query(&["show", name, "--read-only"])?;
+        assert_eq!(output.status.code(), Some(0), "show {name:?}");
+        let text = String::from_utf8(output.stdout)?;
+        assert!(text.contains(symbol), "show {name:?}: {text}");
+
+        let output = query(&["impact", name, "--json", "--read-only"])?;
+        assert_eq!(output.status.code(), Some(0), "impact {name:?}");
+        let json = String::from_utf8(output.stdout)?;
+        assert!(
+            json.contains(&format!("\"name\":\"{symbol}\"")),
+            "impact {name:?}: {json}"
+        );
+    }
+    for (from, to, symbol) in [
+        ("crate::copy", "crate.copy", "crate::copy"),
+        ("syntax.rs::second", "syntax.rs:2", "crate::second"),
+    ] {
+        let output = query(&["path", from, to, "--json", "--read-only"])?;
+        assert_eq!(output.status.code(), Some(0), "path {from:?} to {to:?}");
+        let json = String::from_utf8(output.stdout)?;
+        assert!(
+            json.contains(&format!("\"name\":\"{symbol}\"")),
+            "path {from:?} to {to:?}: {json}"
+        );
+    }
+    Ok(())
+}
+
 /// Arguments, exit code, required substrings, forbidden substrings.
 type FilterCase<'a> = (&'a [&'a str], i32, &'a [&'a str], &'a [&'a str]);
 
