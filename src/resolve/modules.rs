@@ -480,7 +480,7 @@ fn rust_module_overrides(
             }
         })
         .collect();
-    let (mut infos, mut valid) = {
+    let (mut infos, logical_paths, mut valid) = {
         let mut resolver = RustModuleInfoResolver {
             base_infos,
             base_logical: &base_logical,
@@ -492,11 +492,13 @@ fn rust_module_overrides(
             valid: vec![false; files.len()],
         };
         let mut infos = Vec::with_capacity(files.len());
+        let mut logical_paths = Vec::with_capacity(files.len());
         for file in 0..files.len() {
-            let (info, _, _) = resolver.resolve(file);
+            let (info, logical, _) = resolver.resolve(file);
             infos.push(info);
+            logical_paths.push(logical);
         }
-        (infos, resolver.valid)
+        (infos, logical_paths, resolver.valid)
     };
 
     let mut path_target_files = HashSet::new();
@@ -519,13 +521,15 @@ fn rust_module_overrides(
             continue;
         }
         path_target_files.insert(target);
-        if valid.get(target).copied().unwrap_or(false)
-            && let Some(info) = infos.get(target)
+        if valid.get(reference.source).copied().unwrap_or(false)
+            && let (Some(parent), Some(logical)) = (
+                infos.get(reference.source),
+                logical_paths.get(reference.source),
+            )
         {
-            path_claims
-                .entry(info.key.clone())
-                .or_default()
-                .insert(target);
+            let logical = append_rust_module_path(logical, reference.module_suffix);
+            let key = format!("{}::{logical}", parent.method_scope);
+            path_claims.entry(key).or_default().insert(target);
         }
     }
     for targets in path_claims.values().filter(|targets| targets.len() > 1) {
@@ -1020,5 +1024,25 @@ mod tests {
         for (path, want) in cases {
             assert_eq!(rust_module_path(path), want, "{path}");
         }
+    }
+
+    #[test]
+    fn rust_alias_claims_do_not_resolve_to_layout_decoys() -> std::io::Result<()> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/resolve/rust-path-alias-decoys");
+        let graph = super::super::tests::graph_of(&root)?;
+        for alias in ["first", "second"] {
+            let decoy = format!("file:src/{alias}.rs::Thing");
+            assert!(
+                graph.symbols.iter().any(|symbol| symbol.qualified == decoy),
+                "missing quarantined decoy {decoy}"
+            );
+            let wrong = format!("{alias}::Thing");
+            assert!(
+                graph.symbols.iter().all(|symbol| symbol.qualified != wrong),
+                "a layout decoy acquired claimed module {wrong}"
+            );
+        }
+        Ok(())
     }
 }

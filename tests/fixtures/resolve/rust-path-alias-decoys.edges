@@ -1,0 +1,3 @@
+file:src/lib.rs -imports-> file:src/shared.rs @1
+rust_path_alias_decoys::first -references-> file:src/shared.rs @1
+rust_path_alias_decoys::second -references-> file:src/shared.rs @3

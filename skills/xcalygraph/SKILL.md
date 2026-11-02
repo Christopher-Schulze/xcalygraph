@@ -39,7 +39,7 @@ Flags: `-p GLOB` (paths, gitignore syntax, repeatable), `-l go,rust` (languages)
 
 - `<line> <signature>` lines group under file paths.
 - Decode escaped paths/commands before use.
-- Rust `#[path]`: target-aware exact in-root file and declared `mod` path; no same-name fallback.
+- Rust `#[path]`: exact file; shared-file aliases unresolved, no same-name fallback.
 - Map JSON: counts, task runs, API sig/handlers, cycle/layer members, env path/line; audit: name/path/line, drift kind/status.
 - Card: `m` member, `f` fields, `^` supertype, `v` implementation, `<` caller, `>` definition, `t` test, `t2` test via caller, `e` env, `!` notice.
 - `?`=inferred edges/impact; Julia Base uses typed args; Rust closure calls use generic trait bounds; `--exact` drops inferred edges/runs.
