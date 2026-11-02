@@ -220,6 +220,53 @@ fn builtin(name: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn interface_properties_keep_their_owner_and_declared_types() {
+        use crate::domain::corpus::FileRecord;
+        use crate::domain::role::Role;
+
+        let source = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/typescript-interface-properties.ts"
+        ));
+        let record = FileRecord {
+            path: "interface-properties.ts".to_owned(),
+            size: source.len() as u64,
+            mtime_ns: 0,
+            identity: None,
+            hash: 0,
+            role: Role::Src,
+            file_type: Some(FileType::TypeScript),
+        };
+        let facts = crate::extract::extract(&record, source);
+        let fields = |name: &str| {
+            facts
+                .fields
+                .iter()
+                .find(|fields| facts.symbols[fields.owner as usize].name == name)
+        };
+        let config = fields("Config");
+        assert!(config.is_some(), "Config properties were not captured");
+        if let Some(config) = config {
+            assert_eq!(config.names, ["width", "height", "nested", "choice"]);
+            assert_eq!(config.types[0..2], ["number", "number"]);
+            assert_eq!(config.types[3], "");
+            assert!(
+                !config
+                    .names
+                    .iter()
+                    .any(|name| name == "inner" || name == "run" || name == "display-name")
+            );
+        }
+        let other = fields("Other");
+        assert!(other.is_some(), "Other properties were not captured");
+        if let Some(other) = other {
+            assert_eq!(other.names, ["enabled"]);
+            assert_eq!(other.types, ["boolean"]);
+        }
+        assert!(fields("Unrelated").is_some());
+    }
+
     fn rows(statement: &str) -> Vec<(String, String, Option<String>, bool)> {
         expand_import(statement, 1, false)
             .into_iter()

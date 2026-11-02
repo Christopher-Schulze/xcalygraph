@@ -107,6 +107,8 @@ Rust source files loaded under multiple `#[path]` module names retain their exac
 
 Python structural Protocol matches are inferred only for undecorated top-level classes with simple method-only bodies, a direct unshadowed `from typing import Protocol` or `typing_extensions` import, and matching complete method-header tokens, including literal contents. Attributes, inherited requirements, decorators and dynamic class bodies are not inferred; this is not a full Python type check.
 
+TypeScript interface cards include direct identifier-named properties, including optional and readonly properties. Only simple named property types are used for receiver resolution; composite types remain unknown. Nested object members and computed or string-literal keys are not treated as direct properties of the enclosing interface.
+
 Resolution order for all of them is `docs/spec.md` section 6: lexical scope, imports, qualified names, same module, member calls through receiver types (self, declared bindings, constructor and call results, field chains), interface dispatch to non-test implementations (inferred, max 10), overloads narrowed by argument count (the single overload taking the count is exact, several are inferred), unique-name fallback within the own and imported modules (root-wide only for Rust methods), else an ambiguity count. A qualifier chain whose head is an external import (`std.heap.ArenaAllocator.init`) stays external. Test symbols are targets only for test callers.
 
 ## Agent skill
