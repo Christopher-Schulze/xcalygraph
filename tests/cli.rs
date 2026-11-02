@@ -1782,6 +1782,62 @@ fn every_query_stage_obeys_the_shared_filters() -> TestResult {
 }
 
 #[test]
+fn filtered_cycles_are_recomputed_for_map_and_audit() -> TestResult {
+    let dir = TempDir::new("filtered-cycles")?;
+    let root = dir.0.join("repo");
+    let index = dir.0.join("index");
+    dir.write("repo/go.mod", "module example.com/app\n\ngo 1.23\n")?;
+    for (path, source) in [
+        (
+            "repo/a/a.go",
+            "package a\n\nimport \"example.com/app/b\"\n\nfunc A() { b.B() }\n",
+        ),
+        (
+            "repo/b/b.go",
+            "package b\n\nimport \"example.com/app/c\"\n\nfunc B() { c.C() }\n",
+        ),
+        (
+            "repo/c/c.go",
+            "package c\n\nimport \"example.com/app/a\"\n\nfunc C() { a.A() }\n",
+        ),
+        (
+            "repo/d/d.go",
+            "package d\n\nimport \"example.com/app/e\"\n\nfunc D() { e.E() }\n",
+        ),
+        (
+            "repo/e/e.go",
+            "package e\n\nimport \"example.com/app/d\"\n\nfunc E() { d.D() }\n",
+        ),
+    ] {
+        dir.write(path, source)?;
+    }
+    git(&root, &["init", "-q"])?;
+
+    for command in ["map", "audit"] {
+        for json in [false, true] {
+            let mut complete = vec![command];
+            let mut filtered = vec![command, "-p", "a/", "-p", "c/", "-p", "d/", "-p", "e/"];
+            if json {
+                complete.push("--json");
+                filtered.push("--json");
+            }
+            let complete = run_in(&root, &index, &complete)?;
+            assert_eq!(complete.status.code(), Some(0), "{command}: complete graph");
+            let complete = String::from_utf8(complete.stdout)?;
+            assert!(complete.contains("a <-> b <-> c"), "{command}: {complete}");
+            assert!(complete.contains("d <-> e"), "{command}: {complete}");
+
+            let filtered = run_in(&root, &index, &filtered)?;
+            assert_eq!(filtered.status.code(), Some(0), "{command}: filtered graph");
+            let filtered = String::from_utf8(filtered.stdout)?;
+            assert!(!filtered.contains("a <-> c"), "{command}: {filtered}");
+            assert!(filtered.contains("d <-> e"), "{command}: {filtered}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn show_and_audit_results_obey_shared_filters() -> TestResult {
     let dir = TempDir::new("remaining-filters-show-audit")?;
     let root = dir.0.join("repo");

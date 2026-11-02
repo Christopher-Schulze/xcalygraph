@@ -1,7 +1,7 @@
 //! `audit`: dead code, unused exports, cycles, stale doc references, env drift, hidden coupling
 //! and hotspots (`docs/spec.md` sections 6 and 7.7).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::output::{Value, Writer};
 use super::{Filter, Index, Node};
@@ -292,24 +292,10 @@ fn implements_supertype(index: &Index, node: u32, owners: &HashMap<u32, u32>) ->
 }
 
 fn cycles(index: &Index, filter: &Filter) -> Vec<String> {
-    let mut groups: BTreeMap<u32, Vec<&str>> = BTreeMap::new();
     let included = super::map::included_modules(index, filter);
-    for (id, module) in index.derived.modules().iter().enumerate() {
-        if !included[id] {
-            continue;
-        }
-        groups
-            .entry(module.cycle)
-            .or_default()
-            .push(index.string(module.name));
-    }
-    let mut lines: Vec<String> = groups
-        .into_values()
-        .filter(|members| members.len() > 1)
-        .map(|mut members| {
-            members.sort_unstable();
-            members.join(" <-> ")
-        })
+    let mut lines: Vec<String> = super::map::cycle_groups(index, &included)
+        .into_iter()
+        .map(|members| members.join(" <-> "))
         .collect();
     lines.sort();
     lines

@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use super::output::{Value, Writer, json_object};
 use super::{Filter, Index};
 use crate::domain::facts::{EnvSource, FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST, SymKind};
-use crate::domain::graph::EdgeKind;
+use crate::domain::graph::{EdgeKind, ModuleEdge};
 use crate::domain::role::Role;
 
 const MODULE_LINES: usize = 40;
@@ -407,21 +407,9 @@ pub(super) fn included_modules(index: &Index, filter: &Filter) -> Vec<bool> {
 }
 
 fn cycles(index: &Index, included: &[bool]) -> Vec<(String, String)> {
-    let mut groups: BTreeMap<u32, Vec<&str>> = BTreeMap::new();
-    for (id, module) in index.derived.modules().iter().enumerate() {
-        if !included[id] {
-            continue;
-        }
-        groups
-            .entry(module.cycle)
-            .or_default()
-            .push(index.string(module.name));
-    }
-    let mut lines: Vec<(String, String)> = groups
-        .into_values()
-        .filter(|members| members.len() > 1)
-        .map(|mut members| {
-            members.sort_unstable();
+    let mut lines: Vec<(String, String)> = cycle_groups(index, included)
+        .into_iter()
+        .map(|members| {
             let text = members.join(" <-> ");
             let record = json_object(&[
                 ("t", Value::Str("cycle")),
@@ -433,6 +421,44 @@ fn cycles(index: &Index, included: &[bool]) -> Vec<(String, String)> {
         .collect();
     lines.sort();
     lines
+}
+
+/// Strongly connected groups in the selected module subgraph, ordered within each group.
+pub(super) fn cycle_groups<'a>(index: &'a Index, included: &[bool]) -> Vec<Vec<&'a str>> {
+    let modules = index.derived.modules();
+    let components = if included.iter().all(|&selected| selected) {
+        modules.iter().map(|module| module.cycle).collect()
+    } else {
+        let edges: Vec<ModuleEdge> = index
+            .derived
+            .module_edges()
+            .iter()
+            .filter(|edge| included[edge.source as usize] && included[edge.target as usize])
+            .map(|edge| ModuleEdge {
+                source: edge.source,
+                target: edge.target,
+                count: edge.count,
+            })
+            .collect();
+        crate::resolve::derive::strongly_connected(modules.len(), &edges)
+    };
+    let mut groups: BTreeMap<u32, Vec<&str>> = BTreeMap::new();
+    for (id, module) in modules.iter().enumerate() {
+        if included[id] {
+            groups
+                .entry(components[id])
+                .or_default()
+                .push(index.string(module.name));
+        }
+    }
+    groups
+        .into_values()
+        .filter(|members| members.len() > 1)
+        .map(|mut members| {
+            members.sort_unstable();
+            members
+        })
+        .collect()
 }
 
 /// Modules per layer, top layer first; layer 0 has no dependencies inside the root.
