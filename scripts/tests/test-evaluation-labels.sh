@@ -116,6 +116,40 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
         (validation_tools / name).symlink_to(executable)
     validation_environment = dict(environment, PATH=str(validation_tools), LC_ALL="C")
     assert shutil.which("cargo", path=validation_environment["PATH"]) is None
+    alias = work / "repo-alias"
+    alias.symlink_to(root, target_is_directory=True)
+    alias_environment = dict(validation_environment, PWD=str(alias))
+    alias_entry = alias / "scripts/benchmarks/run-evaluation.sh"
+    alias_validation = subprocess.run(["bash", str(alias_entry), "--set", "../../../.cache/cases", "--validate"],
+                                      cwd=alias, env=alias_environment, capture_output=True, text=True)
+    assert alias_validation.returncode == 0, alias_validation.stderr + alias_validation.stdout
+    assert str(alias) in alias_validation.stdout, alias_validation.stdout
+    restored_metadata = json.loads((frozen.parent / "snapshot.json").read_text())
+    assert restored_metadata == metadata
+
+    (root / "changed.go").write_text("package sample\nfunc Changed() {}\n")
+    subprocess.run(["git", "-C", str(root), "add", "changed.go"], env=environment, check=True)
+    subprocess.run(["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "commit", "-qm", "different source snapshot"], env=environment, check=True)
+    changed_commit = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], env=environment,
+                                    capture_output=True, text=True, check=True).stdout.strip()
+    changed = subprocess.run(["bash", str(helper), str(root), str(root / ".cache/corpus-snapshots"), "--graphify"],
+                             env=environment, capture_output=True, text=True, check=True)
+    changed_source = Path(changed.stdout.strip())
+    changed_metadata = json.loads((changed_source.parent / "snapshot.json").read_text())
+    assert changed_metadata["source_sha256"] != metadata["source_sha256"]
+    different_corpus = dict(manifest["corpora"][0], commit=changed_commit,
+                            snapshot=str(changed_source.relative_to(root)))
+    different_manifest = dict(manifest, corpora=[different_corpus])
+    different_manifest_path = cases_dir / "different-snapshot.json"
+    different_manifest_path.write_text(json.dumps(different_manifest))
+    different_validation = subprocess.run(
+        ["bash", str(alias / "scripts/benchmarks/evaluate-sealed.sh"),
+         str(alias / different_manifest_path.relative_to(root)), "validate", str(binary)],
+        cwd=alias, env=alias_environment, capture_output=True, text=True)
+    assert different_validation.returncode != 0 and "frozen source/tool identity mismatch" in different_validation.stderr, \
+        different_validation.stderr + different_validation.stdout
+
     validation_args = ["bash", str(entry), "--set", "../../../.cache/cases", "--validate"]
     entry_validation = subprocess.run(validation_args, env=validation_environment, capture_output=True, text=True)
     assert entry_validation.returncode == 0, entry_validation.stderr + entry_validation.stdout

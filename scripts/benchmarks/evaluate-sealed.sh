@@ -70,7 +70,7 @@ def restore_source(repo, work, corpus, environment):
     result = subprocess.run(["bash", str(repo / "scripts/utils/prepare-corpus.sh"), str(target),
                              str(repo / ".cache/corpus-snapshots"), "--graphify"],
                             env=environment, capture_output=True, text=True, check=True)
-    if Path(result.stdout.strip()) != source:
+    if not Path(result.stdout.strip()).samefile(source):
         raise ValueError("pinned sources do not reproduce the frozen identity: " + name)
     return source
 
