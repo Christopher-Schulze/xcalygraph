@@ -32,12 +32,13 @@ pub fn search(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
     let exact: HashSet<u32> = super::names::lookup(index, filter, name)
         .into_iter()
         .filter(|&node| matches!(index.node(node), Node::Symbol(_)))
+        .map(|node| index.derived.interface_canonical(node))
         .collect();
     if exact.is_empty() {
         return Vec::new();
     }
     let mut hits = search_terms(index, filter, name);
-    hits.retain(|hit| exact.contains(&hit.node));
+    hits.retain(|hit| exact.contains(&index.derived.interface_canonical(hit.node)));
     hits
 }
 
@@ -225,6 +226,31 @@ fn search_terms(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
             )
         })
         .collect();
+    if !derived.interface_groups().is_empty() {
+        let mut positions: HashMap<u32, usize> = HashMap::new();
+        let mut distinct: Vec<(Hit, u64, u32)> = Vec::with_capacity(hits.len());
+        for entry in hits {
+            let node = entry.0.node;
+            if derived
+                .interface_groups()
+                .binary_search_by_key(&node, |pair| pair[0])
+                .is_err()
+            {
+                distinct.push(entry);
+                continue;
+            }
+            let canonical = derived.interface_canonical(node);
+            if let Some(&position) = positions.get(&canonical) {
+                if entry.0.score > distinct[position].0.score {
+                    distinct[position] = entry;
+                }
+            } else {
+                positions.insert(canonical, distinct.len());
+                distinct.push(entry);
+            }
+        }
+        hits = distinct;
+    }
     // Diversity is independent across file/evidence groups; order only within each group.
     let order_in_file = |(a, a_evidence, _): &(Hit, u64, u32),
                          (b, b_evidence, _): &(Hit, u64, u32)| {

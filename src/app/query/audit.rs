@@ -331,6 +331,7 @@ fn unreferenced(
     let symbols = index.derived.symbols();
     let mut dead = Vec::new();
     let mut unused = Vec::new();
+    let mut seen_interfaces = HashSet::new();
     for (id, symbol) in symbols.iter().enumerate() {
         let node = id as u32;
         let kind = symbol.kind();
@@ -359,21 +360,38 @@ fn unreferenced(
         {
             continue;
         }
-        let incoming = index.derived.incoming(node);
+        let canonical = index.derived.interface_canonical(node);
+        if (canonical != node
+            || index
+                .derived
+                .interface_groups()
+                .binary_search_by_key(&node, |pair| pair[0])
+                .is_ok())
+            && !seen_interfaces.insert(canonical)
+        {
+            continue;
+        }
+        let parts = || {
+            index
+                .derived
+                .interface_parts(node)
+                .filter(|&part| filter.node(index, part))
+        };
+        let incoming = || parts().flat_map(|part| index.derived.incoming(part));
         if symbol.exported == 0 {
             // A name with ambiguous references may be one of their targets; a type whose members
             // are used from outside (`Type.CONSTANT`, static imports) is alive.
-            if incoming.is_empty()
+            if incoming().next().is_none()
                 && !index.derived.is_ambiguous_name(index.string(symbol.name))
                 && !(kind.is_type()
-                    && (members_used_outside(index, node) || has_entry_member(index, node)))
+                    && parts().any(|part| members_used_outside(index, part) || has_entry_member(index, part)))
             {
                 dead.push(node);
             }
         } else if kind != SymKind::Method
             && export_semantics(index.file_of(node).file_type())
             // A framework route (`page /x`, `GET /api/x`) using it is its outside caller.
-            && incoming.iter().all(|edge| {
+            && incoming().all(|edge| {
                 index.file_of(edge.node).path == index.file_of(node).path
                     && !matches!(index.node(edge.node), Node::Symbol(caller) if caller.kind() == SymKind::Op)
             })

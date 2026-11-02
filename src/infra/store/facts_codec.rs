@@ -407,17 +407,48 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
         let index = decoder.var_u32()?;
         let key = (kind, index);
         let limit = match kind {
-            SourceIdentityKind::Symbol => facts.symbols.len(),
+            SourceIdentityKind::Symbol
+            | SourceIdentityKind::InterfaceHeader
+            | SourceIdentityKind::InterfaceMembers
+            | SourceIdentityKind::InterfaceGroup => facts.symbols.len(),
             SourceIdentityKind::Reference => facts.refs.len(),
         };
         if usize::try_from(index).map_or(true, |index| index >= limit)
             || previous.is_some_and(|previous| previous >= key)
+            || (matches!(
+                kind,
+                SourceIdentityKind::InterfaceHeader
+                    | SourceIdentityKind::InterfaceMembers
+                    | SourceIdentityKind::InterfaceGroup
+            ) && facts
+                .symbols
+                .get(index as usize)
+                .is_none_or(|symbol| symbol.kind != Some(SymKind::Iface)))
         {
             return Err(DecodeError("source identity index"));
         }
         let identity = decoder.string()?;
         if identity.is_empty() {
             return Err(DecodeError("empty source identity"));
+        }
+        if kind == SourceIdentityKind::InterfaceGroup {
+            let canonical = identity
+                .parse::<u32>()
+                .map_err(|_| DecodeError("interface group"))?;
+            let owner = &facts.symbols[index as usize];
+            let target = facts
+                .symbols
+                .get(canonical as usize)
+                .ok_or(DecodeError("interface group"))?;
+            if canonical > index
+                || target.kind != Some(SymKind::Iface)
+                || owner.name != target.name
+                || owner.exported != target.exported
+                || owner.parent.is_some()
+                || target.parent.is_some()
+            {
+                return Err(DecodeError("interface group"));
+            }
         }
         identities.push(SourceIdentity {
             kind,
@@ -582,6 +613,41 @@ mod tests {
         assert_eq!(decode(&mut decoder)?, facts);
         assert_eq!(decode(&mut decoder)?, Facts::default());
         assert!(decoder.is_done());
+        Ok(())
+    }
+
+    #[test]
+    fn interface_header_identity_round_trips_only_for_interface_symbols() -> DecodeResult<()> {
+        let mut facts = sample();
+        facts.symbols[0].kind = Some(SymKind::Iface);
+        let mut identities = facts
+            .source_identities
+            .as_deref()
+            .unwrap_or_default()
+            .to_vec();
+        identities.push(SourceIdentity {
+            kind: SourceIdentityKind::InterfaceHeader,
+            index: 0,
+            identity: "interface_declaration:6:Config".to_owned(),
+        });
+        identities.push(SourceIdentity {
+            kind: SourceIdentityKind::InterfaceMembers,
+            index: 0,
+            identity: "interface_members:p1:x1:y".to_owned(),
+        });
+        identities.push(SourceIdentity {
+            kind: SourceIdentityKind::InterfaceGroup,
+            index: 0,
+            identity: "0".to_owned(),
+        });
+        facts.source_identities = Some(identities.into_boxed_slice());
+        let mut encoder = Encoder::default();
+        encode(&mut encoder, &facts);
+        assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
+        facts.symbols[0].kind = Some(SymKind::Struct);
+        let mut invalid = Encoder::default();
+        encode(&mut invalid, &facts);
+        assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
         Ok(())
     }
 

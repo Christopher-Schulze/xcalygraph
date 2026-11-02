@@ -33,6 +33,10 @@ pub fn shortest(
     to: u32,
     undirected: bool,
 ) -> Option<Vec<Hop>> {
+    let requested_from = from;
+    let requested_to = to;
+    let from = index.derived.interface_canonical(from);
+    let to = index.derived.interface_canonical(to);
     // node -> (inferred hops so far, predecessor, reversed, exact)
     let mut best: HashMap<u32, (u32, u32, bool, bool)> = HashMap::new();
     best.insert(from, (0, from, false, true));
@@ -42,35 +46,46 @@ pub fn shortest(
         let mut found: HashMap<u32, (u32, u32, bool, bool)> = HashMap::new();
         for &node in &layer {
             let inferred_so_far = best[&node].0;
-            let forward = index
-                .derived
-                .outgoing(node)
-                .iter()
-                .map(|edge| (edge, false));
-            let backward = index
-                .derived
-                .incoming(node)
-                .iter()
-                .filter(|_| undirected)
-                .map(|edge| (edge, true));
+            let parts = || {
+                index
+                    .derived
+                    .interface_parts(node)
+                    .filter(|&part| filter.includes(index, part))
+            };
+            let forward = parts().flat_map(|part| {
+                index
+                    .derived
+                    .outgoing(part)
+                    .iter()
+                    .map(|edge| (edge, false))
+            });
+            let backward = parts().flat_map(|part| {
+                index
+                    .derived
+                    .incoming(part)
+                    .iter()
+                    .filter(|_| undirected)
+                    .map(|edge| (edge, true))
+            });
             for (edge, reversed) in forward.chain(backward) {
+                let target = index.derived.interface_canonical(edge.node);
                 if !KINDS.contains(&edge.kind())
                     || !filter.edge(edge)
-                    || best.contains_key(&edge.node)
+                    || best.contains_key(&target)
                     || !filter.includes(index, edge.node)
                 {
                     continue;
                 }
                 let exact = edge.is_exact() && !reversed;
                 let candidate = (inferred_so_far + u32::from(!exact), node, reversed, exact);
-                match found.get(&edge.node) {
+                match found.get(&target) {
                     Some(current) if current.0 <= candidate.0 => {}
                     Some(_) => {
-                        found.insert(edge.node, candidate);
+                        found.insert(target, candidate);
                     }
                     None => {
-                        found.insert(edge.node, candidate);
-                        next.push(edge.node);
+                        found.insert(target, candidate);
+                        next.push(target);
                     }
                 }
             }
@@ -98,6 +113,12 @@ pub fn shortest(
         exact: true,
     });
     hops.reverse();
+    if let Some(first) = hops.first_mut() {
+        first.node = requested_from;
+    }
+    if let Some(last) = hops.last_mut() {
+        last.node = requested_to;
+    }
     Some(hops)
 }
 

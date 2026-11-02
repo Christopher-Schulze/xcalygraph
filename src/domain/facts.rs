@@ -240,12 +240,18 @@ fn take_length_prefixed(source: &str) -> Option<(&str, &str)> {
     Some(payload.split_at(length))
 }
 
-/// Kind of local fact that has an exact language-level callable identity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// Kind of local fact with a complete source-backed identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum SourceIdentityKind {
     Symbol = 1,
     Reference,
+    /// Full TypeScript interface header, not a claim that declarations are merge-compatible.
+    InterfaceHeader,
+    /// Complete supported TypeScript interface member syntax for compatibility checks.
+    InterfaceMembers,
+    /// Verified same-file group, identified by its first local symbol index.
+    InterfaceGroup,
 }
 
 impl SourceIdentityKind {
@@ -253,12 +259,15 @@ impl SourceIdentityKind {
         match value {
             value if value == Self::Symbol as u8 => Some(Self::Symbol),
             value if value == Self::Reference as u8 => Some(Self::Reference),
+            value if value == Self::InterfaceHeader as u8 => Some(Self::InterfaceHeader),
+            value if value == Self::InterfaceMembers as u8 => Some(Self::InterfaceMembers),
+            value if value == Self::InterfaceGroup as u8 => Some(Self::InterfaceGroup),
             _ => None,
         }
     }
 }
 
-/// Sparse exact callable identity, indexed into the local symbol or reference vector.
+/// Sparse exact source identity, indexed into the local symbol or reference vector.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceIdentity {
     pub kind: SourceIdentityKind,

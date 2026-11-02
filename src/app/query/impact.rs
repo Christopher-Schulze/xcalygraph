@@ -7,7 +7,7 @@ use super::output::{Value, Writer};
 use super::{Filter, Index, Node};
 use crate::app::error::AppError;
 use crate::domain::corpus::FileRecord as CorpusRecord;
-use crate::domain::facts::{FLAG_TEST, Facts, RefKind, SymKind};
+use crate::domain::facts::{FLAG_TEST, Facts, RefKind, SourceIdentityKind, SymKind};
 use crate::domain::filetype::FileType;
 use crate::domain::graph::EdgeKind;
 use crate::extract;
@@ -52,6 +52,8 @@ struct Definition {
     key: DefinitionKey,
     flags: u8,
     signature: Option<String>,
+    /// Complete supported interface members, used only to distinguish repeated declarations.
+    interface_members: Option<String>,
     line: u32,
     matched: bool,
     ambiguous: bool,
@@ -523,6 +525,11 @@ fn definitions(facts: &Facts, identities: &[Option<String>]) -> Option<Vec<Defin
                 },
                 flags: symbol.flags,
                 signature: identities.get(index).cloned().flatten(),
+                interface_members: u32::try_from(index).ok().and_then(|index| {
+                    facts
+                        .source_identity(SourceIdentityKind::InterfaceMembers, index)
+                        .map(str::to_owned)
+                }),
                 line: symbol.line,
                 matched: false,
                 ambiguous: false,
@@ -907,19 +914,23 @@ fn match_local(previous: &mut [Definition], current: &mut [Definition]) {
             let Some(signature) = previous[old_index].signature.as_deref() else {
                 continue;
             };
+            let members = previous[old_index].interface_members.as_deref();
             if old_indices
                 .iter()
-                .filter(|&&index| previous[index].signature.as_deref() == Some(signature))
+                .filter(|&&index| {
+                    previous[index].signature.as_deref() == Some(signature)
+                        && previous[index].interface_members.as_deref() == members
+                })
                 .take(2)
                 .count()
                 != 1
             {
                 continue;
             }
-            let mut candidates = new_indices
-                .iter()
-                .copied()
-                .filter(|&index| current[index].signature.as_deref() == Some(signature));
+            let mut candidates = new_indices.iter().copied().filter(|&index| {
+                current[index].signature.as_deref() == Some(signature)
+                    && current[index].interface_members.as_deref() == members
+            });
             let (Some(new_index), None) = (candidates.next(), candidates.next()) else {
                 continue;
             };
@@ -1311,6 +1322,7 @@ fn render(
     let target_nodes: BTreeSet<u32> = targets
         .iter()
         .flat_map(|target| std::iter::once(target.node).chain(target.seeds.iter().copied()))
+        .flat_map(|node| index.derived.interface_parts(node))
         .collect();
     // Reverse BFS over dependent edges, ordered by depth, then rank. A dependent is exact only
     // when some shortest chain to a target consists of exact edges; within one depth an exact

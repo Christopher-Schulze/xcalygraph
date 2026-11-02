@@ -135,3 +135,332 @@ fn typescript_numeric_keys_are_canonical_in_the_persisted_card() -> Result<(), B
     );
     Ok(())
 }
+
+#[test]
+fn same_file_interfaces_merge_without_losing_declaration_locations() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    fs::create_dir(fixture.0.join("repo"))?;
+    for (name, source) in [
+        (
+            "model.ts",
+            &include_bytes!("fixtures/typescript-merge-model.ts")[..],
+        ),
+        (
+            "other.ts",
+            &include_bytes!("fixtures/typescript-merge-other.ts")[..],
+        ),
+        (
+            "invalid.ts",
+            &include_bytes!("fixtures/typescript-merge-invalid.ts")[..],
+        ),
+    ] {
+        fs::write(fixture.0.join("repo").join(name), source)?;
+    }
+    for name in ["model.Config", "model.ts:1", "model.ts:2"] {
+        let output = fixture.run(&["show", name])?;
+        let text = String::from_utf8(output.stdout)?;
+        assert!(output.status.success(), "{name}: {text}");
+        for required in ["width", "height", "model.ts:1", "model.ts:2"] {
+            assert!(text.contains(required), "{name} lacks {required}: {text}");
+        }
+        assert!(!text.contains("other.ts"), "{text}");
+    }
+    for name in ["invalid.Broken", "invalid.Different"] {
+        let output = fixture.run(&["show", name])?;
+        assert_eq!(output.status.code(), Some(3), "{name}");
+    }
+    let other = fixture.run(&["show", "Config", "-p", "other.ts"])?;
+    assert!(other.status.success());
+    let other = String::from_utf8(other.stdout)?;
+    assert!(
+        other.contains("other") && !other.contains("width"),
+        "{other}"
+    );
+    for caller in ["useService", "useImported"] {
+        let typed = fixture.run(&["show", caller, "--read-only"])?;
+        assert!(typed.status.success());
+        let typed = String::from_utf8(typed.stdout)?;
+        assert!(typed.contains("> model.Service.run "), "{caller}: {typed}");
+        assert!(!typed.contains("OtherService.run"), "{caller}: {typed}");
+    }
+    let second_part = fixture.run(&["show", "model.ts:8", "--read-only"])?;
+    assert!(second_part.status.success());
+    let second_part = String::from_utf8(second_part.stdout)?;
+    assert!(
+        second_part
+            .find("f extra")
+            .zip(second_part.find("model.ts:7"))
+            .is_some_and(|(fields, next)| fields < next),
+        "fields must follow their own declaration: {second_part}"
+    );
+    for caller in ["useService", "useImported"] {
+        assert!(
+            second_part.contains(caller),
+            "show second declaration lacks {caller}: {second_part}"
+        );
+    }
+    let method = fixture.run(&["show", "useWorker", "--read-only"])?;
+    assert!(method.status.success());
+    let method = String::from_utf8(method.stdout)?;
+    assert!(method.contains("> model.Worker.finish "), "{method}");
+    let overload = fixture.run(&["show", "useQuery", "--exact", "--read-only"])?;
+    assert!(overload.status.success());
+    let overload = String::from_utf8(overload.stdout)?;
+    assert!(
+        overload.contains("> model.Query.execute model.ts:14"),
+        "{overload}"
+    );
+    for name in ["model.Services", "model.ts:7", "model.ts:8"] {
+        let impact = fixture.run(&["impact", name, "--read-only"])?;
+        assert!(
+            impact.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&impact.stderr)
+        );
+        let impact = String::from_utf8(impact.stdout)?;
+        for caller in ["useService", "useImported"] {
+            assert!(
+                impact.contains(caller),
+                "impact {name} lacks {caller}: {impact}"
+            );
+        }
+    }
+    let path = fixture.run(&["path", "useService", "model.ts:8", "--exact", "--read-only"])?;
+    assert!(
+        path.status.success(),
+        "{}",
+        String::from_utf8_lossy(&path.stderr)
+    );
+    let path = String::from_utf8(path.stdout)?;
+    assert!(
+        path.contains("useService") && path.contains("model.ts:8"),
+        "{path}"
+    );
+    let found = fixture.run(&["find", "Services", "--json", "--read-only"])?;
+    assert!(found.status.success());
+    let found = String::from_utf8(found.stdout)?;
+    assert_eq!(
+        found.matches("\"name\":\"model.Services\"").count(),
+        1,
+        "{found}"
+    );
+    let context = fixture.run(&["ctx", "Services", "--json", "--read-only"])?;
+    assert!(context.status.success());
+    let context = String::from_utf8(context.stdout)?;
+    assert_eq!(
+        context.matches("\"name\":\"model.Services\"").count(),
+        1,
+        "{context}"
+    );
+    for command in ["find", "ctx"] {
+        let exact = fixture.run(&[
+            command,
+            "exact symbol model.Services",
+            "--json",
+            "--read-only",
+        ])?;
+        assert!(
+            exact.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&exact.stderr)
+        );
+        let exact = String::from_utf8(exact.stdout)?;
+        assert_eq!(
+            exact.matches("\"name\":\"model.Services\"").count(),
+            1,
+            "{command}: {exact}"
+        );
+    }
+    let audit = fixture.run(&["audit", "--json", "--read-only"])?;
+    assert!(audit.status.success());
+    let audit = String::from_utf8(audit.stdout)?;
+    for record in audit
+        .lines()
+        .filter(|line| line.contains("\"name\":\"model.Services\""))
+    {
+        assert!(!record.contains("\"rel\":\"unused\""), "{record}");
+    }
+    for (name, section) in [("model.Unused", "unused"), ("model.Private", "dead")] {
+        let matches: Vec<_> = audit
+            .lines()
+            .filter(|line| {
+                line.contains(&format!("\"name\":\"{name}\""))
+                    && line.contains(&format!("\"rel\":\"{section}\""))
+            })
+            .collect();
+        assert_eq!(matches.len(), 1, "{name}: {audit}");
+    }
+    let map = fixture.run(&[
+        "map",
+        "--json",
+        "--read-only",
+        "-p",
+        "model.ts",
+        "-p",
+        "other.ts",
+    ])?;
+    assert!(map.status.success());
+    let map = String::from_utf8(map.stdout)?;
+    let hubs: Vec<_> = map
+        .lines()
+        .filter(|line| {
+            line.contains("\"rel\":\"hub\"") && line.contains("\"name\":\"model.Services\"")
+        })
+        .collect();
+    assert_eq!(hubs.len(), 1, "expected one logical hub: {map}");
+    for name in ["Config", "Services", "Worker", "Query", "Unused", "Private"] {
+        let matches = map
+            .lines()
+            .filter(|line| {
+                line.contains("\"rel\":\"hub\"")
+                    && line.contains(&format!("\"name\":\"model.{name}\""))
+            })
+            .count();
+        assert!(matches <= 1, "duplicate {name}: {map}");
+    }
+    Ok(())
+}
+
+#[test]
+fn invalid_interface_group_is_rejected_and_rebuilt() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    fs::create_dir(fixture.0.join("repo"))?;
+    fs::write(
+        fixture.0.join("repo/model.ts"),
+        include_bytes!("fixtures/typescript-merge-model.ts"),
+    )?;
+    assert!(fixture.run(&["show", "model.Services"])?.status.success());
+    let entries = fs::read_dir(fixture.0.join("index"))?.collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(entries.len(), 1);
+    let path = entries[0].path().join("derived");
+    let mut image = fs::read(&path)?;
+    let group_entry = 64 + 20 * 16;
+    let offset = u64::from_le_bytes(image[group_entry..group_entry + 8].try_into()?) as usize;
+    let length = u64::from_le_bytes(image[group_entry + 8..group_entry + 16].try_into()?) as usize;
+    assert!(length >= 8 && offset + length <= image.len());
+    image[offset + 4..offset + 8].copy_from_slice(&u32::MAX.to_le_bytes());
+    let checksum = xxhash_rust::xxh3::xxh3_64(&image[64..]);
+    image[32..40].copy_from_slice(&checksum.to_le_bytes());
+    fs::write(&path, image)?;
+    assert!(
+        !fixture
+            .run(&["show", "model.Services", "--read-only"])?
+            .status
+            .success()
+    );
+    let recovered = fixture.run(&["show", "model.Services"])?;
+    assert!(
+        recovered.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recovered.stderr)
+    );
+    let recovered = String::from_utf8(recovered.stdout)?;
+    assert!(
+        recovered.contains("first") && recovered.contains("extra"),
+        "{recovered}"
+    );
+    Ok(())
+}
+
+#[test]
+fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("model.ts"),
+        include_bytes!("fixtures/typescript-merge-model.ts"),
+    )?;
+    let mut images = Vec::new();
+    let mut answers = Vec::new();
+    for workers in ["1", "4"] {
+        let index = fixture.0.join(format!("index-{workers}"));
+        let run = |args: &[&str]| -> Result<Output, Box<dyn Error>> {
+            Ok(
+                support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+                    .args(args)
+                    .arg("-C")
+                    .arg(&root)
+                    .arg("--index-dir")
+                    .arg(&index)
+                    .env("RAYON_NUM_THREADS", workers)
+                    .output()?,
+            )
+        };
+        let output = run(&["index"])?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let entries = fs::read_dir(&index)?.collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(entries.len(), 1);
+        images.push(fs::read(entries[0].path().join("derived"))?);
+        let answer = run(&["show", "model.Services", "--json", "--read-only"])?;
+        assert!(answer.status.success());
+        answers.push(answer.stdout);
+    }
+    assert_eq!(images[0], images[1]);
+    assert_eq!(answers[0], answers[1]);
+    Ok(())
+}
+
+#[test]
+fn interface_second_part_diff_reaches_all_dependents() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    let source = include_str!("fixtures/typescript-merge-model.ts");
+    fs::write(root.join("model.ts"), source)?;
+    fs::write(
+        root.join("other.ts"),
+        include_bytes!("fixtures/typescript-merge-other.ts"),
+    )?;
+    for args in [
+        &["init", "-q"][..],
+        &["add", "model.ts", "other.ts"],
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+    ] {
+        let output = support::command("git", &fixture.0)
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(fixture.run(&["index"])?.status.success());
+    assert!(source.contains("extra: Service"));
+    fs::write(
+        root.join("model.ts"),
+        source.replace("extra: Service", "extra: OtherService"),
+    )?;
+    let output = fixture.run(&["impact", "--diff"])?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = String::from_utf8(output.stdout)?;
+    for expected in ["model.Services", "useService", "useImported"] {
+        assert!(output.contains(expected), "missing {expected}: {output}");
+    }
+    for unrelated in ["Config", "Worker"] {
+        assert!(
+            !output.contains(unrelated),
+            "unrelated {unrelated}: {output}"
+        );
+    }
+    Ok(())
+}

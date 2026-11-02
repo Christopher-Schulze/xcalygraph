@@ -71,6 +71,6 @@ fi
 echo "prune-cache.sh: removed ${removed} entries, .cache is $((size_kib / 1024)) MiB"
 if (( size_kib > WARN_KIB )); then
   echo "prune-cache.sh: .cache exceeds 3 GiB; largest entries:" >&2
-  du -sk "${CACHE}"/* "${CACHE}"/*/* 2>/dev/null | sort -rn | head -5 \
-    | awk '{ printf "  %d MiB %s\n", $1 / 1024, $2 }' >&2
+  du -sk "${CACHE}"/* "${CACHE}"/*/* 2>/dev/null | sort -rn \
+    | awk 'NR <= 5 { printf "  %d MiB %s\n", $1 / 1024, $2 }' >&2
 fi

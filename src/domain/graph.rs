@@ -176,6 +176,8 @@ pub struct Graph {
     pub externals: Vec<External>,
     pub envs: Vec<EnvSite>,
     pub fields: Vec<FieldList>,
+    /// (physical interface symbol, canonical symbol) pairs, sorted by physical symbol.
+    pub interface_groups: Vec<(u32, u32)>,
     /// (type, member) pairs: methods and associated items of each type, sorted.
     pub members: Vec<(u32, u32)>,
     /// Doc references to missing files or members: (referring node, line, reference text).

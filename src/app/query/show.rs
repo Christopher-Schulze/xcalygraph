@@ -51,6 +51,13 @@ pub fn render(index: &Index, filter: &Filter, node: u32, options: &ShowOptions) 
     header(index, filter, &mut writer, node);
     if let Node::Symbol(_) = index.node(node) {
         members(index, filter, &mut writer, node, cap);
+        for part in index.derived.interface_parts(node) {
+            if part == node || !filter.node(index, part) {
+                continue;
+            }
+            header(index, filter, &mut writer, part);
+            members(index, filter, &mut writer, part, cap);
+        }
         let supertypes = edges(
             index,
             filter,
@@ -357,6 +364,7 @@ fn traverse(
         Direction::In => ("<", "in", &INCOMING),
         Direction::Out => (">", "out", &OUTGOING),
     };
+    let node = index.derived.interface_canonical(node);
     let mut seen: HashSet<u32> = HashSet::from([node]);
     let mut written = 0usize;
     let mut stack: Vec<(u32, usize)> = vec![(node, 0)];
@@ -365,14 +373,22 @@ fn traverse(
         if level >= depth.max(1) {
             continue;
         }
-        let list = match direction {
-            Direction::In => index.derived.incoming(current),
-            Direction::Out => index.derived.outgoing(current),
-        };
-        let found = edges(index, filter, list, kinds);
+        let found: Vec<_> = index
+            .derived
+            .interface_parts(current)
+            .filter(|&part| filter.includes(index, part))
+            .flat_map(|part| {
+                let list = match direction {
+                    Direction::In => index.derived.incoming(part),
+                    Direction::Out => index.derived.outgoing(part),
+                };
+                edges(index, filter, list, kinds)
+            })
+            .collect();
         let mut children = Vec::new();
         for edge in found {
-            if !seen.insert(edge.node) {
+            let target = index.derived.interface_canonical(edge.node);
+            if !seen.insert(target) {
                 continue;
             }
             if written >= cap {
@@ -392,7 +408,7 @@ fn traverse(
                 },
             );
             written += 1;
-            children.push(edge.node);
+            children.push(target);
         }
         for child in children.into_iter().rev() {
             stack.push((child, level + 1));

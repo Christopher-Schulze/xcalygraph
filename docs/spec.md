@@ -221,6 +221,7 @@ Resolution order for a reference, first hit wins:
 8. Otherwise no edge; counted per file as ambiguous.
 
 - Julia Base dispatch: an unqualified builtin call can target source-defined `Base.name` methods when a declared concrete nominal argument type equals the method annotation at the same position or is its subtype through declared supertype edges; any known type mismatch rejects that candidate. At least one known position must match. When all direct call argument types and each matching candidate's formal types are known, retain only non-dominated, most-specific signatures; otherwise retain compatible partial matches as inferred. Unsupported types cannot establish a match; untyped calls emit no edge.
+- TypeScript interface identity: source-proven compatible top-level same-file declarations form one logical type; complete headers and supported members establish compatibility, physical declaration locations remain accessible, unproven declarations stay distinct.
 - Implementation edges: `impl Trait for Type`, `implements`, `extends`, base and conformance lists, categories and extensions: exact; Go: type method set contains every interface method name with equal parameter count: inferred.
 - Overload identity: Swift calls compare external argument labels in source order and may omit only parameters with defaults; calls with trailing closures retain argument-count matching. Objective-C messages compare the complete selector, including every keyword and colon; `@selector(...)` resolves matching methods as inferred references because it has no receiver type.
 - Contract edges: OpenAPI `operationId`, Protobuf rpc and GraphQL field -> handler whose name matches within the implementing type or module: `implements`, inferred.
@@ -363,10 +364,10 @@ Location: `<index-dir>/<root basename>-<XXH3-64 hex of the canonical root path>/
 | `git` | churn, co-change, hotspots keyed by HEAD and analysis version | key changes and git data is requested |
 | `lock` | writer lock | never |
 
-- Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum; format 10 fact records include the source XXH3-128 hash and sparse Swift/Objective-C callable identities; fact shard sections deflated; search postings as delta-varint (node, term frequencies) pairs.
+- Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum; format 12 fact records include the source XXH3-128 hash and sparse source identities; derived records include validated sparse TypeScript interface groups; fact shard sections deflated; search postings as delta-varint (node, term frequencies) pairs.
 - Writes: new exclusively created temp file in the same directory (`O_CREAT|O_EXCL`; an existing entry or symlink is skipped, never opened) -> rename; no fsync; unchanged files untouched; install and update use the same primitive. A checksum mismatch or truncation on open rebuilds that file.
 - Reads: memory-mapped, zero-copy.
-- Listing and safe cleanup also recognize format-7, format-8 and format-9 containers; queries require the current format and writable queries rebuild older indexes.
+- Listing and safe cleanup also recognize format-7 through format-11 containers; queries require the current format and writable queries rebuild older indexes.
 
 ## 10. Skill, install, update
 

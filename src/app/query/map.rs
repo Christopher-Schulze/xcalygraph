@@ -1,6 +1,6 @@
 //! `map`: orientation on an unknown tree (`docs/spec.md` section 7.1).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::output::{OutputFact, Value, Writer, json_object};
 use super::{Filter, Index};
@@ -473,6 +473,10 @@ fn modules(index: &Index, filter: &Filter) -> Vec<MapFact> {
             entry
                 .top
                 .sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+            let mut seen = HashSet::new();
+            entry
+                .top
+                .retain(|&(_, node)| seen.insert(index.derived.interface_canonical(node)));
             let top: Vec<&str> = entry
                 .top
                 .iter()
@@ -618,8 +622,10 @@ fn hubs(index: &Index, filter: &Filter) -> Vec<MapFact> {
         .map(|(id, symbol)| (symbol.rank, id as u32))
         .collect();
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    let mut seen = HashSet::new();
     ranked
         .into_iter()
+        .filter(|&(_, node)| seen.insert(index.derived.interface_canonical(node)))
         .take(SECTION_LINES)
         .map(|(_, node)| MapFact::Symbol(symbol_line(index, node, "hub")))
         .collect()

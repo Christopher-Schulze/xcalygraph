@@ -29,7 +29,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 73;
+pub const RESOLVE_VERSION: u32 = 74;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -48,6 +48,8 @@ struct Index<'a> {
     /// First global symbol id of each file.
     base: Vec<u32>,
     symbols: Vec<GraphSymbol>,
+    /// Physical interface declaration to the first declaration of its verified group.
+    interface_canonical: HashMap<u32, u32>,
     /// Top-level, non-method symbols per (module, name).
     by_module: HashMap<(u32, &'a str), Vec<u32>>,
     /// Methods per (method scope, owner type name, method name).
@@ -282,11 +284,27 @@ impl<'a> Index<'a> {
             .collect();
         go_requires.sort_by(|a, b| b.len().cmp(&a.len()).then(a.cmp(b)));
         go_requires.dedup();
+        let mut interface_canonical = HashMap::default();
+        for (file, facts) in input.facts.iter().enumerate() {
+            let Some(facts) = facts else { continue };
+            for identity in facts.source_identities.as_deref().unwrap_or_default() {
+                if identity.kind == SourceIdentityKind::InterfaceGroup
+                    && let Ok(canonical) = identity.identity.parse::<u32>()
+                    && let (Some(part), Some(canonical)) = (
+                        base[file].checked_add(identity.index),
+                        base[file].checked_add(canonical),
+                    )
+                {
+                    interface_canonical.insert(part, canonical);
+                }
+            }
+        }
         let mut index = Self {
             input,
             modules,
             base,
             symbols,
+            interface_canonical,
             scope_ids,
             package_names,
             go_requires,
@@ -358,6 +376,9 @@ impl<'a> Index<'a> {
             let base = self.base[file];
             for (local, symbol) in facts.symbols.iter().enumerate() {
                 let id = base + local as u32;
+                if self.canonical_interface(id) != id {
+                    continue;
+                }
                 let kind = symbol.kind();
                 let name = symbol.name.as_str();
                 self.by_name.entry(name).or_default().push(id);
@@ -428,20 +449,26 @@ impl<'a> Index<'a> {
                 }
             }
             for fields in &facts.fields {
+                let owner = self.canonical_interface(base + fields.owner);
                 for name in fields.names.iter().filter_map(|name| name.text()) {
-                    self.field_names
-                        .insert((base + fields.owner, name.to_owned()));
+                    self.field_names.insert((owner, name.to_owned()));
                 }
                 for (name, kind) in fields.names.iter().zip(&fields.types) {
                     if !kind.is_empty()
                         && let Some(name) = name.text()
                     {
-                        self.field_types
-                            .insert((base + fields.owner, name), kind.as_str());
+                        self.field_types.insert((owner, name), kind.as_str());
                     }
                 }
             }
         }
+    }
+
+    fn canonical_interface(&self, symbol: u32) -> u32 {
+        self.interface_canonical
+            .get(&symbol)
+            .copied()
+            .unwrap_or(symbol)
     }
 
     fn facts(&self, file: u32) -> Option<&'a Facts> {
@@ -1975,13 +2002,15 @@ impl<'a> Index<'a> {
             return (!types.is_empty()).then_some((types, Confidence::Exact));
         }
         if let Some(facts) = self.facts(file) {
-            let local: Vec<u32> = facts
+            let mut local: Vec<u32> = facts
                 .symbols
                 .iter()
                 .enumerate()
                 .filter(|(_, symbol)| symbol.name == name && symbol.kind().is_type())
-                .map(|(local, _)| self.base[file as usize] + local as u32)
+                .map(|(local, _)| self.canonical_interface(self.base[file as usize] + local as u32))
                 .collect();
+            local.sort_unstable();
+            local.dedup();
             if !local.is_empty() {
                 return Some((local, Confidence::Exact));
             }
@@ -3589,6 +3618,9 @@ impl<'a> Index<'a> {
             let mut found: Vec<(usize, u32)> = Vec::new();
             for (local, symbol) in facts.symbols.iter().enumerate() {
                 let id = base + local as u32;
+                if self.canonical_interface(id) != id {
+                    continue;
+                }
                 if symbol.name != name || !kind_ok(id) || symbol.kind() == SymKind::Method {
                     continue;
                 }
@@ -4721,6 +4753,17 @@ impl<'a> Index<'a> {
                     symbol: base + fields.owner,
                     names: fields.names.clone(),
                 });
+            }
+            for identity in facts.source_identities.as_deref().unwrap_or_default() {
+                if identity.kind == SourceIdentityKind::InterfaceGroup
+                    && let Ok(canonical) = identity.identity.parse::<u32>()
+                    && let (Some(part), Some(canonical)) = (
+                        base.checked_add(identity.index),
+                        base.checked_add(canonical),
+                    )
+                {
+                    graph.interface_groups.push((part, canonical));
+                }
             }
         }
         graph.envs.sort();

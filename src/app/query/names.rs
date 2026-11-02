@@ -10,6 +10,8 @@ use crate::domain::graph::has_qualified_suffix;
 pub fn lookup(index: &Index, filter: &Filter, name: &str) -> Vec<u32> {
     let mut found = lookup_unfiltered(index, filter, name);
     found.retain(|&node| filter.includes(index, node));
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|&node| seen.insert(index.derived.interface_canonical(node)));
     found
 }
 

@@ -5,7 +5,7 @@ description: Code graph CLI for locating definitions, handlers, callers, impleme
 
 # xcalygraph
 
-Local deterministic repository index: symbols, calls, type uses, imports, implementations, tests and env reads. Queries refresh incrementally; answers cite `path:line`.
+Local repository index: symbols, relationships, tests and env reads. Queries refresh incrementally; answers cite `path:line`.
 
 ## When
 
@@ -42,6 +42,7 @@ Flags: `-p GLOB` (paths, gitignore syntax, repeatable), `-l go,rust` (languages)
 - Rust `#[path]`: exact file; shared-file aliases unresolved, no same-name fallback.
 - Map JSON: counts, task runs, API sig/handlers, cycle/layer members, env path/line; audit: name/path/line, drift kind/status.
 - Card: `m` member, `f` fields, `^` supertype, `v` implementation, `<` caller, `>` definition, `t` test, `t2` test via caller, `e` env, `!` notice.
+- Merged interfaces: `show` lists each declaration and its members.
 - Fields: after transport decoding, split on commas outside JSON-quoted names; `\u` preserves unpaired surrogates.
 - `?`=inferred edges/impact; Python Protocols, Julia Base typed args, Rust generic bounds; `--exact` drops inferred edges/runs.
 - `impact` run lines retain Go module/package, Cargo manifest and pytest node-ID context; args are quoted. Unsupported runners emit `t`, no `r`.

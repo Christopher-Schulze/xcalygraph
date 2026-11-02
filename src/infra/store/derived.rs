@@ -160,7 +160,8 @@ mod section {
     pub const MEMBERS: usize = 17;
     pub const STALE: usize = 18;
     pub const AMBIGUOUS: usize = 19;
-    pub const COUNT: usize = 20;
+    pub const INTERFACE_GROUPS: usize = 20;
+    pub const COUNT: usize = 21;
 }
 
 #[derive(Default)]
@@ -347,6 +348,12 @@ pub fn build(graph: &Graph) -> Vec<u8> {
         .map(|name| strings.id(name))
         .collect();
     sections[section::AMBIGUOUS] = bytemuck::cast_slice(&ambiguous).to_vec();
+    let interface_groups: Vec<[u32; 2]> = graph
+        .interface_groups
+        .iter()
+        .map(|&(part, canonical)| [part, canonical])
+        .collect();
+    sections[section::INTERFACE_GROUPS] = bytemuck::cast_slice(&interface_groups).to_vec();
     sections[section::STRINGS] = strings.blob;
     sections[section::STRING_OFFSETS] = bytemuck::cast_slice(&strings.offsets).to_vec();
     let views: Vec<&[u8]> = sections.iter().map(Vec::as_slice).collect();
@@ -579,10 +586,14 @@ impl Derived {
             && derived.cast::<[u32; 2]>(section::MEMBERS).is_some()
             && derived.cast::<[u32; 3]>(section::STALE).is_some()
             && derived.cast::<u32>(section::AMBIGUOUS).is_some()
+            && derived
+                .cast::<[u32; 2]>(section::INTERFACE_GROUPS)
+                .is_some()
             && derived.container.section_count() == section::COUNT
             && derived.forward_offsets().len() == derived.node_count() + 1
             && derived.reverse_offsets().len() == derived.node_count() + 1
-            && derived.lengths().len() == derived.node_count();
+            && derived.lengths().len() == derived.node_count()
+            && derived.valid_interface_groups();
         valid.then_some(derived)
     }
 
@@ -665,6 +676,59 @@ impl Derived {
 
     pub fn fields(&self) -> &[FieldsRecord] {
         self.slice(section::FIELDS)
+    }
+
+    /// Physical interface symbols and their canonical symbols, sorted by physical symbol.
+    pub fn interface_groups(&self) -> &[[u32; 2]] {
+        self.slice(section::INTERFACE_GROUPS)
+    }
+
+    /// Returns the logical identity of a physical interface declaration, or the node itself.
+    pub fn interface_canonical(&self, node: u32) -> u32 {
+        self.interface_groups()
+            .binary_search_by_key(&node, |pair| pair[0])
+            .ok()
+            .map_or(node, |position| self.interface_groups()[position][1])
+    }
+
+    /// Returns all physical declarations in the same proven group, including the given node.
+    pub fn interface_parts(&self, node: u32) -> impl Iterator<Item = u32> + '_ {
+        let canonical = self.interface_canonical(node);
+        let groups = self.interface_groups();
+        let grouped = groups.binary_search_by_key(&node, |pair| pair[0]).is_ok();
+        let groups = if grouped { groups } else { &[] };
+        groups
+            .iter()
+            .filter(move |pair| pair[1] == canonical)
+            .map(|pair| pair[0])
+            .chain((!grouped).then_some(node))
+    }
+
+    fn valid_interface_groups(&self) -> bool {
+        let groups = self.interface_groups();
+        let symbols = self.symbols();
+        if groups.windows(2).any(|pair| pair[0][0] >= pair[1][0]) {
+            return false;
+        }
+        groups.iter().all(|&[part, canonical]| {
+            let (Some(part_symbol), Some(canonical_symbol)) =
+                (symbols.get(part as usize), symbols.get(canonical as usize))
+            else {
+                return false;
+            };
+            canonical <= part
+                && part_symbol.kind == SymKind::Iface as u8
+                && canonical_symbol.kind == SymKind::Iface as u8
+                && part_symbol.parent == u32::MAX
+                && canonical_symbol.parent == u32::MAX
+                && part_symbol.file == canonical_symbol.file
+                && part_symbol.name == canonical_symbol.name
+                && part_symbol.exported == canonical_symbol.exported
+                && groups
+                    .binary_search_by_key(&canonical, |pair| pair[0])
+                    .ok()
+                    .is_some_and(|position| groups[position][1] == canonical)
+        })
     }
 
     pub fn tokens(&self) -> &[TokenRecord] {

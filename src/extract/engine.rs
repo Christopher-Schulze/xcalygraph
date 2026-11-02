@@ -561,6 +561,25 @@ fn assemble(assembly: Assembly) -> Parsed {
     });
     let def_name_nodes: Vec<usize> = defs.iter().map(|def| def.name_node).collect();
     let defs = merge_clauses(defs);
+    #[cfg(feature = "lang-typescript")]
+    let repeated_interfaces = {
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        if path
+            .rsplit_once('.')
+            .is_some_and(|(_, suffix)| matches!(suffix, "ts" | "tsx" | "mts" | "cts" | "ets"))
+        {
+            for def in &defs {
+                if def.kind == Some(SymKind::Iface)
+                    && def
+                        .node
+                        .is_some_and(|node| node.kind() == "interface_declaration")
+                {
+                    *counts.entry(&def.name).or_default() += 1;
+                }
+            }
+        }
+        counts
+    };
     let ranges: Vec<(usize, usize)> = defs
         .iter()
         .filter_map(|def| {
@@ -671,6 +690,29 @@ fn assemble(assembly: Assembly) -> Parsed {
                 index,
                 identity: identity.clone(),
             });
+        }
+        #[cfg(feature = "lang-typescript")]
+        if kind == SymKind::Iface
+            && parent.is_none()
+            && repeated_interfaces
+                .get(def.name.as_str())
+                .is_some_and(|&count| count > 1)
+            && let Some(identity) = signature_identity(node, source)
+            && let Ok(index) = u32::try_from(index)
+        {
+            source_identities.push(SourceIdentity {
+                kind: SourceIdentityKind::InterfaceHeader,
+                index,
+                identity,
+            });
+            if let Some(identity) = super::lang::typescript::interface_member_identity(node, source)
+            {
+                source_identities.push(SourceIdentity {
+                    kind: SourceIdentityKind::InterfaceMembers,
+                    index,
+                    identity,
+                });
+            }
         }
     }
     let scope_of = |position: usize| -> Option<u32> {
@@ -828,6 +870,11 @@ fn assemble(assembly: Assembly) -> Parsed {
             }
         }
         refs.push(entry.reference);
+    }
+    #[cfg(feature = "lang-typescript")]
+    if !repeated_interfaces.is_empty() {
+        let groups = super::lang::typescript::interface_groups(&symbols, &source_identities);
+        source_identities.extend(groups);
     }
     source_identities.sort_unstable_by_key(|identity| (identity.kind, identity.index));
     let source_identities =

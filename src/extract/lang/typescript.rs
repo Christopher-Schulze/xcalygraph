@@ -82,6 +82,166 @@ pub(in crate::extract) fn simple_property_key(
     }
 }
 
+/// Complete supported member syntax; unknown or computed members are not merge evidence.
+#[cfg(feature = "lang-typescript")]
+pub(in crate::extract) fn interface_member_identity(
+    interface: tree_sitter::Node,
+    source: &[u8],
+) -> Option<String> {
+    use std::fmt::Write as _;
+
+    if interface.has_error() || interface.is_missing() {
+        return None;
+    }
+    let mut header = interface.walk();
+    if interface
+        .named_children(&mut header)
+        .any(|child| child.kind() == "extends_type_clause")
+    {
+        return None;
+    }
+    let body = interface.child_by_field_name("body")?;
+    let mut cursor = body.walk();
+    let mut identity = String::from("interface_members:");
+    for member in body.named_children(&mut cursor) {
+        let tag = match member.kind() {
+            "property_signature" => 'p',
+            "method_signature" => {
+                let mut children = member.walk();
+                if member
+                    .children(&mut children)
+                    .any(|child| child.kind() == "?")
+                {
+                    'o'
+                } else {
+                    'm'
+                }
+            }
+            kind if kind.contains("comment") => continue,
+            _ => return None,
+        };
+        let name = member.child_by_field_name("name")?;
+        let name = match name.kind() {
+            "property_identifier" => FieldName::Text(name.utf8_text(source).ok()?.to_owned()),
+            "string" | "number" => simple_property_key(name, source)?,
+            _ => return None,
+        };
+        let name = name.token();
+        let signature = crate::extract::engine::signature_identity(member, source)?;
+        let _ = write!(
+            identity,
+            "{tag}{}:{name}{}:{signature}",
+            name.len(),
+            signature.len()
+        );
+    }
+    Some(identity)
+}
+
+/// Group only same-file declarations whose complete source facts prove compatible members.
+#[cfg(feature = "lang-typescript")]
+pub(in crate::extract) fn interface_groups(
+    symbols: &[crate::domain::facts::Symbol],
+    identities: &[crate::domain::facts::SourceIdentity],
+) -> Vec<crate::domain::facts::SourceIdentity> {
+    use crate::domain::facts::{SourceIdentity, SourceIdentityKind};
+    use std::collections::HashMap;
+
+    let mut names: HashMap<&str, Vec<u32>> = HashMap::new();
+    for (index, symbol) in symbols
+        .iter()
+        .enumerate()
+        .filter(|(_, symbol)| symbol.parent.is_none())
+    {
+        if let Ok(index) = u32::try_from(index) {
+            names.entry(&symbol.name).or_default().push(index);
+        }
+    }
+    let lookup: HashMap<_, _> = identities
+        .iter()
+        .map(|identity| ((identity.kind, identity.index), identity.identity.as_str()))
+        .collect();
+    let mut groups = Vec::new();
+    for parts in names.values().filter(|parts| parts.len() > 1) {
+        let first = &symbols[parts[0] as usize];
+        let Some(header) = lookup.get(&(SourceIdentityKind::InterfaceHeader, parts[0])) else {
+            continue;
+        };
+        let mut member_sets = Vec::new();
+        for &part in parts {
+            let symbol = &symbols[part as usize];
+            if symbol.kind != Some(SymKind::Iface)
+                || symbol.exported != first.exported
+                || lookup.get(&(SourceIdentityKind::InterfaceHeader, part)) != Some(header)
+            {
+                member_sets.clear();
+                break;
+            }
+            let Some(members) = lookup.get(&(SourceIdentityKind::InterfaceMembers, part)) else {
+                member_sets.clear();
+                break;
+            };
+            member_sets.push(*members);
+        }
+        if member_sets.len() != parts.len() || !compatible_interface_members(&member_sets) {
+            continue;
+        }
+        let canonical = parts[0].to_string();
+        groups.extend(parts.iter().map(|&index| SourceIdentity {
+            kind: SourceIdentityKind::InterfaceGroup,
+            index,
+            identity: canonical.clone(),
+        }));
+    }
+    groups
+}
+
+#[cfg(feature = "lang-typescript")]
+fn compatible_interface_members(parts: &[&str]) -> bool {
+    use std::collections::{HashMap, HashSet};
+
+    let mut seen: HashMap<&str, (u8, &str)> = HashMap::new();
+    for part in parts {
+        let Some(mut rest) = part.strip_prefix("interface_members:") else {
+            return false;
+        };
+        let mut own_properties = HashSet::new();
+        while !rest.is_empty() {
+            let Some((&tag, tail)) = rest.as_bytes().split_first() else {
+                return false;
+            };
+            let Some(tail) = std::str::from_utf8(tail).ok() else {
+                return false;
+            };
+            let Some((name, tail)) = take_identity_part(tail) else {
+                return false;
+            };
+            let Some((signature, tail)) = take_identity_part(tail) else {
+                return false;
+            };
+            if !matches!(tag, b'p' | b'm' | b'o') || (tag == b'p' && !own_properties.insert(name)) {
+                return false;
+            }
+            if let Some(&(previous_tag, previous_signature)) = seen.get(name) {
+                if tag != previous_tag || (tag == b'p' && signature != previous_signature) {
+                    return false;
+                }
+            } else {
+                seen.insert(name, (tag, signature));
+            }
+            rest = tail;
+        }
+    }
+    true
+}
+
+#[cfg(feature = "lang-typescript")]
+fn take_identity_part(value: &str) -> Option<(&str, &str)> {
+    let (length, value) = value.split_once(':')?;
+    let length = length.parse::<usize>().ok()?;
+    (length <= value.len() && value.is_char_boundary(length)).then(|| value.split_at(length))
+}
+
 /// Decode ECMAScript string content into UTF-16 without replacing unpaired surrogates.
 #[cfg(feature = "lang-typescript")]
 fn decode_string_content(content: &str) -> Option<Vec<u16>> {
@@ -329,6 +489,168 @@ fn builtin(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "lang-typescript")]
+    fn repeated_interface_headers_retain_complete_source_identity() {
+        use crate::domain::corpus::FileRecord;
+        use crate::domain::role::Role;
+
+        let prefix = (0..12)
+            .map(|index| format!("key{index}abcdefghij: string;"))
+            .collect::<String>();
+        let source = format!(
+            "export interface Config<T extends {{ {prefix} last: string }}> {{ a: T }}\n\
+             export interface Config<T extends {{ {prefix} last: number }}> {{ b: T }}\n"
+        );
+        let record = FileRecord {
+            path: "long-headers.ts".to_owned(),
+            size: source.len() as u64,
+            mtime_ns: 0,
+            identity: None,
+            hash: 0,
+            role: Role::Src,
+            file_type: Some(FileType::TypeScript),
+        };
+        let facts = crate::extract::extract(&record, source.as_bytes());
+        assert_eq!(facts.symbols.len(), 2);
+        assert_eq!(facts.symbols[0].signature, facts.symbols[1].signature);
+        let identities: Vec<_> = facts
+            .source_identities
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|identity| identity.identity.starts_with("interface_declaration:"))
+            .map(|identity| (identity.index, identity.identity.as_str()))
+            .collect();
+        assert_eq!(identities.len(), 2, "{identities:?}");
+        assert_eq!((identities[0].0, identities[1].0), (0, 1));
+        assert_ne!(identities[0].1, identities[1].1);
+
+        let source = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/typescript-merge-model.ts"
+        ));
+        let facts = crate::extract::extract(&record, source);
+        let headers: Vec<_> = facts
+            .source_identities
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|identity| {
+                identity.kind == crate::domain::facts::SourceIdentityKind::InterfaceHeader
+                    && facts.symbols[identity.index as usize].name == "Config"
+            })
+            .collect();
+        assert_eq!(headers.len(), 2, "{headers:?}");
+        assert_eq!(headers[0].identity, headers[1].identity);
+        let group = crate::domain::facts::SourceIdentityKind::InterfaceGroup;
+        assert_eq!(
+            facts.source_identity(group, headers[0].index),
+            facts.source_identity(group, headers[1].index)
+        );
+        assert!(facts.source_identity(group, headers[0].index).is_some());
+        assert!(
+            headers
+                .iter()
+                .all(|identity| facts.symbols[identity.index as usize].parent.is_none())
+        );
+        let members: Vec<_> = facts
+            .source_identities
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|identity| {
+                identity.kind == crate::domain::facts::SourceIdentityKind::InterfaceMembers
+                    && facts.symbols[identity.index as usize].name == "Config"
+            })
+            .collect();
+        assert_eq!(members.len(), 2, "{members:?}");
+        assert!(members[0].identity.contains("p5:width"));
+        assert!(members[1].identity.contains("p6:height"));
+        assert!(
+            members
+                .iter()
+                .all(|identity| identity.identity.contains("m3:run"))
+        );
+
+        let unsupported = crate::extract::extract(
+            &record,
+            b"interface Unknown { [x: string]: string }\ninterface Unknown { safe: string }",
+        );
+        assert_eq!(unsupported.symbols.len(), 2);
+        let kind = crate::domain::facts::SourceIdentityKind::InterfaceMembers;
+        assert_eq!(unsupported.source_identity(kind, 0), None);
+        assert!(unsupported.source_identity(kind, 1).is_some());
+        assert_eq!(unsupported.source_identity(group, 0), None);
+        assert_eq!(unsupported.source_identity(group, 1), None);
+
+        let invalid = crate::extract::extract(
+            &record,
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/typescript-merge-invalid.ts"
+            )),
+        );
+        let header = crate::domain::facts::SourceIdentityKind::InterfaceHeader;
+        assert_eq!(
+            invalid.source_identity(header, 0),
+            invalid.source_identity(header, 1)
+        );
+        assert_ne!(
+            invalid.source_identity(kind, 0),
+            invalid.source_identity(kind, 1)
+        );
+        assert_ne!(
+            invalid.source_identity(header, 2),
+            invalid.source_identity(header, 3)
+        );
+        for index in 0..4 {
+            assert_eq!(invalid.source_identity(group, index), None);
+        }
+
+        let mixed = crate::extract::extract(
+            &record,
+            b"interface Mode { f?(): void }\ninterface Mode { f(): void }",
+        );
+        let owners: Vec<_> = mixed
+            .symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, symbol)| symbol.kind() == SymKind::Iface && symbol.name == "Mode")
+            .map(|(index, _)| index as u32)
+            .collect();
+        assert_eq!(owners.len(), 2);
+        assert!(
+            mixed
+                .source_identity(kind, owners[0])
+                .is_some_and(|s| s.contains("o1:f"))
+        );
+        assert!(
+            mixed
+                .source_identity(kind, owners[1])
+                .is_some_and(|s| s.contains("m1:f"))
+        );
+        assert!(
+            owners
+                .iter()
+                .all(|&index| mixed.source_identity(group, index).is_none())
+        );
+
+        let identical = crate::extract::extract(
+            &record,
+            b"interface Same { x: string }\ninterface Same { x: string }",
+        );
+        assert_eq!(identical.source_identity(group, 0), Some("0"));
+        assert_eq!(identical.source_identity(group, 1), Some("0"));
+
+        let duplicate = crate::extract::extract(
+            &record,
+            b"interface Bad { x: string; x: string }\ninterface Bad { y: number }",
+        );
+        assert_eq!(duplicate.source_identity(group, 0), None);
+        assert_eq!(duplicate.source_identity(group, 1), None);
+    }
 
     #[test]
     #[cfg(feature = "lang-typescript")]

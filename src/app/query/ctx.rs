@@ -35,8 +35,14 @@ pub fn render(
     let scores = personalized_rank(index, filter, &seeds);
     let mut related: Vec<(u32, f32)> = scores
         .into_iter()
-        .filter(|(node, _)| !seeds.iter().any(|seed| seed.node == *node))
-        .filter(|(node, _)| !extra.is_some_and(|hit| hit.node == *node))
+        .filter(|(node, _)| {
+            !seeds
+                .iter()
+                .any(|seed| index.derived.interface_canonical(seed.node) == *node)
+        })
+        .filter(|(node, _)| {
+            !extra.is_some_and(|hit| index.derived.interface_canonical(hit.node) == *node)
+        })
         .filter(|(node, _)| {
             matches!(index.node(*node), Node::Symbol(_)) && filter.node(index, *node)
         })
@@ -73,7 +79,9 @@ fn personalized_rank(index: &Index, filter: &Filter, seeds: &[Hit]) -> FastMap<u
         .sum::<f32>()
         .max(f32::EPSILON);
     for seed in seeds {
-        *restart.entry(seed.node).or_default() += seed.score / total;
+        *restart
+            .entry(index.derived.interface_canonical(seed.node))
+            .or_default() += seed.score / total;
     }
     let mut scores = restart.clone();
     for _ in 0..ITERATIONS {
@@ -84,11 +92,16 @@ fn personalized_rank(index: &Index, filter: &Filter, seeds: &[Hit]) -> FastMap<u
         for (&node, &mass) in &scores {
             let neighbors: Vec<u32> = index
                 .derived
-                .outgoing(node)
-                .iter()
-                .chain(index.derived.incoming(node))
+                .interface_parts(node)
+                .flat_map(|part| {
+                    index
+                        .derived
+                        .outgoing(part)
+                        .iter()
+                        .chain(index.derived.incoming(part))
+                })
                 .filter(|edge| !matches!(edge.kind(), EdgeKind::Imports) && filter.edge(edge))
-                .map(|edge| edge.node)
+                .map(|edge| index.derived.interface_canonical(edge.node))
                 .collect();
             if neighbors.is_empty() {
                 *next.entry(node).or_default() += (1.0 - RESTART) * mass;
