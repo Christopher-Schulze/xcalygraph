@@ -4171,13 +4171,9 @@ impl<'a> Index<'a> {
             let base = self.base[file as usize];
             let chain = scope_chain(facts, reference.scope);
             let mut best: Option<(usize, u32)> = None;
-            let mut count = 0;
             let mut found: Vec<(usize, u32)> = Vec::new();
             for (local, symbol) in facts.symbols.iter().enumerate() {
                 let id = base + local as u32;
-                if self.canonical_interface(id) != id {
-                    continue;
-                }
                 if symbol.name != name || !kind_ok(id) || symbol.kind() == SymKind::Method {
                     continue;
                 }
@@ -4188,12 +4184,15 @@ impl<'a> Index<'a> {
                         None => continue,
                     },
                 };
-                count += 1;
-                found.push((depth, id));
+                let canonical = self.canonical_interface(id);
+                found.push((depth, canonical));
                 if best.is_none_or(|(best_depth, _)| depth > best_depth) {
-                    best = Some((depth, id));
+                    best = Some((depth, canonical));
                 }
             }
+            found.sort_unstable();
+            found.dedup();
+            let mut count = found.len();
             // Forward declarations and prototypes announce a definition of the same file.
             let declared = |id: u32| self.symbols[id as usize].flags & FLAG_DECLARATION != 0;
             if found.iter().any(|&(_, id)| declared(id))

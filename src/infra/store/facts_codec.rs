@@ -27,6 +27,44 @@ fn read_terms(decoder: &mut Decoder) -> DecodeResult<String> {
     Ok(value)
 }
 
+fn typescript_namespace_path(symbols: &[Symbol], symbol: &Symbol) -> Option<Vec<String>> {
+    let mut scopes = Vec::new();
+    let mut parent = symbol.parent;
+    let mut remaining = symbols.len();
+    while let Some(index) = parent {
+        if remaining == 0 {
+            return None;
+        }
+        remaining -= 1;
+        let module = symbols.get(index as usize)?;
+        if module.kind() != SymKind::Mod
+            || module.name == "global"
+            || module.name.starts_with('"')
+            || module.name.starts_with('\'')
+        {
+            return None;
+        }
+        let parts: Vec<_> = module
+            .name
+            .split('.')
+            .map(|part| part.trim().to_owned())
+            .collect();
+        if parts.iter().any(String::is_empty) {
+            return None;
+        }
+        scopes.push(parts);
+        parent = module.parent;
+    }
+    scopes.reverse();
+    Some(scopes.into_iter().flatten().collect())
+}
+
+fn same_typescript_namespace(symbols: &[Symbol], left: &Symbol, right: &Symbol) -> bool {
+    typescript_namespace_path(symbols, left)
+        .zip(typescript_namespace_path(symbols, right))
+        .is_some_and(|(left, right)| left == right)
+}
+
 fn opt_index(encoder: &mut Encoder, value: Option<u32>) {
     encoder.var(value.map_or(0, |index| u64::from(index) + 1));
 }
@@ -468,8 +506,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
                 || target.kind != Some(SymKind::Iface)
                 || owner.name != target.name
                 || owner.exported != target.exported
-                || owner.parent.is_some()
-                || target.parent.is_some()
+                || !same_typescript_namespace(&facts.symbols, owner, target)
             {
                 return Err(DecodeError("interface group"));
             }

@@ -378,7 +378,57 @@ fn interface_member_value_type(member: tree_sitter::Node, source: &[u8]) -> Stri
     }
 }
 
-/// Group only same-file declarations whose complete source facts prove compatible members.
+/// Namespace path of a declaration, flattened across dotted and nested namespace syntax.
+#[cfg(feature = "lang-typescript")]
+pub(in crate::extract) fn interface_namespace_path(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+) -> Option<Vec<String>> {
+    let mut scopes = Vec::new();
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        match ancestor.kind() {
+            "internal_module" | "module" => {
+                let name = ancestor.child_by_field_name("name")?;
+                if name.kind() == "string" {
+                    return None;
+                }
+                if !matches!(name.kind(), "identifier" | "nested_identifier") {
+                    return None;
+                }
+                let name = name.utf8_text(source).ok()?;
+                let parts: Vec<_> = name.split('.').map(|part| part.trim().to_owned()).collect();
+                if parts.iter().any(String::is_empty) {
+                    return None;
+                }
+                scopes.push(parts);
+            }
+            "global_declaration" => return None,
+            "ambient_declaration" => {
+                let mut walker = ancestor.walk();
+                if ancestor
+                    .children(&mut walker)
+                    .any(|child| child.kind() == "global")
+                {
+                    return None;
+                }
+            }
+            "statement_block"
+                if ancestor.parent().is_none_or(|parent| {
+                    !matches!(parent.kind(), "internal_module" | "module")
+                }) =>
+            {
+                return None;
+            }
+            _ => {}
+        }
+        current = ancestor.parent();
+    }
+    scopes.reverse();
+    Some(scopes.into_iter().flatten().collect())
+}
+
+/// Group same-file declarations whose namespace paths and complete source facts prove compatible.
 #[cfg(feature = "lang-typescript")]
 pub(in crate::extract) fn interface_groups(
     symbols: &[crate::domain::facts::Symbol],
@@ -387,87 +437,107 @@ pub(in crate::extract) fn interface_groups(
     source: &[u8],
 ) -> Vec<crate::domain::facts::SourceIdentity> {
     use crate::domain::facts::{SourceIdentity, SourceIdentityKind};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
-    let mut names: HashMap<&str, Vec<u32>> = HashMap::new();
-    for (index, symbol) in symbols
+    let candidate_names: HashSet<_> = identities
         .iter()
-        .enumerate()
-        .filter(|(_, symbol)| symbol.parent.is_none())
-    {
+        .filter(|identity| identity.kind == SourceIdentityKind::InterfaceMembers)
+        .filter_map(|identity| symbols.get(identity.index as usize))
+        .map(|symbol| symbol.name.as_str())
+        .collect();
+
+    let mut namespaces: HashMap<Vec<String>, HashMap<&str, Vec<u32>>> = HashMap::new();
+    for (index, symbol) in symbols.iter().enumerate() {
+        let mut parent = symbol.parent;
+        let mut namespace_level = true;
+        let mut remaining = symbols.len();
+        while let Some(scope) = parent {
+            if remaining == 0 {
+                namespace_level = false;
+                break;
+            }
+            remaining -= 1;
+            let Some(scope) = symbols.get(scope as usize) else {
+                namespace_level = false;
+                break;
+            };
+            if scope.kind != Some(SymKind::Mod) {
+                namespace_level = false;
+                break;
+            }
+            parent = scope.parent;
+        }
+        if !namespace_level {
+            continue;
+        }
+        let Some(namespace) = nodes
+            .get(index)
+            .copied()
+            .flatten()
+            .and_then(|node| interface_namespace_path(node, source))
+        else {
+            continue;
+        };
         if let Ok(index) = u32::try_from(index) {
-            names.entry(&symbol.name).or_default().push(index);
+            namespaces
+                .entry(namespace)
+                .or_default()
+                .entry(&symbol.name)
+                .or_default()
+                .push(index);
         }
     }
     let lookup: HashMap<_, _> = identities
         .iter()
         .map(|identity| ((identity.kind, identity.index), identity.identity.as_str()))
         .collect();
-    let escaped_names: Vec<_> = names
-        .keys()
-        .filter(|name| name.contains('\\'))
-        .map(|name| decode_string_content(name).and_then(|units| String::from_utf16(&units).ok()))
-        .collect();
     let mut groups = Vec::new();
-    for parts in names.values().filter(|parts| parts.len() > 1) {
-        if parts.iter().any(|&part| {
-            let mut current = nodes.get(part as usize).copied().flatten();
-            while let Some(node) = current {
-                if node.kind() == "module"
-                    && node
-                        .child_by_field_name("name")
-                        .is_some_and(|name| name.kind() == "string")
-                {
-                    return true;
-                }
-                current = node.parent();
+    for (namespace, names) in namespaces {
+        let escaped_names: Vec<_> = names
+            .keys()
+            .filter(|name| name.contains('\\'))
+            .map(|name| {
+                decode_string_content(name).and_then(|units| String::from_utf16(&units).ok())
+            })
+            .collect();
+        for (name, parts) in &names {
+            if !candidate_names.contains(name) || parts.len() < 2 {
+                continue;
             }
-            false
-        }) {
-            continue;
-        }
-        let first = &symbols[parts[0] as usize];
-        if first.name.contains('\\') || escaped_name_may_match(&first.name, &escaped_names) {
-            continue;
-        }
-        let Some(header) =
-            nodes[parts[0] as usize].and_then(|node| interface_header_without_bases(node, source))
-        else {
-            continue;
-        };
-        let mut member_sets = Vec::new();
-        for &part in parts {
-            let symbol = &symbols[part as usize];
-            if symbol.kind != Some(SymKind::Iface)
-                || symbol.exported != first.exported
-                || nodes[part as usize]
-                    .and_then(|node| interface_header_without_bases(node, source))
-                    .as_ref()
-                    != Some(&header)
-            {
-                member_sets.clear();
-                break;
+            let first = &symbols[parts[0] as usize];
+            if first.name.contains('\\') || escaped_name_may_match(&first.name, &escaped_names) {
+                continue;
             }
-            let Some(members) = lookup.get(&(SourceIdentityKind::InterfaceMembers, part)) else {
-                member_sets.clear();
-                break;
+            let Some(header) = nodes[parts[0] as usize]
+                .and_then(|node| interface_header_without_bases(node, source))
+            else {
+                continue;
             };
-            member_sets.push(*members);
-        }
-        if member_sets.len() != parts.len() || !compatible_interface_members(&member_sets) {
-            continue;
-        }
-        let mut generic_fields = Vec::new();
-        if !compatible_local_bases(
-            parts,
-            &member_sets,
-            symbols,
-            &names,
-            &escaped_names,
-            nodes,
-            source,
-        ) {
-            let Some(fields) = compatible_generic_base(
+            let mut member_sets = Vec::new();
+            for &part in parts {
+                let symbol = &symbols[part as usize];
+                if symbol.kind != Some(SymKind::Iface)
+                    || symbol.exported != first.exported
+                    || nodes[part as usize]
+                        .and_then(|node| interface_header_without_bases(node, source))
+                        .as_ref()
+                        != Some(&header)
+                {
+                    member_sets.clear();
+                    break;
+                }
+                let Some(members) = lookup.get(&(SourceIdentityKind::InterfaceMembers, part))
+                else {
+                    member_sets.clear();
+                    break;
+                };
+                member_sets.push(*members);
+            }
+            if member_sets.len() != parts.len() || !compatible_interface_members(&member_sets) {
+                continue;
+            }
+            let mut generic_fields = Vec::new();
+            if !compatible_local_bases(
                 parts,
                 &member_sets,
                 symbols,
@@ -475,28 +545,41 @@ pub(in crate::extract) fn interface_groups(
                 &escaped_names,
                 nodes,
                 source,
-            ) else {
-                continue;
-            };
-            generic_fields = fields;
-        }
-        let canonical = parts[0].to_string();
-        groups.extend(parts.iter().map(|&index| SourceIdentity {
-            kind: SourceIdentityKind::InterfaceGroup,
-            index,
-            identity: canonical.clone(),
-        }));
-        if !generic_fields.is_empty() {
-            generic_fields.sort_unstable();
-            let fields: Vec<_> = generic_fields
-                .iter()
-                .map(|(base, field, concrete)| (*base, field.as_str(), concrete.as_str()))
-                .collect();
-            groups.push(SourceIdentity {
-                kind: SourceIdentityKind::InterfaceGenericFields,
-                index: parts[0],
-                identity: crate::domain::facts::interface_generic_fields_identity(&fields),
-            });
+            ) {
+                if !namespace.is_empty() {
+                    continue;
+                }
+                let Some(fields) = compatible_generic_base(
+                    parts,
+                    &member_sets,
+                    symbols,
+                    &names,
+                    &escaped_names,
+                    nodes,
+                    source,
+                ) else {
+                    continue;
+                };
+                generic_fields = fields;
+            }
+            let canonical = parts[0].to_string();
+            groups.extend(parts.iter().map(|&index| SourceIdentity {
+                kind: SourceIdentityKind::InterfaceGroup,
+                index,
+                identity: canonical.clone(),
+            }));
+            if !generic_fields.is_empty() {
+                generic_fields.sort_unstable();
+                let fields: Vec<_> = generic_fields
+                    .iter()
+                    .map(|(base, field, concrete)| (*base, field.as_str(), concrete.as_str()))
+                    .collect();
+                groups.push(SourceIdentity {
+                    kind: SourceIdentityKind::InterfaceGenericFields,
+                    index: parts[0],
+                    identity: crate::domain::facts::interface_generic_fields_identity(&fields),
+                });
+            }
         }
     }
     groups

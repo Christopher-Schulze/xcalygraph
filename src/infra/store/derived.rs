@@ -704,6 +704,41 @@ impl Derived {
             .chain((!grouped).then_some(node))
     }
 
+    fn typescript_namespace_path(&self, symbol: &SymbolRecord) -> Option<Vec<String>> {
+        let symbols = self.symbols();
+        let mut scopes = Vec::new();
+        let mut parent = symbol.parent;
+        let mut remaining = symbols.len();
+        while parent != u32::MAX {
+            if remaining == 0 {
+                return None;
+            }
+            remaining -= 1;
+            let module = symbols.get(parent as usize)?;
+            if module.kind != SymKind::Mod as u8 {
+                return None;
+            }
+            let name = self.string(module.name);
+            if name == "global" || name.starts_with('"') || name.starts_with('\'') {
+                return None;
+            }
+            let parts: Vec<_> = name.split('.').map(|part| part.trim().to_owned()).collect();
+            if parts.iter().any(String::is_empty) {
+                return None;
+            }
+            scopes.push(parts);
+            parent = module.parent;
+        }
+        scopes.reverse();
+        Some(scopes.into_iter().flatten().collect())
+    }
+
+    fn same_typescript_namespace(&self, left: &SymbolRecord, right: &SymbolRecord) -> bool {
+        self.typescript_namespace_path(left)
+            .zip(self.typescript_namespace_path(right))
+            .is_some_and(|(left, right)| left == right)
+    }
+
     fn valid_interface_groups(&self) -> bool {
         let groups = self.interface_groups();
         let symbols = self.symbols();
@@ -722,16 +757,17 @@ impl Derived {
                     && part_symbol.flags & FLAG_TYPESCRIPT_AUGMENTATION == 0
                     && canonical_symbol.flags & FLAG_TYPESCRIPT_AUGMENTATION == 0
                     && part_symbol.exported == canonical_symbol.exported
+                    && self.same_typescript_namespace(part_symbol, canonical_symbol)
             } else {
                 part_symbol.flags & FLAG_TYPESCRIPT_AUGMENTATION != 0
                     && canonical_symbol.flags & FLAG_TYPESCRIPT_AUGMENTATION == 0
                     && canonical_symbol.exported == 1
+                    && part_symbol.parent == u32::MAX
+                    && canonical_symbol.parent == u32::MAX
             };
             valid_origin
                 && part_symbol.kind == SymKind::Iface as u8
                 && canonical_symbol.kind == SymKind::Iface as u8
-                && part_symbol.parent == u32::MAX
-                && canonical_symbol.parent == u32::MAX
                 && part_symbol.name == canonical_symbol.name
                 && groups
                     .binary_search_by_key(&canonical, |pair| pair[0])

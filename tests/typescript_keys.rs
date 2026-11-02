@@ -1418,6 +1418,104 @@ fn same_file_interfaces_merge_without_losing_declaration_locations() -> Result<(
 }
 
 #[test]
+fn reopened_namespace_interfaces_merge_only_within_matching_paths() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("valid.ts"),
+        include_bytes!("fixtures/typescript-namespace-merge-valid.ts"),
+    )?;
+    fs::write(
+        root.join("invalid.ts"),
+        include_bytes!("fixtures/typescript-namespace-merge-invalid.ts"),
+    )?;
+
+    let merged = fixture.run(&["show", "Api.Config", "--exact"])?;
+    let merged_text = String::from_utf8(merged.stdout.clone())?;
+    assert!(merged.status.success(), "{merged_text}");
+    for expected in ["valid.ts:3", "valid.ts:8", "left", "right", "service"] {
+        assert!(
+            merged_text.contains(expected),
+            "missing {expected}: {merged_text}"
+        );
+    }
+    assert!(!merged_text.contains("other"), "{merged_text}");
+    let filtered = fixture.run(&[
+        "show",
+        "Api.Config",
+        "--exact",
+        "--read-only",
+        "-p",
+        "valid.ts",
+    ])?;
+    assert!(filtered.status.success());
+    assert_eq!(filtered.stdout, merged.stdout);
+    let repeated = fixture.run(&["show", "Api.Config", "--exact", "--read-only"])?;
+    assert_eq!(repeated.stdout, merged.stdout);
+    for line in ["valid.ts:3", "valid.ts:8"] {
+        let by_line = fixture.run(&["show", line, "--exact", "--read-only"])?;
+        let text = String::from_utf8(by_line.stdout)?;
+        assert!(by_line.status.success(), "{line}: {text}");
+        for expected in ["valid.ts:3", "valid.ts:8", "left", "right"] {
+            assert!(
+                text.contains(expected),
+                "{line}: missing {expected}: {text}"
+            );
+        }
+    }
+
+    let nested = fixture.run(&["show", "Root.Nested.Data", "--exact", "--read-only"])?;
+    let nested_text = String::from_utf8(nested.stdout)?;
+    assert!(nested.status.success(), "{nested_text}");
+    for expected in ["valid.ts:16", "valid.ts:20", "left", "right"] {
+        assert!(
+            nested_text.contains(expected),
+            "missing {expected}: {nested_text}"
+        );
+    }
+
+    let separate = fixture.run(&["show", "Other.Config", "--exact", "--read-only"])?;
+    let separate_text = String::from_utf8(separate.stdout)?;
+    assert!(separate.status.success(), "{separate_text}");
+    assert!(separate_text.contains("other"), "{separate_text}");
+    assert!(!separate_text.contains("left"), "{separate_text}");
+    assert!(!separate_text.contains("right"), "{separate_text}");
+    assert_eq!(
+        fixture
+            .run(&["show", "Broken.Model", "--read-only"])?
+            .status
+            .code(),
+        Some(3)
+    );
+    assert_eq!(
+        fixture
+            .run(&["show", "Config", "--read-only"])?
+            .status
+            .code(),
+        Some(3)
+    );
+
+    let caller = fixture.run(&["show", "Api.useSecond", "--exact", "--read-only"])?;
+    let caller_text = String::from_utf8(caller.stdout)?;
+    assert!(caller.status.success(), "{caller_text}");
+    assert!(
+        caller_text.contains("valid.Api.Service.run"),
+        "{caller_text}"
+    );
+    let impact = fixture.run(&["impact", "Api.Config", "--exact", "--read-only"])?;
+    let impact_text = String::from_utf8(impact.stdout)?;
+    assert!(impact.status.success(), "{impact_text}");
+    for expected in ["useFirst", "useSecond"] {
+        assert!(
+            impact_text.contains(expected),
+            "missing {expected}: {impact_text}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn invalid_interface_group_is_rejected_and_rebuilt() -> Result<(), Box<dyn Error>> {
     let fixture = Fixture::new()?;
     fs::create_dir(fixture.0.join("repo"))?;
