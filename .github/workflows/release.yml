@@ -42,6 +42,19 @@ jobs:
           graphify --version
       - name: Toolchain
         run: rustup target add ${{ matrix.target }}
+      - name: Validate release tag
+        run: |
+          version="$(cargo metadata --locked --no-deps --format-version 1 | python3 -c '
+          import json
+          import sys
+
+          packages = json.load(sys.stdin)["packages"]
+          versions = [package["version"] for package in packages if package["name"] == "xcalygraph"]
+          if len(versions) != 1:
+              raise SystemExit("expected exactly one xcalygraph Cargo package")
+          print(versions[0])
+          ')"
+          bash scripts/utils/validate-release-tag.sh "${GITHUB_REF_NAME}" "${version}"
       - name: Gate
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: scripts/tests/test.sh

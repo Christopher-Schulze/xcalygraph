@@ -194,6 +194,9 @@ build_archives() (
   cd "${REPO_ROOT}" || return 1
   check_requirements || return 1
   version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "xcalygraph") | .version')" || return 1
+  if [[ -n "${GITHUB_REF_NAME:-}" ]]; then
+    bash "${REPO_ROOT}/scripts/utils/validate-release-tag.sh" "${GITHUB_REF_NAME}" "${version}" || return 1
+  fi
   if (( ${#targets[@]} == 0 )); then
     targets=("$(rustc -vV | awk '/^host:/ { print $2 }')")
   fi

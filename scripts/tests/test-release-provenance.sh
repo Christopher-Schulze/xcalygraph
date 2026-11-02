@@ -34,11 +34,13 @@ with tempfile.TemporaryDirectory(prefix="release-provenance.", dir=repo / ".cach
     sentinel.write_text("preserve\n")
     release = root / "scripts/build/build-release.sh"
     shutil.copyfile(repo / "scripts/build/build-release.sh", release)
+    shutil.copyfile(repo / "scripts/utils/validate-release-tag.sh",
+                    root / "scripts/utils/validate-release-tag.sh")
     for name in ("verification-target.sh", "verification-source.sh", "verification-lock.sh", "guard-benchmark.sh",
                  "check-build-space.sh", "cargo-artifact.sh"):
         shutil.copyfile(repo / "scripts/utils" / name, root / "scripts/utils" / name)
     environment = {key: value for key, value in os.environ.items()
-                   if not key.startswith(("GIT_", "XCALYGRAPH_", "BASH_FUNC_", "CARGO_", "RUSTUP_"))
+                   if not key.startswith(("GIT_", "GITHUB_", "XCALYGRAPH_", "BASH_FUNC_", "CARGO_", "RUSTUP_"))
                    and key not in ("BASH_ENV", "ENV", "CDPATH", "TAR_OPTIONS", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER")}
     environment.update(HOME=str(home), CARGO_TARGET_DIR=str(target), CARGO_NET_OFFLINE="true",
                        RUSTUP_HOME=os.environ.get("RUSTUP_HOME", str(Path.home() / ".rustup")),
@@ -113,6 +115,13 @@ with tempfile.TemporaryDirectory(prefix="release-provenance.", dir=repo / ".cach
                                       cwd=root, env=environment, capture_output=True, text=True)
     assert checksum_failure.returncode != 0 and "missing.tar.gz" in checksum_failure.stderr
     assert not list(checksum_dest.iterdir())
+
+    mismatch = subprocess.run(["bash", "-c", 'source "$1"; build_archives --debug "$2"',
+                               "build", str(release), triple], cwd=root,
+                              env=dict(environment, GITHUB_REF_NAME="v9.9.9"), capture_output=True, text=True)
+    assert mismatch.returncode != 0
+    assert "tag v9.9.9 does not match Cargo package version 0.0.0 (expected v0.0.0)" in mismatch.stderr
+    assert list(dist.iterdir()) == [sentinel] and not list(dist.glob(".xcalygraph-release.*"))
 
     staged = work / "staged"
     result = stage_run(staged)
@@ -198,7 +207,8 @@ with tempfile.TemporaryDirectory(prefix="release-provenance.", dir=repo / ".cach
     build_script.unlink()
     disk()
     complete = subprocess.run(["bash", "-c", 'source "$1"; build_archives --debug "$2"',
-                               "build", str(release), triple], cwd=root, env=environment, capture_output=True, text=True)
+                               "build", str(release), triple], cwd=root,
+                              env=dict(environment, GITHUB_REF_NAME="v0.0.0"), capture_output=True, text=True)
     assert complete.returncode == 0, complete.stderr
     published = dist / (name + ".tar.gz")
     assert published.is_file() and sentinel.read_text() == "preserve\n"
@@ -210,8 +220,9 @@ with tempfile.TemporaryDirectory(prefix="release-provenance.", dir=repo / ".cach
     subprocess.run(["tar", "-xzf", str(published), "-C", str(published_extracted)], check=True)
     assert subprocess.check_output([str(published_extracted / name / "xcalygraph")], text=True).strip() == "OTHER"
     conflict = subprocess.run(["bash", "-c", 'source "$1"; build_archives --debug "$2"',
-                               "build", str(release), triple], cwd=root, env=environment, capture_output=True, text=True)
+                               "build", str(release), triple], cwd=root,
+                              env=dict(environment, GITHUB_REF_NAME="v0.0.0"), capture_output=True, text=True)
     assert conflict.returncode != 0 and "output already exists" in conflict.stderr
     assert hashlib.sha256(published.read_bytes()).hexdigest() == checksum and sentinel.read_text() == "preserve\n"
-    print("PASS: stale Cargo reproduction, guarded target-triple archive, interrupted and concurrent stages, safe local output")
+    print("PASS: release tag validation, stale Cargo reproduction, guarded target-triple archive, interrupted and concurrent stages, safe local output")
 PYTHON

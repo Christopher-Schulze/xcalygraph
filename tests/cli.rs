@@ -1248,7 +1248,33 @@ fn release_builder_fixture(dir: &TempDir) -> io::Result<PathBuf> {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/build/build-release.sh"),
         &script,
     )?;
+    let utils = dir.0.join("project/scripts/utils");
+    fs::create_dir_all(&utils)?;
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/utils/validate-release-tag.sh"),
+        utils.join("validate-release-tag.sh"),
+    )?;
     Ok(script)
+}
+
+#[test]
+fn release_builder_rejects_a_mismatched_tag_before_touching_dist() -> TestResult {
+    let dir = TempDir::new("release-tag-mismatch")?;
+    let script = release_builder_fixture(&dir)?;
+    let output = support::command("/bin/bash", &dir.0)
+        .arg(&script)
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("GITHUB_REF_NAME", "v9.9.9")
+        .env("HOME", dir.0.join("home"))
+        .current_dir(dir.0.join("project"))
+        .output()?;
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)?
+            .contains("tag v9.9.9 does not match Cargo package version 0.0.0 (expected v0.0.0)")
+    );
+    assert!(!dir.0.join("project/dist").exists());
+    Ok(())
 }
 
 #[test]
@@ -1259,6 +1285,7 @@ fn release_builder_preserves_foreign_dist_on_preparation_failure() -> TestResult
     let output = support::command("/bin/bash", &dir.0)
         .arg(&script)
         .env("CARGO_NET_OFFLINE", "true")
+        .env("GITHUB_REF_NAME", "v0.0.0")
         .env("HOME", dir.0.join("home"))
         .current_dir(dir.0.join("project"))
         .output()?;
@@ -1285,6 +1312,7 @@ fn release_builder_preserves_foreign_dist_on_preparation_failure() -> TestResult
     let output = support::command("/bin/bash", &dir.0)
         .arg(&script)
         .env("CARGO_NET_OFFLINE", "true")
+        .env("GITHUB_REF_NAME", "v0.0.0")
         .env("HOME", dir.0.join("home"))
         .current_dir(dir.0.join("project"))
         .output()?;
@@ -1300,6 +1328,7 @@ fn release_builder_preserves_foreign_dist_on_preparation_failure() -> TestResult
         .arg(&script)
         .arg("unsupported-target")
         .env("CARGO_NET_OFFLINE", "true")
+        .env("GITHUB_REF_NAME", "v0.0.0")
         .env("HOME", dir.0.join("home"))
         .current_dir(dir.0.join("project"))
         .output()?;
@@ -1312,6 +1341,7 @@ fn release_builder_preserves_foreign_dist_on_preparation_failure() -> TestResult
         .arg(duplicate_script)
         .args(["aarch64-apple-darwin", "aarch64-apple-darwin"])
         .env("CARGO_NET_OFFLINE", "true")
+        .env("GITHUB_REF_NAME", "v0.0.0")
         .env("HOME", duplicate.0.join("home"))
         .current_dir(duplicate.0.join("project"))
         .output()?;

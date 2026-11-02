@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix="checkout-root.", dir=repo / ".cache") a
     sentinel = decoy / "sentinel"
     sentinel.write_text("preserve\n")
     environment = {key: value for key, value in os.environ.items()
-                   if not key.startswith(("GIT_", "XCALYGRAPH_", "BASH_FUNC_", "CARGO_", "RUSTUP_"))
+                   if not key.startswith(("GIT_", "GITHUB_", "XCALYGRAPH_", "BASH_FUNC_", "CARGO_", "RUSTUP_"))
                    and key not in ("BASH_ENV", "ENV", "CDPATH", "TAR_OPTIONS", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER")}
     environment.update(HOME=str(home), TMPDIR=str(tmp), CARGO_TARGET_DIR=str(target), CARGO_NET_OFFLINE="true",
                        RUSTUP_HOME=os.environ.get("RUSTUP_HOME", str(Path.home() / ".rustup")),
