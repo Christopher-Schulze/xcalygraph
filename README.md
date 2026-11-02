@@ -56,44 +56,50 @@ xcalygraph impact --diff            # what your uncommitted changes affect
 
 ## What an agent sees
 
-`xcalygraph show refresh::refresh` returns a symbol card with its signature, callers (`<`, at the call site), callees (`>`, at the definition) and tests (`t`):
+`xcalygraph show refresh::refresh -b 180` returns a symbol card with its signature, callers (`<`, at the call site), callees (`>`, at the definition) and tests (`t`):
 
 ```
-src/app/refresh.rs:40-103 fn app::refresh::refresh
+src/app/refresh.rs:40-112 fn app::refresh::refresh
 pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError>
-< app::run src/app/mod.rs:45
-< app::index src/app/mod.rs:215
+< app::prepare_index src/app/mod.rs:144
+> app::error::AppError::io src/app/error.rs:27
+> app::error::AppError::index_io src/app/error.rs:32
 > infra::lock::WriterLock::acquire src/infra/lock.rs:20
-> app::refresh::write_derived src/app/refresh.rs:137
-> app::refresh::write_shards src/app/refresh.rs:180
-t app::refresh::tests::first_refresh_builds_then_quiet_refresh_writes_nothing src/app/refresh.rs:282
-t app::refresh::tests::changes_rewrite_only_affected_shards_and_read_only_sees_staleness src/app/refresh.rs:311
-+9 more
+> app::refresh::derive_version src/app/refresh.rs:115
+> extract::extraction_version src/extract/mod.rs:36
+> infra::scan::scan src/infra/scan.rs:18
+> app::refresh::invalidate_meta src/app/refresh.rs:150
++23 more
 ```
 
-`xcalygraph impact derived::build` returns the dependents by depth, the tests reaching them and the exact command to run:
+`xcalygraph impact derived::build -b 180` returns the dependents by depth, the tests reaching them and the exact command to run:
 
 ```
-~ infra::store::derived::build src/infra/store/derived.rs:209
-< 1 app::refresh::write_derived src/app/refresh.rs:137
+~ infra::store::derived::build src/infra/store/derived.rs:210
+< 1 app::refresh::write_derived src/app/refresh.rs:161
+< 2 app::refresh::rederive src/app/refresh.rs:135
 < 2 app::refresh::refresh src/app/refresh.rs:40
-< 2 app::refresh::rederive src/app/refresh.rs:126
-< 3 app::run src/app/mod.rs:16
-t app::refresh::tests::first_refresh_builds_then_quiet_refresh_writes_nothing src/app/refresh.rs:282
-t app::refresh::tests::changes_rewrite_only_affected_shards_and_read_only_sees_staleness src/app/refresh.rs:311
-r cargo test -p xcalygraph -- changes_rewrite_only_affected_shards_and_read_only_sees_staleness corrupt_file_table_triggers_full_rebuild ...
+< 3 app::open_index src/app/mod.rs:151
+< 3 app::prepare_index src/app/mod.rs:137
+< 3 app::run_query src/app/mod.rs:163
+t app::refresh::tests::first_refresh_builds_then_quiet_refresh_writes_nothing src/app/refresh.rs:400
+r cargo test --manifest-path Cargo.toml
++9 more
 ```
 
 `xcalygraph impact --diff` does the same for the uncommitted changes in the work tree (or against any revision) and flags exported signature changes.
 
-`xcalygraph find "where is the index refreshed after a change"` returns ranked hits grouped by file:
+`xcalygraph find "where are changed file shards written" -p src/app/refresh.rs -b 180` returns ranked hits grouped by file:
 
 ```
 src/app/refresh.rs
-  180 fn write_shards(workspace: &Workspace, changes: &ChangeSet, rebuilt: bool) -> Result<u64, AppError>
-  40 pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError>
-src/domain/corpus.rs
-  76 pub struct ChangeSet
+  264 fn write_shards(workspace: &Workspace, changes: &ChangeSet, rebuilt: bool) -> Result<u64, AppError>
+  32 pub struct Report
+  161 fn write_derived(workspace: &Workspace, records: &[FileRecord]) -> Result<u64, AppError>
+  150 fn invalidate_meta(workspace: &Workspace, meta: &Meta) -> Result<u64, AppError>
+  126 fn derived_is_valid(workspace: &Workspace) -> bool
+  400 fn first_refresh_builds_then_quiet_refresh_writes_nothing() -> Result<(), Box<dyn std::error::Error>>
++7 more
 ```
 
 ## Commands
