@@ -525,119 +525,190 @@ fn compatible_generic_base(
         .named_children(&mut walker)
         .find(|child| child.kind() == "extends_type_clause")?;
     let mut walker = clause.walk();
-    let mut bases = clause.named_children(&mut walker);
-    let (Some(application), None) = (bases.next(), bases.next()) else {
-        return None;
-    };
-    let base_name = match application.kind() {
-        "generic_type" => application.child_by_field_name("name")?,
-        "type_identifier" => application,
-        _ => return None,
-    };
-    if base_name.kind() != "type_identifier" {
-        return None;
-    }
-    let name = base_name.utf8_text(source).ok()?;
-    if name.contains('\\') || escaped_name_may_match(name, escaped_names) {
-        return None;
-    }
-    let [base_index] = names.get(name)?.as_slice() else {
-        return None;
-    };
-    let base_symbol = symbols.get(*base_index as usize)?;
-    if base_symbol.kind != Some(SymKind::Iface) || base_symbol.exported {
-        return None;
-    }
-    let base = nodes.get(*base_index as usize).copied().flatten()?;
-    let mut walker = base.walk();
-    if base
+    let mut pending: Vec<_> = clause
         .named_children(&mut walker)
-        .any(|child| child.kind() == "extends_type_clause")
+        .map(|node| (node, Vec::new(), Vec::new()))
+        .collect();
+    if pending.is_empty() {
+        return None;
+    }
+    let mut inherited = Vec::new();
+    let mut inherited_fields = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    while let Some((application, outer_bindings, mut path)) = pending.pop() {
+        let base_name = match application.kind() {
+            "generic_type" => application.child_by_field_name("name")?,
+            "type_identifier" => application,
+            _ => return None,
+        };
+        if base_name.kind() != "type_identifier" {
+            return None;
+        }
+        let name = base_name.utf8_text(source).ok()?;
+        if name.contains('\\') || escaped_name_may_match(name, escaped_names) {
+            return None;
+        }
+        let [base_index] = names.get(name)?.as_slice() else {
+            return None;
+        };
+        if path.contains(base_index) {
+            return None;
+        }
+        path.push(*base_index);
+        let base_symbol = symbols.get(*base_index as usize)?;
+        if base_symbol.kind != Some(SymKind::Iface) || base_symbol.exported {
+            return None;
+        }
+        let base = nodes.get(*base_index as usize).copied().flatten()?;
+        let parameters: Vec<_> = match base.child_by_field_name("type_parameters") {
+            Some(parameters) => {
+                let mut cursor = parameters.walk();
+                parameters.named_children(&mut cursor).collect()
+            }
+            None => Vec::new(),
+        };
+        let arguments: Vec<_> = match application.child_by_field_name("type_arguments") {
+            Some(arguments) => {
+                let mut cursor = arguments.walk();
+                arguments.named_children(&mut cursor).collect()
+            }
+            None => Vec::new(),
+        };
+        if arguments.len() > parameters.len() {
+            return None;
+        }
+        let parameter_names: Vec<_> = parameters
+            .iter()
+            .map(|parameter| {
+                parameter
+                    .child_by_field_name("name")?
+                    .utf8_text(source)
+                    .ok()
+            })
+            .collect::<Option<_>>()?;
+        let mut bindings = Vec::new();
+        let mut saw_default = false;
+        for (index, parameter) in parameters.into_iter().enumerate() {
+            if parameter.kind() != "type_parameter" {
+                return None;
+            }
+            let param = parameter_names[index];
+            if param.contains('\\') || bindings.iter().any(|(name, _)| *name == param) {
+                return None;
+            }
+            let resolve = |node: tree_sitter::Node, default: bool| -> Option<&str> {
+                if !matches!(node.kind(), "type_identifier" | "predefined_type") {
+                    return None;
+                }
+                let text = node.utf8_text(source).ok()?;
+                if text.contains('\\') || escaped_name_may_match(text, escaped_names) {
+                    return None;
+                }
+                if default && parameter_names.contains(&text) {
+                    return bindings
+                        .iter()
+                        .find(|(name, _)| *name == text)
+                        .map(|(_, value)| *value);
+                }
+                if !default
+                    && let Some((_, value)) = outer_bindings.iter().find(|(name, _)| *name == text)
+                {
+                    return Some(*value);
+                }
+                if node.kind() == "type_identifier" {
+                    let [target] = names.get(text)?.as_slice() else {
+                        return None;
+                    };
+                    if !symbols
+                        .get(*target as usize)?
+                        .kind
+                        .is_some_and(SymKind::is_type)
+                    {
+                        return None;
+                    }
+                }
+                Some(text)
+            };
+            let default = parameter.child_by_field_name("value");
+            if saw_default && default.is_none() {
+                return None;
+            }
+            saw_default |= default.is_some();
+            let default = match default {
+                Some(default) => Some(resolve(default.named_child(0)?, true)?),
+                None => None,
+            };
+            let actual = match arguments.get(index) {
+                Some(argument) => resolve(*argument, false)?,
+                None => default?,
+            };
+            if let Some(constraint) = parameter.child_by_field_name("constraint") {
+                if arguments.iter().any(|argument| {
+                    argument
+                        .utf8_text(source)
+                        .ok()
+                        .is_some_and(|text| outer_bindings.iter().any(|(name, _)| *name == text))
+                }) {
+                    return None;
+                }
+                let bound_node = constraint.named_child(0)?;
+                let bound = resolve(bound_node, true)?;
+                if actual != bound || default.is_some_and(|value| value != bound) {
+                    return None;
+                }
+                if let Some(default_node) = parameter.child_by_field_name("value") {
+                    let default_text = default_node.named_child(0)?.utf8_text(source).ok()?;
+                    let bound_text = bound_node.utf8_text(source).ok()?;
+                    if (parameter_names.contains(&default_text)
+                        || parameter_names.contains(&bound_text))
+                        && default_text != bound_text
+                    {
+                        return None;
+                    }
+                }
+            }
+            bindings.push((param, actual));
+        }
+        if !visited.insert((*base_index, bindings.clone())) {
+            continue;
+        }
+        let (identity, fields) =
+            instantiated_generic_properties(base, *base_index, source, &bindings)?;
+        inherited.push(identity);
+        inherited_fields.extend(fields);
+        let mut walker = base.walk();
+        if let Some(clause) = base
+            .named_children(&mut walker)
+            .find(|child| child.kind() == "extends_type_clause")
+        {
+            let mut walker = clause.walk();
+            pending.extend(
+                clause
+                    .named_children(&mut walker)
+                    .map(|node| (node, bindings.clone(), path.clone())),
+            );
+        }
+    }
+    inherited_fields.sort_unstable();
+    if inherited_fields
+        .windows(2)
+        .any(|pair| pair[0].0 == pair[1].0 && pair[0].1 == pair[1].1 && pair[0].2 != pair[1].2)
     {
         return None;
     }
-    let parameters = base.child_by_field_name("type_parameters")?;
-    let mut parameter_cursor = parameters.walk();
-    let parameters: Vec<_> = parameters.named_children(&mut parameter_cursor).collect();
-    let arguments: Vec<_> = match application.child_by_field_name("type_arguments") {
-        Some(arguments) => {
-            let mut cursor = arguments.walk();
-            arguments.named_children(&mut cursor).collect()
+    inherited_fields.dedup();
+    for (index, identity) in inherited.iter().enumerate() {
+        let others: Vec<_> = inherited[index + 1..].iter().map(String::as_str).collect();
+        if !imported_base_members_are_disjoint(identity, &others) {
+            return None;
         }
-        None => Vec::new(),
-    };
-    if parameters.is_empty() || arguments.len() > parameters.len() {
-        return None;
     }
-    let parameter_names: Vec<_> = parameters
+    let all: Vec<_> = inherited
         .iter()
-        .map(|parameter| {
-            parameter
-                .child_by_field_name("name")?
-                .utf8_text(source)
-                .ok()
-        })
-        .collect::<Option<_>>()?;
-    let mut bindings = Vec::new();
-    let mut saw_default = false;
-    for (index, parameter) in parameters.into_iter().enumerate() {
-        if parameter.kind() != "type_parameter"
-            || parameter.child_by_field_name("constraint").is_some()
-        {
-            return None;
-        }
-        let param = parameter_names[index];
-        if param.contains('\\') || bindings.iter().any(|(name, _)| *name == param) {
-            return None;
-        }
-        let resolve = |node: tree_sitter::Node, default: bool| -> Option<&str> {
-            if !matches!(node.kind(), "type_identifier" | "predefined_type") {
-                return None;
-            }
-            let text = node.utf8_text(source).ok()?;
-            if text.contains('\\') || escaped_name_may_match(text, escaped_names) {
-                return None;
-            }
-            if default && parameter_names.contains(&text) {
-                return bindings
-                    .iter()
-                    .find(|(name, _)| *name == text)
-                    .map(|(_, value)| *value);
-            }
-            if node.kind() == "type_identifier" {
-                let [target] = names.get(text)?.as_slice() else {
-                    return None;
-                };
-                if !symbols
-                    .get(*target as usize)?
-                    .kind
-                    .is_some_and(SymKind::is_type)
-                {
-                    return None;
-                }
-            }
-            Some(text)
-        };
-        let default = parameter.child_by_field_name("value");
-        if saw_default && default.is_none() {
-            return None;
-        }
-        saw_default |= default.is_some();
-        let default = match default {
-            Some(default) => Some(resolve(default.named_child(0)?, true)?),
-            None => None,
-        };
-        let actual = match arguments.get(index) {
-            Some(argument) => resolve(*argument, false)?,
-            None => default?,
-        };
-        bindings.push((param, actual));
-    }
-    let (identity, fields) = instantiated_generic_properties(base, *base_index, source, &bindings)?;
-    let all: Vec<_> = std::iter::once(identity.as_str())
+        .map(String::as_str)
         .chain(members.iter().copied())
         .collect();
-    compatible_interface_members(&all).then_some(fields)
+    compatible_interface_members(&all).then_some(inherited_fields)
 }
 
 #[cfg(feature = "lang-typescript")]

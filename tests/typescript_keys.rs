@@ -425,6 +425,72 @@ fn generic_defaults_preserve_substitution_and_reject_conflicts() -> Result<(), B
 }
 
 #[test]
+fn transitive_and_multiple_generic_bases_preserve_real_targets() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("valid.ts"),
+        include_bytes!("fixtures/typescript-generic-default-valid.ts"),
+    )?;
+    fs::write(
+        root.join("invalid.ts"),
+        include_bytes!("fixtures/typescript-generic-default-invalid.ts"),
+    )?;
+    for name in [
+        "valid.Transitive",
+        "valid.Multiple",
+        "valid.Diamond",
+        "valid.ConstraintChild",
+    ] {
+        let output = fixture.run(&["show", name])?;
+        assert!(
+            output.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    for name in [
+        "valid.callTransitive",
+        "valid.callMultiple",
+        "valid.callDiamond",
+        "valid.callConstrained",
+    ] {
+        let output = fixture.run(&["show", name, "--read-only", "--exact"])?;
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout)?;
+        assert!(text.contains("valid.Service.execute"), "{name}: {text}");
+    }
+    for name in [
+        "invalid.BadTransitive",
+        "invalid.BadMultiple",
+        "invalid.Cyclic",
+        "invalid.BadConstrainedDefault",
+        "invalid.BadDependentDefault",
+        "invalid.BadTransitiveConstraint",
+        "invalid.BadGenericOverride",
+    ] {
+        assert_eq!(
+            fixture.run(&["show", name, "--read-only"])?.status.code(),
+            Some(3),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        fixture
+            .run(&["show", "valid.MethodChild", "--read-only"])?
+            .status
+            .code(),
+        Some(3)
+    );
+    let impact = fixture.run(&["impact", "valid.Root", "--read-only", "--exact"])?;
+    assert!(impact.status.success());
+    let text = String::from_utf8(impact.stdout)?;
+    assert!(text.contains("valid.callTransitive"), "{text}");
+    Ok(())
+}
+
+#[test]
 fn generic_bases_have_source_backed_inheritance_edges() -> Result<(), Box<dyn Error>> {
     let fixture = Fixture::new()?;
     let root = fixture.0.join("repo");
@@ -925,6 +991,8 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         assert!(generic.status.success());
         let defaults = run(&["show", "defaults.Child", "--json", "--read-only"])?;
         assert!(defaults.status.success());
+        let transitive = run(&["show", "defaults.Transitive", "--json", "--read-only"])?;
+        assert!(transitive.status.success());
         let imported = run(&["show", "child.Child", "--json", "--read-only"])?;
         assert!(imported.status.success());
         answers.push((
@@ -935,6 +1003,7 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
             complex.stdout,
             generic.stdout,
             defaults.stdout,
+            transitive.stdout,
             imported.stdout,
         ));
     }
