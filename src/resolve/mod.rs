@@ -29,7 +29,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 72;
+pub const RESOLVE_VERSION: u32 = 73;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -428,13 +428,16 @@ impl<'a> Index<'a> {
                 }
             }
             for fields in &facts.fields {
-                for name in &fields.names {
-                    self.field_names.insert((base + fields.owner, name.clone()));
+                for name in fields.names.iter().filter_map(|name| name.text()) {
+                    self.field_names
+                        .insert((base + fields.owner, name.to_owned()));
                 }
                 for (name, kind) in fields.names.iter().zip(&fields.types) {
-                    if !kind.is_empty() {
+                    if !kind.is_empty()
+                        && let Some(name) = name.text()
+                    {
                         self.field_types
-                            .insert((base + fields.owner, name.as_str()), kind.as_str());
+                            .insert((base + fields.owner, name), kind.as_str());
                     }
                 }
             }

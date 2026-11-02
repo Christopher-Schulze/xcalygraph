@@ -1,6 +1,6 @@
 //! Resolved knowledge graph: files, symbols, edges and derived data (`docs/spec.md` section 6).
 
-use super::facts::SymKind;
+use super::facts::{FieldName, SymKind};
 use super::filetype::FileType;
 use super::role::Role;
 
@@ -163,7 +163,7 @@ pub struct EnvSite {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldList {
     pub symbol: u32,
-    pub names: Vec<String>,
+    pub names: Vec<FieldName>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

@@ -88,7 +88,7 @@ pub fn render(facts: &Facts) -> String {
             .names
             .iter()
             .zip(&fields.types)
-            .map(|(name, kind)| format!("{name}:{kind}"))
+            .map(|(name, kind)| format!("{}:{kind}", name.token()))
             .collect();
         let _ = writeln!(
             out,

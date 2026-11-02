@@ -23,8 +23,8 @@ use std::collections::{HashMap, HashSet};
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator};
 
 use crate::domain::facts::{
-    self, Binding, EnvRead, Facts, Fields, Import, JuliaCallArgument, Ref, RefKind, SourceIdentity,
-    SourceIdentityKind, SymKind, Symbol,
+    self, Binding, EnvRead, Facts, FieldName, Fields, Import, JuliaCallArgument, Ref, RefKind,
+    SourceIdentity, SourceIdentityKind, SymKind, Symbol,
 };
 
 /// Language-specific behavior the query cannot express.
@@ -134,7 +134,7 @@ struct RawBinding {
 
 #[derive(Default)]
 struct RawField {
-    name: Option<String>,
+    name: Option<FieldName>,
     type_name: String,
     position: usize,
 }
@@ -461,7 +461,7 @@ fn collect(
                             #[cfg(not(feature = "lang-typescript"))]
                             let _ = literal;
                         } else {
-                            entry.name = Some(text(node).to_owned());
+                            entry.name = Some(FieldName::Text(text(node).to_owned()));
                         }
                     }
                     if let Some(node) = get("field.type") {

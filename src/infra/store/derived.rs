@@ -99,7 +99,7 @@ pub struct EnvRecord {
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct FieldsRecord {
     pub symbol: u32,
-    /// Comma-joined field names.
+    /// Comma-separated field tokens.
     pub names: u32,
 }
 
@@ -295,7 +295,12 @@ pub fn build(graph: &Graph) -> Vec<u8> {
         .iter()
         .map(|fields| FieldsRecord {
             symbol: fields.symbol,
-            names: strings.id(&fields.names.join(",")),
+            names: strings.id(&fields
+                .names
+                .iter()
+                .map(|name| name.token())
+                .collect::<Vec<_>>()
+                .join(",")),
         })
         .collect();
     let index = search_index(graph);

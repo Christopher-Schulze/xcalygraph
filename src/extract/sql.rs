@@ -3,7 +3,9 @@
 //! statements, both inside `.sql` files and inside string literals of code. Statement scanners
 //! instead of a grammar: robust across dialects and without query compilation.
 
-use crate::domain::facts::{self, Facts, Fields, NO_ARITY, Ref, RefKind, SymKind, Symbol};
+use crate::domain::facts::{
+    self, Facts, FieldName, Fields, NO_ARITY, Ref, RefKind, SymKind, Symbol,
+};
 
 /// Statement keywords that make a string literal SQL.
 const STATEMENT_KEYWORDS: [&str; 6] = ["select", "insert", "update", "delete", "merge", "with"];
@@ -99,7 +101,7 @@ pub fn objects(text: &str, facts: &mut Facts) {
                         if !names.is_empty() {
                             facts.fields.push(Fields {
                                 owner: symbol,
-                                names,
+                                names: names.into_iter().map(FieldName::Text).collect(),
                                 types,
                             });
                         }
@@ -521,7 +523,13 @@ mod tests {
             symbols,
             ["2-6 Table Users", "8-9 View active_users", "11-13 Fn touch"]
         );
-        assert_eq!(facts.fields[0].names, ["id", "email"]);
+        assert_eq!(
+            facts.fields[0].names,
+            [
+                FieldName::Text("id".to_owned()),
+                FieldName::Text("email".to_owned())
+            ]
+        );
         assert_eq!(facts.fields[0].types, ["serial", "text"]);
         assert_eq!(
             refs,

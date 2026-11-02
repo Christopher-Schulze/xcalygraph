@@ -2,9 +2,9 @@
 
 use super::codec::{DecodeError, DecodeResult, Decoder, Encoder};
 use crate::domain::facts::{
-    AssetMeta, Binding, ConfigKey, EnvDef, EnvRead, EnvSource, Facts, Fields, GoEmbed, Import,
-    JuliaCallArgument, Manifest, Ref, RefKind, RustTargetRoot, SourceIdentity, SourceIdentityKind,
-    SymKind, Symbol, TextSegment, ValueKind,
+    AssetMeta, Binding, ConfigKey, EnvDef, EnvRead, EnvSource, Facts, FieldName, Fields, GoEmbed,
+    Import, JuliaCallArgument, Manifest, Ref, RefKind, RustTargetRoot, SourceIdentity,
+    SourceIdentityKind, SymKind, Symbol, TextSegment, ValueKind,
 };
 
 /// Search terms as a token list, so each token is interned once in the shard's string table.
@@ -108,7 +108,22 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
     encoder.var_usize(facts.fields.len());
     for fields in &facts.fields {
         encoder.var_u32(fields.owner);
-        encoder.strs(&fields.names);
+        encoder.var_usize(fields.names.len());
+        for name in &fields.names {
+            match name {
+                FieldName::Text(value) => {
+                    encoder.u8(0);
+                    encoder.str(value);
+                }
+                FieldName::Utf16(units) => {
+                    encoder.u8(1);
+                    encoder.var_usize(units.len());
+                    for &unit in units {
+                        encoder.var_u32(u32::from(unit));
+                    }
+                }
+            }
+        }
         encoder.strs(&fields.types);
     }
     encoder.var_usize(facts.env_defs.len());
@@ -298,9 +313,31 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
         });
     }
     for _ in 0..decoder.len()? {
+        let owner = decoder.var_u32()?;
+        let mut names = Vec::new();
+        for _ in 0..decoder.len()? {
+            let name = match decoder.u8()? {
+                0 => FieldName::Text(decoder.string()?),
+                1 => {
+                    let mut units = Vec::new();
+                    for _ in 0..decoder.len()? {
+                        units.push(
+                            u16::try_from(decoder.var_u32()?)
+                                .map_err(|_| DecodeError("field UTF-16 unit"))?,
+                        );
+                    }
+                    if String::from_utf16(&units).is_ok() {
+                        return Err(DecodeError("noncanonical field UTF-16"));
+                    }
+                    FieldName::Utf16(units)
+                }
+                _ => return Err(DecodeError("field name tag")),
+            };
+            names.push(name);
+        }
         facts.fields.push(Fields {
-            owner: decoder.var_u32()?,
-            names: decoder.strings()?,
+            owner,
+            names,
             types: decoder.strings()?,
         });
     }
@@ -496,7 +533,7 @@ mod tests {
             }],
             fields: vec![Fields {
                 owner: 0,
-                names: vec!["db".to_owned()],
+                names: vec![FieldName::Text("db".to_owned())],
                 types: vec!["DB".to_owned()],
             }],
             env_defs: vec![EnvDef {
@@ -545,6 +582,36 @@ mod tests {
         assert_eq!(decode(&mut decoder)?, facts);
         assert_eq!(decode(&mut decoder)?, Facts::default());
         assert!(decoder.is_done());
+        Ok(())
+    }
+
+    #[test]
+    fn field_keys_round_trip_without_surrogate_replacement() -> DecodeResult<()> {
+        let mut facts = sample();
+        facts.fields[0].names.extend([
+            FieldName::Text("a,b".to_owned()),
+            FieldName::Text("\\ud800".to_owned()),
+            FieldName::Utf16(vec![0xd800]),
+        ]);
+        facts.fields[0]
+            .types
+            .extend([String::new(), String::new(), String::new()]);
+        for table in [false, true] {
+            let mut encoder = if table {
+                Encoder::with_table()
+            } else {
+                Encoder::default()
+            };
+            encode(&mut encoder, &facts);
+            let table_bytes = encoder.table_bytes();
+            let mut decoder = if table {
+                Decoder::with_table(&encoder.bytes, &table_bytes)?
+            } else {
+                Decoder::new(&encoder.bytes)
+            };
+            assert_eq!(decode(&mut decoder)?, facts);
+            assert!(decoder.is_done());
+        }
         Ok(())
     }
 

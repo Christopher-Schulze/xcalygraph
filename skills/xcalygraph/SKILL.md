@@ -31,7 +31,7 @@ Local deterministic repository index: symbols, calls, type uses, imports, implem
 
 Use `exact symbol NAME` in `find`/`ctx`; misses return no match; `ctx` may add related context.
 
-NAME: `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get`), `path:line`, `path::name`, a file path, or a unique bare name. A file-path match wins locator collisions, including through the existing `./` alias; xcalygraph checks the input spelling first, then its surrounding-whitespace-trimmed form before locator syntax.
+NAME: `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get`), `path:line`, `path::name`, a file path, or a unique bare name. File paths, including `./` aliases, win locator collisions; input spelling is checked before trimming surrounding whitespace.
 
 Flags: `-p GLOB` (paths, gitignore syntax, repeatable), `-l go,rust` (languages), `-k fn,method,struct` (kinds), `--no-tests`, `--exact` (drop inferred edges), `-d N` (show depth), `--all` (show without caps), `-b N` (token budget, hard cap), `--json`, `--read-only` (never write; exit 5 when stale), `-C DIR` (root).
 
@@ -42,10 +42,11 @@ Flags: `-p GLOB` (paths, gitignore syntax, repeatable), `-l go,rust` (languages)
 - Rust `#[path]`: exact file; shared-file aliases unresolved, no same-name fallback.
 - Map JSON: counts, task runs, API sig/handlers, cycle/layer members, env path/line; audit: name/path/line, drift kind/status.
 - Card: `m` member, `f` fields, `^` supertype, `v` implementation, `<` caller, `>` definition, `t` test, `t2` test via caller, `e` env, `!` notice.
+- Fields: after transport decoding, split on commas outside JSON-quoted names; `\u` preserves unpaired surrogates.
 - `?`=inferred edges/impact; Python Protocols, Julia Base typed args, Rust generic bounds; `--exact` drops inferred edges/runs.
 - `impact` run lines retain Go module/package, Cargo manifest and pytest node-ID context; args are quoted. Unsupported runners emit `t`, no `r`.
 - `impact --diff`: removals cite REV path:line; `moved?` gives both locations; `sig?`=inferred signature change; `uncertain?`=ambiguous/unavailable identity; sensitive, oversized or non-regular sides get path-only notes; missing known REV blobs error; inspect paths beyond filters.
-- Truncation: `+N more`, `+N`, `+` or JSON `{}`; narrow with `-p`, `-k`, `-l` or raise `-b`.
+- Truncation: `+N more`, `+N`, `+` or JSON `{}`; narrow with filters or raise `-b`.
 - On shared-index failure, use local `.xcalygraph/`; stderr asks to ignore it in git.
 
 ## Exit codes
@@ -54,6 +55,6 @@ Flags: `-p GLOB` (paths, gitignore syntax, repeatable), `-l go,rust` (languages)
 
 ## Rules
 
-- Open the cited `path:line` before editing; the graph locates, the source decides.
+- Read the cited `path:line` before editing.
 - In read-only tasks pass `--read-only`.
 - `show` exposes callers/callees without whole-file reads.

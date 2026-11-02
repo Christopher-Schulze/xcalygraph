@@ -2,6 +2,8 @@
 //! component usage; `.tsx` uses the TSX grammar.
 
 use super::Pack;
+#[cfg(feature = "lang-typescript")]
+use crate::domain::facts::FieldName;
 use crate::domain::facts::{FLAG_DECLARATION, Import, SymKind};
 use crate::domain::filetype::FileType;
 use crate::extract::engine::{Definition, FileContext, Hooks, unquote};
@@ -47,20 +49,29 @@ pub static JAVASCRIPT: Pack = Pack {
     hooks: HOOKS,
 };
 
-/// Direct literal keys that need neither escape decoding nor ambiguous field-list rendering.
+/// Direct literal keys representable without ambiguous field-list rendering.
 #[cfg(feature = "lang-typescript")]
 pub(in crate::extract) fn simple_property_key(
     node: tree_sitter::Node,
     source: &[u8],
-) -> Option<String> {
+) -> Option<FieldName> {
     let text = node.utf8_text(source).ok()?;
-    let key = match node.kind() {
+    match node.kind() {
         "string" => {
             let quote = text.chars().next()?;
             if !matches!(quote, '\'' | '"') {
                 return None;
             }
-            text.strip_prefix(quote)?.strip_suffix(quote)?
+            let content = text.strip_prefix(quote)?.strip_suffix(quote)?;
+            if content.contains('\\') {
+                let units = decode_string_content(content)?;
+                Some(match String::from_utf16(&units) {
+                    Ok(value) => FieldName::Text(value),
+                    Err(_) => FieldName::Utf16(units),
+                })
+            } else {
+                Some(FieldName::Text(content.to_owned()))
+            }
         }
         "number" => {
             if !text.bytes().all(|byte| byte.is_ascii_digit())
@@ -69,15 +80,85 @@ pub(in crate::extract) fn simple_property_key(
             {
                 return None;
             }
-            text
+            Some(FieldName::Text(text.to_owned()))
         }
-        _ => return None,
-    };
-    (!key.is_empty()
-        && key
-            .chars()
-            .all(|ch| ch.is_alphanumeric() || matches!(ch, '_' | '$' | '-')))
-    .then(|| key.to_owned())
+        _ => None,
+    }
+}
+
+/// Decode ECMAScript string content into UTF-16 without replacing unpaired surrogates.
+#[cfg(feature = "lang-typescript")]
+fn decode_string_content(content: &str) -> Option<Vec<u16>> {
+    let mut chars = content.chars().peekable();
+    let mut units = Vec::with_capacity(content.len());
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            if matches!(ch, '\n' | '\r') {
+                return None;
+            }
+            let mut buffer = [0; 2];
+            units.extend_from_slice(ch.encode_utf16(&mut buffer));
+            continue;
+        }
+        let escaped = chars.next()?;
+        match escaped {
+            '\n' | '\u{2028}' | '\u{2029}' => {}
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+            }
+            'b' => units.push(8),
+            'f' => units.push(12),
+            'n' => units.push(10),
+            'r' => units.push(13),
+            't' => units.push(9),
+            'v' => units.push(11),
+            '0' if !chars.peek().is_some_and(char::is_ascii_digit) => units.push(0),
+            '0'..='9' => return None,
+            'x' => units.push(read_hex(&mut chars, 2)? as u16),
+            'u' => {
+                let value = if chars.peek() == Some(&'{') {
+                    chars.next();
+                    let mut value = 0u32;
+                    let mut digits = 0;
+                    while chars.peek() != Some(&'}') {
+                        let digit = chars.next()?.to_digit(16)?;
+                        value = value.checked_mul(16)?.checked_add(digit)?;
+                        digits += 1;
+                    }
+                    chars.next();
+                    if digits == 0 || value > 0x10ffff {
+                        return None;
+                    }
+                    value
+                } else {
+                    read_hex(&mut chars, 4)?
+                };
+                if value <= 0xffff {
+                    units.push(value as u16);
+                } else {
+                    let scalar = char::from_u32(value)?;
+                    let mut buffer = [0; 2];
+                    units.extend_from_slice(scalar.encode_utf16(&mut buffer));
+                }
+            }
+            other => {
+                let mut buffer = [0; 2];
+                units.extend_from_slice(other.encode_utf16(&mut buffer));
+            }
+        }
+    }
+    Some(units)
+}
+
+#[cfg(feature = "lang-typescript")]
+fn read_hex(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, count: usize) -> Option<u32> {
+    let mut value = 0;
+    for _ in 0..count {
+        value = value * 16 + chars.next()?.to_digit(16)?;
+    }
+    Some(value)
 }
 
 /// `export`ed declarations, plus members of exported classes and interfaces that are not
@@ -254,6 +335,87 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "lang-typescript")]
+    fn string_escape_decoding_preserves_utf16_and_rejects_invalid_escapes() {
+        assert_eq!(
+            decode_string_content("escaped\\u0061"),
+            Some("escapeda".encode_utf16().collect())
+        );
+        assert_eq!(decode_string_content("\\uD800"), Some(vec![0xd800]));
+        assert_eq!(
+            decode_string_content("\\\\uD800"),
+            Some("\\uD800".encode_utf16().collect())
+        );
+        assert_eq!(
+            decode_string_content("\\u{1F600}\\uD83D\\uDE00"),
+            Some("😀😀".encode_utf16().collect())
+        );
+        assert_eq!(
+            decode_string_content("a\\\r\nb\\x21"),
+            Some("ab!".encode_utf16().collect())
+        );
+        for invalid in ["\\", "\\x0", "\\u12", "\\u{}", "\\u{110000}", "\\01", "\\8"] {
+            assert_eq!(decode_string_content(invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "lang-typescript")]
+    fn string_property_keys_preserve_decoded_names_and_types() {
+        use crate::domain::corpus::FileRecord;
+        use crate::domain::role::Role;
+
+        let source = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/typescript-string-property-keys.ts"
+        ));
+        let record = FileRecord {
+            path: "string-property-keys.ts".to_owned(),
+            size: source.len() as u64,
+            mtime_ns: 0,
+            identity: None,
+            hash: 0,
+            role: Role::Src,
+            file_type: Some(FileType::TypeScript),
+        };
+        let facts = crate::extract::extract(&record, source);
+        let special = facts
+            .fields
+            .iter()
+            .find(|fields| facts.symbols[fields.owner as usize].name == "SpecialKeys");
+        assert!(special.is_some(), "extracted facts: {facts:#?}");
+        if let Some(special) = special {
+            assert_eq!(
+                special.names,
+                [
+                    FieldName::Text("a,b".to_owned()),
+                    FieldName::Text(String::new()),
+                    FieldName::Text("escapeda".to_owned()),
+                    FieldName::Text("line\nfeed".to_owned()),
+                    FieldName::Text("😀".to_owned()),
+                    FieldName::Utf16(vec![0xd800]),
+                    FieldName::Text("\\uD800".to_owned()),
+                ]
+            );
+            assert_eq!(
+                special.types,
+                [
+                    "string", "boolean", "number", "string", "boolean", "string", "number"
+                ]
+            );
+        }
+        let computed = facts
+            .fields
+            .iter()
+            .find(|fields| facts.symbols[fields.owner as usize].name == "ComputedKey");
+        assert_eq!(
+            computed.map(|fields| fields.names.as_slice()),
+            Some([FieldName::Text("regular".to_owned())].as_slice())
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "lang-typescript")]
     fn interface_properties_keep_their_owner_and_declared_types() {
         use crate::domain::corpus::FileRecord;
         use crate::domain::role::Role;
@@ -282,17 +444,22 @@ mod tests {
         assert!(config.is_some(), "Config properties were not captured");
         if let Some(config) = config {
             assert_eq!(
-                config.names,
+                config.names.iter().map(FieldName::text).collect::<Vec<_>>(),
                 [
-                    "width",
-                    "height",
-                    "nested",
-                    "choice",
-                    "display-name",
-                    "quoted-key",
-                    "ümlaut",
-                    "123",
-                    "9007199254740991"
+                    Some("width"),
+                    Some("height"),
+                    Some("nested"),
+                    Some("choice"),
+                    Some("display-name"),
+                    Some("quoted-key"),
+                    Some("ümlaut"),
+                    Some("123"),
+                    Some("9007199254740991"),
+                    Some("a,b"),
+                    Some(""),
+                    Some("escapeda"),
+                    None,
+                    Some("\\uD800")
                 ]
             );
             assert_eq!(config.types[0..2], ["number", "number"]);
@@ -302,18 +469,23 @@ mod tests {
                 ["string", "string", "string", "boolean"]
             );
             assert_eq!(config.types[8], "number");
-            assert!(!config.names.iter().any(|name| name == "inner"
-                || name == "run"
-                || name == "a,b"
-                || name == "escaped\\u0061"
-                || name == "escapeda"
-                || name == "0x10"
-                || name == "16"));
+            assert_eq!(config.types[11], "string");
+            assert!(
+                !config
+                    .names
+                    .iter()
+                    .filter_map(FieldName::text)
+                    .any(|name| name == "inner"
+                        || name == "run"
+                        || name == "escaped\\u0061"
+                        || name == "0x10"
+                        || name == "16")
+            );
         }
         let other = fields("Other");
         assert!(other.is_some(), "Other properties were not captured");
         if let Some(other) = other {
-            assert_eq!(other.names, ["enabled"]);
+            assert_eq!(other.names, [FieldName::Text("enabled".to_owned())]);
             assert_eq!(other.types, ["boolean"]);
         }
         assert!(fields("Unrelated").is_some());
@@ -329,7 +501,13 @@ mod tests {
             b"interface Broken { -foo: string; }\ninterface Fine { value: number; 7: boolean; }",
         );
         assert_eq!(mixed.fields.len(), 1);
-        assert_eq!(mixed.fields[0].names, ["value", "7"]);
+        assert_eq!(
+            mixed.fields[0].names,
+            [
+                FieldName::Text("value".to_owned()),
+                FieldName::Text("7".to_owned())
+            ]
+        );
     }
 
     fn rows(statement: &str) -> Vec<(String, String, Option<String>, bool)> {

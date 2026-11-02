@@ -292,11 +292,61 @@ pub struct EnvRead {
     pub line: u32,
 }
 
+/// A field key, including JavaScript strings that cannot be represented as UTF-8.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FieldName {
+    Text(String),
+    Utf16(Vec<u16>),
+}
+
+impl FieldName {
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Self::Text(value) => Some(value),
+            Self::Utf16(_) => None,
+        }
+    }
+
+    /// Unambiguous token in a comma-separated field list, before transport escaping.
+    pub fn token(&self) -> String {
+        use std::fmt::Write as _;
+
+        if let Self::Text(value) = self
+            && !value.is_empty()
+            && !value
+                .chars()
+                .any(|ch| ch.is_whitespace() || ch.is_control() || matches!(ch, ',' | '"' | '\\'))
+        {
+            return value.clone();
+        }
+        let units: Vec<u16> = match self {
+            Self::Text(value) => value.encode_utf16().collect(),
+            Self::Utf16(value) => value.clone(),
+        };
+        let mut result = String::from("\"");
+        for item in char::decode_utf16(units) {
+            match item {
+                Ok('"') => result.push_str("\\\""),
+                Ok('\\') => result.push_str("\\\\"),
+                Ok(ch) if (ch as u32) < 0x20 => {
+                    let _ = write!(result, "\\u{:04x}", ch as u32);
+                }
+                Ok(ch) => result.push(ch),
+                Err(error) => {
+                    let _ = write!(result, "\\u{:04x}", error.unpaired_surrogate());
+                }
+            }
+        }
+        result.push('"');
+        result
+    }
+}
+
 /// Field names of a type: card content only, no graph nodes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fields {
     pub owner: u32,
-    pub names: Vec<String>,
+    pub names: Vec<FieldName>,
     /// Declared type per field (empty when unknown), parallel to `names`.
     pub types: Vec<String>,
 }
@@ -532,6 +582,19 @@ pub fn first_sentence(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn field_tokens_distinguish_separators_empty_and_surrogates() {
+        assert_eq!(FieldName::Text("a".to_owned()).token(), "a");
+        assert_eq!(FieldName::Text("a,b".to_owned()).token(), "\"a,b\"");
+        assert_eq!(FieldName::Text(String::new()).token(), "\"\"");
+        assert_eq!(FieldName::Utf16(vec![0xd800]).token(), "\"\\ud800\"");
+        assert_eq!(
+            FieldName::Text("\\ud800".to_owned()).token(),
+            "\"\\\\ud800\""
+        );
+        assert_eq!(FieldName::Text("a\nb".to_owned()).token(), "\"a\\u000ab\"");
+    }
 
     #[test]
     fn kind_ids_round_trip() {
