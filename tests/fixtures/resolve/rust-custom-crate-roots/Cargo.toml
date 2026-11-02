@@ -1,0 +1,11 @@
+[package]
+name = "custom-root"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/custom.rs"
+
+[[bin]]
+name = "tool"
+path = "tools/cli.rs"

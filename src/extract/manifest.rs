@@ -3,7 +3,7 @@
 
 use super::build_manifests;
 use super::json::{self, Value};
-use crate::domain::facts::Manifest;
+use crate::domain::facts::{Manifest, RustTargetRoot};
 
 /// Parses a manifest by file name; `None` for manifests without a parser.
 pub fn parse(name: &str, text: &str) -> Option<Manifest> {
@@ -249,17 +249,29 @@ fn cargo_toml(text: &str) -> Manifest {
     let mut manifest = Manifest::default();
     let mut section = String::new();
     let mut pending: Option<(String, String)> = None;
-    let mut bin_path: Option<String> = None;
-    let mut bin_name: Option<String> = None;
-    let flush_bin =
-        |manifest: &mut Manifest, path: &mut Option<String>, name: &mut Option<String>| {
-            if let Some(path) = path.take() {
-                manifest.entrypoints.push(path);
-            } else if let Some(name) = name.take() {
-                manifest.entrypoints.push(format!("src/bin/{name}.rs"));
-            }
-            *name = None;
+    let mut target_path: Option<String> = None;
+    let mut target_name: Option<String> = None;
+    let flush_target = |manifest: &mut Manifest,
+                        section: &str,
+                        path: &mut Option<String>,
+                        name: &mut Option<String>| {
+        let Some((directory, binary)) = cargo_target_section(section) else {
+            return;
         };
+        let target = path
+            .take()
+            .or_else(|| name.take().map(|name| format!("{directory}/{name}.rs")));
+        *name = None;
+        if let Some(path) = target {
+            manifest.rust_target_roots.push(RustTargetRoot {
+                path: path.clone(),
+                is_library: false,
+            });
+            if binary {
+                manifest.entrypoints.push(path);
+            }
+        }
+    };
     for raw in text.lines() {
         let line = strip_toml_comment(raw).trim().to_owned();
         if let Some((key, mut value)) = pending.take() {
@@ -272,8 +284,8 @@ fn cargo_toml(text: &str) -> Manifest {
             continue;
         }
         if line.starts_with('[') {
-            if section == "[bin]" {
-                flush_bin(&mut manifest, &mut bin_path, &mut bin_name);
+            if cargo_target_section(&section).is_some() {
+                flush_target(&mut manifest, &section, &mut target_path, &mut target_name);
             }
             section = line
                 .trim_matches(|ch| ch == '[' || ch == ']')
@@ -291,10 +303,10 @@ fn cargo_toml(text: &str) -> Manifest {
             key.trim().trim_matches('"').to_owned(),
             value.trim().to_owned(),
         );
-        if section == "[bin]" {
+        if cargo_target_section(&section).is_some() {
             match key.as_str() {
-                "path" => bin_path = Some(unquote(&value)),
-                "name" => bin_name = Some(unquote(&value)),
+                "path" => target_path = Some(unquote(&value)),
+                "name" => target_name = Some(unquote(&value)),
                 _ => {}
             }
             continue;
@@ -305,10 +317,20 @@ fn cargo_toml(text: &str) -> Manifest {
         }
         assign(&mut manifest, &section, &key, &value);
     }
-    if section == "[bin]" {
-        flush_bin(&mut manifest, &mut bin_path, &mut bin_name);
+    if cargo_target_section(&section).is_some() {
+        flush_target(&mut manifest, &section, &mut target_path, &mut target_name);
     }
     manifest
+}
+
+fn cargo_target_section(section: &str) -> Option<(&'static str, bool)> {
+    match section {
+        "[bin]" => Some(("src/bin", true)),
+        "[example]" => Some(("examples", false)),
+        "[test]" => Some(("tests", false)),
+        "[bench]" => Some(("benches", false)),
+        _ => None,
+    }
 }
 
 /// `include_directories(...)` and `target_include_directories(target [SYSTEM] [BEFORE] PUBLIC
@@ -420,7 +442,14 @@ fn assign(manifest: &mut Manifest, section: &str, key: &str, value: &str) {
     match (section, key) {
         ("package", "name") => manifest.module = Some(unquote(value)),
         ("workspace", "members") => manifest.members.extend(array(value)),
-        ("lib", "path") => manifest.source_roots.push(unquote(value)),
+        ("lib", "path") => {
+            let path = unquote(value);
+            manifest.source_roots.push(path.clone());
+            manifest.rust_target_roots.push(RustTargetRoot {
+                path,
+                is_library: true,
+            });
+        }
         (section, name)
             if section == "dependencies"
                 || section.ends_with(".dependencies")
@@ -595,5 +624,64 @@ mod tests {
             ]
         );
         assert_eq!(manifest.entrypoints, ["src/bin/tool.rs", "src/other.rs"]);
+        assert_eq!(
+            manifest.rust_target_roots,
+            [
+                RustTargetRoot {
+                    path: "src/bin/tool.rs".to_owned(),
+                    is_library: false,
+                },
+                RustTargetRoot {
+                    path: "src/other.rs".to_owned(),
+                    is_library: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn cargo_toml_records_custom_library_and_all_target_roots() {
+        let manifest = cargo_toml(
+            "[package]\nname = \"custom-root\"\n\n[lib]\npath = \"src/custom.rs\"\n\n[[bin]]\nname = \"tool\"\npath = \"tools/cli.rs\"\n\n[[example]]\nname = \"default-example\"\n\n[[example]]\nname = \"demo\"\npath = \"samples/demo.rs\"\n\n[[test]]\nname = \"default-test\"\n\n[[test]]\nname = \"integration\"\npath = \"checks/integration.rs\"\n\n[[bench]]\nname = \"default-bench\"\n\n[[bench]]\nname = \"speed\"\npath = \"benchmarks/speed.rs\"\n",
+        );
+        assert_eq!(manifest.source_roots, ["src/custom.rs"]);
+        assert_eq!(manifest.entrypoints, ["tools/cli.rs"]);
+        assert_eq!(
+            manifest.rust_target_roots,
+            [
+                RustTargetRoot {
+                    path: "src/custom.rs".to_owned(),
+                    is_library: true,
+                },
+                RustTargetRoot {
+                    path: "tools/cli.rs".to_owned(),
+                    is_library: false,
+                },
+                RustTargetRoot {
+                    path: "examples/default-example.rs".to_owned(),
+                    is_library: false,
+                },
+                RustTargetRoot {
+                    path: "samples/demo.rs".to_owned(),
+                    is_library: false,
+                },
+                RustTargetRoot {
+                    path: "tests/default-test.rs".to_owned(),
+                    is_library: false,
+                },
+                RustTargetRoot {
+                    path: "checks/integration.rs".to_owned(),
+                    is_library: false,
+                },
+                RustTargetRoot {
+                    path: "benches/default-bench.rs".to_owned(),
+                    is_library: false,
+                },
+                RustTargetRoot {
+                    path: "benchmarks/speed.rs".to_owned(),
+                    is_library: false,
+                },
+            ]
+        );
     }
 }

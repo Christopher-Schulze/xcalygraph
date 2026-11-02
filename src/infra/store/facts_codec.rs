@@ -3,8 +3,8 @@
 use super::codec::{DecodeError, DecodeResult, Decoder, Encoder};
 use crate::domain::facts::{
     AssetMeta, Binding, ConfigKey, EnvDef, EnvRead, EnvSource, Facts, Fields, Import,
-    JuliaCallArgument, Manifest, Ref, RefKind, SourceIdentity, SourceIdentityKind, SymKind, Symbol,
-    TextSegment, ValueKind,
+    JuliaCallArgument, Manifest, Ref, RefKind, RustTargetRoot, SourceIdentity, SourceIdentityKind,
+    SymKind, Symbol, TextSegment, ValueKind,
 };
 
 /// Search terms as a token list, so each token is interned once in the shard's string table.
@@ -143,6 +143,11 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
             encoder.strs(&manifest.source_roots);
             encoder.strs(&manifest.include_dirs);
             encoder.strs(&manifest.entrypoints);
+            encoder.var_usize(manifest.rust_target_roots.len());
+            for root in &manifest.rust_target_roots {
+                encoder.str(&root.path);
+                encoder.u8(u8::from(root.is_library));
+            }
         }
         None => encoder.u8(0),
     }
@@ -311,6 +316,20 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             source_roots: decoder.strings()?,
             include_dirs: decoder.strings()?,
             entrypoints: decoder.strings()?,
+            rust_target_roots: {
+                let mut roots = Vec::new();
+                for _ in 0..decoder.len()? {
+                    roots.push(RustTargetRoot {
+                        path: decoder.string()?,
+                        is_library: match decoder.u8()? {
+                            0 => false,
+                            1 => true,
+                            _ => return Err(DecodeError("Rust target root kind")),
+                        },
+                    });
+                }
+                roots
+            },
         });
     }
     let mut identities = Vec::new();
@@ -477,6 +496,10 @@ mod tests {
                 source_roots: vec!["src".to_owned()],
                 include_dirs: vec!["include".to_owned()],
                 entrypoints: vec!["src/main.rs".to_owned()],
+                rust_target_roots: vec![RustTargetRoot {
+                    path: "src/lib.rs".to_owned(),
+                    is_library: true,
+                }],
             }),
         }
     }

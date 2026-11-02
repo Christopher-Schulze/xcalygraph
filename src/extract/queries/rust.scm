@@ -14,6 +14,12 @@
 (macro_definition name: (identifier) @name) @definition.macro
 (mod_item name: (identifier) @name) @definition.module
 
+((attribute_item
+  (attribute
+    (identifier) @_attribute
+    value: [(string_literal) (raw_string_literal)] @name))
+ (#eq? @_attribute "path")) @reference.path
+
 (impl_item type: (_) @impl.type) @impl
 (impl_item trait: (_) @impl.trait type: (_) @impl.type) @impl
 (trait_item bounds: (trait_bounds [(type_identifier) (scoped_type_identifier)] @name) @reference.inherit)

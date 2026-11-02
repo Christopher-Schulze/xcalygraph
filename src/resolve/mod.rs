@@ -29,7 +29,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 68;
+pub const RESOLVE_VERSION: u32 = 70;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1644,12 +1644,31 @@ impl<'a> Index<'a> {
         // `mod child;` declarations make child modules visible by name.
         let module = self.module_of(file);
         let key = self.modules.modules[module as usize].key.clone();
-        for symbol in &facts.symbols {
-            if symbol.kind() == SymKind::Mod
-                && symbol.parent.is_none()
-                && symbol.end_line == symbol.line
-                && let Some(child) = self.rust_child(&key, &symbol.name)
-            {
+        for (symbol_index, symbol) in facts.symbols.iter().enumerate() {
+            if symbol.kind() == SymKind::Mod && symbol.end_line == symbol.line {
+                if let Some(reference) = Self::rust_path_reference_index(facts, symbol_index) {
+                    if let Some(target) = self.modules.rust_path_target(file, reference)
+                        && target != file
+                        && !imports.files.contains(&(file, target))
+                    {
+                        imports.files.push((file, target));
+                    }
+                    if symbol.parent.is_none()
+                        && let Some(child) = self.modules.rust_path_module(file, reference)
+                    {
+                        imports
+                            .names
+                            .entry(symbol.name.clone())
+                            .or_insert(Target::Module(child));
+                    }
+                    continue;
+                }
+                if symbol.parent.is_some() {
+                    continue;
+                }
+                let Some(child) = self.rust_child(&key, &symbol.name) else {
+                    continue;
+                };
                 imports
                     .names
                     .entry(symbol.name.clone())
@@ -2155,13 +2174,34 @@ impl<'a> Index<'a> {
         let facts = self.facts(file)?;
         let base = self.base[file as usize];
         let mut parent: Option<u32> = None;
+        let mut external_target = None;
         for segment in qualifier.split("::") {
+            if let Some(target) = external_target.as_ref() {
+                external_target = self.rust_member(file, target, segment);
+                if external_target.is_none() {
+                    return Some(Vec::new());
+                }
+                continue;
+            }
             let found = facts.symbols.iter().position(|symbol| {
                 symbol.kind() == SymKind::Mod
                     && symbol.name == segment
                     && (parent.is_none() || symbol.parent == parent)
             })?;
             parent = Some(found as u32);
+            if let Some(reference) = Self::rust_path_reference_index(facts, found) {
+                let Some(module) = self.modules.rust_path_module(file, reference) else {
+                    return Some(Vec::new());
+                };
+                external_target = Some(Target::Module(module));
+            }
+        }
+        if let Some(target) = external_target {
+            return match self.rust_member(file, &target, name) {
+                Some(Target::Symbols(symbols)) => Some(symbols),
+                Some(Target::Module(_) | Target::External(_)) => Some(Vec::new()),
+                None => Some(Vec::new()),
+            };
         }
         let module = parent?;
         let members: Vec<u32> = facts
@@ -2172,6 +2212,24 @@ impl<'a> Index<'a> {
             .map(|(local, _)| base + local as u32)
             .collect();
         (!members.is_empty()).then_some(members)
+    }
+
+    fn rust_path_reference_index(facts: &Facts, symbol_index: usize) -> Option<u32> {
+        let symbol = u32::try_from(symbol_index).ok()?;
+        facts
+            .refs
+            .iter()
+            .enumerate()
+            .find(|(_, reference)| {
+                reference.kind == RefKind::Path
+                    && reference.scope == Some(symbol)
+                    && reference
+                        .qualifier
+                        .as_deref()
+                        .and_then(facts::rust_module_path_ref_context)
+                        .is_some()
+            })
+            .and_then(|(index, _)| u32::try_from(index).ok())
     }
 
     /// Names of the namespaces enclosing a symbol, outermost first.
@@ -2382,6 +2440,20 @@ impl<'a> Index<'a> {
                         },
                     },
                     RefKind::Inherit => self.resolve_supertype(file, imports, reference),
+                    RefKind::Path
+                        if reference
+                            .qualifier
+                            .as_deref()
+                            .and_then(facts::rust_module_path_ref_context)
+                            .is_some() =>
+                    {
+                        match local_reference
+                            .and_then(|index| self.modules.rust_path_target(file, index))
+                        {
+                            Some(target) => exact(self.symbols.len() as u32 + target),
+                            None => Outcome::Unresolved,
+                        }
+                    }
                     RefKind::Path => self.resolve_path(file, &reference.name),
                     RefKind::Mention => self.resolve_mention(file, &reference.name),
                     RefKind::Run => self.resolve_run(file, reference),

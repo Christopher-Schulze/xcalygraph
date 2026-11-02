@@ -1,0 +1,10 @@
+custom_root::call -uses-> declared::Declared @9
+custom_root::call -uses-> inline::nested::Nested @9
+custom_root::declared -references-> file:src/declared.rs @1
+custom_root::inline::nested -references-> file:src/inline/leaf.rs @5
+custom_root::nested_group::leaf -references-> file:tools/nested_group/leaf.rs @2
+custom_root::tool_call -uses-> nested_group::leaf::CliNested @6
+file:src/custom.rs -imports-> file:src/declared.rs @1
+file:src/custom.rs -imports-> file:src/inline/leaf.rs @1
+file:tools/cli.rs -imports-> file:tools/nested_group/leaf.rs @1
+entry tools/cli.rs

@@ -275,6 +275,34 @@ fn collect(
             }
         } else if let Some(kind) = primary.strip_prefix("reference.") {
             let Some(name) = get("name") else { continue };
+            if path.ends_with(".rs") && kind == "path" {
+                let Some(module) = rust_path_module(primary_node, source) else {
+                    continue;
+                };
+                let Some(path_value) = rust_string_literal(text(name)) else {
+                    continue;
+                };
+                let Some((module_path, inline_path)) = rust_module_path_context(module, source)
+                else {
+                    continue;
+                };
+                refs.insert(
+                    name.id(),
+                    RawRef {
+                        kind: Some(RefKind::Path),
+                        name: path_value,
+                        qualifier: Some(facts::rust_module_path_ref_qualifier(
+                            &module_path,
+                            &inline_path,
+                        )),
+                        position: module.start_byte(),
+                        line,
+                        arity: facts::NO_ARITY,
+                        ..RawRef::default()
+                    },
+                );
+                continue;
+            }
             // Rust macro token trees: `.method(...)` after anything but a plain receiver name
             // (`a.b().len()`) has an unknown receiver; query anchors skip the anonymous `.`.
             if primary_node.kind() == "token_tree"
@@ -930,6 +958,7 @@ fn ref_kind(kind: &str) -> Option<RefKind> {
     Some(match kind {
         "call" => RefKind::Call,
         "type" => RefKind::Type,
+        "path" => RefKind::Path,
         "inherit" | "class" => RefKind::Inherit,
         "implementation" | "implement" => RefKind::Implement,
         "value" => RefKind::Value,
@@ -1376,6 +1405,193 @@ fn source_reference_identity(
 
 fn row(node: Node) -> u32 {
     node.start_position().row as u32 + 1
+}
+
+fn rust_path_module<'tree>(attribute_item: Node<'tree>, source: &[u8]) -> Option<Node<'tree>> {
+    let mut sibling = attribute_item.next_named_sibling()?;
+    while sibling.kind() == "attribute_item" || sibling.kind().contains("comment") {
+        sibling = sibling.next_named_sibling()?;
+    }
+    if sibling.kind() != "mod_item" || sibling.child_by_field_name("body").is_some() {
+        return None;
+    }
+    let (path_attribute, _) = rust_module_path_attribute(sibling, source).ok()??;
+    (path_attribute.id() == attribute_item.id()).then_some(sibling)
+}
+
+fn rust_module_path_attribute<'tree>(
+    module: Node<'tree>,
+    source: &[u8],
+) -> Result<Option<(Node<'tree>, String)>, ()> {
+    let mut current = module.prev_named_sibling();
+    let mut found = None;
+    while let Some(sibling) = current {
+        if sibling.kind().contains("comment") {
+            current = sibling.prev_named_sibling();
+            continue;
+        }
+        if sibling.kind() != "attribute_item" {
+            break;
+        }
+        if let Some(value) = rust_path_attribute_value(sibling, source)? {
+            if found.is_some() {
+                return Err(());
+            }
+            found = Some(value);
+        }
+        current = sibling.prev_named_sibling();
+    }
+    Ok(found)
+}
+
+fn rust_path_attribute_value<'tree>(
+    attribute_item: Node<'tree>,
+    source: &[u8],
+) -> Result<Option<(Node<'tree>, String)>, ()> {
+    let Some(attribute) = attribute_item.named_child(0) else {
+        return Err(());
+    };
+    if attribute.kind() != "attribute" {
+        return Err(());
+    }
+    let Some(name) = attribute.named_child(0) else {
+        return Err(());
+    };
+    if name.kind() != "identifier" || name.utf8_text(source).map_err(|_| ())? != "path" {
+        return Ok(None);
+    }
+    let Some(value) = attribute.child_by_field_name("value") else {
+        return Err(());
+    };
+    let decoded = rust_string_literal(value.utf8_text(source).map_err(|_| ())?).ok_or(())?;
+    Ok(Some((attribute_item, decoded)))
+}
+
+fn rust_module_path_context(module: Node, source: &[u8]) -> Option<(String, String)> {
+    let mut inline_modules = Vec::new();
+    let mut ancestor = module.parent();
+    while let Some(node) = ancestor {
+        if node.kind() == "mod_item" && node.child_by_field_name("body").is_some() {
+            inline_modules.push(node);
+        }
+        ancestor = node.parent();
+    }
+    inline_modules.reverse();
+
+    let mut module_path = String::new();
+    let mut inline_path = String::new();
+    for inline in inline_modules {
+        let name = inline.child_by_field_name("name")?.utf8_text(source).ok()?;
+        append_module_path(&mut module_path, name);
+        let component = match rust_module_path_attribute(inline, source).ok()? {
+            Some((_, path)) => path,
+            None => name.strip_prefix("r#").unwrap_or(name).to_owned(),
+        };
+        append_path_expression(&mut inline_path, &component);
+    }
+    let name = module.child_by_field_name("name")?.utf8_text(source).ok()?;
+    append_module_path(&mut module_path, name);
+    Some((module_path, inline_path))
+}
+
+fn append_module_path(path: &mut String, name: &str) {
+    if !path.is_empty() {
+        path.push_str("::");
+    }
+    path.push_str(name);
+}
+
+fn append_path_expression(path: &mut String, component: &str) {
+    if component.starts_with('/') {
+        *path = component.to_owned();
+        return;
+    }
+    if component.is_empty() {
+        return;
+    }
+    if !path.is_empty() && !path.ends_with('/') {
+        path.push('/');
+    }
+    path.push_str(component);
+}
+
+fn rust_string_literal(text: &str) -> Option<String> {
+    if let Some(raw) = text.strip_prefix('r') {
+        let hashes = raw.bytes().take_while(|byte| *byte == b'#').count();
+        if raw.as_bytes().get(hashes) != Some(&b'"') {
+            return None;
+        }
+        let prefix_len = 1usize.checked_add(hashes)?.checked_add(1)?;
+        let suffix_len = hashes.checked_add(1)?;
+        let content_end = text.len().checked_sub(suffix_len)?;
+        let closing = text.get(content_end..)?;
+        if closing != format!("\"{}", "#".repeat(hashes)) {
+            return None;
+        }
+        return Some(text.get(prefix_len..content_end)?.to_owned());
+    }
+
+    let content = text.strip_prefix('"')?.strip_suffix('"')?;
+    let mut chars = content.chars().peekable();
+    let mut decoded = String::with_capacity(content.len());
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            decoded.push(character);
+            continue;
+        }
+        match chars.next()? {
+            '\'' => decoded.push('\''),
+            '"' => decoded.push('"'),
+            '\\' => decoded.push('\\'),
+            'n' => decoded.push('\n'),
+            'r' => decoded.push('\r'),
+            't' => decoded.push('\t'),
+            '0' => decoded.push('\0'),
+            'x' => {
+                let high = chars.next()?.to_digit(16)?;
+                let low = chars.next()?.to_digit(16)?;
+                let value = high.checked_mul(16)?.checked_add(low)?;
+                if value > 0x7f {
+                    return None;
+                }
+                decoded.push(char::from_u32(value)?);
+            }
+            'u' => {
+                if chars.next()? != '{' {
+                    return None;
+                }
+                let mut digits = String::new();
+                loop {
+                    match chars.next()? {
+                        '}' if !digits.is_empty() => break,
+                        '_' => {}
+                        digit if digit.is_ascii_hexdigit() => digits.push(digit),
+                        _ => return None,
+                    }
+                }
+                let value = u32::from_str_radix(&digits, 16).ok()?;
+                decoded.push(char::from_u32(value)?);
+            }
+            '\n' => skip_rust_string_continuation(&mut chars),
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                skip_rust_string_continuation(&mut chars);
+            }
+            _ => return None,
+        }
+    }
+    Some(decoded)
+}
+
+fn skip_rust_string_continuation(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    while chars
+        .peek()
+        .is_some_and(|character| character.is_whitespace())
+    {
+        chars.next();
+    }
 }
 
 /// Strips string quotes and backticks.
@@ -1916,5 +2132,27 @@ mod tests {
         assert_eq!(strip_comment("/**\n * Multi\n * line\n */"), " Multi line ");
         assert_eq!(unquote("\"os\""), "os");
         assert_eq!(unquote("`raw`"), "raw");
+    }
+
+    #[test]
+    fn rust_path_strings_decode_supported_literals() {
+        assert_eq!(
+            rust_string_literal("\"custom\\u{5f}widget.rs\""),
+            Some("custom_widget.rs".to_owned())
+        );
+        assert_eq!(
+            rust_string_literal("\"quoted\\'widget.rs\""),
+            Some("quoted'widget.rs".to_owned())
+        );
+        assert_eq!(
+            rust_string_literal("r##\"custom/widget.rs\"##"),
+            Some("custom/widget.rs".to_owned())
+        );
+        assert_eq!(
+            rust_string_literal("\"line\\\n    /file.rs\""),
+            Some("line/file.rs".to_owned())
+        );
+        assert_eq!(rust_string_literal("r\"unterminated\"#"), None);
+        assert_eq!(rust_string_literal("\"\\xFF.rs\""), None);
     }
 }

@@ -201,6 +201,45 @@ pub struct Ref {
 /// Arity of references that are no calls or whose arguments were not counted.
 pub const NO_ARITY: u8 = u8::MAX;
 
+/// Internal qualifier tag for Rust `#[path] mod` facts. The payload is two UTF-8 byte-length
+/// prefixed fields: the declared logical module suffix and the inline path context.
+pub const RUST_MODULE_PATH_REF_PREFIX: &str = "xcalygraph:rust-module-path:";
+
+pub fn rust_module_path_ref_qualifier(module_path: &str, inline_path: &str) -> String {
+    let mut qualifier = String::with_capacity(
+        RUST_MODULE_PATH_REF_PREFIX.len()
+            + module_path.len()
+            + inline_path.len()
+            + 2 * usize::BITS as usize / 3,
+    );
+    qualifier.push_str(RUST_MODULE_PATH_REF_PREFIX);
+    push_length_prefixed(&mut qualifier, module_path);
+    push_length_prefixed(&mut qualifier, inline_path);
+    qualifier
+}
+
+pub fn rust_module_path_ref_context(qualifier: &str) -> Option<(&str, &str)> {
+    let payload = qualifier.strip_prefix(RUST_MODULE_PATH_REF_PREFIX)?;
+    let (module_path, payload) = take_length_prefixed(payload)?;
+    let (inline_path, payload) = take_length_prefixed(payload)?;
+    payload.is_empty().then_some((module_path, inline_path))
+}
+
+fn push_length_prefixed(target: &mut String, value: &str) {
+    target.push_str(&value.len().to_string());
+    target.push(':');
+    target.push_str(value);
+}
+
+fn take_length_prefixed(source: &str) -> Option<(&str, &str)> {
+    let (length, payload) = source.split_once(':')?;
+    let length = length.parse::<usize>().ok()?;
+    if length > payload.len() || !payload.is_char_boundary(length) {
+        return None;
+    }
+    Some(payload.split_at(length))
+}
+
 /// Kind of local fact that has an exact language-level callable identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
@@ -375,6 +414,15 @@ pub struct Manifest {
     pub source_roots: Vec<String>,
     pub include_dirs: Vec<String>,
     pub entrypoints: Vec<String>,
+    /// Cargo crate roots with library identity retained for module resolution.
+    pub rust_target_roots: Vec<RustTargetRoot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RustTargetRoot {
+    /// Path relative to `Cargo.toml`.
+    pub path: String,
+    pub is_library: bool,
 }
 
 /// Everything extracted from one file.
@@ -497,6 +545,20 @@ mod tests {
         assert_eq!(
             first_sentence("Uses v1.2 format\nfor x"),
             "Uses v1.2 format for x"
+        );
+    }
+
+    #[test]
+    fn rust_module_path_qualifiers_round_trip_paths_without_delimiter_assumptions() {
+        let qualifier = rust_module_path_ref_qualifier("inventory::r#type", "thread_files/naïve");
+        assert_eq!(
+            rust_module_path_ref_context(&qualifier),
+            Some(("inventory::r#type", "thread_files/naïve"))
+        );
+        assert_eq!(rust_module_path_ref_context("receiver"), None);
+        assert_eq!(
+            rust_module_path_ref_context("xcalygraph:rust-module-path:99:x"),
+            None
         );
     }
 }

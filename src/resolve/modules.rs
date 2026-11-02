@@ -1,9 +1,9 @@
 //! Module units per language (`docs/spec.md` section 6, module unit column).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::domain::corpus::FileRecord;
-use crate::domain::facts::Facts;
+use crate::domain::facts::{self, Facts};
 use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
@@ -29,17 +29,38 @@ pub struct ModuleMap {
     pub go_modules: Vec<(String, String)>,
     /// Rust crates: directory and crate name.
     pub crates: Vec<(String, String)>,
+    rust_target_roots: HashMap<String, CargoRootKind>,
+    /// Exact file target for each Rust `#[path] mod` reference, keyed by (source file, ref index).
+    pub rust_path_targets: HashMap<(u32, u32), u32>,
+    /// Module target for each unambiguous Rust `#[path] mod` declaration.
+    pub rust_path_modules: HashMap<(u32, u32), u32>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CargoRootKind {
+    Library,
+    Target,
+    Ambiguous,
 }
 
 impl ModuleMap {
     pub fn get(&self, key: &str) -> Option<u32> {
         self.by_key.get(key).copied()
     }
+
+    pub fn rust_path_target(&self, file: u32, reference: u32) -> Option<u32> {
+        self.rust_path_targets.get(&(file, reference)).copied()
+    }
+
+    pub fn rust_path_module(&self, file: u32, reference: u32) -> Option<u32> {
+        self.rust_path_modules.get(&(file, reference)).copied()
+    }
 }
 
 pub fn assign(files: &[FileRecord], facts: &[Option<Facts>]) -> ModuleMap {
     let mut go_modules: Vec<(String, String)> = Vec::new();
     let mut crates: Vec<(String, String)> = Vec::new();
+    let mut rust_target_roots = HashMap::new();
     for (record, facts) in files.iter().zip(facts) {
         let Some(manifest) = facts.as_ref().and_then(|facts| facts.manifest.as_ref()) else {
             continue;
@@ -55,6 +76,20 @@ pub fn assign(files: &[FileRecord], facts: &[Option<Facts>]) -> ModuleMap {
                 if let Some(name) = &manifest.module {
                     crates.push((dir, name.replace('-', "_")));
                 }
+                for root in &manifest.rust_target_roots {
+                    let Some(path) = append_root_relative(parent_dir(&record.path), &root.path)
+                    else {
+                        continue;
+                    };
+                    let kind = if root.is_library {
+                        CargoRootKind::Library
+                    } else {
+                        CargoRootKind::Target
+                    };
+                    if rust_target_roots.insert(path.clone(), kind).is_some() {
+                        rust_target_roots.insert(path, CargoRootKind::Ambiguous);
+                    }
+                }
             }
             _ => {}
         }
@@ -67,21 +102,538 @@ pub fn assign(files: &[FileRecord], facts: &[Option<Facts>]) -> ModuleMap {
         by_key: HashMap::new(),
         go_modules,
         crates,
+        rust_target_roots,
+        rust_path_targets: HashMap::new(),
+        rust_path_modules: HashMap::new(),
     };
-    for (record, facts) in files.iter().zip(facts) {
-        let info = module_of(&map, record, facts.as_ref());
-        let id = match map.by_key.get(&info.key) {
-            Some(&id) => id,
-            None => {
-                let id = map.modules.len() as u32;
-                map.by_key.insert(info.key.clone(), id);
-                map.modules.push(info);
-                id
-            }
-        };
+    let rust_path_refs = rust_module_path_refs(facts);
+    if rust_path_refs.is_empty() {
+        for (record, file_facts) in files.iter().zip(facts) {
+            let info = module_of(&map, record, file_facts.as_ref());
+            let id = insert_module(&mut map, info);
+            map.file_module.push(id);
+        }
+        return map;
+    }
+    let base_infos: Vec<ModuleInfo> = files
+        .iter()
+        .zip(facts)
+        .map(|(record, facts)| module_of(&map, record, facts.as_ref()))
+        .collect();
+    map.rust_path_targets =
+        resolve_rust_path_targets(files, facts, &map, &base_infos, &rust_path_refs);
+    let (infos, valid_modules) = rust_module_overrides(
+        files,
+        &map,
+        &base_infos,
+        &rust_path_refs,
+        &map.rust_path_targets,
+    );
+    for info in infos {
+        let id = insert_module(&mut map, info);
         map.file_module.push(id);
     }
+    for reference in &rust_path_refs {
+        let (Ok(source), Ok(reference_index)) = (
+            u32::try_from(reference.source),
+            u32::try_from(reference.reference),
+        ) else {
+            continue;
+        };
+        let Some(target) = map.rust_path_target(source, reference_index) else {
+            continue;
+        };
+        let target = target as usize;
+        if valid_modules.get(target).copied().unwrap_or(false)
+            && base_infos
+                .get(target)
+                .is_some_and(|info| info.file_type == Some(FileType::Rust))
+            && let Some(module) = map.file_module.get(target).copied()
+        {
+            map.rust_path_modules
+                .insert((source, reference_index), module);
+        }
+    }
     map
+}
+
+fn insert_module(map: &mut ModuleMap, info: ModuleInfo) -> u32 {
+    if let Some(&id) = map.by_key.get(&info.key) {
+        return id;
+    }
+    let id = map.modules.len() as u32;
+    map.by_key.insert(info.key.clone(), id);
+    map.modules.push(info);
+    id
+}
+
+#[derive(Clone, Copy)]
+struct RustModulePathRef<'a> {
+    source: usize,
+    reference: usize,
+    path: &'a str,
+    module_suffix: &'a str,
+    inline_path: &'a str,
+}
+
+fn rust_module_path_refs(facts: &[Option<Facts>]) -> Vec<RustModulePathRef<'_>> {
+    let mut references = Vec::new();
+    for (source, file_facts) in facts.iter().enumerate() {
+        let Some(file_facts) = file_facts else {
+            continue;
+        };
+        for (reference, fact) in file_facts.refs.iter().enumerate() {
+            if fact.kind != facts::RefKind::Path {
+                continue;
+            }
+            let Some(qualifier) = fact.qualifier.as_deref() else {
+                continue;
+            };
+            let Some((module_suffix, inline_path)) = facts::rust_module_path_ref_context(qualifier)
+            else {
+                continue;
+            };
+            references.push(RustModulePathRef {
+                source,
+                reference,
+                path: &fact.name,
+                module_suffix,
+                inline_path,
+            });
+        }
+    }
+    references
+}
+
+fn resolve_rust_path_targets(
+    files: &[FileRecord],
+    facts: &[Option<Facts>],
+    map: &ModuleMap,
+    base_infos: &[ModuleInfo],
+    references: &[RustModulePathRef<'_>],
+) -> HashMap<(u32, u32), u32> {
+    if references.is_empty() {
+        return HashMap::new();
+    }
+    let path_index: HashMap<&str, usize> = files
+        .iter()
+        .enumerate()
+        .map(|(index, record)| (record.path.as_str(), index))
+        .collect();
+    let mut path_loaded = vec![false; files.len()];
+    let mut seen = HashSet::new();
+    seen.insert(Vec::<usize>::new());
+
+    for _ in 0..=references.len() {
+        let targets =
+            resolve_rust_path_targets_once(files, map, references, &path_index, &path_loaded);
+        let mut next_loaded = vec![false; files.len()];
+        for target in targets.values() {
+            let index = *target as usize;
+            if base_infos
+                .get(index)
+                .is_some_and(|info| info.file_type == Some(FileType::Rust))
+                && facts.get(index).is_some_and(Option::is_some)
+            {
+                next_loaded[index] = true;
+            }
+        }
+        if next_loaded == path_loaded {
+            return targets;
+        }
+        let state: Vec<usize> = next_loaded
+            .iter()
+            .enumerate()
+            .filter_map(|(index, loaded)| loaded.then_some(index))
+            .collect();
+        if !seen.insert(state) {
+            return resolve_rust_path_targets_direct(files, references, &path_index);
+        }
+        path_loaded = next_loaded;
+    }
+    resolve_rust_path_targets_direct(files, references, &path_index)
+}
+
+fn resolve_rust_path_targets_once(
+    files: &[FileRecord],
+    map: &ModuleMap,
+    references: &[RustModulePathRef<'_>],
+    path_index: &HashMap<&str, usize>,
+    path_loaded: &[bool],
+) -> HashMap<(u32, u32), u32> {
+    let mut targets = HashMap::new();
+    for reference in references {
+        let Some(source) = files.get(reference.source) else {
+            continue;
+        };
+        let inline = reference.module_suffix.contains("::");
+        let base = if inline {
+            let Some(module_dir) = rust_source_module_directory(
+                map,
+                &source.path,
+                path_loaded.get(reference.source).copied().unwrap_or(false),
+            ) else {
+                continue;
+            };
+            let Some(inline_dir) = append_root_relative(&module_dir, reference.inline_path) else {
+                continue;
+            };
+            inline_dir
+        } else {
+            parent_dir(&source.path).to_owned()
+        };
+        let Some(path) = append_root_relative(&base, reference.path) else {
+            continue;
+        };
+        let Some(target) = path_index.get(path.as_str()) else {
+            continue;
+        };
+        if let (Ok(source), Ok(reference), Ok(target)) = (
+            u32::try_from(reference.source),
+            u32::try_from(reference.reference),
+            u32::try_from(*target),
+        ) {
+            targets.insert((source, reference), target);
+        }
+    }
+    targets
+}
+
+fn resolve_rust_path_targets_direct(
+    files: &[FileRecord],
+    references: &[RustModulePathRef<'_>],
+    path_index: &HashMap<&str, usize>,
+) -> HashMap<(u32, u32), u32> {
+    let mut targets = HashMap::new();
+    for reference in references
+        .iter()
+        .filter(|reference| !reference.module_suffix.contains("::"))
+    {
+        let Some(source) = files.get(reference.source) else {
+            continue;
+        };
+        let base = parent_dir(&source.path);
+        let Some(path) = append_root_relative(base, reference.path) else {
+            continue;
+        };
+        let Some(target) = path_index.get(path.as_str()) else {
+            continue;
+        };
+        if let (Ok(source), Ok(reference), Ok(target)) = (
+            u32::try_from(reference.source),
+            u32::try_from(reference.reference),
+            u32::try_from(*target),
+        ) {
+            targets.insert((source, reference), target);
+        }
+    }
+    targets
+}
+
+fn rust_source_module_directory(map: &ModuleMap, path: &str, path_loaded: bool) -> Option<String> {
+    if path_loaded {
+        return Some(parent_dir(path).to_owned());
+    }
+    let (crate_dir, _) = rust_crate(map, path);
+    let relative = path
+        .strip_prefix(crate_dir.as_str())
+        .unwrap_or(path)
+        .trim_start_matches('/');
+    let file_name = relative.rsplit('/').next().unwrap_or(relative);
+    if file_name == "mod.rs" || rust_is_root(map, path, relative) {
+        return Some(parent_dir(path).to_owned());
+    }
+    let stem = file_name.strip_suffix(".rs")?;
+    let stem = stem.strip_prefix("r#").unwrap_or(stem);
+    Some(join_path(parent_dir(path), stem))
+}
+
+fn rust_is_crate_root(relative: &str) -> bool {
+    if matches!(
+        relative,
+        "lib.rs" | "main.rs" | "build.rs" | "src/lib.rs" | "src/main.rs"
+    ) {
+        return true;
+    }
+    let parts: Vec<&str> = relative.split('/').collect();
+    let Some(file_name) = parts.last().copied() else {
+        return false;
+    };
+    if !file_name.ends_with(".rs") {
+        return false;
+    }
+    (parts.len() == 3 && parts[0] == "src" && parts[1] == "bin")
+        || (parts.len() == 2 && matches!(parts[0], "tests" | "examples" | "benches"))
+        || (parts.len() == 4 && parts[0] == "src" && parts[1] == "bin" && file_name == "main.rs")
+}
+
+fn rust_is_root(map: &ModuleMap, path: &str, relative: &str) -> bool {
+    rust_is_crate_root(relative) || map.rust_target_roots.contains_key(path)
+}
+
+fn rust_root_target(map: &ModuleMap, path: &str, relative: &str) -> Option<String> {
+    match map.rust_target_roots.get(path) {
+        Some(CargoRootKind::Library) => Some(String::new()),
+        Some(CargoRootKind::Target) => Some(rust_target(relative)),
+        Some(CargoRootKind::Ambiguous) => None,
+        None => rust_is_crate_root(relative).then(|| rust_target(relative)),
+    }
+}
+
+fn append_root_relative(base: &str, relative: &str) -> Option<String> {
+    let relative = if cfg!(windows) {
+        relative.replace('\\', "/")
+    } else {
+        relative.to_owned()
+    };
+    if relative.starts_with('/')
+        || relative.contains('\0')
+        || (cfg!(windows)
+            && relative.as_bytes().get(1) == Some(&b':')
+            && relative
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphabetic))
+    {
+        return None;
+    }
+    let mut parts: Vec<&str> = base.split('/').filter(|part| !part.is_empty()).collect();
+    for part in relative.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            _ => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+fn rust_module_overrides(
+    files: &[FileRecord],
+    map: &ModuleMap,
+    base_infos: &[ModuleInfo],
+    references: &[RustModulePathRef<'_>],
+    path_targets: &HashMap<(u32, u32), u32>,
+) -> (Vec<ModuleInfo>, Vec<bool>) {
+    let mut incoming = vec![Vec::<(usize, String)>::new(); files.len()];
+    for reference in references {
+        let (Ok(source), Ok(reference_index)) = (
+            u32::try_from(reference.source),
+            u32::try_from(reference.reference),
+        ) else {
+            continue;
+        };
+        let Some(target) = path_targets.get(&(source, reference_index)) else {
+            continue;
+        };
+        let target = *target as usize;
+        if base_infos
+            .get(target)
+            .is_some_and(|info| info.file_type == Some(FileType::Rust))
+            && let Some(candidates) = incoming.get_mut(target)
+        {
+            candidates.push((reference.source, reference.module_suffix.to_owned()));
+        }
+    }
+    for candidates in &mut incoming {
+        candidates.sort_unstable();
+        candidates.dedup();
+    }
+
+    let mut parents = vec![None; files.len()];
+    let mut suffixes = vec![None; files.len()];
+    let mut ambiguous = vec![false; files.len()];
+    for (target, candidates) in incoming.iter().enumerate() {
+        match candidates.as_slice() {
+            [(parent, suffix)] => {
+                parents[target] = Some(*parent);
+                suffixes[target] = Some(suffix.clone());
+            }
+            [] => {}
+            _ => ambiguous[target] = true,
+        }
+    }
+    for (file, record) in files.iter().enumerate() {
+        if matches!(
+            map.rust_target_roots.get(&record.path),
+            Some(CargoRootKind::Ambiguous)
+        ) {
+            ambiguous[file] = true;
+        }
+    }
+
+    let base_logical: Vec<String> = files
+        .iter()
+        .map(|record| {
+            let (crate_dir, _) = rust_crate(map, &record.path);
+            let relative = record
+                .path
+                .strip_prefix(crate_dir.as_str())
+                .unwrap_or(&record.path)
+                .trim_start_matches('/');
+            if rust_is_root(map, &record.path, relative) {
+                String::new()
+            } else {
+                rust_module_path(relative)
+            }
+        })
+        .collect();
+    let (mut infos, mut valid) = {
+        let mut resolver = RustModuleInfoResolver {
+            base_infos,
+            base_logical: &base_logical,
+            parents: &parents,
+            suffixes: &suffixes,
+            ambiguous: &ambiguous,
+            state: vec![0; files.len()],
+            effective: vec![None; files.len()],
+            valid: vec![false; files.len()],
+        };
+        let mut infos = Vec::with_capacity(files.len());
+        for file in 0..files.len() {
+            let (info, _, _) = resolver.resolve(file);
+            infos.push(info);
+        }
+        (infos, resolver.valid)
+    };
+
+    let mut path_target_files = HashSet::new();
+    let mut path_claims = HashMap::<String, HashSet<usize>>::new();
+    for reference in references {
+        let (Ok(source), Ok(reference_index)) = (
+            u32::try_from(reference.source),
+            u32::try_from(reference.reference),
+        ) else {
+            continue;
+        };
+        let Some(target) = path_targets.get(&(source, reference_index)) else {
+            continue;
+        };
+        let target = *target as usize;
+        if !base_infos
+            .get(target)
+            .is_some_and(|info| info.file_type == Some(FileType::Rust))
+        {
+            continue;
+        }
+        path_target_files.insert(target);
+        if valid.get(target).copied().unwrap_or(false)
+            && let Some(info) = infos.get(target)
+        {
+            path_claims
+                .entry(info.key.clone())
+                .or_default()
+                .insert(target);
+        }
+    }
+    for targets in path_claims.values().filter(|targets| targets.len() > 1) {
+        for &target in targets {
+            valid[target] = false;
+        }
+    }
+    for (file, info) in infos.iter_mut().enumerate() {
+        let owns_unique_path = path_claims
+            .get(&info.key)
+            .is_some_and(|targets| targets.len() == 1 && targets.contains(&file));
+        if owns_unique_path
+            || (!path_target_files.contains(&file) && !path_claims.contains_key(&info.key))
+        {
+            continue;
+        }
+        let physical_module = format!("file:{}", files[file].path);
+        info.key = physical_module.clone();
+        info.name = physical_module.clone();
+        info.method_scope = physical_module;
+    }
+    (infos, valid)
+}
+
+struct RustModuleInfoResolver<'a> {
+    base_infos: &'a [ModuleInfo],
+    base_logical: &'a [String],
+    parents: &'a [Option<usize>],
+    suffixes: &'a [Option<String>],
+    ambiguous: &'a [bool],
+    state: Vec<u8>,
+    effective: Vec<Option<(ModuleInfo, String)>>,
+    valid: Vec<bool>,
+}
+
+impl RustModuleInfoResolver<'_> {
+    fn resolve(&mut self, file: usize) -> (ModuleInfo, String, bool) {
+        if self.state[file] == 2 {
+            if let Some((info, logical)) = &self.effective[file] {
+                return (info.clone(), logical.clone(), self.valid[file]);
+            }
+            return (
+                self.base_infos[file].clone(),
+                self.base_logical[file].clone(),
+                false,
+            );
+        }
+        if self.state[file] == 1 {
+            return (
+                self.base_infos[file].clone(),
+                self.base_logical[file].clone(),
+                false,
+            );
+        }
+        self.state[file] = 1;
+
+        let (info, logical, is_valid) = if self.ambiguous[file] {
+            (
+                self.base_infos[file].clone(),
+                self.base_logical[file].clone(),
+                false,
+            )
+        } else if let (Some(parent), Some(suffix)) =
+            (self.parents[file], self.suffixes[file].clone())
+        {
+            let (parent_info, parent_logical, parent_valid) = self.resolve(parent);
+            if parent_valid {
+                let logical = append_rust_module_path(&parent_logical, &suffix);
+                let key = format!("{}::{logical}", parent_info.method_scope);
+                (
+                    ModuleInfo {
+                        key,
+                        name: logical.clone(),
+                        separator: "::",
+                        method_scope: parent_info.method_scope,
+                        file_type: Some(FileType::Rust),
+                    },
+                    logical,
+                    true,
+                )
+            } else {
+                (
+                    self.base_infos[file].clone(),
+                    self.base_logical[file].clone(),
+                    false,
+                )
+            }
+        } else {
+            (
+                self.base_infos[file].clone(),
+                self.base_logical[file].clone(),
+                true,
+            )
+        };
+
+        self.state[file] = 2;
+        self.valid[file] = is_valid;
+        self.effective[file] = Some((info.clone(), logical.clone()));
+        (info, logical, is_valid)
+    }
+}
+
+fn append_rust_module_path(parent: &str, suffix: &str) -> String {
+    if parent.is_empty() {
+        suffix.to_owned()
+    } else {
+        format!("{parent}::{suffix}")
+    }
 }
 
 fn module_of(map: &ModuleMap, record: &FileRecord, facts: Option<&Facts>) -> ModuleInfo {
@@ -292,9 +844,28 @@ fn module_of(map: &ModuleMap, record: &FileRecord, facts: Option<&Facts>) -> Mod
                 .strip_prefix(crate_dir.as_str())
                 .unwrap_or(&record.path)
                 .trim_start_matches('/');
-            let path = rust_module_path(relative);
+            let is_root = rust_is_root(map, &record.path, relative);
+            let path = if is_root {
+                String::new()
+            } else {
+                rust_module_path(relative)
+            };
+            let target = rust_root_target(map, &record.path, relative);
+            if is_root && target.is_none() {
+                let key = format!("file:{}", record.path);
+                return ModuleInfo {
+                    name: record.path.clone(),
+                    method_scope: key.clone(),
+                    key,
+                    separator: "::",
+                    file_type: Some(FileType::Rust),
+                };
+            }
             let key = if path.is_empty() {
-                format!("{crate_name}::{}", rust_target(relative))
+                format!(
+                    "{crate_name}::{}",
+                    target.unwrap_or_else(|| rust_target(relative))
+                )
             } else {
                 format!("{crate_name}::{path}")
             };
@@ -361,8 +932,8 @@ pub fn rust_crate(map: &ModuleMap, path: &str) -> (String, String) {
     (String::new(), "crate".to_owned())
 }
 
-/// Module path of a crate-relative Rust file: `src/a/b.rs` and `src/a/b/mod.rs` -> `a::b`;
-/// crate roots (`src/lib.rs`, `src/main.rs`, `src/bin/x.rs`, `tests/x.rs`) -> empty.
+/// Module path from conventional Rust file layout; explicit Cargo target roots are handled by the
+/// module map.
 pub fn rust_module_path(relative: &str) -> String {
     let Some(inner) = relative.strip_prefix("src/") else {
         return String::new();

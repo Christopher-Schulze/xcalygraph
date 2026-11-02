@@ -179,7 +179,7 @@ Freshness:
 | language | module unit | import resolution |
 |----------|-------------|-------------------|
 | Go | package directory | `go.mod` and `go.work` module paths plus import path -> directory |
-| Rust | module tree from `mod` declarations and file layout; crate per `Cargo.toml` target | `use` paths with `crate::`, `super::`, `self::`, workspace crates, `pub use` re-exports |
+| Rust | module tree from `mod` declarations and file layout; `#[path]` binds a declaration to the exact in-root source file and declared logical module path; crate per `Cargo.toml` target | `use` paths with `crate::`, `super::`, `self::`, workspace crates, `pub use` re-exports |
 | TypeScript, JavaScript, Vue, Svelte, Astro | file | relative specifiers with extension and index probing; `tsconfig.json` and `jsconfig.json` `paths` and `baseUrl`; `package.json` `exports` and workspaces; CommonJS `require` |
 | Python | module file or package; source roots: root, `src/`, pyproject package directories | absolute and relative imports, namespace packages, `__init__.py` re-exports |
 | Java, Kotlin, Scala, Groovy | package declaration; source roots `src/{main,test}/<language>/` or the path suffix matching the package | single-type, wildcard and static imports; same package without import |
