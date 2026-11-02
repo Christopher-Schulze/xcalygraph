@@ -8,6 +8,10 @@ use crate::domain::facts::{FLAG_DECLARATION, Import, SymKind};
 use crate::domain::filetype::FileType;
 use crate::extract::engine::{Definition, FileContext, Hooks, unquote};
 
+#[cfg(feature = "lang-typescript")]
+#[path = "typescript_number.rs"]
+mod number;
+
 pub const HOOKS: Hooks = Hooks {
     exported,
     signature_prefix,
@@ -73,15 +77,7 @@ pub(in crate::extract) fn simple_property_key(
                 Some(FieldName::Text(content.to_owned()))
             }
         }
-        "number" => {
-            if !text.bytes().all(|byte| byte.is_ascii_digit())
-                || (text.len() > 1 && text.starts_with('0'))
-                || text.parse::<u64>().ok()? > 9_007_199_254_740_991
-            {
-                return None;
-            }
-            Some(FieldName::Text(text.to_owned()))
-        }
+        "number" => number::property_key(text).map(FieldName::Text),
         _ => None,
     }
 }
@@ -336,6 +332,65 @@ mod tests {
 
     #[test]
     #[cfg(feature = "lang-typescript")]
+    fn numeric_property_keys_follow_ecmascript_value_and_spelling() {
+        use crate::domain::corpus::FileRecord;
+        use crate::domain::role::Role;
+
+        let source = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/typescript-numeric-property-keys.ts"
+        ));
+        let record = FileRecord {
+            path: "numeric-property-keys.ts".to_owned(),
+            size: source.len() as u64,
+            mtime_ns: 0,
+            identity: None,
+            hash: 0,
+            role: Role::Src,
+            file_type: Some(FileType::TypeScript),
+        };
+        let facts = crate::extract::extract(&record, source);
+        let numeric = facts
+            .fields
+            .iter()
+            .find(|fields| facts.symbols[fields.owner as usize].name == "NumericKeys");
+        assert!(numeric.is_some(), "missing numeric fields: {facts:#?}");
+        if let Some(numeric) = numeric {
+            assert_eq!(
+                numeric
+                    .names
+                    .iter()
+                    .filter_map(FieldName::text)
+                    .collect::<Vec<_>>(),
+                [
+                    "16",
+                    "1000",
+                    "10",
+                    "63",
+                    "1234",
+                    "92862869855095860",
+                    "679496604817411.2",
+                    "1e-7",
+                    "0.000001",
+                    "1e+21",
+                    "100000000000000000000",
+                    "Infinity",
+                    "9007199254740992"
+                ]
+            );
+        }
+        let ambiguous = facts
+            .fields
+            .iter()
+            .find(|fields| facts.symbols[fields.owner as usize].name == "AmbiguousDecimalKey");
+        assert_eq!(
+            ambiguous.map(|fields| fields.names.as_slice()),
+            Some([FieldName::Text("safe".to_owned())].as_slice())
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "lang-typescript")]
     fn string_escape_decoding_preserves_utf16_and_rejects_invalid_escapes() {
         assert_eq!(
             decode_string_content("escaped\\u0061"),
@@ -455,11 +510,14 @@ mod tests {
                     Some("ümlaut"),
                     Some("123"),
                     Some("9007199254740991"),
+                    Some("9007199254740992"),
                     Some("a,b"),
                     Some(""),
                     Some("escapeda"),
                     None,
-                    Some("\\uD800")
+                    Some("\\uD800"),
+                    Some("16"),
+                    Some("1000")
                 ]
             );
             assert_eq!(config.types[0..2], ["number", "number"]);
@@ -469,7 +527,7 @@ mod tests {
                 ["string", "string", "string", "boolean"]
             );
             assert_eq!(config.types[8], "number");
-            assert_eq!(config.types[11], "string");
+            assert_eq!(config.types[12], "string");
             assert!(
                 !config
                     .names
@@ -478,8 +536,7 @@ mod tests {
                     .any(|name| name == "inner"
                         || name == "run"
                         || name == "escaped\\u0061"
-                        || name == "0x10"
-                        || name == "16")
+                        || name == "0x10")
             );
         }
         let other = fields("Other");

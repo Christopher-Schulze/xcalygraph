@@ -102,3 +102,36 @@ fn typescript_field_lists_are_lossless_and_budgeted() -> Result<(), Box<dyn Erro
     }
     Ok(())
 }
+
+#[test]
+fn typescript_numeric_keys_are_canonical_in_the_persisted_card() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    fs::create_dir(fixture.0.join("repo"))?;
+    fs::write(
+        fixture.0.join("repo/keys.ts"),
+        include_bytes!("fixtures/typescript-numeric-property-keys.ts"),
+    )?;
+    let names = "16,1000,10,63,1234,92862869855095860,679496604817411.2,1e-7,0.000001,1e+21,100000000000000000000,Infinity,9007199254740992";
+    let text = fixture.run(&["show", "NumericKeys"])?;
+    assert!(text.status.success());
+    let text = String::from_utf8(text.stdout)?;
+    assert!(
+        text.lines().any(|line| line == format!("f {names}")),
+        "{text}"
+    );
+    let json = fixture.run(&["show", "NumericKeys", "--json", "--read-only"])?;
+    assert!(json.status.success());
+    let json = String::from_utf8(json.stdout)?;
+    assert!(
+        json.contains(&format!("\"rel\":\"fields\",\"name\":\"{names}\"")),
+        "{json}"
+    );
+    let ambiguous = fixture.run(&["show", "AmbiguousDecimalKey", "--read-only"])?;
+    assert!(ambiguous.status.success());
+    let ambiguous = String::from_utf8(ambiguous.stdout)?;
+    assert!(
+        ambiguous.lines().any(|line| line == "f safe"),
+        "{ambiguous}"
+    );
+    Ok(())
+}
