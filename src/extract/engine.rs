@@ -506,6 +506,23 @@ fn collect(
     if path.ends_with(".go") {
         super::go_embed::collect(root, source, &mut parsed);
     }
+    #[cfg(feature = "lang-typescript")]
+    if super::lang::typescript::is_typescript_path(path) {
+        let scope =
+            super::lang::typescript::file_scope(root, source, cursor.did_exceed_match_limit());
+        let mut identities = parsed
+            .facts
+            .source_identities
+            .take()
+            .map_or_else(Vec::new, |items| items.into_vec());
+        identities.push(SourceIdentity {
+            kind: SourceIdentityKind::TypeScriptScope,
+            index: 0,
+            identity: scope.to_owned(),
+        });
+        identities.sort_unstable_by_key(|identity| (identity.kind, identity.index));
+        parsed.facts.source_identities = Some(identities.into_boxed_slice());
+    }
     parsed.facts.doc = doc;
     parsed.facts.entry |= entry;
     parsed.incomplete = incomplete;
@@ -694,9 +711,10 @@ fn assemble(assembly: Assembly) -> Parsed {
         #[cfg(feature = "lang-typescript")]
         if kind == SymKind::Iface
             && parent.is_none()
-            && repeated_interfaces
+            && (repeated_interfaces
                 .get(def.name.as_str())
                 .is_some_and(|&count| count > 1)
+                || (exported && super::lang::typescript::is_typescript_path(path)))
             && let Some(identity) = signature_identity(node, source)
             && let Ok(index) = u32::try_from(index)
         {

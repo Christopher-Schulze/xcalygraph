@@ -29,7 +29,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 77;
+pub const RESOLVE_VERSION: u32 = 78;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -133,6 +133,23 @@ pub fn build(input: &Input) -> Graph {
         .map(|file| index.imports(file as u32))
         .collect();
     index.file_imports = imports;
+    #[cfg(feature = "lang-typescript")]
+    if index.link_typescript_imported_groups() {
+        index.by_module.clear();
+        index.methods.clear();
+        index.types.clear();
+        index.by_name.clear();
+        index.returns.clear();
+        index.field_types.clear();
+        index.field_names.clear();
+        index.global_usings.clear();
+        index.tables.clear();
+        index.build_tables();
+        index.file_imports = (0..input.files.len())
+            .into_par_iter()
+            .map(|file| index.imports(file as u32))
+            .collect();
+    }
     index.link_implementations();
     let resolved: Vec<Resolved> = (0..input.files.len())
         .into_par_iter()
@@ -355,6 +372,223 @@ impl<'a> Index<'a> {
             })
             .collect();
         index
+    }
+
+    /// Add same-file groups only after all TypeScript scope and imported base evidence is known.
+    #[cfg(feature = "lang-typescript")]
+    fn link_typescript_imported_groups(&mut self) -> bool {
+        if self
+            .input
+            .files
+            .iter()
+            .enumerate()
+            .any(|(file, record)| match record.file_type {
+                Some(FileType::Vue | FileType::Svelte | FileType::Astro) => true,
+                Some(FileType::TypeScript) => {
+                    self.facts(file as u32).and_then(|facts| {
+                        facts.source_identity(SourceIdentityKind::TypeScriptScope, 0)
+                    }) != Some("clear")
+                }
+                _ => false,
+            })
+        {
+            return false;
+        }
+        let mut module_files: HashMap<u32, Vec<u32>> = HashMap::default();
+        for (file, record) in self.input.files.iter().enumerate() {
+            if record.file_type == Some(FileType::TypeScript) {
+                let file = file as u32;
+                module_files
+                    .entry(self.module_of(file))
+                    .or_default()
+                    .push(file);
+            }
+        }
+        let mut groups = Vec::new();
+        for (file, facts) in self.input.facts.iter().enumerate() {
+            if self.file_type(file as u32) != Some(FileType::TypeScript) {
+                continue;
+            }
+            let Some(facts) = facts else { continue };
+            if facts
+                .symbols
+                .iter()
+                .any(|symbol| symbol.parent.is_none() && symbol.name.contains('\\'))
+            {
+                continue;
+            }
+            let mut names: HashMap<&str, Vec<u32>> = HashMap::default();
+            for (local, symbol) in facts
+                .symbols
+                .iter()
+                .enumerate()
+                .filter(|(_, symbol)| symbol.parent.is_none())
+            {
+                if let Ok(local) = u32::try_from(local) {
+                    names.entry(&symbol.name).or_default().push(local);
+                }
+            }
+            for parts in names.values().filter(|parts| parts.len() > 1) {
+                if let Some(group) =
+                    self.prove_typescript_imported_group(file as u32, facts, parts, &module_files)
+                {
+                    groups.push(group);
+                }
+            }
+        }
+        for group in &groups {
+            let canonical = group[0];
+            for &part in group {
+                self.interface_canonical.insert(part, canonical);
+            }
+        }
+        !groups.is_empty()
+    }
+
+    #[cfg(feature = "lang-typescript")]
+    fn prove_typescript_imported_group(
+        &self,
+        file: u32,
+        facts: &Facts,
+        parts: &[u32],
+        module_files: &HashMap<u32, Vec<u32>>,
+    ) -> Option<Vec<u32>> {
+        let first = facts.symbols.get(parts[0] as usize)?;
+        if first.kind != Some(SymKind::Iface)
+            || self
+                .interface_canonical
+                .contains_key(&(self.base[file as usize] + parts[0]))
+        {
+            return None;
+        }
+        if self.typescript_module_has_other_declaration(file, &first.name, module_files) {
+            return None;
+        }
+        let mut child_members = Vec::new();
+        let mut base_name = None;
+        for &part in parts {
+            let symbol = facts.symbols.get(part as usize)?;
+            if symbol.kind != Some(SymKind::Iface) || symbol.exported != first.exported {
+                return None;
+            }
+            let mut inherits = facts.refs.iter().filter(|reference| {
+                reference.scope == Some(part) && reference.kind == RefKind::Inherit
+            });
+            let reference = inherits.next()?;
+            if inherits.next().is_some() || reference.qualifier.is_some() || reference.arity != 0 {
+                return None;
+            }
+            if base_name.is_some_and(|name| name != reference.name) {
+                return None;
+            }
+            base_name = Some(reference.name.as_str());
+            let expected = format!(
+                "interface_declaration:9:interface:{}:{}:7:extends:{}:{}",
+                first.name.len(),
+                first.name,
+                reference.name.len(),
+                reference.name
+            );
+            if facts.source_identity(SourceIdentityKind::InterfaceHeader, part)
+                != Some(expected.as_str())
+            {
+                return None;
+            }
+            child_members.push(facts.source_identity(SourceIdentityKind::InterfaceMembers, part)?);
+        }
+        let base_name = base_name?;
+        if facts
+            .symbols
+            .iter()
+            .any(|symbol| symbol.parent.is_none() && symbol.name == base_name)
+        {
+            return None;
+        }
+        let Target::Symbols(targets) =
+            self.file_imports.get(file as usize)?.names.get(base_name)?
+        else {
+            return None;
+        };
+        let [target] = targets.as_slice() else {
+            return None;
+        };
+        let symbol = self.symbols.get(*target as usize)?;
+        if symbol.file == file
+            || symbol.kind != SymKind::Iface
+            || symbol.parent != NONE
+            || !symbol.exported
+            || self.file_type(symbol.file) != Some(FileType::TypeScript)
+        {
+            return None;
+        }
+        if self.typescript_module_has_other_declaration(symbol.file, &symbol.name, module_files) {
+            return None;
+        }
+        let base_facts = self.facts(symbol.file)?;
+        if base_facts
+            .symbols
+            .iter()
+            .any(|symbol| symbol.parent.is_none() && symbol.name.contains('\\'))
+            || base_facts
+                .symbols
+                .iter()
+                .filter(|candidate| candidate.parent.is_none() && candidate.name == symbol.name)
+                .count()
+                != 1
+        {
+            return None;
+        }
+        let local = target.checked_sub(self.base[symbol.file as usize])?;
+        let expected = format!(
+            "interface_declaration:9:interface:{}:{}",
+            symbol.name.len(),
+            symbol.name
+        );
+        if base_facts.source_identity(SourceIdentityKind::InterfaceHeader, local)
+            != Some(expected.as_str())
+        {
+            return None;
+        }
+        let base_members =
+            base_facts.source_identity(SourceIdentityKind::InterfaceMembers, local)?;
+        if !crate::extract::lang::typescript::imported_base_members_are_disjoint(
+            base_members,
+            &child_members,
+        ) {
+            return None;
+        }
+        Some(
+            parts
+                .iter()
+                .map(|&part| self.base[file as usize] + part)
+                .collect(),
+        )
+    }
+
+    #[cfg(feature = "lang-typescript")]
+    fn typescript_module_has_other_declaration(
+        &self,
+        file: u32,
+        name: &str,
+        module_files: &HashMap<u32, Vec<u32>>,
+    ) -> bool {
+        let module = self.module_of(file);
+        module_files
+            .get(&module)
+            .into_iter()
+            .flatten()
+            .any(|&other| {
+                other != file
+                    && self.facts(other).is_some_and(|facts| {
+                        facts.symbols.iter().any(|symbol| {
+                            symbol.parent.is_none()
+                                && crate::extract::lang::typescript::declaration_name_may_match(
+                                    &symbol.name,
+                                    name,
+                                )
+                        })
+                    })
+            })
     }
 
     fn build_tables(&mut self) {
@@ -4844,18 +5078,13 @@ impl<'a> Index<'a> {
                     names: fields.names.clone(),
                 });
             }
-            for identity in facts.source_identities.as_deref().unwrap_or_default() {
-                if identity.kind == SourceIdentityKind::InterfaceGroup
-                    && let Ok(canonical) = identity.identity.parse::<u32>()
-                    && let (Some(part), Some(canonical)) = (
-                        base.checked_add(identity.index),
-                        base.checked_add(canonical),
-                    )
-                {
-                    graph.interface_groups.push((part, canonical));
-                }
-            }
         }
+        graph.interface_groups.extend(
+            self.interface_canonical
+                .iter()
+                .map(|(&part, &canonical)| (part, canonical)),
+        );
+        graph.interface_groups.sort_unstable();
         graph.envs.sort();
         graph.ambiguous_names.sort_unstable();
         graph.ambiguous_names.dedup();

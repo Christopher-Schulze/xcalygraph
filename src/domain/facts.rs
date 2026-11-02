@@ -254,6 +254,8 @@ pub enum SourceIdentityKind {
     InterfaceGroup,
     /// Source-proven concrete field types for generic bases of an interface group.
     InterfaceGenericFields,
+    /// File-level TypeScript parsing and module-augmentation coverage.
+    TypeScriptScope,
 }
 
 impl SourceIdentityKind {
@@ -267,6 +269,7 @@ impl SourceIdentityKind {
             value if value == Self::InterfaceGenericFields as u8 => {
                 Some(Self::InterfaceGenericFields)
             }
+            value if value == Self::TypeScriptScope as u8 => Some(Self::TypeScriptScope),
             _ => None,
         }
     }

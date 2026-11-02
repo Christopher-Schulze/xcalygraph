@@ -53,6 +53,55 @@ pub static JAVASCRIPT: Pack = Pack {
     hooks: HOOKS,
 };
 
+#[cfg(feature = "lang-typescript")]
+pub(in crate::extract) fn is_typescript_path(path: &str) -> bool {
+    path.rsplit('.').next().is_some_and(|extension| {
+        ["ts", "tsx", "mts", "cts", "ets"]
+            .iter()
+            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+    })
+}
+
+/// Record whether file-wide augmentation and parse completeness can be established.
+#[cfg(feature = "lang-typescript")]
+pub(in crate::extract) fn file_scope(
+    root: tree_sitter::Node,
+    source: &[u8],
+    exceeded: bool,
+) -> &'static str {
+    if root.has_error() || exceeded {
+        return "incomplete";
+    }
+    if !source
+        .windows(6)
+        .any(|window| window == b"module" || window == b"global")
+    {
+        return "clear";
+    }
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        if node.kind() == "module"
+            && node
+                .child_by_field_name("name")
+                .is_some_and(|name| name.kind() == "string")
+        {
+            return "augmentation";
+        }
+        if node.kind() == "ambient_declaration" {
+            let mut walker = node.walk();
+            if node
+                .children(&mut walker)
+                .any(|child| child.kind() == "global")
+            {
+                return "augmentation";
+            }
+        }
+        let mut walker = node.walk();
+        pending.extend(node.named_children(&mut walker));
+    }
+    "clear"
+}
+
 /// Direct literal keys representable without ambiguous field-list rendering.
 #[cfg(feature = "lang-typescript")]
 pub(in crate::extract) fn simple_property_key(
@@ -268,6 +317,15 @@ fn escaped_name_may_match(name: &str, escaped_names: &[Option<String>]) -> bool 
     escaped_names
         .iter()
         .any(|candidate| candidate.as_ref().is_none_or(|decoded| decoded == name))
+}
+
+#[cfg(feature = "lang-typescript")]
+pub(crate) fn declaration_name_may_match(candidate: &str, name: &str) -> bool {
+    candidate == name
+        || (candidate.contains('\\')
+            && decode_string_content(candidate)
+                .and_then(|units| String::from_utf16(&units).ok())
+                .is_none_or(|decoded| decoded == name))
 }
 
 /// Local, nongeneric interface bases prove compatibility only when their complete supported
@@ -704,6 +762,36 @@ fn interface_method_signatures(
     Some(methods)
 }
 
+/// Cross-file type spellings can resolve differently, so only disjoint member names prove safety.
+#[cfg(feature = "lang-typescript")]
+pub(crate) fn imported_base_members_are_disjoint(base: &str, parts: &[&str]) -> bool {
+    use std::collections::HashSet;
+    if !compatible_interface_members(&[base]) || !compatible_interface_members(parts) {
+        return false;
+    }
+    fn names(identity: &str) -> Option<HashSet<&str>> {
+        let mut rest = identity.strip_prefix("interface_members:")?;
+        let mut names = HashSet::new();
+        while !rest.is_empty() {
+            let (&tag, tail) = rest.as_bytes().split_first()?;
+            if !matches!(tag, b'p' | b'm' | b'o') {
+                return None;
+            }
+            let (name, tail) = take_identity_part(std::str::from_utf8(tail).ok()?)?;
+            let (_, tail) = take_identity_part(tail)?;
+            names.insert(name);
+            rest = tail;
+        }
+        Some(names)
+    }
+    let Some(base_names) = names(base) else {
+        return false;
+    };
+    parts
+        .iter()
+        .all(|part| names(part).is_some_and(|part_names| base_names.is_disjoint(&part_names)))
+}
+
 #[cfg(feature = "lang-typescript")]
 fn compatible_interface_members(parts: &[&str]) -> bool {
     use std::collections::{HashMap, HashSet};
@@ -997,6 +1085,54 @@ fn builtin(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "lang-typescript")]
+    fn typescript_scope_and_exported_base_evidence_are_source_backed() {
+        use crate::domain::corpus::FileRecord;
+        use crate::domain::facts::SourceIdentityKind;
+        use crate::domain::role::Role;
+
+        let record = FileRecord {
+            path: "scope.TS".to_owned(),
+            size: 0,
+            mtime_ns: 0,
+            identity: None,
+            hash: 0,
+            role: Role::Src,
+            file_type: Some(FileType::TypeScript),
+        };
+        for (source, expected) in [
+            (&b"export interface Base { id: string }"[..], "clear"),
+            (
+                &b"declare module './base' { interface Base { id: number } }"[..],
+                "augmentation",
+            ),
+            (
+                &b"export {}; declare global { interface Window { id: number } }"[..],
+                "augmentation",
+            ),
+            (&b"export interface Broken { id:"[..], "incomplete"),
+            (&b"const word = 'module';"[..], "clear"),
+        ] {
+            let facts = crate::extract::extract(&record, source);
+            assert_eq!(
+                facts.source_identity(SourceIdentityKind::TypeScriptScope, 0),
+                Some(expected)
+            );
+        }
+        let facts = crate::extract::extract(&record, b"export interface Base { id: string }");
+        let index = facts
+            .symbols
+            .iter()
+            .position(|symbol| symbol.name == "Base")
+            .map(|index| index as u32);
+        assert!(index.is_some_and(|index| {
+            facts
+                .source_identity(SourceIdentityKind::InterfaceMembers, index)
+                .is_some()
+        }));
+    }
 
     #[test]
     #[cfg(feature = "lang-typescript")]

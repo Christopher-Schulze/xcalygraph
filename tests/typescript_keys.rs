@@ -267,6 +267,104 @@ fn inherited_interfaces_merge_without_hiding_incompatible_base_members()
 }
 
 #[test]
+fn imported_interface_bases_require_cross_file_compatibility() -> Result<(), Box<dyn Error>> {
+    for (base, child, augment, valid) in [
+        (
+            &include_bytes!("fixtures/typescript-cross-base-valid.ts")[..],
+            &include_bytes!("fixtures/typescript-cross-child-valid.ts")[..],
+            None,
+            true,
+        ),
+        (
+            &include_bytes!("fixtures/typescript-cross-base-invalid.ts")[..],
+            &include_bytes!("fixtures/typescript-cross-child-invalid.ts")[..],
+            Some(&include_bytes!("fixtures/typescript-cross-augmentation.ts")[..]),
+            false,
+        ),
+        (
+            &include_bytes!("fixtures/typescript-cross-base-valid.ts")[..],
+            &include_bytes!("fixtures/typescript-cross-child-conflict.ts")[..],
+            None,
+            false,
+        ),
+    ] {
+        let fixture = Fixture::new()?;
+        let root = fixture.0.join("repo");
+        fs::create_dir(&root)?;
+        fs::write(root.join("base.ts"), base)?;
+        fs::write(root.join("child.ts"), child)?;
+        if let Some(augment) = augment {
+            fs::write(root.join("augment.ts"), augment)?;
+        }
+        let output = fixture.run(&["show", "child.Child"])?;
+        if valid {
+            let text = String::from_utf8(output.stdout)?;
+            assert!(output.status.success(), "{text}");
+            for expected in ["child.ts:2", "child.ts:3", "base.Base"] {
+                assert!(text.contains(expected), "missing {expected}: {text}");
+            }
+            let public = fixture.run(&["show", "child.Public", "--read-only"])?;
+            assert!(
+                public.status.success(),
+                "{}",
+                String::from_utf8_lossy(&public.stdout)
+            );
+            let call = fixture.run(&["show", "child.call", "--exact", "--read-only"])?;
+            assert!(call.status.success());
+            let text = String::from_utf8(call.stdout)?;
+            assert!(text.contains("base.Base.run"), "{text}");
+            let impact = fixture.run(&["impact", "base.Base", "--exact", "--read-only"])?;
+            assert!(impact.status.success());
+            let text = String::from_utf8(impact.stdout)?;
+            assert!(text.contains("child.call"), "{text}");
+            let sibling = root.join("child.d.ts");
+            fs::write(&sibling, "export interface Child { extra: string; }")?;
+            let changed = fixture.run(&["show", "child.ts:2"])?;
+            assert!(changed.status.success());
+            let text = String::from_utf8(changed.stdout)?;
+            assert!(!text.contains("child.ts:3"), "{text}");
+            fs::remove_file(sibling)?;
+            let incomplete = root.join("incomplete.ts");
+            fs::write(&incomplete, "export interface Broken { item:")?;
+            let changed = fixture.run(&["show", "child.Child"])?;
+            assert_eq!(
+                changed.status.code(),
+                Some(3),
+                "{}",
+                String::from_utf8_lossy(&changed.stdout)
+            );
+            fs::remove_file(incomplete)?;
+            let restored = fixture.run(&["show", "child.Child"])?;
+            assert!(restored.status.success());
+            let component = root.join("component.vue");
+            fs::write(&component, "<script lang=\"ts\"></script>")?;
+            let changed = fixture.run(&["show", "child.Child"])?;
+            assert_eq!(
+                changed.status.code(),
+                Some(3),
+                "{}",
+                String::from_utf8_lossy(&changed.stdout)
+            );
+            fs::remove_file(component)?;
+            fs::write(
+                root.join("augment.ts"),
+                include_bytes!("fixtures/typescript-cross-augmentation-after.ts"),
+            )?;
+            let changed = fixture.run(&["show", "child.Child"])?;
+            assert_eq!(
+                changed.status.code(),
+                Some(3),
+                "{}",
+                String::from_utf8_lossy(&changed.stdout)
+            );
+        } else {
+            assert_eq!(output.status.code(), Some(3));
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn generic_bases_have_source_backed_inheritance_edges() -> Result<(), Box<dyn Error>> {
     let fixture = Fixture::new()?;
     let root = fixture.0.join("repo");
@@ -716,6 +814,14 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         root.join("generic.ts"),
         include_bytes!("fixtures/typescript-inherited-generic-valid.ts"),
     )?;
+    fs::write(
+        root.join("base.ts"),
+        include_bytes!("fixtures/typescript-cross-base-valid.ts"),
+    )?;
+    fs::write(
+        root.join("child.ts"),
+        include_bytes!("fixtures/typescript-cross-child-valid.ts"),
+    )?;
     let mut images = Vec::new();
     let mut answers = Vec::new();
     for workers in ["1", "4"] {
@@ -753,6 +859,8 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         assert!(complex.status.success());
         let generic = run(&["show", "generic.Child", "--json", "--read-only"])?;
         assert!(generic.status.success());
+        let imported = run(&["show", "child.Child", "--json", "--read-only"])?;
+        assert!(imported.status.success());
         answers.push((
             answer.stdout,
             equivalent.stdout,
@@ -760,6 +868,7 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
             overrides.stdout,
             complex.stdout,
             generic.stdout,
+            imported.stdout,
         ));
     }
     assert_eq!(images[0], images[1]);

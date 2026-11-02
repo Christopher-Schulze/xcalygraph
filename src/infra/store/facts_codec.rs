@@ -413,6 +413,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             | SourceIdentityKind::InterfaceGroup
             | SourceIdentityKind::InterfaceGenericFields => facts.symbols.len(),
             SourceIdentityKind::Reference => facts.refs.len(),
+            SourceIdentityKind::TypeScriptScope => 1,
         };
         if usize::try_from(index).map_or(true, |index| index >= limit)
             || previous.is_some_and(|previous| previous >= key)
@@ -432,6 +433,11 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
         let identity = decoder.string()?;
         if identity.is_empty() {
             return Err(DecodeError("empty source identity"));
+        }
+        if kind == SourceIdentityKind::TypeScriptScope
+            && !matches!(identity.as_str(), "clear" | "augmentation" | "incomplete")
+        {
+            return Err(DecodeError("TypeScript scope"));
         }
         if kind == SourceIdentityKind::InterfaceGroup {
             let canonical = identity
@@ -669,6 +675,35 @@ mod tests {
         encode(&mut encoder, &facts);
         assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
         facts.symbols[0].kind = Some(SymKind::Struct);
+        let mut invalid = Encoder::default();
+        encode(&mut invalid, &facts);
+        assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn typescript_scope_evidence_validates_file_level_identity() -> DecodeResult<()> {
+        let mut facts = Facts {
+            source_identities: Some(
+                vec![SourceIdentity {
+                    kind: SourceIdentityKind::TypeScriptScope,
+                    index: 0,
+                    identity: "augmentation".to_owned(),
+                }]
+                .into_boxed_slice(),
+            ),
+            ..Facts::default()
+        };
+        let mut encoder = Encoder::default();
+        encode(&mut encoder, &facts);
+        assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
+        let marker = facts
+            .source_identities
+            .as_mut()
+            .ok_or(DecodeError("identities"))?
+            .first_mut()
+            .ok_or(DecodeError("identity"))?;
+        marker.identity = "unknown".to_owned();
         let mut invalid = Encoder::default();
         encode(&mut invalid, &facts);
         assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
