@@ -124,31 +124,38 @@ impl Store {
         )
     }
 
-    /// Facts of every file in the shard, sorted by path.
-    pub fn read_shard(&self, shard: usize) -> Result<Vec<(String, Facts)>, OpenError> {
+    /// Source hash and facts of every file in the shard, sorted by path.
+    pub fn read_shard(&self, shard: usize) -> Result<Vec<(String, u128, Facts)>, OpenError> {
         let container = Container::open(&self.shard_path(shard), Kind::Facts)?;
         let (Some(table), Some(bytes)) =
             (inflate(container.section(0)), inflate(container.section(1)))
         else {
             return Err(OpenError::Invalid("facts compression"));
         };
-        let decode = || -> DecodeResult<Vec<(String, Facts)>> {
+        let decode = || -> DecodeResult<Vec<(String, u128, Facts)>> {
             let mut decoder = Decoder::with_table(&bytes, &table)?;
             let count = decoder.len()?;
             (0..count)
-                .map(|_| Ok((decoder.string()?, facts_codec::decode(&mut decoder)?)))
+                .map(|_| {
+                    Ok((
+                        decoder.string()?,
+                        decoder.u128()?,
+                        facts_codec::decode(&mut decoder)?,
+                    ))
+                })
                 .collect()
         };
         decode().map_err(|_| OpenError::Invalid("facts content"))
     }
 
-    pub fn write_shard(&self, shard: usize, files: &[(&str, &Facts)]) -> io::Result<u64> {
+    pub fn write_shard(&self, shard: usize, files: &[(&str, u128, &Facts)]) -> io::Result<u64> {
         // Section 0: shard-local string table; section 1: per-file facts referencing it. Both are
         // deflated: shards are read whole and in parallel, so inflating costs little.
         let mut encoder = Encoder::with_table();
         encoder.var_usize(files.len());
-        for (path, facts) in files {
+        for (path, content_hash, facts) in files {
             encoder.str(path);
+            encoder.u128(*content_hash);
             facts_codec::encode(&mut encoder, facts);
         }
         let table = deflate(&encoder.table_bytes())?;
@@ -405,10 +412,11 @@ mod tests {
             lines: 3,
             ..Facts::default()
         };
-        store.write_shard(7, &[("src/a.go", &facts)])?;
+        let content_hash = 0x1122_3344_5566_7788_99aa_bbcc_ddee_ff00;
+        store.write_shard(7, &[("src/a.go", content_hash, &facts)])?;
         assert_eq!(
             store.read_shard(7).map_err(|e| e.to_string())?,
-            [("src/a.go".to_owned(), facts)]
+            [("src/a.go".to_owned(), content_hash, facts)]
         );
         assert!(matches!(store.read_shard(8), Err(OpenError::Missing)));
         assert!(store.drop_all()?);

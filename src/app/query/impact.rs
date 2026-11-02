@@ -270,7 +270,7 @@ pub fn render_diff(
                 .is_some_and(|(before, after)| before != after),
         });
     }
-    let survivors = surviving_references(index, filter, options.store, &removed_names);
+    let survivors = surviving_references(index, filter, options.store, &removed_names)?;
     let mut incomplete = Vec::new();
     for change in &changes {
         if let Some(previous) = &change.previous
@@ -315,9 +315,18 @@ fn surviving_references(
     filter: &Filter,
     store: &crate::infra::store::Store,
     names: &BTreeSet<String>,
-) -> Vec<u32> {
+) -> Result<Vec<u32>, AppError> {
     if names.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
+    }
+    let records = store
+        .read_files()
+        .map_err(|error| AppError::Invalid(format!("cannot read index file records: {error}")))?;
+    let mut expected: Vec<Vec<&CorpusRecord>> = (0..crate::infra::store::SHARDS)
+        .map(|_| Vec::new())
+        .collect();
+    for record in records.iter().filter(|record| record.role.is_extracted()) {
+        expected[crate::infra::store::shard_of(&record.path)].push(record);
     }
     let positions: HashMap<&str, usize> = index
         .derived
@@ -327,13 +336,32 @@ fn surviving_references(
         .map(|(position, file)| (index.string(file.path), position))
         .collect();
     let mut found: BTreeSet<u32> = BTreeSet::new();
-    for shard in 0..crate::infra::store::SHARDS {
-        let Ok(files) = store.read_shard(shard) else {
+    for (shard, expected_files) in expected.iter().enumerate() {
+        if expected_files.is_empty() {
             continue;
-        };
-        for (path, facts) in &files {
+        }
+        let files = store.read_shard(shard).map_err(|error| {
+            AppError::RecoverFacts(format!(
+                "fact shard {shard:02} cannot be read ({error}); run 'xcalygraph index'"
+            ))
+        })?;
+        if files.len() != expected_files.len()
+            || files
+                .iter()
+                .zip(expected_files)
+                .any(|((path, content_hash, _), record)| {
+                    path != &record.path || *content_hash != record.hash
+                })
+        {
+            return Err(AppError::RecoverFacts(format!(
+                "fact shard {shard:02} does not match indexed sources; run 'xcalygraph index'"
+            )));
+        }
+        for (path, _, facts) in &files {
             let Some(&position) = positions.get(path.as_str()) else {
-                continue;
+                return Err(AppError::RecoverFacts(format!(
+                    "fact shard {shard:02} references a file missing from derived data; run 'xcalygraph index'"
+                )));
             };
             let record = &index.derived.files()[position];
             for reference in &facts.refs {
@@ -356,7 +384,7 @@ fn surviving_references(
             }
         }
     }
-    found.into_iter().collect()
+    Ok(found.into_iter().collect())
 }
 
 /// Symbols whose range intersects a changed range; an enclosing symbol is dropped when one of
@@ -492,41 +520,13 @@ fn collect_changes(
         }
         let current = if let Some(file) = file {
             let record = &index.derived.files()[file];
-            let facts = if record.symbol_count == 0 {
-                None
-            } else {
-                let shard = crate::infra::store::shard_of(&diff.path);
-                if let std::collections::hash_map::Entry::Vacant(entry) = shards.entry(shard) {
-                    let entries = store.read_shard(shard).map_err(|error| {
-                        AppError::Invalid(format!(
-                            "cannot read index facts for '{}': {error}; run 'xcalygraph index'",
-                            diff.path
-                        ))
-                    })?;
-                    entry.insert(entries);
-                }
-                Some(
-                    shards
-                        .get(&shard)
-                        .and_then(|entries: &Vec<(String, Facts)>| {
-                            entries.iter().find(|(path, _)| path == &diff.path)
-                        })
-                        .map(|(_, facts)| facts)
-                        .ok_or_else(|| {
-                            AppError::Invalid(format!(
-                                "index facts missing for '{}'; run 'xcalygraph index'",
-                                diff.path
-                            ))
-                        })?,
-                )
-            };
             let verify_empty = matches!(
                 record.role(),
                 crate::domain::role::Role::Src
                     | crate::domain::role::Role::Test
                     | crate::domain::role::Role::Gen
             ) && record.file_type().is_some_and(FileType::is_code);
-            let (symbols, hash, incomplete) = if facts.is_some() || verify_empty {
+            let source = if record.symbol_count > 0 || verify_empty {
                 let source = records
                     .binary_search_by(|entry| entry.path.as_str().cmp(diff.path.as_str()))
                     .ok()
@@ -543,6 +543,47 @@ fn collect_changes(
                         diff.path
                     )));
                 }
+                Some(source)
+            } else {
+                None
+            };
+            let facts = if record.symbol_count == 0 {
+                None
+            } else {
+                let source = source.ok_or_else(|| {
+                    AppError::Invalid(format!("index file record missing for '{}'", diff.path))
+                })?;
+                let shard = crate::infra::store::shard_of(&diff.path);
+                if let std::collections::hash_map::Entry::Vacant(entry) = shards.entry(shard) {
+                    let entries = store.read_shard(shard).map_err(|error| {
+                        AppError::RecoverFacts(format!(
+                            "cannot read index facts for '{}': {error}; run 'xcalygraph index'",
+                            diff.path
+                        ))
+                    })?;
+                    entry.insert(entries);
+                }
+                Some(
+                    shards
+                        .get(&shard)
+                        .and_then(|entries: &Vec<(String, u128, Facts)>| {
+                            entries.iter().find(|(path, content_hash, _)| {
+                                path == &diff.path && *content_hash == source.hash
+                            })
+                        })
+                        .map(|(_, _, facts)| facts)
+                        .ok_or_else(|| {
+                            AppError::RecoverFacts(format!(
+                                "index facts for '{}' do not match the source; run 'xcalygraph index'",
+                                diff.path
+                            ))
+                        })?,
+                )
+            };
+            let (symbols, hash, incomplete) = if facts.is_some() || verify_empty {
+                let source = source.ok_or_else(|| {
+                    AppError::Invalid(format!("index file record missing for '{}'", diff.path))
+                })?;
                 let content = std::fs::read(root.join(&diff.path))
                     .map_err(AppError::io(format!("read source '{}'", diff.path)))?;
                 if xxhash_rust::xxh3::xxh3_128(&content) != source.hash {

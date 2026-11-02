@@ -175,18 +175,26 @@ fn write_derived(workspace: &Workspace, records: &[FileRecord]) -> Result<u64, A
                 && entries
                     .iter()
                     .zip(&files)
-                    .all(|((path, _), file)| path == &file.path)
+                    .all(|((path, content_hash, _), file)| {
+                        path == &file.path && *content_hash == file.hash
+                    })
             {
-                return Ok((entries, 0));
+                return Ok((
+                    entries
+                        .into_iter()
+                        .map(|(path, _, facts)| (path, facts))
+                        .collect(),
+                    0,
+                ));
             }
             let facts: Vec<Facts> = files
                 .par_iter()
                 .map(|record| extract_file(workspace, record))
                 .collect::<Result<_, _>>()?;
-            let entries: Vec<(&str, &Facts)> = files
+            let entries: Vec<(&str, u128, &Facts)> = files
                 .iter()
-                .map(|record| record.path.as_str())
                 .zip(&facts)
+                .map(|(record, facts)| (record.path.as_str(), record.hash, facts))
                 .collect();
             let written = workspace
                 .store
@@ -293,33 +301,52 @@ fn write_shards(
     let written: Vec<Result<u64, AppError>> = work
         .into_par_iter()
         .map(|(shard, files)| {
-            let mut old: HashMap<String, Facts> = if rebuilt {
+            let mut old: HashMap<String, (u128, Facts)> = if rebuilt {
                 HashMap::new()
             } else {
                 match store.read_shard(shard) {
-                    Ok(entries) => entries.into_iter().collect(),
+                    Ok(entries)
+                        if entries.len() == files.len()
+                            && entries
+                                .iter()
+                                .zip(&files)
+                                .all(|((path, _, _), file)| path == &file.path) =>
+                    {
+                        entries
+                            .into_iter()
+                            .map(|(path, content_hash, facts)| (path, (content_hash, facts)))
+                            .collect()
+                    }
                     Err(OpenError::Missing | OpenError::Invalid(_) | OpenError::Io(_)) => {
                         HashMap::new()
                     }
+                    Ok(_) => HashMap::new(),
                 }
             };
-            let facts: Vec<Facts> = files
-                .par_iter()
-                .map(|record| match old.get(&record.path) {
-                    Some(_) if !changed.contains(record.path.as_str()) => Ok(None),
-                    _ => extract_file(workspace, record).map(Some),
-                })
-                .collect::<Result<Vec<Option<Facts>>, AppError>>()?
-                .into_iter()
-                .zip(&files)
-                .map(|(fresh, record)| {
-                    fresh.unwrap_or_else(|| old.remove(&record.path).unwrap_or_default())
+            let reusable: Vec<Option<Facts>> = files
+                .iter()
+                .map(|record| match old.remove(&record.path) {
+                    Some((content_hash, facts))
+                        if content_hash == record.hash
+                            && !changed.contains(record.path.as_str()) =>
+                    {
+                        Some(facts)
+                    }
+                    _ => None,
                 })
                 .collect();
-            let entries: Vec<(&str, &Facts)> = files
+            let facts: Vec<Facts> = files
+                .par_iter()
+                .zip(reusable.into_par_iter())
+                .map(|(record, cached)| match cached {
+                    Some(facts) => Ok(facts),
+                    None => extract_file(workspace, record),
+                })
+                .collect::<Result<_, AppError>>()?;
+            let entries: Vec<(&str, u128, &Facts)> = files
                 .iter()
-                .map(|record| record.path.as_str())
                 .zip(facts.iter())
+                .map(|(record, facts)| (record.path.as_str(), record.hash, facts))
                 .collect();
             store
                 .write_shard(shard, &entries)
@@ -393,7 +420,7 @@ mod tests {
         assert!(
             entries
                 .iter()
-                .any(|(path, facts)| path == "a.go" && facts.lines == 1)
+                .any(|(path, _, facts)| path == "a.go" && facts.lines == 1)
         );
         Ok(())
     }
@@ -475,7 +502,7 @@ mod tests {
         assert!(
             entries
                 .iter()
-                .any(|(path, facts)| path == "f3.go" && facts.lines == 3)
+                .any(|(path, _, facts)| path == "f3.go" && facts.lines == 3)
         );
         std::fs::remove_file(dir.path().join("root/f3.go"))?;
         let report = refresh(&workspace, Mode::Write)?;
@@ -484,7 +511,7 @@ mod tests {
             .store
             .read_shard(changed_shard)
             .map_err(|e| e.to_string())?;
-        assert!(entries.iter().all(|(path, _)| path != "f3.go"));
+        assert!(entries.iter().all(|(path, _, _)| path != "f3.go"));
         Ok(())
     }
 
@@ -509,7 +536,7 @@ mod tests {
         assert!(
             entries
                 .iter()
-                .any(|(path, facts)| path == "a.go" && facts.lines == 2)
+                .any(|(path, _, facts)| path == "a.go" && facts.lines == 2)
         );
         Ok(())
     }

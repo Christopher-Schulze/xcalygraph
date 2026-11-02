@@ -14,8 +14,8 @@ use crate::infra::file_access;
 use crate::infra::store::container::{Container, FORMAT_VERSION, Kind};
 use crate::infra::store::{self, SHARDS, Store};
 
-// Version 7 uses the same container envelope and meta encoding; other versions need review.
-const CLEANUP_FORMATS: [u32; 2] = [FORMAT_VERSION, 7];
+// Versions 7 and 8 use the same container envelope and meta encoding; other versions need review.
+const CLEANUP_FORMATS: [u32; 3] = [FORMAT_VERSION, 8, 7];
 
 struct Entry {
     dir: PathBuf,
@@ -307,6 +307,30 @@ mod tests {
         dir.write("a/meta", "12345")?;
         dir.write("a/facts/00", "123")?;
         assert_eq!(size(&dir.path().join("a")), 8);
+        Ok(())
+    }
+
+    #[test]
+    fn format_eight_index_remains_verifiable_for_cleanup() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let dir = TestDir::new("indexes-format-eight")?;
+        let root = dir.path().join("repo");
+        fs::create_dir(&root)?;
+        let base = dir.path().join("indexes");
+        let store = Store::new(store::index_dir(&base, &root));
+        store.create_dirs()?;
+        store.write_meta(&store::Meta {
+            extraction_version: 1,
+            binary_version: "0.1.0+r1".to_owned(),
+            root: root.to_string_lossy().into_owned(),
+            write_time_ns: 1,
+        })?;
+        let path = store.dir.join("meta");
+        let mut image = fs::read(&path)?;
+        image[8..12].copy_from_slice(&8_u32.to_le_bytes());
+        fs::write(&path, image)?;
+        assert_eq!(known_meta(&store).map(|(_, version)| version), Some(8));
+        assert_eq!(owned_root(&store.dir), Some(root));
         Ok(())
     }
 }

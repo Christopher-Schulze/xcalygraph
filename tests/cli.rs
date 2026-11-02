@@ -511,39 +511,42 @@ fn clean_preserves_symlinked_shards_and_their_target() -> TestResult {
 }
 
 fn verified_previous_format_cleanup() -> TestResult {
-    let dir = TempDir::new("clean-previous-format")?;
-    dir.write("repo/main.go", "package main\n")?;
-    let root = dir.0.join("repo");
-    let base = dir.0.join("index");
-    assert!(run_in(&root, &base, &["index"])?.status.success());
-    let store = index_for(&base, "repo")?;
-    let mut converted = 0;
-    for (path, mut content, _) in index_snapshot(&store)? {
-        if content.starts_with(b"XCALYGR\0") {
-            content[8..12].copy_from_slice(&7u32.to_le_bytes());
-            fs::write(path, content)?;
-            converted += 1;
+    for legacy_format in [8_u32, 7] {
+        let dir = TempDir::new(&format!("clean-previous-format-{legacy_format}"))?;
+        dir.write("repo/main.go", "package main\n")?;
+        let root = dir.0.join("repo");
+        let base = dir.0.join("index");
+        assert!(run_in(&root, &base, &["index"])?.status.success());
+        let store = index_for(&base, "repo")?;
+        let mut converted = 0;
+        for (path, mut content, _) in index_snapshot(&store)? {
+            if content.starts_with(b"XCALYGR\0") {
+                content[8..12].copy_from_slice(&legacy_format.to_le_bytes());
+                fs::write(path, content)?;
+                converted += 1;
+            }
         }
+        assert!(converted > 2);
+        let listed = support::command(BINARY, &dir.0)
+            .arg("ls")
+            .arg("--index-dir")
+            .arg(&base)
+            .env("HOME", dir.0.join("home"))
+            .output()?;
+        assert!(
+            String::from_utf8(listed.stdout)?.contains(&root.canonicalize()?.display().to_string()),
+            "format {legacy_format}"
+        );
+        let foreign = store.join("foreign");
+        fs::write(&foreign, b"preserve")?;
+        let skipped = clean_in(&dir, &base, &["repo"])?;
+        assert!(String::from_utf8(skipped.stdout)?.contains("skipped "));
+        assert_eq!(fs::read(&foreign)?, b"preserve");
+        fs::remove_file(foreign)?;
+        let removed = clean_in(&dir, &base, &["repo"])?;
+        assert!(String::from_utf8(removed.stdout)?.starts_with("deleted "));
+        assert!(!store.exists());
     }
-    assert!(converted > 2);
-    let listed = support::command(BINARY, &dir.0)
-        .arg("ls")
-        .arg("--index-dir")
-        .arg(&base)
-        .env("HOME", dir.0.join("home"))
-        .output()?;
-    assert!(
-        String::from_utf8(listed.stdout)?.contains(&root.canonicalize()?.display().to_string())
-    );
-    let foreign = store.join("foreign");
-    fs::write(&foreign, b"preserve")?;
-    let skipped = clean_in(&dir, &base, &["repo"])?;
-    assert!(String::from_utf8(skipped.stdout)?.contains("skipped "));
-    assert_eq!(fs::read(&foreign)?, b"preserve");
-    fs::remove_file(foreign)?;
-    let removed = clean_in(&dir, &base, &["repo"])?;
-    assert!(String::from_utf8(removed.stdout)?.starts_with("deleted "));
-    assert!(!store.exists());
     Ok(())
 }
 
@@ -1889,28 +1892,31 @@ fn preserved_mtime_edits_and_replacements_invalidate_the_index() -> TestResult {
         );
         assert_eq!(index_snapshot(&index)?, before, "read-only wrote metadata");
         let meta = index_for(&index, "repo")?.join("meta");
-        let mut old_format = fs::read(&meta)?;
-        old_format[8..12].copy_from_slice(&7u32.to_le_bytes());
-        fs::write(&meta, old_format)?;
-        let before_upgrade = index_snapshot(&index)?;
-        assert_eq!(
-            run_in(&root, &index, &["show", "Bravo", "--read-only"])?
-                .status
-                .code(),
-            Some(5)
-        );
-        assert_eq!(
-            index_snapshot(&index)?,
-            before_upgrade,
-            "read-only changed an old index"
-        );
-        let upgraded = run_in(&root, &index, &["index"])?;
-        assert_eq!(upgraded.status.code(), Some(0));
-        assert_eq!(
-            String::from_utf8(upgraded.stdout)?,
-            "files 1 changed 1 deleted 0\n"
-        );
-        assert_eq!(derived_image(&index)?, derived_image(&fresh)?);
+        for legacy_format in [8_u32, 7] {
+            let mut old_format = fs::read(&meta)?;
+            old_format[8..12].copy_from_slice(&legacy_format.to_le_bytes());
+            fs::write(&meta, old_format)?;
+            let before_upgrade = index_snapshot(&index)?;
+            assert_eq!(
+                run_in(&root, &index, &["show", "Bravo", "--read-only"])?
+                    .status
+                    .code(),
+                Some(5),
+                "format {legacy_format}"
+            );
+            assert_eq!(
+                index_snapshot(&index)?,
+                before_upgrade,
+                "read-only changed format {legacy_format} index"
+            );
+            let upgraded = run_in(&root, &index, &["index"])?;
+            assert_eq!(upgraded.status.code(), Some(0));
+            assert_eq!(
+                String::from_utf8(upgraded.stdout)?,
+                "files 1 changed 1 deleted 0\n"
+            );
+            assert_eq!(derived_image(&index)?, derived_image(&fresh)?);
+        }
     }
     verified_previous_format_cleanup()
 }
@@ -2352,6 +2358,41 @@ fn impact_diff_never_reads_deleted_sensitive_revision_content() -> TestResult {
     assert!(calls.contains("HEAD:safe.go"), "{calls}");
     assert!(!calls.contains("HEAD:.env"), "{calls}");
     assert!(String::from_utf8(output.stdout)?.contains("\"name\":\"Safe\""));
+    Ok(())
+}
+
+#[test]
+fn impact_diff_handles_modified_sensitive_files_as_path_only() -> TestResult {
+    let dir = TempDir::new("impact-sensitive-current")?;
+    let root = dir.0.join("repo");
+    let index = dir.0.join("index");
+    dir.write("repo/.gitignore", "!.env*\n")?;
+    dir.write("repo/.env", "DUMMY=before\n")?;
+    dir.write("repo/safe.go", "package sample\nfunc Safe() {}\n")?;
+    git(&root, &["init", "-q"])?;
+    git(&root, &["add", ".gitignore", ".env", "safe.go"])?;
+    git(&root, &["commit", "-q", "-m", "initial"])?;
+    let indexed = run_in(&root, &index, &["index"])?;
+    assert_eq!(
+        indexed.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&indexed.stderr)
+    );
+    dir.write("repo/.env", "DUMMY=after\n")?;
+
+    let output = run_in(&root, &index, &["impact", "--diff", "--json"])?;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout)?;
+    assert!(
+        !text.contains("DUMMY=before") && !text.contains("DUMMY=after"),
+        "{text}"
+    );
     Ok(())
 }
 

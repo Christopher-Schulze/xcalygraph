@@ -17,6 +17,8 @@ pub enum AppError {
     Ambiguous(String),
     /// Nothing matched.
     NoMatch(String),
+    /// A query found fact shards that must be recovered from their recorded source files.
+    RecoverFacts(String),
     /// Invalid input detected after parsing (for example a root that is no directory).
     Invalid(String),
 }
@@ -48,7 +50,9 @@ impl AppError {
 
     pub fn status(&self) -> ExitStatus {
         match self {
-            Self::Io(..) | Self::IndexIo(..) | Self::Invalid(_) => ExitStatus::Runtime,
+            Self::Io(..) | Self::IndexIo(..) | Self::RecoverFacts(_) | Self::Invalid(_) => {
+                ExitStatus::Runtime
+            }
             Self::Stale(_) => ExitStatus::Stale,
             Self::Ambiguous(_) => ExitStatus::Ambiguous,
             Self::NoMatch(_) => ExitStatus::NoMatch,
@@ -63,9 +67,10 @@ impl fmt::Display for AppError {
                 write!(formatter, "{context}: {error}")
             }
             Self::Stale(reason) => write!(formatter, "{reason} (--read-only)"),
-            Self::Ambiguous(text) | Self::NoMatch(text) | Self::Invalid(text) => {
-                formatter.write_str(text)
-            }
+            Self::Ambiguous(text)
+            | Self::NoMatch(text)
+            | Self::RecoverFacts(text)
+            | Self::Invalid(text) => formatter.write_str(text),
         }
     }
 }

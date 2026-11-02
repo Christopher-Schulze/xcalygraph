@@ -42,6 +42,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | `help` | `[COMMAND]` | none | syntax reference |
 
 - Query commands (`map`, `find`, `ctx`, `show`, `impact`, `path`, `audit`) refresh the index first (section 4) unless `--read-only`.
+- `impact --diff` verifies each required fact shard against the indexed source hashes and exact file roster; writable queries re-derive damaged shards and retry, while `--read-only` returns exit 5 without writes.
 - Filters (`-p`, `-l`, `-k`, `--exact`, `--no-tests`) apply to every query command and restrict seeds, expansions and listed facts alike: every NAME form (an excluded file or `path:line` is no match), `path` searches only the subgraph of included nodes, `impact` traverses the whole graph but lists only included dependents, tests and their run lines, and `map` module sections (cycles, layers, externals) show only modules with an included file. `-k` restricts symbols; a file NAME, file-level facts and import hops stay usable.
 - NAME forms: `qualified.name`; `path:line`; `path::name`; bare name (must be unique). Resolution checks the input as a file path first (including the existing `./` alias), then its surrounding-whitespace-trimmed form before locator syntax; a matching file path wins a collision.
 - Aliases: `-h`, `--help` = `help`; `<command> -h|--help` = `help <command>`; `-V`, `--version` = `version`.
@@ -345,16 +346,16 @@ Location: `<index-dir>/<root basename>-<XXH3-64 hex of the canonical root path>/
 |------|---------|----------------|
 | `meta` | format version, extraction version, binary version, canonical root, write time | a refresh has changes |
 | `files` | per file: path, size, mtime_ns, optional device/inode/status-change time, content hash, role, language, shard | file set or stat records change |
-| `facts/NN` (64 shards by path hash) | fact records of the shard's files, shard-local string table | a file of the shard changes |
+| `facts/NN` (64 shards by path hash) | per-file source hash and fact records, shard-local string table | a file of the shard changes or its stored facts do not match the file table |
 | `derived` | interned strings, symbol table, CSR graph, ranks, modules, search index, test map, audit data | derived content changes |
 | `used` | empty; its mtime is the last use for `ls` | a writing query when older than an hour |
 | `git` | churn, co-change, hotspots keyed by HEAD and analysis version | key changes and git data is requested |
 | `lock` | writer lock | never |
 
-- Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum; fact shard sections deflated; search postings as delta-varint (node, term frequencies) pairs.
+- Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum; format 9 fact records include the source XXH3-128 hash; fact shard sections deflated; search postings as delta-varint (node, term frequencies) pairs.
 - Writes: new exclusively created temp file in the same directory (`O_CREAT|O_EXCL`; an existing entry or symlink is skipped, never opened) -> rename; no fsync; unchanged files untouched; install and update use the same primitive. A checksum mismatch or truncation on open rebuilds that file.
 - Reads: memory-mapped, zero-copy.
-- Listing and safe cleanup also recognize format-7 containers; queries require the current format and writable queries rebuild older indexes.
+- Listing and safe cleanup also recognize format-7 and format-8 containers; queries require the current format and writable queries rebuild older indexes.
 
 ## 10. Skill, install, update
 

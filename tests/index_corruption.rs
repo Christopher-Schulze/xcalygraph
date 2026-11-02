@@ -4,7 +4,7 @@
 
 mod support;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs;
 use std::io;
@@ -74,11 +74,15 @@ impl Fixture {
     }
 
     fn run(&self, args: &[&str], index: Option<&Path>) -> io::Result<Output> {
+        self.run_at(&self.root, args, index)
+    }
+
+    fn run_at(&self, root: &Path, args: &[&str], index: Option<&Path>) -> io::Result<Output> {
         let mut command = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &self.work.0);
         command
             .args(args)
             .arg("-C")
-            .arg(&self.root)
+            .arg(root)
             .env("HOME", &self.home)
             .env("TMPDIR", &self.temp)
             .env("XDG_CONFIG_HOME", self.home.join("config"))
@@ -90,6 +94,27 @@ impl Fixture {
             command.arg("--index-dir").arg(index);
         }
         command.output()
+    }
+
+    fn git(&self, args: &[&str]) -> io::Result<Output> {
+        let output = support::command("git", &self.work.0)
+            .arg("-C")
+            .arg(&self.root)
+            .args([
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "user.name=Fixture",
+            ])
+            .args(args)
+            .output()?;
+        if output.status.success() {
+            Ok(output)
+        } else {
+            Err(io::Error::other(
+                String::from_utf8_lossy(&output.stderr).into_owned(),
+            ))
+        }
     }
 }
 
@@ -492,6 +517,232 @@ fn damaged_shard_never_publishes_a_stale_or_incomplete_graph() -> TestResult {
         let read_only = fixture.run(&["find", "recoverable_marker", "--read-only"], Some(&base))?;
         assert_eq!(read_only.status.code(), Some(5));
     }
+    Ok(())
+}
+
+#[test]
+fn impact_diff_recovers_or_reports_every_damaged_required_shard() -> TestResult {
+    let mut failures = Vec::new();
+    for damage in ["missing", "corrupt", "incomplete", "wrong-generation"] {
+        let fixture = Fixture::new()?;
+        fs::remove_file(fixture.root.join("lib.rs"))?;
+        fs::write(
+            fixture.root.join("go.mod"),
+            "module example.com/probe\n\ngo 1.23\n",
+        )?;
+        fs::write(
+            fixture.root.join("api.go"),
+            "package probe\n\nfunc Retired() {}\n",
+        )?;
+        let caller = "caller.go";
+        let caller_shard = xxhash_rust::xxh3::xxh3_64(caller.as_bytes()) % 64;
+        assert_ne!(caller_shard, xxhash_rust::xxh3::xxh3_64(b"api.go") % 64);
+        fs::write(
+            fixture.root.join(caller),
+            "package probe\n\nfunc Caller() { Retired() }\n",
+        )?;
+        fixture.git(&["init", "-q"])?;
+        fixture.git(&["add", "."])?;
+        fixture.git(&["commit", "-q", "-m", "initial"])?;
+        let base = fixture.work.0.join("index");
+        assert_success(&fixture.run(&["index"], Some(&base))?);
+        fs::remove_file(fixture.root.join("api.go"))?;
+        assert_success(&fixture.run(&["index"], Some(&base))?);
+
+        let current_derived = derived(&base)?;
+        let current_store = current_derived
+            .parent()
+            .ok_or("missing current index directory")?;
+        let damaged_shard = fact_shard(&current_derived, caller)?;
+        match damage {
+            "missing" => fs::remove_file(&damaged_shard)?,
+            "corrupt" => fs::write(&damaged_shard, b"corrupt shard")?,
+            "incomplete" => {
+                let empty = (0..64)
+                    .find(|shard| *shard as u64 != caller_shard)
+                    .ok_or("missing empty shard")?;
+                fs::copy(
+                    current_store.join(format!("facts/{empty:02}")),
+                    &damaged_shard,
+                )?;
+            }
+            "wrong-generation" => {
+                let alternate = fixture.work.0.join("alternate");
+                fs::create_dir(&alternate)?;
+                fs::write(
+                    alternate.join("go.mod"),
+                    "module example.com/probe\n\ngo 1.23\n",
+                )?;
+                fs::write(
+                    alternate.join(caller),
+                    "package probe\n\nfunc Caller() { OtherMissing() }\n",
+                )?;
+                let alternate_index = fixture.work.0.join("alternate-index");
+                assert_success(&fixture.run_at(&alternate, &["index"], Some(&alternate_index))?);
+                let alternate_shard = fact_shard(&derived(&alternate_index)?, caller)?;
+                fs::copy(alternate_shard, &damaged_shard)?;
+            }
+            _ => return Err("unknown shard damage".into()),
+        }
+
+        let facts_dir = current_store.join("facts");
+        let before_shards = snapshot(&facts_dir)?;
+        let before_index = snapshot(&base)?;
+        let before_root = snapshot(&fixture.root)?;
+        let before_home = snapshot(&fixture.home)?;
+        let read_only = fixture.run(&["impact", "--diff", "--json", "--read-only"], Some(&base))?;
+        let read_only_unchanged = snapshot(&base)? == before_index
+            && snapshot(&fixture.root)? == before_root
+            && snapshot(&fixture.home)? == before_home;
+        if read_only.status.code() != Some(5) || !read_only_unchanged {
+            failures.push(format!(
+                "{damage}: read-only status {:?}, unchanged={read_only_unchanged}, stderr={}",
+                read_only.status.code(),
+                String::from_utf8_lossy(&read_only.stderr)
+            ));
+        }
+
+        let writable = fixture.run(&["impact", "--diff", "--json"], Some(&base))?;
+        let writable_text = String::from_utf8_lossy(&writable.stdout);
+        if !writable.status.success()
+            || !writable_text.contains("Caller")
+            || !writable_text.contains("\"conf\":\"inferred\"")
+        {
+            failures.push(format!(
+                "{damage}: writable status {:?}, stdout={}, stderr={}",
+                writable.status.code(),
+                writable_text,
+                String::from_utf8_lossy(&writable.stderr)
+            ));
+        }
+
+        let after_shards = snapshot(&facts_dir)?;
+        let shard_name = damaged_shard
+            .file_name()
+            .ok_or("missing damaged shard name")?;
+        let before_others: BTreeMap<_, _> = before_shards
+            .iter()
+            .filter(|(path, _)| {
+                !path.as_os_str().is_empty()
+                    && path.file_name().is_none_or(|name| name != shard_name)
+            })
+            .collect();
+        let after_others: BTreeMap<_, _> = after_shards
+            .iter()
+            .filter(|(path, _)| {
+                !path.as_os_str().is_empty()
+                    && path.file_name().is_none_or(|name| name != shard_name)
+            })
+            .collect();
+        if before_others != after_others {
+            failures.push(format!(
+                "{damage}: recovery changed an unrelated fact shard"
+            ));
+        }
+        let before_clean_read_only = (
+            snapshot(&base)?,
+            snapshot(&fixture.root)?,
+            snapshot(&fixture.home)?,
+        );
+        let read_only_after =
+            fixture.run(&["impact", "--diff", "--json", "--read-only"], Some(&base))?;
+        let clean_read_only_unchanged = snapshot(&base)? == before_clean_read_only.0
+            && snapshot(&fixture.root)? == before_clean_read_only.1
+            && snapshot(&fixture.home)? == before_clean_read_only.2;
+        if !read_only_after.status.success() || !clean_read_only_unchanged {
+            failures.push(format!(
+                "{damage}: repaired index is not cleanly readable without writes"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+#[test]
+fn wrong_generation_shard_cannot_contaminate_a_rebuilt_graph() -> TestResult {
+    let fixture = Fixture::new()?;
+    fs::remove_file(fixture.root.join("lib.rs"))?;
+    fs::write(
+        fixture.root.join("go.mod"),
+        "module example.com/probe\n\ngo 1.23\n",
+    )?;
+    fs::write(
+        fixture.root.join("api.go"),
+        "package probe\n\nfunc Retired() {}\n",
+    )?;
+    let mut used_shards = BTreeSet::from([xxhash_rust::xxh3::xxh3_64(b"api.go") % 64]);
+    let choose_path = |prefix: &str, used: &mut BTreeSet<u64>| {
+        (0..1000)
+            .map(|number| format!("{prefix}{number}.go"))
+            .find(|path| used.insert(xxhash_rust::xxh3::xxh3_64(path.as_bytes()) % 64))
+    };
+    let caller = choose_path("caller", &mut used_shards).ok_or("missing caller shard")?;
+    let helper = choose_path("helper", &mut used_shards).ok_or("missing helper shard")?;
+    let trigger = choose_path("trigger", &mut used_shards).ok_or("missing trigger shard")?;
+    fs::write(
+        fixture.root.join(&caller),
+        "package probe\n\nfunc Caller() { Retired() }\n",
+    )?;
+    fs::write(
+        fixture.root.join(&helper),
+        "package probe\n\nfunc Helper() {}\n",
+    )?;
+    fs::write(
+        fixture.root.join(&trigger),
+        "package probe\n\nfunc Trigger() int { return 1 }\n",
+    )?;
+    fixture.git(&["init", "-q"])?;
+    fixture.git(&["add", "."])?;
+    fixture.git(&["commit", "-q", "-m", "initial"])?;
+    let base = fixture.work.0.join("index");
+    assert_success(&fixture.run(&["index"], Some(&base))?);
+    fs::remove_file(fixture.root.join("api.go"))?;
+    assert_success(&fixture.run(&["index"], Some(&base))?);
+
+    let alternate = fixture.work.0.join("alternate");
+    fs::create_dir(&alternate)?;
+    fs::write(
+        alternate.join("go.mod"),
+        "module example.com/probe\n\ngo 1.23\n",
+    )?;
+    fs::write(
+        alternate.join(&caller),
+        "package probe\n\nfunc Caller() { Helper() }\n",
+    )?;
+    fs::write(
+        alternate.join(&helper),
+        "package probe\n\nfunc Helper() {}\n",
+    )?;
+    fs::write(
+        alternate.join(&trigger),
+        "package probe\n\nfunc Trigger() int { return 1 }\n",
+    )?;
+    let alternate_index = fixture.work.0.join("alternate-index");
+    assert_success(&fixture.run_at(&alternate, &["index"], Some(&alternate_index))?);
+    let foreign_shard = fact_shard(&derived(&alternate_index)?, &caller)?;
+    let current_shard = fact_shard(&derived(&base)?, &caller)?;
+    fs::copy(foreign_shard, current_shard)?;
+
+    fs::write(
+        fixture.root.join(&trigger),
+        "package probe\n\nfunc Trigger() int { return 2 }\n",
+    )?;
+    assert_success(&fixture.run(&["index"], Some(&base))?);
+    let fresh = fixture.work.0.join("fresh-index");
+    assert_success(&fixture.run(&["index"], Some(&fresh))?);
+    let rebuilt = fs::read(derived(&base)?)?;
+    let expected = fs::read(derived(&fresh)?)?;
+    if rebuilt != expected {
+        return Err("rebuilt derived index differs from fresh index".into());
+    }
+    let impact = fixture.run(&["impact", "--diff", "--json"], Some(&base))?;
+    assert_success(&impact);
+    let text = String::from_utf8(impact.stdout)?;
+    assert!(
+        text.contains("Caller") && text.contains("\"conf\":\"inferred\""),
+        "{text}"
+    );
     Ok(())
 }
 

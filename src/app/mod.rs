@@ -221,7 +221,17 @@ fn run_query(
                     ));
                 }
                 let rev = args.first().map_or("HEAD", String::as_str);
-                return query::impact::render_diff(index, filter, rev, &impact);
+                return match query::impact::render_diff(index, filter, rev, &impact) {
+                    Err(AppError::RecoverFacts(_)) if options.read_only => Err(AppError::Stale(
+                        "index facts damaged; run 'xcalygraph index'",
+                    )),
+                    Err(AppError::RecoverFacts(_)) => {
+                        refresh::rederive(workspace)?;
+                        let recovered = open_index(workspace, Mode::Write)?;
+                        query::impact::render_diff(&recovered, filter, rev, &impact)
+                    }
+                    result => result,
+                };
             }
             if args.is_empty() {
                 return Err(AppError::Invalid(
