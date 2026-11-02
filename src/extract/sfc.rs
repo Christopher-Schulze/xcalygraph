@@ -12,6 +12,8 @@ use crate::domain::facts::{Ref, RefKind, SymKind, Symbol};
 use crate::domain::filetype::FileType;
 use crate::extract::engine;
 
+use super::markup::{markup_tag, raw_element_close};
+
 pub fn extract(record: &FileRecord, content: &[u8], capture_identities: bool) -> engine::Parsed {
     let text = String::from_utf8_lossy(content);
     let MarkupContext {
@@ -212,94 +214,6 @@ fn markup_context(text: &str, astro: bool) -> MarkupContext {
         from += 1;
     }
     context
-}
-
-struct MarkupTag<'a> {
-    name: &'a str,
-    closing: bool,
-    start: usize,
-    end: usize,
-}
-
-/// Parses one HTML-like tag and skips `>` characters inside quoted attributes.
-fn markup_tag(text: &str, start: usize) -> Option<MarkupTag<'_>> {
-    let bytes = text.as_bytes();
-    if bytes.get(start) != Some(&b'<') {
-        return None;
-    }
-    let mut name_start = start + 1;
-    let closing = bytes.get(name_start) == Some(&b'/');
-    if closing {
-        name_start += 1;
-    }
-    if !bytes.get(name_start)?.is_ascii_alphabetic() {
-        return None;
-    }
-    let mut name_end = name_start + 1;
-    while bytes
-        .get(name_end)
-        .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-    {
-        name_end += 1;
-    }
-    if bytes
-        .get(name_end)
-        .is_some_and(|byte| !byte.is_ascii_whitespace() && !matches!(byte, b'/' | b'>'))
-    {
-        return None;
-    }
-    let end = markup_tag_end(bytes, start);
-    Some(MarkupTag {
-        name: &text[name_start..name_end],
-        closing,
-        start,
-        end,
-    })
-}
-
-fn markup_tag_end(bytes: &[u8], start: usize) -> usize {
-    let mut quote = None;
-    for (index, &byte) in bytes.iter().enumerate().skip(start + 1) {
-        match quote {
-            Some(delimiter) if byte == delimiter => quote = None,
-            Some(_) => {}
-            None => match byte {
-                b'\'' | b'"' => quote = Some(byte),
-                b'>' => return index + 1,
-                _ => {}
-            },
-        }
-    }
-    bytes.len()
-}
-
-fn raw_element_close<'a>(
-    text: &'a str,
-    lower: &str,
-    from: usize,
-    name: &str,
-) -> Option<MarkupTag<'a>> {
-    let needle = if name.eq_ignore_ascii_case("script") {
-        "</script"
-    } else if name.eq_ignore_ascii_case("style") {
-        "</style"
-    } else {
-        return None;
-    };
-    let mut search_from = from;
-    while let Some(start) = lower[search_from..]
-        .find(needle)
-        .map(|offset| search_from + offset)
-    {
-        if let Some(tag) = markup_tag(text, start)
-            && tag.closing
-            && tag.name.eq_ignore_ascii_case(name)
-        {
-            return Some(tag);
-        }
-        search_from = start + 2;
-    }
-    None
 }
 
 /// Copies the code of each markup expression into `blanked` as a parenthesized statement

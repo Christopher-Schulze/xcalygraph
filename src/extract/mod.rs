@@ -9,10 +9,12 @@ pub mod engine;
 #[cfg(test)]
 mod golden;
 mod hcl;
+mod html;
 pub mod json;
 pub mod lang;
 pub mod manifest;
 pub mod markdown;
+mod markup;
 mod prose;
 mod routes;
 pub mod sfc;
@@ -27,7 +29,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 58;
+const EXTRACTION_VERSION: u32 = 59;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -62,13 +64,15 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
         parsed.facts.lines = count_lines(content);
         return parsed;
     }
+    if record.file_type == Some(FileType::Html) && record.role == Role::Doc {
+        return html::extract(record, content, capture_identities);
+    }
     if let Some(
         file_type @ (FileType::Text
         | FileType::Rst
         | FileType::Org
         | FileType::AsciiDoc
-        | FileType::Tex
-        | FileType::Html),
+        | FileType::Tex),
     ) = record.file_type
         && record.role == Role::Doc
     {
@@ -426,5 +430,148 @@ mod tests {
         );
         let notes = extract(&record("docs/notes.txt", Role::Doc), b"First line.\n");
         assert_eq!(notes.doc, "First line.");
+    }
+
+    #[test]
+    fn html_extracts_only_enabled_inline_javascript_at_original_lines() {
+        let record = FileRecord {
+            path: "docs/page.html".to_owned(),
+            size: 0,
+            mtime_ns: 0,
+            identity: None,
+            hash: 0,
+            role: Role::Doc,
+            file_type: Some(FileType::Html),
+        };
+        let source = concat!(
+            "<!doctype html>\n",
+            "<h1>Guide</h1>\n",
+            "<!--\n",
+            "<script>function commentOnly() { return ghost(); }</script>\n",
+            "-->\n",
+            "<style>\n",
+            "<script>function styleOnly() { return ghost(); }</script>\n",
+            "</style>\n",
+            "<textarea>\n",
+            "<script>function textOnly() { return ghost(); }</script>\n",
+            "</textarea>\n",
+            "<template>\n",
+            "<script>function templateOnly() { return ghost(); }</script>\n",
+            "</template>\n",
+            "<script type=\"module\">\n",
+            "function hydrate() {\n",
+            "  return render();\n",
+            "}\n",
+            "</script>\n",
+            "<script type=\"application/json\">\n",
+            "function dataOnly() { return fake(); }\n",
+            "</script>\n",
+            "<script src=\"external.js\">\n",
+            "function externalOnly() { return remote(); }\n",
+            "</script>\n",
+            "<script nomodule>\n",
+            "function legacyOnly() { return legacy(); }\n",
+            "</script>\n",
+            "<script type=\"text/javascript; charset=utf-8\">\n",
+            "function classic() { return hydrate(); }\n",
+            "</script>\n",
+            "<script language=\"javascript\">\n",
+            "function legacyLanguage() { return classic(); }\n",
+            "</script>\n",
+            "<!DOCTYPE html PUBLIC \"<script>function doctypeOnly() { return fake(); }</script>\" \"x\">\n",
+            "<![CDATA[\n",
+            "<script>function cdataOnly() { return fake(); }</script>\n",
+            "]]>\n",
+            "<noscript>\n",
+            "<script>function noScriptOnly() { return fake(); }</script>\n",
+            "</noscript>\n",
+            "<script>\n",
+            "function malformed() { return unfinished(); }\n"
+        );
+        let parsed = extract_with_identities(&record, source.as_bytes());
+        let symbols: Vec<_> = parsed
+            .facts
+            .symbols
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.line))
+            .collect();
+        assert_eq!(
+            symbols,
+            [
+                ("Guide", 2),
+                ("hydrate", 16),
+                ("classic", 30),
+                ("legacyLanguage", 33),
+            ]
+        );
+        let calls: Vec<_> = parsed
+            .facts
+            .refs
+            .iter()
+            .filter(|reference| reference.kind == crate::domain::facts::RefKind::Call)
+            .map(|reference| (reference.name.as_str(), reference.line))
+            .collect();
+        assert_eq!(calls, [("render", 17), ("hydrate", 30), ("classic", 33)]);
+        let function_lines: Vec<_> = parsed
+            .facts
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.kind() == crate::domain::facts::SymKind::Fn)
+            .map(|symbol| (symbol.name.as_str(), symbol.line, symbol.end_line))
+            .collect();
+        assert_eq!(
+            function_lines,
+            [
+                ("hydrate", 16, 18),
+                ("classic", 30, 30),
+                ("legacyLanguage", 33, 33),
+            ]
+        );
+        let call_scopes: Vec<_> = parsed
+            .facts
+            .refs
+            .iter()
+            .filter(|reference| reference.kind == crate::domain::facts::RefKind::Call)
+            .map(|reference| {
+                (
+                    reference.name.as_str(),
+                    reference
+                        .scope
+                        .map(|index| parsed.facts.symbols[index as usize].name.as_str()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            call_scopes,
+            [
+                ("render", Some("hydrate")),
+                ("hydrate", Some("classic")),
+                ("classic", Some("legacyLanguage")),
+            ]
+        );
+        assert_eq!(parsed.identities.len(), parsed.facts.symbols.len());
+        assert_eq!(parsed.identities[0].as_deref(), Some("Guide"));
+        assert!(parsed.identities[1..].iter().all(Option::is_some));
+        assert!(!parsed.incomplete);
+        for (name, term) in [
+            ("hydrate", "render"),
+            ("classic", "hydrat"),
+            ("legacyLanguage", "classic"),
+        ] {
+            assert!(
+                parsed.facts.symbols.iter().any(|symbol| {
+                    symbol.name == name
+                        && symbol
+                            .terms
+                            .split_whitespace()
+                            .any(|indexed| indexed == term)
+                }),
+                "{name} is missing body term {term}"
+            );
+        }
+        assert!(!parsed.facts.terms.contains("render"));
+        let facts = extract(&record, source.as_bytes());
+        assert_eq!(facts.symbols, parsed.facts.symbols);
+        assert_eq!(facts.refs, parsed.facts.refs);
     }
 }
