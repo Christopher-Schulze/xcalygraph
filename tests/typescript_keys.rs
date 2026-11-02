@@ -185,6 +185,74 @@ fn typescript_type_names_respect_lexical_visibility() -> Result<(), Box<dyn Erro
 }
 
 #[test]
+fn typescript_index_signatures_merge_only_with_proven_member_values() -> Result<(), Box<dyn Error>>
+{
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    for (name, source) in [
+        (
+            "index-valid.ts",
+            &include_bytes!("fixtures/typescript-index-signature-valid.ts")[..],
+        ),
+        (
+            "index-invalid.ts",
+            &include_bytes!("fixtures/typescript-index-signature-invalid.ts")[..],
+        ),
+    ] {
+        fs::write(root.join(name), source)?;
+    }
+
+    let valid = fixture.run(&["show", "index-valid.useBag", "--exact"])?;
+    assert!(valid.status.success());
+    let valid = String::from_utf8(valid.stdout)?;
+    assert!(valid.contains("index-valid.Service.run"), "{valid}");
+    let impact = fixture.run(&[
+        "impact",
+        "index-valid.Service.run",
+        "--exact",
+        "--read-only",
+    ])?;
+    assert!(impact.status.success());
+    let impact = String::from_utf8(impact.stdout)?;
+    assert!(impact.contains("index-valid.useBag"), "{impact}");
+    let filtered = fixture.run(&[
+        "show",
+        "index-valid.useBag",
+        "-p",
+        "index-valid.ts",
+        "--read-only",
+    ])?;
+    assert!(filtered.status.success());
+    assert!(String::from_utf8(filtered.stdout)?.contains("index-valid.Service.run"));
+    assert_eq!(
+        fixture
+            .run(&[
+                "show",
+                "index-valid.useBag",
+                "-p",
+                "index-invalid.ts",
+                "--read-only",
+            ])?
+            .status
+            .code(),
+        Some(4)
+    );
+
+    for (caller, invalid_target) in [
+        ("index-invalid.useBad", "index-invalid.Service.run"),
+        ("index-invalid.useDuplicate", "index-invalid.Service.run"),
+        ("index-invalid.useMismatch", "index-invalid.Service.run"),
+    ] {
+        let result = fixture.run(&["show", caller, "--exact", "--read-only"])?;
+        assert!(result.status.success());
+        let output = String::from_utf8(result.stdout)?;
+        assert!(!output.contains(invalid_target), "{caller}: {output}");
+    }
+    Ok(())
+}
+
+#[test]
 fn typescript_field_lists_are_lossless_and_budgeted() -> Result<(), Box<dyn Error>> {
     let fixture = Fixture::new()?;
     fs::create_dir(fixture.0.join("repo"))?;
@@ -1254,6 +1322,10 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         include_bytes!("fixtures/typescript-lexical-valid.ts"),
     )?;
     fs::write(
+        root.join("index-signature.ts"),
+        include_bytes!("fixtures/typescript-index-signature-valid.ts"),
+    )?;
+    fs::write(
         root.join("base.ts"),
         include_bytes!("fixtures/typescript-cross-base-valid.ts"),
     )?;
@@ -1322,6 +1394,14 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
             "--read-only",
         ])?;
         assert!(lexical.status.success());
+        let indexed = run(&[
+            "show",
+            "index-signature.useBag",
+            "--json",
+            "--exact",
+            "--read-only",
+        ])?;
+        assert!(indexed.status.success());
         answers.push((
             answer.stdout,
             equivalent.stdout,
@@ -1334,6 +1414,7 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
             imported.stdout,
             augmented.stdout,
             lexical.stdout,
+            indexed.stdout,
         ));
     }
     assert_eq!(images[0], images[1]);

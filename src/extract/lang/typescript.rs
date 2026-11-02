@@ -245,6 +245,25 @@ pub(in crate::extract) fn interface_member_identity(
     let mut cursor = body.walk();
     let mut identity = String::from("interface_members:");
     for member in body.named_children(&mut cursor) {
+        if member.kind() == "index_signature" {
+            let name = member
+                .child_by_field_name("index_type")?
+                .utf8_text(source)
+                .ok()?;
+            if !matches!(name, "string" | "number") {
+                return None;
+            }
+            let value = member
+                .child_by_field_name("type")?
+                .named_child(0)?
+                .utf8_text(source)
+                .ok()?;
+            if !matches!(value, "string" | "number" | "boolean" | "any" | "unknown") {
+                return None;
+            }
+            let _ = write!(identity, "i{}:{name}{}:{value}", name.len(), value.len());
+            continue;
+        }
         let tag = match member.kind() {
             "property_signature" => 'p',
             "method_signature" => {
@@ -285,8 +304,34 @@ pub(in crate::extract) fn interface_member_identity(
             name.len(),
             signature.len()
         );
+        if matches!(tag, 'p' | 'm' | 'o') {
+            let value = interface_member_value_type(member, source);
+            let _ = write!(identity, "v{}:{name}{}:{value}", name.len(), value.len());
+        }
     }
     Some(identity)
+}
+
+#[cfg(feature = "lang-typescript")]
+fn interface_member_value_type(member: tree_sitter::Node, source: &[u8]) -> String {
+    if member.kind() == "method_signature" {
+        return "function".to_owned();
+    }
+    let mut cursor = member.walk();
+    let optional = member
+        .children(&mut cursor)
+        .any(|child| child.kind() == "?");
+    let value = member
+        .child_by_field_name("type")
+        .and_then(|annotation| annotation.named_child(0))
+        .filter(|node| node.kind() == "predefined_type")
+        .and_then(|node| node.utf8_text(source).ok())
+        .filter(|value| matches!(*value, "string" | "number" | "boolean"));
+    match value {
+        Some(value) if optional => format!("optional:{value}"),
+        Some(value) => format!("required:{value}"),
+        None => "unsupported".to_owned(),
+    }
 }
 
 /// Group only same-file declarations whose complete source facts prove compatible members.
@@ -916,9 +961,12 @@ fn instantiated_generic_properties(
         let (&tag, tail) = rest.as_bytes().split_first()?;
         let (name, tail) = take_identity_part(std::str::from_utf8(tail).ok()?)?;
         let (signature, tail) = take_identity_part(tail)?;
-        let signature = match replacements.get(name) {
-            Some(&(parameter, actual)) => substitute_signature_token(signature, parameter, actual)?,
-            None => signature.to_owned(),
+        let signature = match (tag, replacements.get(name)) {
+            (b'v' | b'i', _) => signature.to_owned(),
+            (_, Some(&(parameter, actual))) => {
+                substitute_signature_token(signature, parameter, actual)?
+            }
+            (_, None) => signature.to_owned(),
         };
         let _ = write!(
             result,
@@ -963,7 +1011,7 @@ fn interface_method_signatures(
     let mut methods = std::collections::HashMap::new();
     while !rest.is_empty() {
         let (&tag, tail) = rest.as_bytes().split_first()?;
-        if !matches!(tag, b'p' | b'm' | b'o') {
+        if !matches!(tag, b'p' | b'm' | b'o' | b'v' | b'i') {
             return None;
         }
         let tail = std::str::from_utf8(tail).ok()?;
@@ -984,7 +1032,13 @@ fn interface_method_signatures(
 #[cfg(feature = "lang-typescript")]
 pub(crate) fn imported_base_members_are_disjoint(base: &str, parts: &[&str]) -> bool {
     use std::collections::HashSet;
-    if !compatible_interface_members(&[base]) || !compatible_interface_members(parts) {
+    if !compatible_interface_members(&[base])
+        || !compatible_interface_members(parts)
+        || interface_has_index_signature(base) != Some(false)
+        || parts
+            .iter()
+            .any(|part| interface_has_index_signature(part) != Some(false))
+    {
         return false;
     }
     fn names(identity: &str) -> Option<HashSet<&str>> {
@@ -992,12 +1046,14 @@ pub(crate) fn imported_base_members_are_disjoint(base: &str, parts: &[&str]) -> 
         let mut names = HashSet::new();
         while !rest.is_empty() {
             let (&tag, tail) = rest.as_bytes().split_first()?;
-            if !matches!(tag, b'p' | b'm' | b'o') {
+            if !matches!(tag, b'p' | b'm' | b'o' | b'v' | b'i') {
                 return None;
             }
             let (name, tail) = take_identity_part(std::str::from_utf8(tail).ok()?)?;
             let (_, tail) = take_identity_part(tail)?;
-            names.insert(name);
+            if matches!(tag, b'p' | b'm' | b'o') {
+                names.insert(name);
+            }
             rest = tail;
         }
         Some(names)
@@ -1015,11 +1071,16 @@ fn compatible_interface_members(parts: &[&str]) -> bool {
     use std::collections::{HashMap, HashSet};
 
     let mut seen: HashMap<&str, (u8, &str)> = HashMap::new();
+    let mut index_values = HashMap::new();
+    let mut member_values = Vec::new();
+    let mut complete_member_values = true;
     for part in parts {
         let Some(mut rest) = part.strip_prefix("interface_members:") else {
             return false;
         };
         let mut own_properties = HashSet::new();
+        let mut member_count = 0usize;
+        let mut value_count = 0usize;
         while !rest.is_empty() {
             let Some((&tag, tail)) = rest.as_bytes().split_first() else {
                 return false;
@@ -1033,20 +1094,97 @@ fn compatible_interface_members(parts: &[&str]) -> bool {
             let Some((signature, tail)) = take_identity_part(tail) else {
                 return false;
             };
-            if !matches!(tag, b'p' | b'm' | b'o') || (tag == b'p' && !own_properties.insert(name)) {
-                return false;
-            }
-            if let Some(&(previous_tag, previous_signature)) = seen.get(name) {
-                if tag != previous_tag || (tag == b'p' && signature != previous_signature) {
-                    return false;
+            match tag {
+                b'p' | b'm' | b'o' => {
+                    if tag == b'p' && !own_properties.insert(name) {
+                        return false;
+                    }
+                    member_count += 1;
+                    if let Some(&(previous_tag, previous_signature)) = seen.get(name) {
+                        if tag != previous_tag || (tag == b'p' && signature != previous_signature) {
+                            return false;
+                        }
+                    } else {
+                        seen.insert(name, (tag, signature));
+                    }
                 }
-            } else {
-                seen.insert(name, (tag, signature));
+                b'v' => {
+                    if !seen.contains_key(name)
+                        || !matches!(
+                            signature,
+                            "function"
+                                | "unsupported"
+                                | "required:string"
+                                | "required:number"
+                                | "required:boolean"
+                                | "optional:string"
+                                | "optional:number"
+                                | "optional:boolean"
+                        )
+                    {
+                        return false;
+                    }
+                    value_count += 1;
+                    member_values.push(signature);
+                }
+                b'i' => {
+                    if !matches!(name, "string" | "number")
+                        || !matches!(
+                            signature,
+                            "string" | "number" | "boolean" | "any" | "unknown"
+                        )
+                        || index_values.insert(name, signature).is_some()
+                    {
+                        return false;
+                    }
+                }
+                _ => return false,
             }
             rest = tail;
         }
+        complete_member_values &= member_count == value_count;
+    }
+    if !index_values.is_empty() && !complete_member_values {
+        return false;
+    }
+    if let (Some(number), Some(string)) = (index_values.get("number"), index_values.get("string"))
+        && number != string
+    {
+        return false;
+    }
+    for index in index_values.values() {
+        if !compatible_index_members(index, &member_values) {
+            return false;
+        }
     }
     true
+}
+
+#[cfg(feature = "lang-typescript")]
+fn interface_has_index_signature(identity: &str) -> Option<bool> {
+    let mut rest = identity.strip_prefix("interface_members:")?;
+    let mut found = false;
+    while !rest.is_empty() {
+        let (&tag, tail) = rest.as_bytes().split_first()?;
+        if !matches!(tag, b'p' | b'm' | b'o' | b'v' | b'i') {
+            return None;
+        }
+        let (_, tail) = take_identity_part(std::str::from_utf8(tail).ok()?)?;
+        let (_, tail) = take_identity_part(tail)?;
+        found |= tag == b'i';
+        rest = tail;
+    }
+    Some(found)
+}
+
+#[cfg(feature = "lang-typescript")]
+fn compatible_index_members(index: &str, members: &[&str]) -> bool {
+    if matches!(index, "any" | "unknown") {
+        return true;
+    }
+    members
+        .iter()
+        .all(|member| member.strip_prefix("required:") == Some(index))
 }
 
 #[cfg(feature = "lang-typescript")]
@@ -1487,16 +1625,23 @@ mod tests {
                 .all(|identity| identity.identity.contains("m3:run"))
         );
 
-        let unsupported = crate::extract::extract(
+        let indexed = crate::extract::extract(
             &record,
             b"interface Unknown { [x: string]: string }\ninterface Unknown { safe: string }",
         );
-        assert_eq!(unsupported.symbols.len(), 2);
+        assert_eq!(indexed.symbols.len(), 2);
         let kind = crate::domain::facts::SourceIdentityKind::InterfaceMembers;
-        assert_eq!(unsupported.source_identity(kind, 0), None);
-        assert!(unsupported.source_identity(kind, 1).is_some());
-        assert_eq!(unsupported.source_identity(group, 0), None);
-        assert_eq!(unsupported.source_identity(group, 1), None);
+        assert!(
+            indexed
+                .source_identity(kind, 0)
+                .is_some_and(|identity| identity.contains("i6:string6:string"))
+        );
+        assert!(indexed.source_identity(kind, 1).is_some());
+        assert_eq!(
+            indexed.source_identity(group, 0),
+            indexed.source_identity(group, 1)
+        );
+        assert!(indexed.source_identity(group, 0).is_some());
 
         let invalid = crate::extract::extract(
             &record,
