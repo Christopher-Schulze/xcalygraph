@@ -3573,3 +3573,71 @@ fn env_definitions_feed_map_env_and_audit_drift_without_values() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn show_attributes_environment_reads_to_exact_symbol_or_file_in_text_and_json() -> TestResult {
+    let dir = TempDir::new("env-read-ownership")?;
+    let root = dir.0.join("repo");
+    dir.write(
+        "repo/src/env.ts",
+        "process.env.FILE_ONLY;\n\
+         function outer() {\n\
+           function unused() { return process.env.NESTED_ONLY; }\n\
+           return process.env.OUTER_ONLY;\n\
+         }\n\
+         class Config {\n\
+           read() { return process.env.METHOD_ONLY; }\n\
+         }\n\
+         function first() { return process.env.FIRST_ONLY; } function second() { return process.env.SECOND_ONLY; }\n",
+    )?;
+    let index = dir.0.join("index");
+    let cases: &[(&str, &[&str], &[&str])] = &[
+        (
+            "src/env.ts",
+            &["FILE_ONLY"],
+            &[
+                "NESTED_ONLY",
+                "OUTER_ONLY",
+                "METHOD_ONLY",
+                "FIRST_ONLY",
+                "SECOND_ONLY",
+            ],
+        ),
+        ("outer", &["OUTER_ONLY"], &["NESTED_ONLY", "FILE_ONLY"]),
+        ("unused", &["NESTED_ONLY"], &["OUTER_ONLY", "FILE_ONLY"]),
+        ("Config", &[], &["METHOD_ONLY"]),
+        ("Config.read", &["METHOD_ONLY"], &["FILE_ONLY"]),
+        ("first", &["FIRST_ONLY"], &["SECOND_ONLY"]),
+        ("second", &["SECOND_ONLY"], &["FIRST_ONLY"]),
+    ];
+
+    for json in [false, true] {
+        for (target, expected, forbidden) in cases {
+            let mut args = vec!["show", target];
+            if json {
+                args.push("--json");
+            }
+            let output = run_in(&root, &index, &args)?;
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "show {target:?}, json={json}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let rendered = String::from_utf8(output.stdout)?;
+            for name in *expected {
+                assert!(
+                    rendered.contains(name),
+                    "show {target:?}, json={json}, missing {name}: {rendered}"
+                );
+            }
+            for name in *forbidden {
+                assert!(
+                    !rendered.contains(name),
+                    "show {target:?}, json={json}, leaked {name}: {rendered}"
+                );
+            }
+        }
+    }
+    Ok(())
+}

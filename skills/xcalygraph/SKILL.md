@@ -21,7 +21,7 @@ Local, deterministic index of the repository (symbols, calls, type uses, imports
 | `xcalygraph map` | languages, largest modules with top symbols, entrypoints, tasks (make, scripts, CI, services) with what they run, hubs, API operations with handlers, cycles, layers, external deps, env vars |
 | `xcalygraph find TERMS...` | ranked symbols and files, one line each; natural-language terms work |
 | `xcalygraph ctx TERMS...` | best matches with doc sentence plus related symbols, grouped by file |
-| `xcalygraph show NAME` | card: signature, doc, members, supertypes, implementations, callers, callees, tests, env reads |
+| `xcalygraph show NAME` | card: signature, doc, members, supertypes, implementations, callers, callees, tests, env reads owned by the symbol or file when unscoped |
 | `xcalygraph path FROM TO` | shortest dependency path |
 | `xcalygraph impact NAME... \| --diff [REV]` | dependents of a change, tests reaching them, test commands to run |
 | `xcalygraph audit` | dead code, unused exports, cycles, stale doc references, env drift, unreferenced assets, files co-changed without static link, hotspots |

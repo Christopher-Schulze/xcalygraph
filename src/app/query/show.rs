@@ -465,22 +465,13 @@ fn tests(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: us
 }
 
 fn envs(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: usize) {
-    let symbol_end = match index.node(node) {
-        Node::Symbol(symbol) => Some((symbol.file, symbol.line, symbol.end_line)),
-        Node::File(_) => None,
-    };
     let reads: Vec<_> = index
         .derived
         .envs()
         .iter()
         .filter(|env| env.source == 0)
         .filter(|env| filter.includes(index, env.node))
-        .filter(|env| {
-            env.node == node
-                || symbol_end.is_some_and(|(file, start, end)| {
-                    index.file_index_of(env.node) == file && start <= env.line && env.line <= end
-                })
-        })
+        .filter(|env| env.node == node)
         .collect();
     for (shown, env) in reads.iter().enumerate() {
         if shown >= cap {
