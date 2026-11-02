@@ -1,0 +1,7 @@
+Sink.Sink.run -calls-> Sink.Sink.reset @11
+Sink.Sink.run -calls-> Sink.Sink.send @6
+Sink.Sink.run -calls-> Sink.Sink.send @7
+Sink.Sink.run -uses?-> Sink.Sink.reset @12
+Sink.Sink.run -uses?-> Sink.Sink.send @9
+file:Sink.m -imports-> file:Sink.h @1
+ext Sink Foundation 1

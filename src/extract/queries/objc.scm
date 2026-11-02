@@ -79,6 +79,8 @@
 (class_interface (parameterized_arguments (type_name (type_identifier) @name))) @reference.implement
 (protocol_declaration (protocol_reference_list (identifier) @name)) @reference.inherit
 (message_expression receiver: (_) @qualifier method: (identifier) @name) @reference.call
+; A selector expression uses the complete selector identity, captured from the node text.
+(selector_expression) @name @reference.value
 (argument_list (pointer_expression argument: (identifier) @name) @reference.value)
 (initializer_list (pointer_expression argument: (identifier) @name) @reference.value)
 (assignment_expression right: (identifier) @name @reference.value)

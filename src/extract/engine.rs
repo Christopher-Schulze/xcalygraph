@@ -23,7 +23,8 @@ use std::collections::{HashMap, HashSet};
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator};
 
 use crate::domain::facts::{
-    self, Binding, EnvRead, Facts, Fields, Import, Ref, RefKind, SymKind, Symbol,
+    self, Binding, EnvRead, Facts, Fields, Import, Ref, RefKind, SourceIdentity,
+    SourceIdentityKind, SymKind, Symbol,
 };
 
 /// Language-specific behavior the query cannot express.
@@ -84,6 +85,7 @@ struct RawDef<'tree> {
     node: Option<Node<'tree>>,
     kind: Option<SymKind>,
     name: String,
+    source_identity: Option<String>,
     name_node: usize,
     owner: Option<String>,
     /// Last clause of a multi-clause definition (Elixir `def f(nil)` then `def f(x)`).
@@ -94,6 +96,7 @@ struct RawDef<'tree> {
 struct RawRef {
     kind: Option<RefKind>,
     name: String,
+    source_identity: Option<String>,
     qualifier: Option<String>,
     position: usize,
     line: u32,
@@ -251,6 +254,8 @@ fn collect(
             entry.node = Some(primary_node);
             entry.kind = def_kind(kind);
             entry.name = text(name).to_owned();
+            entry.source_identity =
+                source_definition_identity(path, primary_node, &entry.name, source);
             entry.name_node = name.id();
             if let Some(owner) = get("owner") {
                 entry.owner = Some(type_name(text(owner)));
@@ -289,7 +294,16 @@ fn collect(
                 Some(RefKind::Inherit | RefKind::Implement) => type_argument_count(name),
                 _ => facts::NO_ARITY,
             };
-            reference.name = text(name).to_owned();
+            let (reference_name, source_identity) = source_reference_identity(
+                path,
+                primary_node,
+                kind,
+                text(name),
+                source,
+                reference.arity,
+            );
+            reference.name = reference_name;
+            reference.source_identity = source_identity;
             reference.position = name.start_byte();
             reference.line = row(name);
             if let Some(qualifier) = get("qualifier") {
@@ -480,6 +494,7 @@ fn assemble(assembly: Assembly) -> Parsed {
         package: package.as_deref(),
     };
     let mut symbols: Vec<Symbol> = Vec::with_capacity(defs.len());
+    let mut source_identities = Vec::new();
     let mut identities = Vec::new();
     let mut stack: Vec<usize> = Vec::new();
     for (index, def) in defs.iter().enumerate() {
@@ -565,6 +580,13 @@ fn assemble(assembly: Assembly) -> Parsed {
             exported,
             flags,
         });
+        if let (Some(identity), Ok(index)) = (def.source_identity.as_ref(), u32::try_from(index)) {
+            source_identities.push(SourceIdentity {
+                kind: SourceIdentityKind::Symbol,
+                index,
+                identity: identity.clone(),
+            });
+        }
     }
     let scope_of = |position: usize| -> Option<u32> {
         let after = ranges.partition_point(|&(start, _)| start <= position);
@@ -595,7 +617,7 @@ fn assemble(assembly: Assembly) -> Parsed {
         })
         .map(|symbol| symbol.name.as_str())
         .collect();
-    let mut facts_refs: Vec<Ref> = refs
+    let mut facts_refs: Vec<(Ref, Option<String>)> = refs
         .into_iter()
         .filter(|(name_node, raw)| {
             !def_name_nodes.contains(name_node)
@@ -604,14 +626,17 @@ fn assemble(assembly: Assembly) -> Parsed {
                     && !local_functions.contains(raw.name.as_str()))
         })
         .filter_map(|(_, raw)| {
-            Some(Ref {
-                kind: raw.kind?,
-                name: raw.name,
-                qualifier: raw.qualifier,
-                scope: scope_of(raw.position),
-                line: raw.line,
-                arity: raw.arity,
-            })
+            Some((
+                Ref {
+                    kind: raw.kind?,
+                    name: raw.name,
+                    qualifier: raw.qualifier,
+                    scope: scope_of(raw.position),
+                    line: raw.line,
+                    arity: raw.arity,
+                },
+                raw.source_identity,
+            ))
         })
         .collect();
     if !locals.is_empty() {
@@ -622,7 +647,7 @@ fn assemble(assembly: Assembly) -> Parsed {
         // A local shadows every unqualified use of its name (`count := rc.Len; count()`); in
         // Ruby only bare names, since `foo(1)` calls the method even when a local `foo` exists.
         let ruby = path.ends_with(".rb");
-        facts_refs.retain(|reference| {
+        facts_refs.retain(|(reference, _)| {
             let shadowable = match reference.kind {
                 RefKind::Value => true,
                 RefKind::Call => !ruby || reference.arity == facts::NO_ARITY,
@@ -635,17 +660,20 @@ fn assemble(assembly: Assembly) -> Parsed {
     }
     for (impl_node, target, trait_name) in &impls {
         if let Some(trait_name) = trait_name {
-            facts_refs.push(Ref {
-                kind: RefKind::Implement,
-                name: trait_name.clone(),
-                qualifier: Some(target.clone()),
-                scope: None,
-                line: row(*impl_node),
-                arity: facts::NO_ARITY,
-            });
+            facts_refs.push((
+                Ref {
+                    kind: RefKind::Implement,
+                    name: trait_name.clone(),
+                    qualifier: Some(target.clone()),
+                    scope: None,
+                    line: row(*impl_node),
+                    arity: facts::NO_ARITY,
+                },
+                None,
+            ));
         }
     }
-    facts_refs.sort_by(|a, b| {
+    facts_refs.sort_by(|(a, _), (b, _)| {
         (a.line, &a.name, a.kind, &a.qualifier, a.scope).cmp(&(
             b.line,
             &b.name,
@@ -657,14 +685,29 @@ fn assemble(assembly: Assembly) -> Parsed {
     // A value reference repeated in its scope adds no edge: binding shadowing only grows with
     // the line and edges keep their first line, so the first occurrence decides.
     let mut seen_values = HashSet::new();
-    facts_refs.retain(|reference| {
+    facts_refs.retain(|(reference, identity)| {
         reference.kind != RefKind::Value
             || seen_values.insert((
                 reference.name.clone(),
                 reference.qualifier.clone(),
                 reference.scope,
+                identity.clone(),
             ))
     });
+    let mut refs = Vec::with_capacity(facts_refs.len());
+    for (index, (reference, identity)) in facts_refs.into_iter().enumerate() {
+        if let (Some(identity), Ok(index)) = (identity, u32::try_from(index)) {
+            source_identities.push(SourceIdentity {
+                kind: SourceIdentityKind::Reference,
+                index,
+                identity,
+            });
+        }
+        refs.push(reference);
+    }
+    source_identities.sort_unstable_by_key(|identity| (identity.kind, identity.index));
+    let source_identities =
+        (!source_identities.is_empty()).then(|| source_identities.into_boxed_slice());
     let mut facts_imports: Vec<Import> = imports
         .into_values()
         .flat_map(|raw| match (raw.tree, raw.path) {
@@ -769,7 +812,8 @@ fn assemble(assembly: Assembly) -> Parsed {
             package,
             symbols,
             imports: facts_imports,
-            refs: facts_refs,
+            refs,
+            source_identities,
             bindings: facts_bindings,
             envs: facts_envs,
             fields: grouped,
@@ -1024,6 +1068,198 @@ fn arity(call: Node) -> u8 {
         })
         .sum();
     u8::try_from(count).unwrap_or(facts::NO_ARITY - 1)
+}
+
+fn source_definition_identity(path: &str, node: Node, name: &str, source: &[u8]) -> Option<String> {
+    if path.ends_with(".swift")
+        && matches!(
+            node.kind(),
+            "function_declaration" | "protocol_function_declaration" | "init_declaration"
+        )
+    {
+        return swift_definition_identity(node, name, source);
+    }
+    if matches!(node.kind(), "method_declaration" | "method_definition") {
+        return objective_c_definition_identity(node, source);
+    }
+    None
+}
+
+fn swift_definition_identity(node: Node, name: &str, source: &[u8]) -> Option<String> {
+    let mut labels = Vec::new();
+    let mut defaulted = Vec::new();
+    for index in 0..node.named_child_count() {
+        let child_index = u32::try_from(index).ok()?;
+        let child = node.named_child(child_index)?;
+        if child.kind() == "parameter" {
+            let label = child
+                .child_by_field_name("external_name")
+                .or_else(|| child.child_by_field_name("name"))?
+                .utf8_text(source)
+                .ok()?
+                .to_owned();
+            labels.push(label);
+            defaulted.push(false);
+        } else if node.field_name_for_named_child(child_index) == Some("default_value") {
+            *defaulted.last_mut()? = true;
+        }
+    }
+    (!labels.is_empty())
+        .then(|| swift_labeled_identity(name, &labels, Some(&defaulted)))
+        .flatten()
+}
+
+fn swift_call_identity(call: Node, name: &str, source: &[u8], arity: u8) -> Option<String> {
+    let mut cursor = call.walk();
+    let suffix = call
+        .named_children(&mut cursor)
+        .find(|child| child.kind() == "call_suffix")?;
+    let mut suffix_cursor = suffix.walk();
+    let arguments = suffix
+        .named_children(&mut suffix_cursor)
+        .find(|child| child.kind() == "value_arguments")?;
+    let mut arguments_cursor = arguments.walk();
+    let labels: Option<Vec<String>> = arguments
+        .named_children(&mut arguments_cursor)
+        .filter(|argument| argument.kind() == "value_argument")
+        .map(|argument| {
+            argument
+                .child_by_field_name("name")
+                .map_or(Some("_".to_owned()), |label| {
+                    label.utf8_text(source).ok().map(str::to_owned)
+                })
+        })
+        .collect();
+    let labels = labels?;
+    if labels.is_empty() || u8::try_from(labels.len()).ok() != Some(arity) {
+        return None;
+    }
+    swift_labeled_identity(name, &labels, None)
+}
+
+fn swift_labeled_identity(
+    name: &str,
+    labels: &[String],
+    defaulted: Option<&[bool]>,
+) -> Option<String> {
+    if labels.is_empty()
+        || labels.iter().any(String::is_empty)
+        || defaulted.is_some_and(|parameters| parameters.len() != labels.len())
+    {
+        return None;
+    }
+    let optional_markers = defaulted.map_or(0, |parameters| {
+        parameters
+            .iter()
+            .filter(|&&is_defaulted| is_defaulted)
+            .count()
+    });
+    let capacity = name.len()
+        + labels.iter().map(|label| label.len() + 1).sum::<usize>()
+        + optional_markers
+        + 2;
+    let mut identity = String::with_capacity(capacity);
+    identity.push_str(name);
+    identity.push('(');
+    for (index, label) in labels.iter().enumerate() {
+        identity.push_str(label);
+        if defaulted.is_some_and(|parameters| parameters[index]) {
+            identity.push('?');
+        }
+        identity.push(':');
+    }
+    identity.push(')');
+    Some(identity)
+}
+
+fn objective_c_definition_identity(node: Node, source: &[u8]) -> Option<String> {
+    let mut cursor = node.walk();
+    let children: Vec<Node> = node.named_children(&mut cursor).collect();
+    if !children.iter().any(|child| child.kind() == "method_type") {
+        return None;
+    }
+    let mut identity = String::new();
+    for (index, child) in children.iter().enumerate() {
+        if child.kind() != "identifier" {
+            continue;
+        }
+        identity.push_str(child.utf8_text(source).ok()?);
+        if children
+            .get(index + 1)
+            .is_some_and(|next| next.kind() == "method_parameter")
+        {
+            identity.push(':');
+        }
+    }
+    (!identity.is_empty()).then_some(identity)
+}
+
+fn objective_c_message_identity(node: Node, source: &[u8], arity: u8) -> Option<String> {
+    if arity == facts::NO_ARITY {
+        return None;
+    }
+    let mut cursor = node.walk();
+    let mut parts = Vec::new();
+    if cursor.goto_first_child() {
+        loop {
+            if cursor.field_name() == Some("method") && cursor.node().kind() == "identifier" {
+                parts.push(cursor.node().utf8_text(source).ok()?);
+            }
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    let expected_parts = if arity == 0 { 1 } else { usize::from(arity) };
+    if parts.len() != expected_parts {
+        return None;
+    }
+    if arity == 0 {
+        return Some(parts[0].to_owned());
+    }
+    let mut identity = String::new();
+    for part in parts {
+        identity.push_str(part);
+        identity.push(':');
+    }
+    Some(identity)
+}
+
+fn source_reference_identity(
+    path: &str,
+    node: Node,
+    kind: Option<RefKind>,
+    name: &str,
+    source: &[u8],
+    arity: u8,
+) -> (String, Option<String>) {
+    if path.ends_with(".swift")
+        && kind == Some(RefKind::Call)
+        && let Some(identity) = swift_call_identity(node, name, source, arity)
+    {
+        return (name.to_owned(), Some(identity));
+    }
+    if node.kind() == "message_expression"
+        && kind == Some(RefKind::Call)
+        && let Some(identity) = objective_c_message_identity(node, source, arity)
+    {
+        return (name.to_owned(), Some(identity));
+    }
+    if node.kind() == "selector_expression"
+        && kind == Some(RefKind::Value)
+        && let Ok(expression) = node.utf8_text(source)
+        && let Some(selector) = expression
+            .trim()
+            .strip_prefix("@selector(")
+            .and_then(|selector| selector.strip_suffix(')'))
+            .map(str::trim)
+    {
+        let base = selector.split(':').next().unwrap_or(selector).trim();
+        if !base.is_empty() {
+            return (base.to_owned(), Some(selector.to_owned()));
+        }
+    }
+    (name.to_owned(), None)
 }
 
 fn row(node: Node) -> u32 {

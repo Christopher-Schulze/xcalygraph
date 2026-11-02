@@ -14,8 +14,8 @@ use crate::infra::file_access;
 use crate::infra::store::container::{Container, FORMAT_VERSION, Kind};
 use crate::infra::store::{self, SHARDS, Store};
 
-// Versions 7 and 8 use the same container envelope and meta encoding; other versions need review.
-const CLEANUP_FORMATS: [u32; 3] = [FORMAT_VERSION, 8, 7];
+// Formats 7-9 retain the container envelope and meta encoding used for ownership checks.
+const CLEANUP_FORMATS: [u32; 4] = [FORMAT_VERSION, 9, 8, 7];
 
 struct Entry {
     dir: PathBuf,
@@ -311,26 +311,32 @@ mod tests {
     }
 
     #[test]
-    fn format_eight_index_remains_verifiable_for_cleanup() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let dir = TestDir::new("indexes-format-eight")?;
-        let root = dir.path().join("repo");
-        fs::create_dir(&root)?;
-        let base = dir.path().join("indexes");
-        let store = Store::new(store::index_dir(&base, &root));
-        store.create_dirs()?;
-        store.write_meta(&store::Meta {
-            extraction_version: 1,
-            binary_version: "0.1.0+r1".to_owned(),
-            root: root.to_string_lossy().into_owned(),
-            write_time_ns: 1,
-        })?;
-        let path = store.dir.join("meta");
-        let mut image = fs::read(&path)?;
-        image[8..12].copy_from_slice(&8_u32.to_le_bytes());
-        fs::write(&path, image)?;
-        assert_eq!(known_meta(&store).map(|(_, version)| version), Some(8));
-        assert_eq!(owned_root(&store.dir), Some(root));
+    fn format_eight_and_nine_indexes_remain_verifiable_for_cleanup()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for version in [9_u32, 8] {
+            let dir = TestDir::new(if version == 9 {
+                "indexes-format-nine"
+            } else {
+                "indexes-format-eight"
+            })?;
+            let root = dir.path().join("repo");
+            fs::create_dir(&root)?;
+            let base = dir.path().join("indexes");
+            let store = Store::new(store::index_dir(&base, &root));
+            store.create_dirs()?;
+            store.write_meta(&store::Meta {
+                extraction_version: 1,
+                binary_version: "0.1.0+r1".to_owned(),
+                root: root.to_string_lossy().into_owned(),
+                write_time_ns: 1,
+            })?;
+            let path = store.dir.join("meta");
+            let mut image = fs::read(&path)?;
+            image[8..12].copy_from_slice(&version.to_le_bytes());
+            fs::write(&path, image)?;
+            assert_eq!(known_meta(&store).map(|(_, found)| found), Some(version));
+            assert_eq!(owned_root(&store.dir), Some(root));
+        }
         Ok(())
     }
 }

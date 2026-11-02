@@ -201,6 +201,32 @@ pub struct Ref {
 /// Arity of references that are no calls or whose arguments were not counted.
 pub const NO_ARITY: u8 = u8::MAX;
 
+/// Kind of local fact that has an exact language-level callable identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum SourceIdentityKind {
+    Symbol = 1,
+    Reference,
+}
+
+impl SourceIdentityKind {
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            value if value == Self::Symbol as u8 => Some(Self::Symbol),
+            value if value == Self::Reference as u8 => Some(Self::Reference),
+            _ => None,
+        }
+    }
+}
+
+/// Sparse exact callable identity, indexed into the local symbol or reference vector.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceIdentity {
+    pub kind: SourceIdentityKind,
+    pub index: u32,
+    pub identity: String,
+}
+
 /// Declared or constructed type of a name in a scope, for receiver typing (resolution step 5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
@@ -351,6 +377,8 @@ pub struct Facts {
     pub symbols: Vec<Symbol>,
     pub imports: Vec<Import>,
     pub refs: Vec<Ref>,
+    /// Exact language-level callable identities, stored only for labeled declarations/calls.
+    pub source_identities: Option<Box<[SourceIdentity]>>,
     pub bindings: Vec<Binding>,
     pub envs: Vec<EnvRead>,
     pub fields: Vec<Fields>,
@@ -368,6 +396,16 @@ pub struct Facts {
     pub terms: String,
     /// The file is an executable entrypoint (shebang, `__main__` block).
     pub entry: bool,
+}
+
+impl Facts {
+    pub fn source_identity(&self, kind: SourceIdentityKind, index: u32) -> Option<&str> {
+        let identities = self.source_identities.as_deref()?;
+        let position = identities
+            .binary_search_by_key(&(kind, index), |item| (item.kind, item.index))
+            .ok()?;
+        Some(identities[position].identity.as_str())
+    }
 }
 
 /// Truncates to at most `max` characters, appending `…` when shortened.

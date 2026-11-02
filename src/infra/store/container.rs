@@ -12,7 +12,7 @@ use xxhash_rust::xxh3::xxh3_64;
 
 pub const MAGIC: [u8; 8] = *b"XCALYGR\x00";
 /// Bumped on every incompatible change of any index file layout.
-pub const FORMAT_VERSION: u32 = 9;
+pub const FORMAT_VERSION: u32 = 10;
 const HEADER_LEN: usize = 64;
 const ALIGN: usize = 64;
 
@@ -290,6 +290,23 @@ mod tests {
             Container::open(&dir.path().join("none"), Kind::Meta),
             Err(OpenError::Missing)
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn old_format_is_rejected_for_reads_but_remains_openable_for_cleanup()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = TestDir::new("container-old-format")?;
+        let path = dir.path().join("meta");
+        let mut image = build(Kind::Meta, &[b"payload"]);
+        image[8..12].copy_from_slice(&9_u32.to_le_bytes());
+        fs::write(&path, image)?;
+
+        assert!(matches!(
+            Container::open(&path, Kind::Meta),
+            Err(OpenError::Invalid("format version"))
+        ));
+        assert!(Container::open_version(&path, Kind::Meta, 9).is_ok());
         Ok(())
     }
 }

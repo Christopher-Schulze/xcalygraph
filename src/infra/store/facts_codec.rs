@@ -3,7 +3,7 @@
 use super::codec::{DecodeError, DecodeResult, Decoder, Encoder};
 use crate::domain::facts::{
     AssetMeta, Binding, ConfigKey, EnvDef, EnvRead, EnvSource, Facts, Fields, Import, Manifest,
-    Ref, RefKind, SymKind, Symbol, TextSegment, ValueKind,
+    Ref, RefKind, SourceIdentity, SourceIdentityKind, SymKind, Symbol, TextSegment, ValueKind,
 };
 
 /// Search terms as a token list, so each token is interned once in the shard's string table.
@@ -135,6 +135,13 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
         }
         None => encoder.u8(0),
     }
+    let identities = facts.source_identities.as_deref().unwrap_or_default();
+    encoder.var_usize(identities.len());
+    for identity in identities {
+        encoder.u8(identity.kind as u8);
+        encoder.var_u32(identity.index);
+        encoder.str(&identity.identity);
+    }
 }
 
 pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
@@ -257,6 +264,36 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             entrypoints: decoder.strings()?,
         });
     }
+    let mut identities = Vec::new();
+    let mut previous = None;
+    for _ in 0..decoder.len()? {
+        let kind = SourceIdentityKind::from_u8(decoder.u8()?)
+            .ok_or(DecodeError("source identity kind"))?;
+        let index = decoder.var_u32()?;
+        let key = (kind, index);
+        let limit = match kind {
+            SourceIdentityKind::Symbol => facts.symbols.len(),
+            SourceIdentityKind::Reference => facts.refs.len(),
+        };
+        if usize::try_from(index).map_or(true, |index| index >= limit)
+            || previous.is_some_and(|previous| previous >= key)
+        {
+            return Err(DecodeError("source identity index"));
+        }
+        let identity = decoder.string()?;
+        if identity.is_empty() {
+            return Err(DecodeError("empty source identity"));
+        }
+        identities.push(SourceIdentity {
+            kind,
+            index,
+            identity,
+        });
+        previous = Some(key);
+    }
+    if !identities.is_empty() {
+        facts.source_identities = Some(identities.into_boxed_slice());
+    }
     Ok(facts)
 }
 
@@ -315,6 +352,21 @@ mod tests {
                 line: 12,
                 arity: 2,
             }],
+            source_identities: Some(
+                vec![
+                    SourceIdentity {
+                        kind: SourceIdentityKind::Symbol,
+                        index: 1,
+                        identity: "Store.Get(id:)".to_owned(),
+                    },
+                    SourceIdentity {
+                        kind: SourceIdentityKind::Reference,
+                        index: 0,
+                        identity: "Query(sql:)".to_owned(),
+                    },
+                ]
+                .into_boxed_slice(),
+            ),
             bindings: vec![Binding {
                 scope: Some(1),
                 name: "s".to_owned(),

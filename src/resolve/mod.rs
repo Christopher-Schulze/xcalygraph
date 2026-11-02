@@ -17,7 +17,9 @@ use crate::domain::hash::FastSet as HashSet;
 use rayon::prelude::*;
 
 use crate::domain::corpus::FileRecord;
-use crate::domain::facts::{self, Binding, FLAG_DECLARATION, Facts, Ref, RefKind, SymKind};
+use crate::domain::facts::{
+    self, Binding, FLAG_DECLARATION, Facts, Ref, RefKind, SourceIdentityKind, SymKind,
+};
 use crate::domain::filetype::FileType;
 use crate::domain::graph::{
     self, Confidence, Edge, EdgeKind, EnvSite, External, FieldList, Graph, GraphFile, GraphSymbol,
@@ -27,7 +29,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 65;
+pub const RESOLVE_VERSION: u32 = 66;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -2313,18 +2315,31 @@ impl<'a> Index<'a> {
         let base = self.base[file as usize];
         let file_node = self.symbols.len() as u32 + file;
         let file_is_test = self.input.files[file as usize].role == Role::Test;
-        for reference in &facts.refs {
+        for (reference_index, reference) in facts.refs.iter().enumerate() {
             let source = reference.scope.map_or(file_node, |scope| base + scope);
+            let source_identity = u32::try_from(reference_index)
+                .ok()
+                .and_then(|index| facts.source_identity(SourceIdentityKind::Reference, index));
             let outcome = match reference.kind {
-                RefKind::Call | RefKind::Type => self.resolve_ref(file, imports, reference),
+                RefKind::Call | RefKind::Type => source_identity.map_or_else(
+                    || self.resolve_ref(file, imports, reference),
+                    |identity| self.resolve_source_identity(file, imports, reference, identity),
+                ),
                 // A value reference only counts when it certainly names a symbol: no fallback,
                 // no ambiguity count (most identifiers are locals).
-                RefKind::Value => match self.resolve_value(file, imports, reference) {
-                    Outcome::Targets(targets, confidence) => Outcome::Targets(targets, confidence),
-                    Outcome::External => Outcome::External,
-                    // Never counted as ambiguity (most value identifiers are locals), but the
-                    // name stays uncertain for dead-code checks.
-                    Outcome::Ambiguous | Outcome::Unresolved => Outcome::Unresolved,
+                RefKind::Value => match source_identity {
+                    Some(identity) => {
+                        self.resolve_source_identity(file, imports, reference, identity)
+                    }
+                    None => match self.resolve_value(file, imports, reference) {
+                        Outcome::Targets(targets, confidence) => {
+                            Outcome::Targets(targets, confidence)
+                        }
+                        Outcome::External => Outcome::External,
+                        // Never counted as ambiguity (most value identifiers are locals), but the
+                        // name stays uncertain for dead-code checks.
+                        Outcome::Ambiguous | Outcome::Unresolved => Outcome::Unresolved,
+                    },
                 },
                 RefKind::Inherit => self.resolve_supertype(file, imports, reference),
                 RefKind::Path => self.resolve_path(file, &reference.name),
@@ -3026,6 +3041,124 @@ impl<'a> Index<'a> {
             None => self.resolve_plain(file, imports, reference, wants_type),
             Some(qualifier) => self.resolve_qualified(file, imports, reference, qualifier),
         }
+    }
+
+    fn resolve_source_identity(
+        &self,
+        file: u32,
+        imports: &Imports,
+        reference: &Ref,
+        identity: &str,
+    ) -> Outcome {
+        if reference.kind == RefKind::Value && self.file_type(file) == Some(FileType::ObjC) {
+            let Some(candidates) = self.by_name.get(reference.name.as_str()) else {
+                return Outcome::Unresolved;
+            };
+            let mut targets: Vec<u32> = candidates
+                .iter()
+                .copied()
+                .filter(|&symbol| self.symbols[symbol as usize].kind == SymKind::Method)
+                .filter(|&symbol| self.source_identity_of_symbol(symbol) == Some(identity))
+                .collect();
+            if targets
+                .iter()
+                .any(|&symbol| self.symbols[symbol as usize].flags & FLAG_DECLARATION == 0)
+            {
+                targets
+                    .retain(|&symbol| self.symbols[symbol as usize].flags & FLAG_DECLARATION == 0);
+            }
+            targets.sort_unstable();
+            targets.dedup();
+            return match targets.as_slice() {
+                [] => Outcome::Unresolved,
+                [only] => {
+                    Outcome::Targets(vec![(*only, Confidence::Inferred)], Confidence::Inferred)
+                }
+                _ => Outcome::Targets(
+                    targets
+                        .into_iter()
+                        .map(|target| (target, Confidence::Inferred))
+                        .collect(),
+                    Confidence::Inferred,
+                ),
+            };
+        }
+        let mut lookup = reference.clone();
+        lookup.arity = facts::NO_ARITY;
+        let (candidates, confidence) = match self.resolve_ref(file, imports, &lookup) {
+            Outcome::Targets(candidates, confidence) => (candidates, confidence),
+            Outcome::External => return Outcome::External,
+            Outcome::Ambiguous | Outcome::Unresolved => return Outcome::Unresolved,
+        };
+        let matching: Vec<(u32, Confidence)> = candidates
+            .iter()
+            .copied()
+            .filter(|(symbol, _)| self.source_identity_matches(*symbol, reference, identity))
+            .collect();
+        if matching.is_empty() {
+            let constructor = reference.kind == RefKind::Call
+                && !candidates.is_empty()
+                && candidates
+                    .iter()
+                    .all(|(symbol, _)| self.symbols[*symbol as usize].kind.is_type());
+            return if constructor {
+                self.resolve_ref(file, imports, reference)
+            } else {
+                Outcome::Unresolved
+            };
+        }
+        if let [only] = matching.as_slice() {
+            let confidence = if candidates.len() > 1 && self.same_overload_group(&candidates) {
+                Confidence::Exact
+            } else {
+                confidence.max(only.1)
+            };
+            return Outcome::Targets(vec![(only.0, confidence)], confidence);
+        }
+        Outcome::Targets(matching, confidence)
+    }
+
+    fn source_identity_of_symbol(&self, symbol: u32) -> Option<&str> {
+        let graph_symbol = self.symbols.get(symbol as usize)?;
+        let base = *self.base.get(graph_symbol.file as usize)?;
+        let local = symbol.checked_sub(base)?;
+        self.facts(graph_symbol.file)?
+            .source_identity(SourceIdentityKind::Symbol, local)
+    }
+
+    fn source_identity_matches(&self, symbol: u32, reference: &Ref, identity: &str) -> bool {
+        let Some(candidate) = self.source_identity_of_symbol(symbol) else {
+            return false;
+        };
+        let graph_symbol = &self.symbols[symbol as usize];
+        if reference.kind == RefKind::Call
+            && self.file_type(graph_symbol.file) == Some(FileType::Swift)
+        {
+            swift_source_identity_matches(candidate, identity)
+        } else {
+            candidate == identity
+        }
+    }
+
+    fn same_overload_group(&self, candidates: &[(u32, Confidence)]) -> bool {
+        let Some((first, _)) = candidates.first() else {
+            return false;
+        };
+        let first_symbol = &self.symbols[*first as usize];
+        let owner = |id: u32| {
+            let symbol = &self.symbols[id as usize];
+            let owner = self.owner_name(id);
+            let module =
+                (symbol.parent == NONE && owner.is_empty()).then(|| self.module_of(symbol.file));
+            (symbol.parent, owner, module)
+        };
+        let first_owner = owner(*first);
+        candidates.iter().all(|(candidate, _)| {
+            let symbol = &self.symbols[*candidate as usize];
+            symbol.kind.is_callable()
+                && symbol.name == first_symbol.name
+                && owner(*candidate) == first_owner
+        })
     }
 
     /// Steps 1, 2, 4 and 7 for an unqualified name.
@@ -4198,6 +4331,69 @@ impl<'a> Index<'a> {
         derive::finish(&mut graph, &self.modules);
         graph
     }
+}
+
+fn swift_source_identity_matches(candidate: &str, reference: &str) -> bool {
+    fn identity_parts(identity: &str) -> Option<(&str, &str)> {
+        let (name, encoded) = identity.split_once('(')?;
+        let encoded = encoded.strip_suffix(')')?.strip_suffix(':')?;
+        if name.is_empty() || encoded.is_empty() {
+            return None;
+        }
+        Some((name, encoded))
+    }
+
+    fn parameter(encoded: &str) -> Option<(&str, bool)> {
+        let defaulted = encoded.ends_with('?');
+        let label = encoded.strip_suffix('?').unwrap_or(encoded);
+        (!label.is_empty()).then_some((label, defaulted))
+    }
+
+    let (
+        Some((candidate_name, candidate_parameters)),
+        Some((reference_name, reference_parameters)),
+    ) = (identity_parts(candidate), identity_parts(reference))
+    else {
+        return false;
+    };
+    if candidate_name != reference_name {
+        return false;
+    }
+    if candidate == reference {
+        return true;
+    }
+    if !candidate_parameters.contains('?') {
+        return false;
+    }
+
+    let reference_labels = reference_parameters.split(':');
+    let reference_count = reference_labels.clone().count();
+    if reference_count >= usize::from(facts::NO_ARITY)
+        || reference_labels.clone().any(|label| label.ends_with('?'))
+    {
+        return false;
+    }
+
+    // NO_ARITY is reserved, so at most 254 call labels need DP states.
+    let mut possible = [false; u8::MAX as usize];
+    let mut next = [false; u8::MAX as usize];
+    possible[0] = true;
+    for encoded in candidate_parameters.split(':') {
+        let Some((candidate_label, defaulted)) = parameter(encoded) else {
+            return false;
+        };
+        next[..=reference_count].fill(false);
+        if defaulted {
+            next[..=reference_count].copy_from_slice(&possible[..=reference_count]);
+        }
+        for (index, reference_label) in reference_labels.clone().enumerate() {
+            if possible[index] && candidate_label == reference_label {
+                next[index + 1] = true;
+            }
+        }
+        std::mem::swap(&mut possible, &mut next);
+    }
+    possible[reference_count]
 }
 
 impl Index<'_> {

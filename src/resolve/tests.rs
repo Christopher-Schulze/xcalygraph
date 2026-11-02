@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{Input, build};
+use super::{Input, build, swift_source_identity_matches};
 use crate::domain::corpus::FileRecord;
 use crate::domain::graph::{Confidence, Graph};
 use crate::domain::role::{self, FileFacts};
@@ -372,4 +372,172 @@ fn parameter_counts_come_from_the_declaration_list() {
         Some((0, 2, false))
     );
     assert_eq!(count("const value = 1", "value"), None);
+}
+
+fn targets_at(
+    graph: &Graph,
+    caller_suffix: &str,
+    line: u32,
+    kind: crate::domain::graph::EdgeKind,
+) -> Vec<(Confidence, String)> {
+    let mut targets: Vec<(Confidence, String)> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == kind && edge.line == line)
+        .filter(|edge| {
+            graph
+                .symbols
+                .get(edge.source as usize)
+                .is_some_and(|source| source.qualified.ends_with(caller_suffix))
+        })
+        .filter_map(|edge| {
+            graph
+                .symbols
+                .get(edge.target as usize)
+                .map(|target| (edge.confidence, target.signature.clone()))
+        })
+        .collect();
+    targets.sort();
+    targets
+}
+
+#[test]
+fn swift_calls_select_equal_arity_overloads_by_external_labels() -> std::io::Result<()> {
+    let root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/resolve/swift-labels-app");
+    let graph = graph_of(&root)?;
+
+    let matching = targets_at(
+        &graph,
+        "Codec.run",
+        5,
+        crate::domain::graph::EdgeKind::Calls,
+    );
+    assert_eq!(matching.len(), 1, "matching label must select one overload");
+    assert_eq!(matching[0].0, Confidence::Exact);
+    assert!(
+        matching[0].1.contains("base radix: Int"),
+        "selected: {matching:?}"
+    );
+
+    let mismatched = targets_at(
+        &graph,
+        "Codec.run",
+        6,
+        crate::domain::graph::EdgeKind::Calls,
+    );
+    assert!(
+        mismatched.is_empty(),
+        "wrong labels must not resolve: {mismatched:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn swift_calls_skip_only_defaulted_parameters() {
+    assert!(swift_source_identity_matches(
+        "render(_:columns?:root:header:separator?:)",
+        "render(_:root:header:)"
+    ));
+    assert!(swift_source_identity_matches(
+        "render(_:root:header:separator?:)",
+        "render(_:root:header:)"
+    ));
+    assert!(swift_source_identity_matches("render(_?:_:)", "render(_:)"));
+    assert!(!swift_source_identity_matches(
+        "render(_:columns:root:header:)",
+        "render(_:root:header:)"
+    ));
+    assert!(!swift_source_identity_matches(
+        "render(_:root:header?:)",
+        "render(_:header:root:)"
+    ));
+}
+
+#[test]
+fn swift_call_resolves_overload_with_omitted_default_parameters() -> std::io::Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/resolve/swift-app");
+    let graph = graph_of(&root)?;
+    let targets = targets_at(&graph, "main", 9, crate::domain::graph::EdgeKind::Calls);
+
+    assert_eq!(
+        targets.len(),
+        1,
+        "defaulted labels select one overload: {targets:?}"
+    );
+    assert!(
+        targets[0].1.contains("U: CustomStringConvertible"),
+        "selected: {targets:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn objective_c_message_sends_keep_full_selectors() -> std::io::Result<()> {
+    let root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/resolve/objc-selectors-app");
+    let graph = graph_of(&root)?;
+    let calls = crate::domain::graph::EdgeKind::Calls;
+
+    let to = targets_at(&graph, "Sink.run", 6, calls);
+    assert_eq!(to.len(), 1, "to selector must select one method: {to:?}");
+    assert!(to[0].1.contains("to:"), "selected: {to:?}");
+    assert_eq!(to[0].0, Confidence::Exact);
+
+    let on = targets_at(&graph, "Sink.run", 7, calls);
+    assert_eq!(on.len(), 1, "on selector must select one method: {on:?}");
+    assert!(on[0].1.contains("on:"), "selected: {on:?}");
+    assert_eq!(on[0].0, Confidence::Exact);
+
+    let mismatched = targets_at(&graph, "Sink.run", 8, calls);
+    assert!(
+        mismatched.is_empty(),
+        "unknown selector pieces must not resolve: {mismatched:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn objective_c_selector_expression_resolves_its_full_selector() -> std::io::Result<()> {
+    let root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/resolve/objc-selectors-app");
+    let graph = graph_of(&root)?;
+    let selector = targets_at(&graph, "Sink.run", 9, crate::domain::graph::EdgeKind::Uses);
+    assert_eq!(
+        selector.len(),
+        1,
+        "@selector must resolve to its method: {selector:?}"
+    );
+    assert_eq!(selector[0].0, Confidence::Inferred);
+    assert!(selector[0].1.contains("on:"), "selected: {selector:?}");
+
+    let mismatched = targets_at(&graph, "Sink.run", 10, crate::domain::graph::EdgeKind::Uses);
+    assert!(
+        mismatched.is_empty(),
+        "unknown selector pieces must not resolve: {mismatched:?}"
+    );
+
+    let reset_call = targets_at(
+        &graph,
+        "Sink.run",
+        11,
+        crate::domain::graph::EdgeKind::Calls,
+    );
+    assert_eq!(
+        reset_call.len(),
+        1,
+        "zero-argument selector must resolve: {reset_call:?}"
+    );
+    assert_eq!(reset_call[0].0, Confidence::Exact);
+
+    let reset_selector = targets_at(&graph, "Sink.run", 12, crate::domain::graph::EdgeKind::Uses);
+    assert_eq!(
+        reset_selector.len(),
+        1,
+        "zero-argument @selector must resolve: {reset_selector:?}"
+    );
+    assert_eq!(reset_selector[0].0, Confidence::Inferred);
+    assert!(reset_selector[0].1.contains("reset"));
+    Ok(())
 }
