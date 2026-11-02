@@ -425,6 +425,14 @@ pub struct RustTargetRoot {
     pub is_library: bool,
 }
 
+/// One source-backed Go embed pattern, before filesystem resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoEmbed {
+    pub symbol: u32,
+    pub line: u32,
+    pub pattern: Vec<u8>,
+}
+
 /// Everything extracted from one file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Facts {
@@ -433,6 +441,7 @@ pub struct Facts {
     pub symbols: Vec<Symbol>,
     pub imports: Vec<Import>,
     pub refs: Vec<Ref>,
+    pub go_embeds: Vec<GoEmbed>,
     /// Unqualified builtins retained so cross-file Julia Base extensions can be dispatched.
     pub julia_builtin_calls: Vec<u32>,
     /// Sparse simple-variable arguments for Julia calls, sorted by reference and position.

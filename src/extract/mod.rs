@@ -6,6 +6,8 @@ mod config;
 mod contracts;
 mod documents;
 pub mod engine;
+#[cfg(feature = "lang-go")]
+mod go_embed;
 #[cfg(test)]
 mod golden;
 mod hcl;
@@ -29,7 +31,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 64;
+const EXTRACTION_VERSION: u32 = 65;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.

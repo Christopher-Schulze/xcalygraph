@@ -2,7 +2,7 @@
 
 use super::codec::{DecodeError, DecodeResult, Decoder, Encoder};
 use crate::domain::facts::{
-    AssetMeta, Binding, ConfigKey, EnvDef, EnvRead, EnvSource, Facts, Fields, Import,
+    AssetMeta, Binding, ConfigKey, EnvDef, EnvRead, EnvSource, Facts, Fields, GoEmbed, Import,
     JuliaCallArgument, Manifest, Ref, RefKind, RustTargetRoot, SourceIdentity, SourceIdentityKind,
     SymKind, Symbol, TextSegment, ValueKind,
 };
@@ -71,6 +71,15 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
         opt_index(encoder, reference.scope);
         encoder.var_u32(reference.line);
         encoder.u8(reference.arity);
+    }
+    encoder.var_usize(facts.go_embeds.len());
+    for embed in &facts.go_embeds {
+        encoder.var_u32(embed.symbol);
+        encoder.var_u32(embed.line);
+        encoder.var_usize(embed.pattern.len());
+        for &byte in &embed.pattern {
+            encoder.u8(byte);
+        }
     }
     encoder.var_usize(facts.julia_builtin_calls.len());
     for &reference in &facts.julia_builtin_calls {
@@ -211,6 +220,27 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             scope: read_opt_index(decoder)?,
             line: decoder.var_u32()?,
             arity: decoder.u8()?,
+        });
+    }
+    for _ in 0..decoder.len()? {
+        let symbol = decoder.var_u32()?;
+        let line = decoder.var_u32()?;
+        let length = decoder.len()?;
+        if !facts
+            .symbols
+            .get(symbol as usize)
+            .is_some_and(|item| item.kind() == SymKind::Var)
+            || line == 0
+        {
+            return Err(DecodeError("Go embed owner"));
+        }
+        let pattern = (0..length)
+            .map(|_| decoder.u8())
+            .collect::<DecodeResult<Vec<_>>>()?;
+        facts.go_embeds.push(GoEmbed {
+            symbol,
+            line,
+            pattern,
         });
     }
     let mut previous_builtin = None;
@@ -430,6 +460,7 @@ mod tests {
                     arity: 1,
                 },
             ],
+            go_embeds: Vec::new(),
             julia_builtin_calls: vec![1],
             julia_call_arguments: vec![JuliaCallArgument {
                 reference: 1,
@@ -514,6 +545,27 @@ mod tests {
         assert_eq!(decode(&mut decoder)?, facts);
         assert_eq!(decode(&mut decoder)?, Facts::default());
         assert!(decoder.is_done());
+        Ok(())
+    }
+
+    #[test]
+    fn go_embed_bytes_round_trip_and_invalid_owners_are_rejected() -> DecodeResult<()> {
+        let mut facts = sample();
+        let mut variable = facts.symbols[0].clone();
+        variable.kind = Some(SymKind::Var);
+        facts.symbols.push(variable);
+        facts.go_embeds.push(GoEmbed {
+            symbol: 2,
+            line: 5,
+            pattern: vec![b'a', 0xff],
+        });
+        let mut encoder = Encoder::default();
+        encode(&mut encoder, &facts);
+        assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
+        facts.go_embeds[0].symbol = 0;
+        let mut encoder = Encoder::default();
+        encode(&mut encoder, &facts);
+        assert!(decode(&mut Decoder::new(&encoder.bytes)).is_err());
         Ok(())
     }
 

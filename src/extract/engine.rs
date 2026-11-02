@@ -482,6 +482,10 @@ fn collect(
         envs,
         locals,
     });
+    #[cfg(feature = "lang-go")]
+    if path.ends_with(".go") {
+        super::go_embed::collect(root, source, &mut parsed);
+    }
     parsed.facts.doc = doc;
     parsed.facts.entry |= entry;
     parsed.incomplete = incomplete;
