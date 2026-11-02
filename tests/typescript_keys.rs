@@ -267,6 +267,43 @@ fn inherited_interfaces_merge_without_hiding_incompatible_base_members()
 }
 
 #[test]
+fn identical_inherited_property_overrides_merge_without_accepting_conflicts()
+-> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("valid.ts"),
+        include_bytes!("fixtures/typescript-inherited-overrides-valid.ts"),
+    )?;
+    fs::write(
+        root.join("invalid.ts"),
+        include_bytes!("fixtures/typescript-inherited-overrides-invalid.ts"),
+    )?;
+    let valid = fixture.run(&["show", "valid.Child"])?;
+    let text = String::from_utf8(valid.stdout)?;
+    assert!(valid.status.success(), "{text}");
+    for expected in ["valid.ts:2", "valid.ts:3", "valid.Base", "right"] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    assert_eq!(
+        fixture
+            .run(&["show", "invalid.Bad", "--read-only"])?
+            .status
+            .code(),
+        Some(3)
+    );
+    assert_eq!(
+        fixture
+            .run(&["show", "valid.MethodChild", "--read-only"])?
+            .status
+            .code(),
+        Some(3)
+    );
+    Ok(())
+}
+
+#[test]
 fn same_file_interfaces_merge_without_losing_declaration_locations() -> Result<(), Box<dyn Error>> {
     let fixture = Fixture::new()?;
     fs::create_dir(fixture.0.join("repo"))?;
@@ -509,6 +546,10 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         root.join("inherited.ts"),
         include_bytes!("fixtures/typescript-inherited-valid.ts"),
     )?;
+    fs::write(
+        root.join("overrides.ts"),
+        include_bytes!("fixtures/typescript-inherited-overrides-valid.ts"),
+    )?;
     let mut images = Vec::new();
     let mut answers = Vec::new();
     for workers in ["1", "4"] {
@@ -540,7 +581,14 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         assert!(equivalent.status.success());
         let inherited = run(&["show", "inherited.Inherited", "--json", "--read-only"])?;
         assert!(inherited.status.success());
-        answers.push((answer.stdout, equivalent.stdout, inherited.stdout));
+        let overrides = run(&["show", "overrides.Child", "--json", "--read-only"])?;
+        assert!(overrides.status.success());
+        answers.push((
+            answer.stdout,
+            equivalent.stdout,
+            inherited.stdout,
+            overrides.stdout,
+        ));
     }
     assert_eq!(images[0], images[1]);
     assert_eq!(answers[0], answers[1]);

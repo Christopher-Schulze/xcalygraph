@@ -204,8 +204,8 @@ pub(in crate::extract) fn interface_groups(
     groups
 }
 
-/// A single local, nongeneric interface base proves compatibility only when its members do not
-/// overlap the declarations being merged. Other inheritance needs stronger type evidence.
+/// A single local, nongeneric interface base proves compatibility when inherited properties
+/// match exactly and inherited methods are not overridden. Other cases need stronger evidence.
 #[cfg(feature = "lang-typescript")]
 fn compatible_direct_base(
     part: u32,
@@ -294,21 +294,30 @@ fn compatible_direct_base(
     let Some(base_members) = interface_member_identity(base, source) else {
         return false;
     };
-    if !compatible_interface_members(&[&base_members]) {
+    let mut all_members = Vec::with_capacity(members.len() + 1);
+    all_members.push(base_members.as_str());
+    all_members.extend_from_slice(members);
+    if !compatible_interface_members(&all_members) {
         return false;
     }
-    let Some(base_names) = interface_member_names(&base_members) else {
+    let Some((_, base_methods)) = interface_member_names(&base_members) else {
         return false;
     };
     members.iter().all(|part| {
-        interface_member_names(part).is_some_and(|names| names.is_disjoint(&base_names))
+        interface_member_names(part).is_some_and(|(names, _)| names.is_disjoint(&base_methods))
     })
 }
 
 #[cfg(feature = "lang-typescript")]
-fn interface_member_names(identity: &str) -> Option<std::collections::HashSet<&str>> {
+fn interface_member_names(
+    identity: &str,
+) -> Option<(
+    std::collections::HashSet<&str>,
+    std::collections::HashSet<&str>,
+)> {
     let mut rest = identity.strip_prefix("interface_members:")?;
     let mut names = std::collections::HashSet::new();
+    let mut methods = std::collections::HashSet::new();
     while !rest.is_empty() {
         let (&tag, tail) = rest.as_bytes().split_first()?;
         if !matches!(tag, b'p' | b'm' | b'o') {
@@ -318,9 +327,12 @@ fn interface_member_names(identity: &str) -> Option<std::collections::HashSet<&s
         let (name, tail) = take_identity_part(tail)?;
         let (_, tail) = take_identity_part(tail)?;
         names.insert(name);
+        if matches!(tag, b'm' | b'o') {
+            methods.insert(name);
+        }
         rest = tail;
     }
-    Some(names)
+    Some((names, methods))
 }
 
 #[cfg(feature = "lang-typescript")]
