@@ -1216,7 +1216,7 @@ fn render(
             .then(a.1.cmp(&b.1))
     });
     // Reserve package-level commands before any notices, targets, dependents or tests.
-    let commands = run_lines(index, options.root, &tests);
+    let commands = run_lines(index, &tests);
     let run_record = |command: &str| -> (String, String) {
         let text = format!("r {command}");
         let record = super::output::json_object(&[
@@ -1467,13 +1467,70 @@ fn is_test(index: &Index, node: u32) -> bool {
     }
 }
 
-/// Commands that run exactly the selected tests: Go per package, Rust per crate, JVM test classes
-/// per Gradle or Maven project, test files otherwise (section 7.5).
+/// Quote one argument for the POSIX shell that consumes the rendered command.
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn shell_arg(value: &str) -> String {
+    if !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'_' | b'-' | b'.' | b'/' | b':' | b'+' | b'@' | b'=' | b','
+                )
+        })
+    {
+        value.to_owned()
+    } else {
+        shell_quote(value)
+    }
+}
+
+/// Pytest selectors are emitted only for top-level functions and one-level `Test*` classes.
+/// Nested functions and non-collectable classes remain test facts without a run command.
+fn python_selector(index: &Index, node: u32) -> Option<String> {
+    let Node::Symbol(symbol) = index.node(node) else {
+        return None;
+    };
+    let symbols = index.derived.symbols();
+    let mut classes = Vec::new();
+    let mut parent = symbol.parent;
+    for _ in 0..symbols.len() {
+        if parent == u32::MAX {
+            break;
+        }
+        let ancestor = symbols.get(parent as usize)?;
+        match ancestor.kind() {
+            SymKind::Class => {
+                let name = index.string(ancestor.name);
+                if !name.starts_with("Test") {
+                    return None;
+                }
+                classes.push(name.to_owned());
+            }
+            SymKind::Mod => {}
+            _ => return None,
+        }
+        parent = ancestor.parent;
+    }
+    if parent != u32::MAX || classes.len() > 1 {
+        return None;
+    }
+    classes.reverse();
+    classes.push(index.string(symbol.name).to_owned());
+    Some(classes.join("::"))
+}
+
+/// Commands that run exactly the selected tests: Go per module/package, Cargo per manifest,
+/// pytest per node ID, and supported project runners. Unsupported tests stay listed as `t` facts.
 /// Run commands as (precise, package-level): the second is shorter and still correct, running
 /// the whole package, crate, project or suite; it replaces the first when the budget is short.
-fn run_lines(index: &Index, root: &Path, tests: &BTreeMap<u32, bool>) -> Vec<(String, String)> {
+fn run_lines(index: &Index, tests: &BTreeMap<u32, bool>) -> Vec<(String, String)> {
     let mut go: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     let mut rust: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut python: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     // (build tool, project directory) -> test classes.
     let mut jvm: BTreeMap<(JvmBuild, String), BTreeSet<String>> = BTreeMap::new();
     // .NET project directory -> fully qualified test names.
@@ -1484,7 +1541,6 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeMap<u32, bool>) -> Vec<(St
     let mut by_path: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
     let mut phpunit: BTreeSet<String> = BTreeSet::new();
     let mut zig = false;
-    let mut files: BTreeSet<String> = BTreeSet::new();
     let paths: Vec<&str> = index
         .derived
         .files()
@@ -1519,13 +1575,41 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeMap<u32, bool>) -> Vec<(St
             phpunit.insert(index.string(symbol.name).to_owned());
             continue;
         }
+        let file_type = index.file_of(test).file_type();
         let Node::Symbol(symbol) = index.node(test) else {
-            files.insert(index.path_of(test).to_owned());
+            let dir = parent(path);
+            match file_type {
+                Some(FileType::Go) => {
+                    let module = nearest(&paths, dir, "go.mod").unwrap_or_default();
+                    let relative = dir
+                        .strip_prefix(module.as_str())
+                        .unwrap_or(dir)
+                        .trim_start_matches('/');
+                    go.entry((module, relative.to_owned())).or_default();
+                }
+                Some(FileType::Rust) => {
+                    if let Some(directory) = nearest(&paths, dir, "Cargo.toml") {
+                        let manifest = if directory.is_empty() {
+                            "Cargo.toml".to_owned()
+                        } else {
+                            format!("{directory}/Cargo.toml")
+                        };
+                        rust.entry(manifest).or_default();
+                    }
+                }
+                Some(FileType::Python) => {
+                    python
+                        .entry(path.to_owned())
+                        .or_default()
+                        .insert(String::new());
+                }
+                _ => {}
+            }
             continue;
         };
         let path = index.path_of(test);
         let name = index.string(symbol.name).to_owned();
-        match index.file_of(test).file_type() {
+        match file_type {
             Some(FileType::Go) if symbol.kind() == SymKind::Fn && name.starts_with("Test") => {
                 let dir = parent(path);
                 let module = nearest(&paths, dir, "go.mod").unwrap_or_default();
@@ -1538,19 +1622,19 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeMap<u32, bool>) -> Vec<(St
                     .insert(name);
             }
             Some(FileType::Rust) if symbol.kind() == SymKind::Fn => {
-                let manifest = nearest(&paths, parent(path), "Cargo.toml");
-                let crate_name = manifest
-                    .and_then(|dir| {
-                        let file = if dir.is_empty() {
-                            "Cargo.toml".to_owned()
-                        } else {
-                            format!("{dir}/Cargo.toml")
-                        };
-                        let text = std::fs::read_to_string(root.join(file)).ok()?;
-                        extract::manifest::parse("Cargo.toml", &text)?.module
-                    })
-                    .unwrap_or_default();
-                rust.entry(crate_name).or_default().insert(name);
+                if let Some(directory) = nearest(&paths, parent(path), "Cargo.toml") {
+                    let manifest = if directory.is_empty() {
+                        "Cargo.toml".to_owned()
+                    } else {
+                        format!("{directory}/Cargo.toml")
+                    };
+                    rust.entry(manifest).or_default().insert(name);
+                }
+            }
+            Some(FileType::Python) if symbol.flags & FLAG_TEST != 0 => {
+                if let Some(selector) = python_selector(index, test) {
+                    python.entry(path.to_owned()).or_default().insert(selector);
+                }
             }
             Some(FileType::Java | FileType::Kotlin | FileType::Scala | FileType::Groovy)
                 if symbol.parent != u32::MAX =>
@@ -1564,42 +1648,25 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeMap<u32, bool>) -> Vec<(St
                     .or_else(|| {
                         nearest(&paths, dir, "pom.xml").map(|project| (JvmBuild::Maven, project))
                     });
-                match build {
-                    Some(key) => {
-                        jvm.entry(key).or_default().insert(class.into_owned());
-                    }
-                    None => {
-                        files.insert(path.to_owned());
-                    }
+                if let Some(key) = build {
+                    jvm.entry(key).or_default().insert(class.into_owned());
                 }
             }
             Some(FileType::Swift) if symbol.parent != u32::MAX => {
                 let class = index
                     .string(index.derived.symbols()[symbol.parent as usize].name)
                     .to_owned();
-                match nearest(&paths, parent(path), "Package.swift") {
-                    Some(package) => {
-                        swift.entry(package).or_default().insert(class);
-                    }
-                    None => {
-                        files.insert(path.to_owned());
-                    }
+                if let Some(package) = nearest(&paths, parent(path), "Package.swift") {
+                    swift.entry(package).or_default().insert(class);
                 }
             }
             Some(FileType::CSharp | FileType::VbNet) => {
                 let qualified = index.qualified(symbol).into_owned();
-                match nearest_project(&paths, parent(path)) {
-                    Some(project) => {
-                        dotnet.entry(project).or_default().insert(qualified);
-                    }
-                    None => {
-                        files.insert(path.to_owned());
-                    }
+                if let Some(project) = nearest_project(&paths, parent(path)) {
+                    dotnet.entry(project).or_default().insert(qualified);
                 }
             }
-            _ => {
-                files.insert(path.to_owned());
-            }
+            _ => {}
         }
     }
     let mut lines = Vec::new();
@@ -1613,28 +1680,42 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeMap<u32, bool>) -> Vec<(St
         let prefix = if module.is_empty() {
             "go".to_owned()
         } else {
-            format!("go -C {module}")
+            format!("go -C {}", shell_arg(&module))
         };
         // Beyond a handful of names the whole package is the shorter and safer command.
-        let whole = format!("{prefix} test {package}");
-        if names.len() > RUN_NAMES {
+        let whole = format!("{prefix} test {}", shell_arg(&package));
+        if names.is_empty() || names.len() > RUN_NAMES {
             lines.push((whole.clone(), whole));
         } else {
-            lines.push((format!("{whole} -run '^({})$'", names.join("|")), whole));
+            let pattern = format!("^({})$", names.join("|"));
+            lines.push((format!("{whole} -run {}", shell_arg(&pattern)), whole));
         }
     }
-    for (crate_name, names) in rust {
+    for (manifest, names) in rust {
         let names: Vec<String> = names.into_iter().collect();
-        let package = if crate_name.is_empty() {
-            String::new()
-        } else {
-            format!(" -p {crate_name}")
-        };
-        let whole = format!("cargo test{package}");
-        if names.len() > RUN_NAMES {
+        let whole = format!("cargo test --manifest-path {}", shell_arg(&manifest));
+        if names.is_empty() || names.len() > RUN_NAMES {
             lines.push((whole.clone(), whole));
         } else {
-            lines.push((format!("{whole} -- {}", names.join(" ")), whole));
+            let names = names
+                .iter()
+                .map(|name| shell_arg(name))
+                .collect::<Vec<_>>()
+                .join(" ");
+            lines.push((format!("{whole} -- {names}"), whole));
+        }
+    }
+    for (path, names) in python {
+        let whole = format!("pytest {}", shell_arg(&path));
+        let selectors: Vec<String> = names
+            .iter()
+            .filter(|name| !name.is_empty())
+            .map(|name| shell_arg(&format!("{path}::{name}")))
+            .collect();
+        if names.contains("") || selectors.is_empty() || selectors.len() > RUN_NAMES {
+            lines.push((whole.clone(), whole));
+        } else {
+            lines.push((format!("pytest {}", selectors.join(" ")), whole));
         }
     }
     for ((build, project), classes) in jvm {
@@ -1644,11 +1725,11 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeMap<u32, bool>) -> Vec<(St
                 let project = if project.is_empty() {
                     String::new()
                 } else {
-                    format!(" -p {project}")
+                    format!(" -p {}", shell_arg(&project))
                 };
                 let filters: Vec<String> = classes
                     .iter()
-                    .map(|class| format!("--tests {class}"))
+                    .map(|class| format!("--tests {}", shell_arg(class)))
                     .collect();
                 (
                     format!("./gradlew{project} test {}", filters.join(" ")),
@@ -1659,10 +1740,11 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeMap<u32, bool>) -> Vec<(St
                 let project = if project.is_empty() {
                     String::new()
                 } else {
-                    format!(" -f {project}/pom.xml")
+                    format!(" -f {}", shell_arg(&format!("{project}/pom.xml")))
                 };
+                let selector = shell_arg(&format!("-Dtest={}", classes.join(",")));
                 (
-                    format!("mvn{project} test -Dtest={}", classes.join(",")),
+                    format!("mvn{project} test {selector}"),
                     format!("mvn{project} test"),
                 )
             }
@@ -1672,11 +1754,12 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeMap<u32, bool>) -> Vec<(St
         let package = if package.is_empty() {
             String::new()
         } else {
-            format!(" --package-path {package}")
+            format!(" --package-path {}", shell_arg(&package))
         };
         let classes: Vec<String> = classes.into_iter().collect();
+        let selector = shell_quote(&classes.join("|"));
         lines.push((
-            format!("swift test{package} --filter '{}'", classes.join("|")),
+            format!("swift test{package} --filter {selector}"),
             format!("swift test{package}"),
         ));
     }
@@ -1684,14 +1767,15 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeMap<u32, bool>) -> Vec<(St
         let project = if project.is_empty() {
             String::new()
         } else {
-            format!(" {project}")
+            format!(" {}", shell_arg(&project))
         };
         let filter: Vec<String> = names
             .iter()
             .map(|name| format!("FullyQualifiedName~{name}"))
             .collect();
+        let filter = shell_arg(&filter.join("|"));
         lines.push((
-            format!("dotnet test{project} --filter \"{}\"", filter.join("|")),
+            format!("dotnet test{project} --filter {filter}"),
             format!("dotnet test{project}"),
         ));
     }
@@ -1700,24 +1784,29 @@ fn run_lines(index: &Index, root: &Path, tests: &BTreeMap<u32, bool>) -> Vec<(St
         if runner == "bundle exec ruby -Itest" {
             // Minitest runs one file per process; no shorter command is equally correct.
             lines.extend(paths.iter().map(|path| {
-                let line = format!("{runner} {path}");
+                let line = format!("{runner} {}", shell_arg(path));
                 (line.clone(), line)
             }));
         } else {
-            lines.push((format!("{runner} {}", paths.join(" ")), runner.to_owned()));
+            let paths = paths
+                .iter()
+                .map(|path| shell_arg(path))
+                .collect::<Vec<_>>()
+                .join(" ");
+            lines.push((format!("{runner} {paths}"), runner.to_owned()));
         }
     }
     if !phpunit.is_empty() {
         let names: Vec<String> = phpunit.into_iter().collect();
+        let filter = shell_quote(&names.join("|"));
         lines.push((
-            format!("vendor/bin/phpunit --filter '{}'", names.join("|")),
+            format!("vendor/bin/phpunit --filter {filter}"),
             "vendor/bin/phpunit".to_owned(),
         ));
     }
     if zig {
         lines.push(("zig build test".to_owned(), "zig build test".to_owned()));
     }
-    lines.extend(files.into_iter().map(|file| (file.clone(), file)));
     lines
 }
 

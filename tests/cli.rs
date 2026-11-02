@@ -3417,7 +3417,7 @@ fn impact_on_dotnet_tests_prints_dotnet_test_filters() -> TestResult {
     let text = String::from_utf8(output.stdout)?;
     assert!(text.contains("t App.Tests.StoreTests.Opens "), "{text}");
     assert!(
-        text.contains("r dotnet test tests/App.Tests --filter \"FullyQualifiedName~App.Tests.StoreTests.Opens\"\n"),
+        text.contains("r dotnet test tests/App.Tests --filter 'FullyQualifiedName~App.Tests.StoreTests.Opens'\n"),
         "{text}"
     );
     Ok(())

@@ -38,6 +38,7 @@ Flags: `-p GLOB` (paths, gitignore syntax, repeatable), `-l go,rust` (languages)
 - `<line> <signature>` lines are grouped under their file path.
 - Card markers: `m` member, `f` fields, `^` supertype, `v` implementation, `<` incoming (caller site), `>` outgoing (definition), `t` test, `t2` test through one caller, `e` env read, `!` notice.
 - A trailing `?` marks inferred edges (name-based or dispatch) and whole indirect test/impact paths; `--exact` drops inferred paths and dependent test commands.
+- `impact` run lines keep Go module/package context, use Cargo manifest paths, or select Python pytest node IDs; shell arguments are quoted as needed. Unsupported test runners have `t` facts but no `r` command.
 - `impact --diff` cites REV paths and lines for removals; `moved?` cites both locations, `sig?` an inferred moved signature change, and `uncertain?` an ambiguous or unavailable identity. Inspect paths in incomplete-extraction notices, including outside filters.
 - `+N more`, `+N`, `+` or a JSON `{}` marks truncated output. Narrow with `-p`, `-k`, `-l` or raise `-b`.
 - A shared-index failure can use `.xcalygraph/` locally; the stderr notice asks to ignore it in git.
