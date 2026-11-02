@@ -262,6 +262,7 @@ with tempfile.TemporaryDirectory(prefix="benchmark-output-writer.", dir=repo / "
         shutil.copyfile(writer_source, project / "scripts/benchmarks/output-writer.sh")
         shutil.copyfile(repo / "scripts/utils/prepare-corpus.sh", utilities / "prepare-corpus.sh")
         (utilities / "check-build-space.sh").write_text("#!/bin/sh\nexit 0\n")
+        (utilities / "verification-lock.sh").write_text("#!/bin/sh\nexit 0\n")
         environment = tools_for_entrypoint(shell, f"depth-{number}")
         run = subprocess.run([shell, str(project / "scripts/benchmarks/compare-depth.sh"), "fixture", "1"],
                              cwd=project, env=environment, capture_output=True, timeout=120)

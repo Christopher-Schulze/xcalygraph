@@ -11,7 +11,7 @@
 #   Edges are matched by source file, source line (+-1) and target file;
 #   imports by the file pair; a C-family header and its implementation count as one target; an
 #   edge of the same family from the same source file to a target of the same name also counts.
-# Requires: graphify, python3; the release test build is made here.
+# Requires: graphify, python3, Cargo; the guarded release test build is made here.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
@@ -39,6 +39,10 @@ fi
 if [[ -L "${REPO_ROOT}/.cache" || -L "${WORK_BASE}" ]]; then
   echo "compare-depth.sh: depth cache must not be a symlink" >&2
   exit 1
+fi
+if ! bash "${REPO_ROOT}/scripts/utils/verification-lock.sh"; then
+  exec bash "${REPO_ROOT}/scripts/utils/guard-benchmark.sh" \
+    bash "${REPO_ROOT}/scripts/benchmarks/compare-depth.sh" "$@"
 fi
 bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
 mkdir -p "${WORK_BASE}"

@@ -42,6 +42,7 @@ with tempfile.TemporaryDirectory(prefix="build-space.", dir=repo / ".cache") as 
         destination.parent.mkdir(parents=True, exist_ok=True)
         if source.exists():
             shutil.copyfile(source, destination)
+    (root / "scripts/utils/verification-lock.sh").write_text("#!/bin/sh\nexit 0\n")
     benchmark = root / "scripts/benchmarks/compare-depth.sh"
     (root / "research/corpora/fixture").mkdir(parents=True)
     failed = subprocess.run([shell, str(benchmark), "fixture"], cwd=root, env=restricted,
