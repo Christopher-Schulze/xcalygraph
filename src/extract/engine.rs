@@ -1816,6 +1816,24 @@ fn body_start(node: Node, source: &[u8]) -> Option<usize> {
 /// Complete header tokens, ignoring formatting and comments but preserving literal contents.
 /// Unknown boundaries and malformed declarations stay unknown rather than compare as equal.
 pub(in crate::extract) fn signature_identity(node: Node, source: &[u8]) -> Option<String> {
+    signature_identity_with_exclusion(node, source, None)
+}
+
+/// A separately encoded property key is excluded without altering the remaining source tokens.
+#[cfg(feature = "lang-typescript")]
+pub(in crate::extract) fn signature_identity_without_node(
+    node: Node,
+    source: &[u8],
+    excluded: Node,
+) -> Option<String> {
+    signature_identity_with_exclusion(node, source, Some(excluded.id()))
+}
+
+fn signature_identity_with_exclusion(
+    node: Node,
+    source: &[u8],
+    excluded: Option<usize>,
+) -> Option<String> {
     if node.has_error() || node.is_missing() {
         return None;
     }
@@ -1851,7 +1869,8 @@ pub(in crate::extract) fn signature_identity(node: Node, source: &[u8]) -> Optio
         let atomic = current.child_count() == 0 || (literal && !interpolated);
         let within = current.start_byte() < end;
         let comment = kind.contains("comment");
-        if within && !comment && atomic && current.end_byte() <= end {
+        let skip = excluded.is_some_and(|id| id == current.id());
+        if within && !comment && !skip && atomic && current.end_byte() <= end {
             let fragment =
                 std::str::from_utf8(source.get(current.start_byte()..current.end_byte())?).ok()?;
             identity.push(':');
@@ -1859,7 +1878,7 @@ pub(in crate::extract) fn signature_identity(node: Node, source: &[u8]) -> Optio
             identity.push(':');
             identity.push_str(fragment);
         }
-        if within && !comment && !atomic && cursor.goto_first_child() {
+        if within && !comment && !skip && !atomic && cursor.goto_first_child() {
             continue;
         }
         while !cursor.goto_next_sibling() {

@@ -137,6 +137,52 @@ fn typescript_numeric_keys_are_canonical_in_the_persisted_card() -> Result<(), B
 }
 
 #[test]
+fn equivalent_interface_property_spellings_merge_only_when_compatible() -> Result<(), Box<dyn Error>>
+{
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("valid.ts"),
+        include_bytes!("fixtures/typescript-equivalent-valid.ts"),
+    )?;
+    fs::write(
+        root.join("invalid.ts"),
+        include_bytes!("fixtures/typescript-equivalent-invalid.ts"),
+    )?;
+    for (name, lines) in [
+        ("Strings", [1, 2]),
+        ("Escaped", [3, 4]),
+        ("Numbers", [5, 6]),
+    ] {
+        let output = fixture.run(&["show", &format!("valid.{name}")])?;
+        let text = String::from_utf8(output.stdout)?;
+        assert!(output.status.success(), "{name}: {text}");
+        for line in lines {
+            assert!(text.contains(&format!("valid.ts:{line}")), "{name}: {text}");
+        }
+    }
+    for name in [
+        "DifferentTypes",
+        "DifferentOptional",
+        "DifferentReadonly",
+        "DifferentLiteral",
+    ] {
+        let output = fixture.run(&["show", &format!("invalid.{name}")])?;
+        assert_eq!(output.status.code(), Some(3), "{name}");
+    }
+    let impact = fixture.run(&["impact", "valid.ts:2", "--read-only", "--exact"])?;
+    assert!(impact.status.success());
+    let impact = String::from_utf8(impact.stdout)?;
+    assert!(impact.contains("valid.readValue"), "{impact}");
+    let filtered = fixture.run(&["show", "Strings", "--read-only", "-p", "invalid.ts"])?;
+    assert_eq!(filtered.status.code(), Some(4));
+    let unknown = fixture.run(&["show", "valid.EscapedIdentifier", "--read-only"])?;
+    assert_eq!(unknown.status.code(), Some(3));
+    Ok(())
+}
+
+#[test]
 fn same_file_interfaces_merge_without_losing_declaration_locations() -> Result<(), Box<dyn Error>> {
     let fixture = Fixture::new()?;
     fs::create_dir(fixture.0.join("repo"))?;
@@ -371,6 +417,10 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         root.join("model.ts"),
         include_bytes!("fixtures/typescript-merge-model.ts"),
     )?;
+    fs::write(
+        root.join("valid.ts"),
+        include_bytes!("fixtures/typescript-equivalent-valid.ts"),
+    )?;
     let mut images = Vec::new();
     let mut answers = Vec::new();
     for workers in ["1", "4"] {
@@ -398,7 +448,9 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         images.push(fs::read(entries[0].path().join("derived"))?);
         let answer = run(&["show", "model.Services", "--json", "--read-only"])?;
         assert!(answer.status.success());
-        answers.push(answer.stdout);
+        let equivalent = run(&["show", "valid.Strings", "--json", "--read-only"])?;
+        assert!(equivalent.status.success());
+        answers.push((answer.stdout, equivalent.stdout));
     }
     assert_eq!(images[0], images[1]);
     assert_eq!(answers[0], answers[1]);

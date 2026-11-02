@@ -120,14 +120,24 @@ pub(in crate::extract) fn interface_member_identity(
             kind if kind.contains("comment") => continue,
             _ => return None,
         };
-        let name = member.child_by_field_name("name")?;
-        let name = match name.kind() {
-            "property_identifier" => FieldName::Text(name.utf8_text(source).ok()?.to_owned()),
-            "string" | "number" => simple_property_key(name, source)?,
+        let name_node = member.child_by_field_name("name")?;
+        let name = match name_node.kind() {
+            "property_identifier" => {
+                let name = name_node.utf8_text(source).ok()?;
+                if name.contains('\\') {
+                    return None;
+                }
+                FieldName::Text(name.to_owned())
+            }
+            "string" | "number" => simple_property_key(name_node, source)?,
             _ => return None,
         };
         let name = name.token();
-        let signature = crate::extract::engine::signature_identity(member, source)?;
+        let signature = if tag == 'p' {
+            crate::extract::engine::signature_identity_without_node(member, source, name_node)?
+        } else {
+            crate::extract::engine::signature_identity(member, source)?
+        };
         let _ = write!(
             identity,
             "{tag}{}:{name}{}:{signature}",
