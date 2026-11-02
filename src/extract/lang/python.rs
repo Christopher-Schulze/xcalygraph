@@ -5,6 +5,7 @@ use super::Pack;
 use crate::domain::facts::{FLAG_TEST, Import, SymKind};
 use crate::domain::filetype::FileType;
 use crate::extract::engine::{Definition, FileContext, Hooks};
+use tree_sitter::Node;
 
 pub static PACK: Pack = Pack {
     suffixes: &[],
@@ -19,6 +20,69 @@ pub static PACK: Pack = Pack {
         builtin,
     },
 };
+
+/// Evidence for conservative structural protocol matching; decorated or dynamic class bodies are
+/// intentionally excluded because their runtime members cannot be established from method names.
+pub(in crate::extract) fn structural_identity(node: Node, source: &[u8]) -> Option<String> {
+    if node.has_error() || node.is_missing() {
+        return None;
+    }
+    if node.kind() == "class_definition" && node.parent()?.kind() == "module" {
+        let body = node.child_by_field_name("body")?;
+        let mut cursor = body.walk();
+        let simple = body.named_children(&mut cursor).all(|child| {
+            matches!(
+                child.kind(),
+                "function_definition" | "comment" | "pass_statement"
+            ) || (child.kind() == "expression_statement"
+                && child.named_child_count() == 1
+                && child
+                    .named_child(0)
+                    .is_some_and(|item| item.kind() == "string"))
+        });
+        if !simple {
+            return None;
+        }
+        if node.child_by_field_name("superclasses").is_none() {
+            return Some("python:plain-class:".to_owned());
+        }
+        let module = node.parent()?;
+        let mut cursor = module.walk();
+        let lines = module
+            .named_children(&mut cursor)
+            .take_while(|child| child.start_byte() < node.start_byte())
+            .filter(|child| child.kind() == "import_from_statement")
+            .filter_map(|child| {
+                let name = child
+                    .child_by_field_name("module_name")?
+                    .utf8_text(source)
+                    .ok()?;
+                matches!(name, "typing" | "typing_extensions")
+                    .then(|| (child.start_position().row + 1).to_string())
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        return Some(format!("python:plain-class:{lines}"));
+    }
+    if node.kind() != "function_definition" {
+        return None;
+    }
+    let block = node.parent()?;
+    let class = block.parent()?;
+    if block.kind() != "block"
+        || class.kind() != "class_definition"
+        || class.parent()?.kind() != "module"
+    {
+        return None;
+    }
+    let body = node.child_by_field_name("body")?;
+    let header = source.get(node.start_byte()..body.start_byte())?;
+    if header.len() > 1024 {
+        return None;
+    }
+    let identity = crate::extract::engine::signature_identity(node, source)?;
+    Some(format!("python:method:{identity}"))
+}
 
 fn flags(definition: &Definition, context: &FileContext) -> u8 {
     // A registering decorator (`@app.route`, `@pytest.fixture`, `@click.command`) means the

@@ -1216,6 +1216,10 @@ fn julia_arguments(arguments: Node, source: &[u8]) -> Vec<(u8, String)> {
 }
 
 fn source_definition_identity(path: &str, node: Node, name: &str, source: &[u8]) -> Option<String> {
+    #[cfg(feature = "lang-python")]
+    if path.ends_with(".py") || path.ends_with(".pyi") {
+        return super::lang::python::structural_identity(node, source);
+    }
     if path.ends_with(".swift")
         && matches!(
             node.kind(),
@@ -1744,7 +1748,7 @@ fn body_start(node: Node, source: &[u8]) -> Option<usize> {
 
 /// Complete header tokens, ignoring formatting and comments but preserving literal contents.
 /// Unknown boundaries and malformed declarations stay unknown rather than compare as equal.
-fn signature_identity(node: Node, source: &[u8]) -> Option<String> {
+pub(in crate::extract) fn signature_identity(node: Node, source: &[u8]) -> Option<String> {
     if node.has_error() || node.is_missing() {
         return None;
     }

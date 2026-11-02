@@ -1,13 +1,122 @@
 //! Python module rules (`docs/spec.md` section 6): absolute and relative imports, package
 //! `__init__` modules, dotted qualifiers through the package tree.
 
-use super::{Imports, Index, Target};
-use crate::domain::facts::{Facts, SymKind};
+use super::{Imports, Index, Pair, Target};
+use crate::domain::facts::{Facts, SourceIdentityKind, SymKind};
+use crate::domain::filetype::FileType;
+use crate::domain::graph::Confidence;
 
 /// Modules a re-exported name is followed through (`pkg/__init__` -> `pkg/api` -> `pkg/impl`).
 const MAX_REEXPORT_DEPTH: usize = 3;
 
 impl Index<'_> {
+    pub(super) fn python_structural_implementations(&self) -> Vec<Pair> {
+        let mut protocols = Vec::new();
+        let mut concrete = Vec::new();
+        for (file, facts) in self.input.facts.iter().enumerate() {
+            if self.file_type(file as u32) != Some(FileType::Python) {
+                continue;
+            }
+            let Some(facts) = facts else { continue };
+            for (local, class) in facts.symbols.iter().enumerate() {
+                let Some(class_evidence) = facts
+                    .source_identity(SourceIdentityKind::Symbol, local as u32)
+                    .and_then(|identity| identity.strip_prefix("python:plain-class:"))
+                else {
+                    continue;
+                };
+                if class.kind() != SymKind::Class {
+                    continue;
+                }
+                let methods: Vec<_> = facts
+                    .symbols
+                    .iter()
+                    .enumerate()
+                    .skip(local + 1)
+                    .take_while(|(_, method)| method.line <= class.end_line)
+                    .filter(|(_, method)| {
+                        method.kind() == SymKind::Method && method.parent == Some(local as u32)
+                    })
+                    .map(|(index, method)| {
+                        Some((
+                            method.name.as_str(),
+                            facts.source_identity(SourceIdentityKind::Symbol, index as u32)?,
+                        ))
+                    })
+                    .collect::<Option<_>>()
+                    .unwrap_or_default();
+                if methods.is_empty()
+                    || methods.iter().enumerate().any(|(index, (name, _))| {
+                        methods[..index].iter().any(|(other, _)| name == other)
+                    })
+                {
+                    continue;
+                }
+                let id = self.base[file] + local as u32;
+                if self.python_is_direct_protocol(facts, class, class_evidence) {
+                    protocols.push((id, methods));
+                } else if class.signature == format!("class {}:", class.name) {
+                    concrete.push((id, methods));
+                }
+            }
+        }
+        let mut pairs = Vec::new();
+        for (candidate, methods) in &concrete {
+            for (protocol, required) in &protocols {
+                if self.is_test(*candidate) && !self.is_test(*protocol) {
+                    continue;
+                }
+                if required.iter().all(|required| methods.contains(required)) {
+                    pairs.push((
+                        *candidate,
+                        *protocol,
+                        Confidence::Inferred,
+                        self.symbols[*candidate as usize].line,
+                    ));
+                }
+            }
+        }
+        pairs
+    }
+
+    fn python_is_direct_protocol(
+        &self,
+        facts: &Facts,
+        class: &crate::domain::facts::Symbol,
+        direct_import_lines: &str,
+    ) -> bool {
+        facts.imports.iter().any(|import| {
+            if !matches!(import.spec.as_str(), "typing" | "typing_extensions")
+                || self.python_module(&import.spec).is_some()
+                || import.names.as_slice() != ["Protocol"]
+            {
+                return false;
+            }
+            let local = import.alias.as_deref().unwrap_or("Protocol");
+            direct_import_lines
+                .split(',')
+                .any(|line| line.parse::<u32>() == Ok(import.line))
+                && import.line < class.line
+                && class.signature == format!("class {}({local}):", class.name)
+                && !facts.imports.iter().any(|other| {
+                    if std::ptr::eq(other, import) || other.line >= class.line {
+                        return false;
+                    }
+                    let bound = other.alias.as_deref().or_else(|| {
+                        other
+                            .names
+                            .first()
+                            .map(String::as_str)
+                            .or_else(|| other.spec.split('.').next())
+                    });
+                    bound == Some(local) || other.names.iter().any(|name| name == "*")
+                })
+                && !facts.symbols.iter().any(|symbol| {
+                    symbol.parent.is_none() && symbol.name == local && symbol.line < class.line
+                })
+        })
+    }
+
     pub(super) fn python_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
         self.python_module_imports(file, facts, imports);
         // File edges to every imported module's files (module import graph at file level).
@@ -213,6 +322,64 @@ fn join(base: &str, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn structural_protocol_requires_all_methods_with_matching_shapes() -> std::io::Result<()> {
+        use crate::domain::graph::{Confidence, EdgeKind};
+
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/python-protocol");
+        let graph = super::super::tests::graph_of(&root)?;
+        let symbol = |name: &str| {
+            graph
+                .symbols
+                .iter()
+                .position(|symbol| symbol.qualified == name)
+                .map(|index| index as u32)
+                .ok_or_else(|| std::io::Error::other(format!("missing symbol {name}")))
+        };
+        let protocol = symbol("app.protocols.Reader")?;
+        let implements = |source| {
+            graph.edges.iter().any(|edge| {
+                edge.source == source
+                    && edge.target == protocol
+                    && edge.kind == EdgeKind::Implements
+                    && edge.confidence == Confidence::Inferred
+            })
+        };
+        assert!(implements(symbol("app.implementations.FileReader")?));
+        assert!(!implements(symbol("app.implementations.MissingClose")?));
+        assert!(!implements(symbol("app.implementations.WrongShape")?));
+        assert!(!implements(symbol("app.implementations.DecoratedReader")?));
+        let file_reader = symbol("app.implementations.FileReader")?;
+        for name in [
+            "app.protocols.NeedsFlag",
+            "app.protocols.DefaultValue",
+            "app.shadowed.NotAProtocol",
+        ] {
+            let protocol = symbol(name)?;
+            assert!(!graph.edges.iter().any(|edge| {
+                edge.source == file_reader
+                    && edge.target == protocol
+                    && edge.kind == EdgeKind::Implements
+            }));
+        }
+        let long_wrong = symbol("app.implementations.LongWrong")?;
+        let long_protocol = symbol("app.protocols.LongReader")?;
+        assert!(!graph.edges.iter().any(|edge| {
+            edge.source == long_wrong
+                && edge.target == long_protocol
+                && edge.kind == EdgeKind::Implements
+        }));
+        let literal_wrong = symbol("app.implementations.LiteralWrong")?;
+        let literal_protocol = symbol("app.protocols.LiteralReader")?;
+        assert!(!graph.edges.iter().any(|edge| {
+            edge.source == literal_wrong
+                && edge.target == literal_protocol
+                && edge.kind == EdgeKind::Implements
+        }));
+        Ok(())
+    }
 
     #[test]
     fn relative_imports_climb_packages() {

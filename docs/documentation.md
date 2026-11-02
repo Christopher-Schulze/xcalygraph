@@ -105,6 +105,8 @@ Every language drops unqualified references to its builtins and prelude names, u
 
 Rust source files loaded under multiple `#[path]` module names retain their exact declaration-to-file references, but their symbols are not yet resolved separately under each name. Conflicting conventional-layout files are kept under file-qualified names rather than presented as those modules.
 
+Python structural Protocol matches are inferred only for undecorated top-level classes with simple method-only bodies, a direct unshadowed `from typing import Protocol` or `typing_extensions` import, and matching complete method-header tokens, including literal contents. Attributes, inherited requirements, decorators and dynamic class bodies are not inferred; this is not a full Python type check.
+
 Resolution order for all of them is `docs/spec.md` section 6: lexical scope, imports, qualified names, same module, member calls through receiver types (self, declared bindings, constructor and call results, field chains), interface dispatch to non-test implementations (inferred, max 10), overloads narrowed by argument count (the single overload taking the count is exact, several are inferred), unique-name fallback within the own and imported modules (root-wide only for Rust methods), else an ambiguity count. A qualifier chain whose head is an external import (`std.heap.ArenaAllocator.init`) stays external. Test symbols are targets only for test callers.
 
 ## Agent skill
