@@ -1390,6 +1390,9 @@ fn render(
             next.push(node);
         }
         frontier = next;
+        if frontier.is_empty() {
+            break;
+        }
     }
     let rank = |node: u32| match index.node(node) {
         Node::Symbol(symbol) => symbol.rank,

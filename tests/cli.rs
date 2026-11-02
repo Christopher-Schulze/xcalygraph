@@ -229,6 +229,45 @@ fn run_in(root: &Path, index: &Path, args: &[&str]) -> io::Result<Output> {
         .output()
 }
 
+fn assert_impact_large_depth_matches(
+    root: &Path,
+    index: &Path,
+    args: &[&str],
+    expected: &str,
+) -> TestResult {
+    let mut child = support::command(BINARY, index.parent().unwrap_or(root))
+        .args(args)
+        .arg("-C")
+        .arg(root)
+        .arg("--index-dir")
+        .arg(index)
+        .env("HOME", index)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let started = std::time::Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            let output = child.wait_with_output()?;
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "args {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(String::from_utf8(output.stdout)?, expected, "args {args:?}");
+            return Ok(());
+        }
+        if started.elapsed() >= std::time::Duration::from_millis(1_000) {
+            child.kill()?;
+            child.wait()?;
+            return Err(format!("impact command exceeded 1-second deadline: {args:?}").into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 fn assert_json_lines_parse(text: &str, fixture: &Path) -> TestResult {
     let mut parser = support::command("python3", fixture)
         .args([
@@ -1752,6 +1791,43 @@ fn path_and_impact_keep_inferred_dispatch_inferred_on_every_hop() -> TestResult 
         query(&["impact", "FileStore.Write"])?.1,
         query(&["impact", "FileStore.Write"])?.1
     );
+    Ok(())
+}
+
+#[test]
+fn impact_stops_after_reachable_frontiers_are_exhausted() -> TestResult {
+    let dir = TempDir::new("impact-large-depth")?;
+    let root = dir.0.join("repo");
+    dir.write("repo/go.mod", "module example.com/app\n\ngo 1.23\n")?;
+    dir.write("repo/app.go", DISPATCH_GO)?;
+    let index = dir.0.join("index");
+
+    let bounded = run_in(
+        &root,
+        &index,
+        &["impact", "FileStore.Write", "--depth", "3"],
+    )?;
+    assert_eq!(bounded.status.code(), Some(0));
+    let bounded = String::from_utf8(bounded.stdout)?;
+    assert!(bounded.contains("< 1 Send app.go:13?\n"), "{bounded}");
+    assert!(bounded.contains("< 3 Top app.go:31?\n"), "{bounded}");
+    assert_impact_large_depth_matches(
+        &root,
+        &index,
+        &["impact", "FileStore.Write", "--depth", "1000000000"],
+        &bounded,
+    )?;
+
+    let cycle = run_in(&root, &index, &["impact", "Pong", "--depth", "3"])?;
+    assert_eq!(cycle.status.code(), Some(0));
+    let cycle = String::from_utf8(cycle.stdout)?;
+    assert!(cycle.contains("< 1 Ping app.go:35\n"), "{cycle}");
+    assert_impact_large_depth_matches(
+        &root,
+        &index,
+        &["impact", "Pong", "--depth", "1000000000"],
+        &cycle,
+    )?;
     Ok(())
 }
 
@@ -3574,11 +3650,17 @@ fn impact_of_removed_files_and_symbols_names_their_surviving_dependents() -> Tes
     let restore = || fs::write(root.join("store/open.go"), OPEN);
     // Whole file deleted (staged): removed definitions, inferred survivors, their tests.
     git(&root, &["rm", "-q", "store/open.go"])?;
-    let text = impact(&["impact", "--diff"])?;
+    let text = impact(&["impact", "--diff", "--depth", "3"])?;
     assert_eq!(
         text,
         "~ Close store/open.go:7 removed\n~ Open store/open.go:3 removed\n< 1 store.Warm store/use.go:3?\n< 1 store.Stop store/use.go:7?\nt store.TestOpen store/open_test.go:5?\nr go test ./store -run '^(TestOpen)$'\n"
     );
+    assert_impact_large_depth_matches(
+        &root,
+        &index,
+        &["impact", "--diff", "--depth", "1000000000"],
+        &text,
+    )?;
     let json = impact(&["impact", "--diff", "--json"])?;
     assert!(
         json.contains("{\"t\":\"sym\",\"rel\":\"chg\",\"name\":\"Open\",\"path\":\"store/open.go\",\"line\":3,\"kind\":\"removed\"}"),
