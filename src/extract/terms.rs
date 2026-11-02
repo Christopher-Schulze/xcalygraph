@@ -191,91 +191,401 @@ const CLASS_CALLS: [&[u8]; 9] = [
     b"tv",
 ];
 
-/// Blanks CSS class lists where the syntax says they are classes: the value of a `class=` or
-/// `className=` attribute (also `:class=`, `className={...}`) and string arguments of a class
-/// composition call ([`CLASS_CALLS`]), across lines. Every other string, comment and text stays:
-/// `"small-screen navigation"` in a label or log message is behavior text. Byte length and line
-/// breaks are preserved.
+/// Blanks CSS literals in exact `class`/`className` attributes, bound class expressions, Svelte
+/// `class:<name>` directives and recognized class-composition calls ([`CLASS_CALLS`]). Dynamic
+/// identifiers, comments and strings in nested ordinary calls stay searchable. Byte length and
+/// line breaks are preserved.
 fn without_class_lists(text: &mut [u8]) {
-    // Per open parenthesis: whether it opened a class composition call.
-    let mut calls: Vec<bool> = Vec::new();
     let mut index = 0;
     while index < text.len() {
+        if let Some(end) = comment_end(text, index, text.len()) {
+            index = end;
+            continue;
+        }
+        if matches!(text[index], b'\'' | b'"' | b'`') {
+            index = skip_string(text, index, text.len());
+            continue;
+        }
+        if text[index] == b'<'
+            && let Some(end) = markup_tag(text, index)
+        {
+            index = end;
+            continue;
+        }
+        if text[index] == b'('
+            && is_class_call_before(text, index)
+            && let Some(close) = matching_delimiter(text, index, b')', text.len())
+        {
+            class_expression(text, index + 1, close, true);
+            index = close + 1;
+            continue;
+        }
+        index += 1;
+    }
+}
+
+fn markup_tag(text: &mut [u8], start: usize) -> Option<usize> {
+    if text.get(start) != Some(&b'<') || !text.get(start + 1)?.is_ascii_alphabetic() {
+        return None;
+    }
+    let mut index = start + 2;
+    while text.get(index).is_some_and(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+    }) {
+        index += 1;
+    }
+    if text
+        .get(index)
+        .is_some_and(|byte| !byte.is_ascii_whitespace() && !matches!(byte, b'/' | b'>'))
+    {
+        return None;
+    }
+
+    while index < text.len() {
+        if text[index].is_ascii_whitespace() {
+            index += 1;
+            continue;
+        }
         match text[index] {
-            b'/' if text.get(index + 1) == Some(&b'/') => {
-                index = text[index..]
-                    .iter()
-                    .position(|&byte| byte == b'\n')
-                    .map_or(text.len(), |offset| index + offset);
+            b'>' => return Some(index + 1),
+            b'/' if text.get(index + 1) == Some(&b'>') => return Some(index + 2),
+            b'{' => {
+                index = matching_delimiter(text, index, b'}', text.len())? + 1;
             }
-            b'/' if text.get(index + 1) == Some(&b'*') => {
-                index = text[index + 2..]
-                    .windows(2)
-                    .position(|window| window == b"*/")
-                    .map_or(text.len(), |offset| index + offset + 4);
-            }
-            b'<' if text[index..].starts_with(b"<!--") => {
-                index = text[index + 4..]
-                    .windows(3)
-                    .position(|window| window == b"-->")
-                    .map_or(text.len(), |offset| index + offset + 7);
-            }
-            b'(' => {
-                let name_start = text[..index]
-                    .iter()
-                    .rposition(|byte| !(byte.is_ascii_alphanumeric() || *byte == b'_'))
-                    .map_or(0, |position| position + 1);
-                calls.push(CLASS_CALLS.contains(&&text[name_start..index]));
+            _ => {
+                let name_start = index;
+                while text.get(index).is_some_and(|byte| {
+                    !byte.is_ascii_whitespace() && !matches!(byte, b'=' | b'/' | b'>')
+                }) {
+                    index += 1;
+                }
+                if index == name_start {
+                    index += 1;
+                    continue;
+                }
+                let name_end = index;
+                if let Some(suffix) = class_directive_suffix(&text[name_start..name_end]) {
+                    blank(text, name_start + suffix, name_end);
+                }
+                let class_kind = class_attribute(&text[name_start..name_end]);
+                while text.get(index).is_some_and(u8::is_ascii_whitespace) {
+                    index += 1;
+                }
+                if text.get(index) != Some(&b'=') {
+                    continue;
+                }
                 index += 1;
-            }
-            b')' => {
-                calls.pop();
-                index += 1;
-            }
-            quote @ (b'"' | b'\'' | b'`') => {
-                let end = string_end(text, index, quote);
-                if calls.contains(&true) || after_class_attribute(&text[..index]) {
-                    for byte in &mut text[index + 1..end.saturating_sub(1).max(index + 1)] {
-                        if *byte != b'\n' {
-                            *byte = b' ';
+                while text.get(index).is_some_and(u8::is_ascii_whitespace) {
+                    index += 1;
+                }
+                match text.get(index).copied() {
+                    Some(quote @ (b'\'' | b'"')) => {
+                        let value_start = index + 1;
+                        let value_end = attribute_quote_end(text, index, quote)?;
+                        if let Some(kind) = class_kind {
+                            if kind == ClassAttribute::Static {
+                                class_attribute_text(text, value_start, value_end);
+                            } else {
+                                class_expression(text, value_start, value_end, true);
+                            }
+                        }
+                        index = value_end + 1;
+                    }
+                    Some(b'{') => {
+                        let close = matching_delimiter(text, index, b'}', text.len())?;
+                        if class_kind.is_some() {
+                            class_expression(text, index + 1, close, true);
+                        }
+                        index = close + 1;
+                    }
+                    Some(_) => {
+                        let value_start = index;
+                        while text
+                            .get(index)
+                            .is_some_and(|byte| !byte.is_ascii_whitespace() && *byte != b'>')
+                        {
+                            index += 1;
+                        }
+                        if class_kind == Some(ClassAttribute::Static) {
+                            blank(text, value_start, index);
                         }
                     }
+                    None => return None,
                 }
-                index = end;
+            }
+        }
+    }
+    None
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ClassAttribute {
+    Static,
+    Bound,
+}
+
+fn class_attribute(name: &[u8]) -> Option<ClassAttribute> {
+    if name.eq_ignore_ascii_case(b"class") || name == b"className" {
+        return Some(ClassAttribute::Static);
+    }
+    if matches!(
+        name,
+        b":class" | b"v-bind:class" | b"class:list" | b"[class]" | b"[className]"
+    ) || (name.starts_with(b"[class.") && name.ends_with(b"]"))
+    {
+        return Some(ClassAttribute::Bound);
+    }
+    None
+}
+
+fn class_directive_suffix(name: &[u8]) -> Option<usize> {
+    (name.starts_with(b"class:") && name.len() > b"class:".len()).then_some(b"class:".len())
+}
+
+fn class_attribute_text(text: &mut [u8], start: usize, end: usize) {
+    let mut segment = start;
+    let mut index = start;
+    while index < end {
+        if text[index] == b'\\' {
+            index = (index + 2).min(end);
+            continue;
+        }
+        if text[index] == b'{'
+            && let Some(close) = matching_delimiter(text, index, b'}', end)
+        {
+            blank(text, segment, index);
+            class_expression(text, index + 1, close, true);
+            index = close + 1;
+            segment = index;
+            continue;
+        }
+        index += 1;
+    }
+    blank(text, segment, end);
+}
+
+fn class_expression(text: &mut [u8], start: usize, end: usize, owned: bool) {
+    let mut index = start;
+    while index < end {
+        if let Some(comment_end) = comment_end(text, index, end) {
+            index = comment_end;
+            continue;
+        }
+        match text[index] {
+            quote @ (b'\'' | b'"') => {
+                let close = quoted_end(text, index, quote, end, false);
+                if owned && close > index + 1 && text.get(close - 1) == Some(&quote) {
+                    blank(text, index + 1, close - 1);
+                }
+                index = close;
+            }
+            b'`' => {
+                index = class_template(text, index, end, owned);
+            }
+            byte if identifier_start(byte) => {
+                let name_start = index;
+                index += 1;
+                while index < end && identifier_continue(text[index]) {
+                    index += 1;
+                }
+                let name_end = index;
+                let mut open = index;
+                while open < end && text[open].is_ascii_whitespace() {
+                    open += 1;
+                }
+                if text.get(open) == Some(&b'(')
+                    && let Some(close) = matching_delimiter(text, open, b')', end)
+                {
+                    let child_owned = is_class_call(&text[name_start..name_end]);
+                    class_expression(text, open + 1, close, child_owned);
+                    index = close + 1;
+                }
+            }
+            b'(' => {
+                if let Some(close) = matching_delimiter(text, index, b')', end) {
+                    class_expression(text, index + 1, close, owned);
+                    index = close + 1;
+                } else {
+                    index += 1;
+                }
             }
             _ => index += 1,
         }
     }
 }
 
-/// Index just past the closing quote of the string opening at `start`, honoring backslash
-/// escapes; `'` and `"` strings end at a line break, template literals may span lines.
-fn string_end(text: &[u8], start: usize, quote: u8) -> usize {
-    let mut index = start + 1;
-    while index < text.len() {
+fn class_template(text: &mut [u8], start: usize, end: usize, owned: bool) -> usize {
+    let mut segment = start + 1;
+    let mut index = segment;
+    while index < end {
+        if text[index] == b'\\' {
+            index = (index + 2).min(end);
+            continue;
+        }
+        if text[index] == b'`' {
+            if owned {
+                blank(text, segment, index);
+            }
+            return index + 1;
+        }
+        if text[index] == b'$'
+            && text.get(index + 1) == Some(&b'{')
+            && let Some(close) = matching_delimiter(text, index + 1, b'}', end)
+        {
+            if owned {
+                blank(text, segment, index);
+            }
+            class_expression(text, index + 2, close, owned);
+            index = close + 1;
+            segment = index;
+            continue;
+        }
+        index += 1;
+    }
+    if owned {
+        blank(text, segment, end);
+    }
+    end
+}
+
+fn is_class_call_before(text: &[u8], open: usize) -> bool {
+    let mut end = open;
+    while end > 0 && text[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    let mut start = end;
+    while start > 0 && identifier_continue(text[start - 1]) {
+        start -= 1;
+    }
+    start < end && is_class_call(&text[start..end])
+}
+
+fn is_class_call(name: &[u8]) -> bool {
+    CLASS_CALLS.contains(&name)
+}
+
+fn identifier_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_' || byte == b'$'
+}
+
+fn identifier_continue(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
+}
+
+fn comment_end(text: &[u8], start: usize, limit: usize) -> Option<usize> {
+    let tail = text.get(start..limit)?;
+    if tail.starts_with(b"//") {
+        return Some(
+            start
+                + tail
+                    .iter()
+                    .position(|&byte| byte == b'\n')
+                    .unwrap_or(tail.len()),
+        );
+    }
+    if tail.starts_with(b"/*") {
+        return Some(
+            start
+                + tail[2..]
+                    .windows(2)
+                    .position(|window| window == b"*/")
+                    .map_or(tail.len(), |offset| offset + 4),
+        );
+    }
+    if tail.starts_with(b"<!--") {
+        return Some(
+            start
+                + tail[4..]
+                    .windows(3)
+                    .position(|window| window == b"-->")
+                    .map_or(tail.len(), |offset| offset + 7),
+        );
+    }
+    None
+}
+
+fn matching_delimiter(text: &[u8], open: usize, close: u8, limit: usize) -> Option<usize> {
+    let opening = *text.get(open)?;
+    let mut depth = 0usize;
+    let mut index = open;
+    while index < limit {
+        if let Some(end) = comment_end(text, index, limit) {
+            index = end;
+            continue;
+        }
         match text[index] {
-            b'\\' => index += 2,
-            b'\n' if quote != b'`' => return index,
-            byte if byte == quote => return index + 1,
+            quote @ (b'\'' | b'"') => index = quoted_end(text, index, quote, limit, false),
+            b'`' => index = template_end(text, index, limit),
+            byte if byte == opening => {
+                depth += 1;
+                index += 1;
+            }
+            byte if byte == close => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+                index += 1;
+            }
             _ => index += 1,
         }
     }
-    text.len()
+    None
 }
 
-/// Whether the text before a quote ends with `class=` or `className=`, optionally followed by
-/// `{` (JSX expression) and whitespace.
-fn after_class_attribute(before: &[u8]) -> bool {
-    let trimmed = before.trim_ascii_end();
-    let trimmed = trimmed
-        .strip_suffix(b"{")
-        .unwrap_or(trimmed)
-        .trim_ascii_end();
-    let Some(name) = trimmed.strip_suffix(b"=") else {
-        return false;
-    };
-    let name = name.trim_ascii_end();
-    name.ends_with(b"className") || name.ends_with(b"class")
+fn template_end(text: &[u8], start: usize, limit: usize) -> usize {
+    let mut index = start + 1;
+    while index < limit {
+        if text[index] == b'\\' {
+            index = (index + 2).min(limit);
+            continue;
+        }
+        if text[index] == b'`' {
+            return index + 1;
+        }
+        if text[index] == b'$'
+            && text.get(index + 1) == Some(&b'{')
+            && let Some(close) = matching_delimiter(text, index + 1, b'}', limit)
+        {
+            index = close + 1;
+            continue;
+        }
+        index += 1;
+    }
+    limit
+}
+
+fn skip_string(text: &[u8], start: usize, limit: usize) -> usize {
+    match text[start] {
+        b'`' => template_end(text, start, limit),
+        quote => quoted_end(text, start, quote, limit, false),
+    }
+}
+
+fn quoted_end(text: &[u8], start: usize, quote: u8, limit: usize, multiline: bool) -> usize {
+    let mut index = start + 1;
+    while index < limit {
+        match text[index] {
+            b'\\' => index = (index + 2).min(limit),
+            byte if byte == quote => return index + 1,
+            b'\n' if !multiline => return index,
+            _ => index += 1,
+        }
+    }
+    limit
+}
+
+fn attribute_quote_end(text: &[u8], start: usize, quote: u8) -> Option<usize> {
+    let end = quoted_end(text, start, quote, text.len(), true);
+    (end > start + 1 && text.get(end - 1) == Some(&quote)).then_some(end - 1)
+}
+
+fn blank(text: &mut [u8], start: usize, end: usize) {
+    for byte in &mut text[start..end] {
+        if *byte != b'\n' {
+            *byte = b' ';
+        }
+    }
 }
 
 /// First line of the comment and annotation block directly above `line` (`///`, `/** */`,
@@ -385,14 +695,17 @@ mod tests {
                 "<nav class='md:hidden px-4'>Menu</nav>",
                 &["nav", "class", "Menu", "nav"],
             ),
-            ("<p :class=\"{ 'text-red-500': failed }\">x</p>", &["class"]),
+            (
+                "<p :class=\"{ 'text-red-500': failed }\">x</p>",
+                &["class", "failed"],
+            ),
             (
                 "cn(\n  \"flex items-center\",\n  active && \"bg-blue-500\"\n)",
                 &["cn", "active"],
             ),
             (
-                "className={`grid ${wide ? \"col-span-2\" : \"\"}`}",
-                &["className"],
+                "<div className={`grid ${wide ? \"col-span-2\" : \"\"}`}></div>",
+                &["div", "className", "wide", "div"],
             ),
             (
                 "label(\"small-screen navigation\"); log.warn('read-only mode')",
@@ -425,6 +738,114 @@ mod tests {
         ];
         for (text, expected) in cases {
             assert_eq!(kept_words(text), expected, "{text}");
+        }
+    }
+
+    #[test]
+    fn class_attribute_names_and_composition_calls_have_exact_ownership() {
+        let source = r#"
+const asset_class = "asset-description-code";
+const classes = cn("flex gap-2", selected && "bg-blue-500", labelFor("ordinary-caption-text"));
+<div asset_class="asset-attribute-description" class="rounded border-dashed" aria-label="screen-reader-description" />
+"#;
+        let words = kept_words(source);
+        for expected in [
+            "asset_class",
+            "description",
+            "code",
+            "attribute",
+            "ordinary",
+            "caption",
+            "screen",
+            "reader",
+        ] {
+            assert!(
+                words.iter().any(|word| word == expected),
+                "missing {expected}: {words:?}"
+            );
+        }
+        for excluded in ["flex", "gap", "blue", "rounded", "border", "dashed"] {
+            assert!(
+                !words.iter().any(|word| word == excluded),
+                "class word {excluded} survived: {words:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn jsx_conditional_and_template_classes_keep_dynamic_and_ordinary_words() {
+        let source = r#"
+const view = <div className={active ? "bg-blue-500" : "bg-gray-500"} aria-label="mobile-navigation-copy" />;
+const templated = <span className={`grid ${wide ? "col-span-2" : "col-span-1"}`} title="read-only-copy" />;
+const ordinary = "className=\"literal-violet-500\"";
+<div className="escaped-amber-500\"still-class" aria-label="after-escape-description" />
+<!-- <div class="comment-magenta-code"> -->
+"#;
+        let words = kept_words(source);
+        for expected in [
+            "active",
+            "wide",
+            "mobile",
+            "navigation",
+            "copy",
+            "read",
+            "only",
+            "violet",
+            "magenta",
+            "after",
+            "escape",
+            "description",
+        ] {
+            assert!(
+                words.iter().any(|word| word == expected),
+                "missing {expected}: {words:?}"
+            );
+        }
+        for excluded in ["blue", "gray", "grid", "col", "amber"] {
+            assert!(
+                !words.iter().any(|word| word == excluded),
+                "class word {excluded} survived: {words:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn svelte_conditional_classes_keep_state_terms_without_directive_names() {
+        let source = r#"
+<button class="rounded-md px-4 {isReady ? 'bg-green-500' : 'bg-gray-500'}" class:highlighted={isSelected} aria-label="save-button-label">Save</button>
+"#;
+        let words = kept_words(source);
+        for expected in ["isReady", "isSelected", "save", "button", "label"] {
+            assert!(
+                words.iter().any(|word| word == expected),
+                "missing {expected}: {words:?}"
+            );
+        }
+        for excluded in ["rounded", "green", "gray", "highlighted"] {
+            assert!(
+                !words.iter().any(|word| word == excluded),
+                "class word {excluded} survived: {words:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn vue_bound_class_conditions_keep_state_and_hide_class_literals() {
+        let source = r#"
+<div :class="isSelected ? 'bg-red-500' : 'bg-blue-500'" class="rounded-md" :aria-label="'accessible-description'"></div>
+"#;
+        let words = kept_words(source);
+        for expected in ["isSelected", "accessible", "description"] {
+            assert!(
+                words.iter().any(|word| word == expected),
+                "missing {expected}: {words:?}"
+            );
+        }
+        for excluded in ["red", "blue", "rounded"] {
+            assert!(
+                !words.iter().any(|word| word == excluded),
+                "class word {excluded} survived: {words:?}"
+            );
         }
     }
 
