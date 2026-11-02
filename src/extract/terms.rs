@@ -102,8 +102,20 @@ pub fn add(content: &[u8], facts: &mut Facts, spans: &[(usize, usize)]) {
             (start.min(content.len()), end.min(content.len()).max(start))
         })
         .collect();
+    let ownership = if owned.len() >= MIN_OWNERSHIP_PLAN_SYMBOLS {
+        OwnershipPlan::build(&owned, (0, content.len()))
+    } else {
+        None
+    };
+    let mut direct_children = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    facts.terms = collect(content, (0, content.len()), &owned, &mut seen);
+    facts.terms = match &ownership {
+        Some(plan) => {
+            plan.file_children(&mut direct_children);
+            collect(content, (0, content.len()), &direct_children, &mut seen)
+        }
+        None => collect(content, (0, content.len()), &owned, &mut seen),
+    };
     for (index, symbol) in facts.symbols.iter_mut().enumerate() {
         if matches!(
             symbol.kind(),
@@ -120,13 +132,132 @@ pub fn add(content: &[u8], facts: &mut Facts, spans: &[(usize, usize)]) {
                 | SymKind::Table
                 | SymKind::View
         ) {
-            symbol.terms = collect(content, owned[index], &owned, &mut seen);
+            symbol.terms = match &ownership {
+                Some(plan) => {
+                    plan.children(index, &mut direct_children);
+                    collect(content, owned[index], &direct_children, &mut seen)
+                }
+                None => collect(content, owned[index], &owned, &mut seen),
+            };
+        }
+    }
+}
+
+/// A containment forest over owned byte ranges. Direct children cover every nested descendant,
+/// so body extraction need not rescan them. Partial overlaps reject the plan and keep the legacy
+/// all-ranges scan unchanged.
+struct OwnershipPlan {
+    intervals: Vec<OwnedInterval>,
+    symbol_intervals: Vec<usize>,
+    first_root: Option<usize>,
+    file_root: Option<usize>,
+}
+
+const MIN_OWNERSHIP_PLAN_SYMBOLS: usize = 2048;
+
+struct OwnedInterval {
+    range: (usize, usize),
+    first_child: Option<usize>,
+    last_child: Option<usize>,
+    next_sibling: Option<usize>,
+}
+
+impl OwnershipPlan {
+    fn build(ranges: &[(usize, usize)], file_range: (usize, usize)) -> Option<Self> {
+        let mut sorted: Vec<(usize, usize, usize)> = ranges
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(symbol, (first, last))| (first, last, symbol))
+            .collect();
+        sorted.sort_unstable_by(|left, right| {
+            left.0.cmp(&right.0).then_with(|| right.1.cmp(&left.1))
+        });
+
+        let mut plan = Self {
+            intervals: Vec::with_capacity(ranges.len()),
+            symbol_intervals: vec![0; ranges.len()],
+            first_root: None,
+            file_root: None,
+        };
+        let mut stack: Vec<usize> = Vec::new();
+        let mut last_root: Option<usize> = None;
+        let mut cursor = 0;
+        while cursor < sorted.len() {
+            let range = (sorted[cursor].0, sorted[cursor].1);
+            let interval = plan.intervals.len();
+            plan.intervals.push(OwnedInterval {
+                range,
+                first_child: None,
+                last_child: None,
+                next_sibling: None,
+            });
+
+            let mut next = cursor;
+            while next < sorted.len() && (sorted[next].0, sorted[next].1) == range {
+                plan.symbol_intervals[sorted[next].2] = interval;
+                next += 1;
+            }
+            if range == file_range {
+                plan.file_root = Some(interval);
+            }
+
+            while let Some(&previous) = stack.last() {
+                if plan.intervals[previous].range.1 > range.0 {
+                    break;
+                }
+                stack.pop();
+            }
+            if let Some(&parent) = stack.last() {
+                if range.1 > plan.intervals[parent].range.1 {
+                    return None;
+                }
+                if let Some(previous) = plan.intervals[parent].last_child {
+                    plan.intervals[previous].next_sibling = Some(interval);
+                } else {
+                    plan.intervals[parent].first_child = Some(interval);
+                }
+                plan.intervals[parent].last_child = Some(interval);
+            } else {
+                if let Some(previous) = last_root {
+                    plan.intervals[previous].next_sibling = Some(interval);
+                } else {
+                    plan.first_root = Some(interval);
+                }
+                last_root = Some(interval);
+            }
+            stack.push(interval);
+            cursor = next;
+        }
+        Some(plan)
+    }
+
+    fn children(&self, symbol: usize, ranges: &mut Vec<(usize, usize)>) {
+        let interval = self.symbol_intervals[symbol];
+        self.ranges_from(self.intervals[interval].first_child, ranges);
+    }
+
+    fn file_children(&self, ranges: &mut Vec<(usize, usize)>) {
+        let first = match self.file_root {
+            Some(root) => self.intervals[root].first_child,
+            None => self.first_root,
+        };
+        self.ranges_from(first, ranges);
+    }
+
+    fn ranges_from(&self, mut interval: Option<usize>, ranges: &mut Vec<(usize, usize)>) {
+        ranges.clear();
+        while let Some(index) = interval {
+            let node = &self.intervals[index];
+            ranges.push(node.range);
+            interval = node.next_sibling;
         }
     }
 }
 
 /// Tokens of the distinct words of the bytes of `range` outside the ranges of `others` strictly
-/// inside it (the range itself and identical ranges are not inside), line by line.
+/// inside it (the range itself and identical ranges are not inside), line by line. A containment
+/// plan supplies direct children because their bytes also cover every nested descendant.
 fn collect(
     content: &[u8],
     (first, last): (usize, usize),
@@ -652,6 +783,86 @@ fn for_each_body_word(text: &[u8], mut emit: impl FnMut(&str)) {
 mod tests {
     use super::*;
     use crate::domain::facts::Symbol;
+
+    fn function_facts(count: usize) -> Facts {
+        Facts {
+            symbols: (0..count)
+                .map(|index| Symbol {
+                    kind: Some(SymKind::Fn),
+                    name: format!("function_{index}"),
+                    line: 1,
+                    end_line: 1,
+                    ..Symbol::default()
+                })
+                .collect(),
+            ..Facts::default()
+        }
+    }
+
+    /// Original all-ranges behavior used as the equivalence oracle for the optimized plan.
+    fn legacy_add(content: &[u8], initial: &Facts, ranges: &[(usize, usize)]) -> Facts {
+        let mut facts = initial.clone();
+        let mut seen = HashSet::new();
+        facts.terms = collect(content, (0, content.len()), ranges, &mut seen);
+        for (index, symbol) in facts.symbols.iter_mut().enumerate() {
+            symbol.terms = collect(content, ranges[index], ranges, &mut seen);
+        }
+        facts
+    }
+
+    #[test]
+    fn ownership_plan_preserves_nested_equal_zero_width_and_single_line_facts() -> Result<(), String>
+    {
+        let content = b"alpha beta gamma delta";
+        let mut ranges = vec![(0, 22), (6, 16), (6, 16), (11, 16), (12, 12), (17, 22)];
+        ranges.extend(std::iter::repeat_n(
+            (6, 16),
+            MIN_OWNERSHIP_PLAN_SYMBOLS - ranges.len(),
+        ));
+        let initial = function_facts(ranges.len());
+        let expected = legacy_add(content, &initial, &ranges);
+        let mut actual = initial;
+        add(content, &mut actual, &ranges);
+
+        assert_eq!(actual, expected);
+        assert_eq!(actual.symbols[4].terms, "");
+
+        let plan = OwnershipPlan::build(&ranges, (0, content.len()))
+            .ok_or_else(|| "expected nested spans".to_owned())?;
+        let mut children = Vec::new();
+        plan.children(0, &mut children);
+        assert_eq!(children.len(), 2);
+        plan.children(1, &mut children);
+        assert_eq!(children.len(), 1);
+        plan.children(2, &mut children);
+        assert_eq!(children.len(), 1);
+        plan.children(3, &mut children);
+        assert_eq!(children.len(), 1);
+        plan.children(4, &mut children);
+        assert_eq!(children.len(), 0);
+        plan.children(5, &mut children);
+        assert_eq!(children.len(), 0);
+        plan.file_children(&mut children);
+        assert_eq!(children.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn partially_overlapping_spans_keep_the_legacy_facts() {
+        let content = b"alpha beta gamma";
+        let mut ranges = vec![(0, 10), (6, 16)];
+        ranges.extend(std::iter::repeat_n(
+            (16, 16),
+            MIN_OWNERSHIP_PLAN_SYMBOLS - ranges.len(),
+        ));
+        let initial = function_facts(ranges.len());
+        assert!(OwnershipPlan::build(&ranges, (0, content.len())).is_none());
+
+        let expected = legacy_add(content, &initial, &ranges);
+        let mut actual = initial;
+        add(content, &mut actual, &ranges);
+        assert_eq!(actual, expected);
+    }
 
     #[test]
     fn body_words_skip_nested_symbols_and_keywords() {
