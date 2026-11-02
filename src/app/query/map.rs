@@ -319,7 +319,7 @@ pub fn render(
             (false, true) => {
                 json_object(&[("t", Value::Str("sec")), ("name", Value::Str(keyword))]).len()
             }
-            (false, false) => keyword.len() + 1,
+            (false, false) => super::output::escaped_text_len(keyword) + 1,
         }
     };
     let size = |sections: &[Section]| -> usize {
@@ -334,7 +334,7 @@ pub fn render(
                             if json {
                                 fact.json.len()
                             } else {
-                                fact.text.len() + 1
+                                super::output::escaped_text_len(&fact.text) + 1
                             }
                         })
                         .sum::<usize>()

@@ -305,6 +305,7 @@ Sections: dead candidates -> unused exports -> cycles -> stale doc references ->
 Text:
 
 - Paths are root-relative with `/`. Symbol lines are grouped under their file line and indented two spaces: `<line> <signature>`, or `<line> <kind> <name>` when a symbol has no signature.
+- Text fields double backslashes, escape LF/CR/TAB as `\n`, `\r`, `\t`, and encode other C0/C1 controls (`U+0000`-`U+001F`, `U+007F`-`U+009F`) as four-digit lowercase hexadecimal `\uNNNN`. The representation is reversible, ordinary text is unchanged, and budgets count the rendered UTF-8 bytes.
 - No headers, banners or empty fields. Truncation emits one final line `+<n> more` (JSON `{"t":"more","n":<n>}`), whose space is reserved in the budget; when the full footer cannot fit, text uses `+<n>` or `+`, JSON uses `{"t":"more"}` or `{}`. An empty JSON object is exclusively a truncation marker. Only complete lines and complete JSON records are emitted.
 - `map` and `audit` open each section with one keyword line: `modules`, `entry`, `tasks`, `hubs`, `api`, `cycles`, `layers`, `ext`, `env`, `dead`, `unused`, `stale`, `drift`, `assets`, `coupling`, `hotspots`.
 

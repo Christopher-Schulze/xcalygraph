@@ -1,5 +1,6 @@
 //! Budgeted output in the text and JSON Lines formats (`docs/spec.md` section 8).
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
 /// Bytes per estimated token (`docs/spec.md` section 2, `--budget`).
@@ -84,13 +85,13 @@ impl Writer {
             if let Some(path) = file
                 && self.current_file.as_deref() != Some(path)
             {
-                chunk.push_str(path);
+                chunk.push_str(escape_text(path).as_ref());
                 chunk.push('\n');
             }
             if file.is_some() {
                 chunk.push_str("  ");
             }
-            chunk.push_str(text);
+            chunk.push_str(escape_text(text).as_ref());
             chunk.push('\n');
         }
         if chunk.len() > self.remaining() {
@@ -256,6 +257,52 @@ fn json_string(text: &str) -> String {
     out
 }
 
+/// Text form for output fields: escape backslashes and C0/C1 controls, leaving ordinary text
+/// unchanged so the records stay single-line and the representation remains reversible.
+fn escape_text(text: &str) -> Cow<'_, str> {
+    let mut escaped = None::<String>;
+    let mut start = 0;
+    for (position, character) in text.char_indices() {
+        let replacement = match character {
+            '\\' => "\\\\",
+            '\n' => "\\n",
+            '\r' => "\\r",
+            '\t' => "\\t",
+            control if control.is_control() => {
+                let output = escaped.get_or_insert_with(|| String::with_capacity(text.len()));
+                output.push_str(&text[start..position]);
+                let _ = write!(output, "\\u{:04x}", control as u32);
+                start = position + character.len_utf8();
+                continue;
+            }
+            _ => continue,
+        };
+        let output = escaped.get_or_insert_with(|| String::with_capacity(text.len()));
+        output.push_str(&text[start..position]);
+        output.push_str(replacement);
+        start = position + character.len_utf8();
+    }
+    match escaped {
+        Some(mut output) => {
+            output.push_str(&text[start..]);
+            Cow::Owned(output)
+        }
+        None => Cow::Borrowed(text),
+    }
+}
+
+/// UTF-8 byte length after `escape_text`, for query renderers that preflight text budgets.
+pub(super) fn escaped_text_len(text: &str) -> usize {
+    text.chars().fold(text.len(), |length, character| {
+        let extra = match character {
+            '\\' | '\n' | '\r' | '\t' => 1,
+            control if control.is_control() => 6 - control.len_utf8(),
+            _ => 0,
+        };
+        length.saturating_add(extra)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,5 +424,29 @@ mod tests {
             writer.finish(),
             "{\"t\":\"sym\"}\n{\"t\":\"more\",\"n\":1}\n"
         );
+    }
+
+    #[test]
+    fn text_escapes_backslashes_and_control_characters_reversibly() {
+        let mut writer = Writer::new(false, 100);
+        assert!(writer.item(Some("a\\b\tc\r\n\u{0001}\u{0085}"), "line\\next\n", &[],));
+        assert_eq!(
+            writer.finish(),
+            "a\\\\b\\tc\\r\\n\\u0001\\u0085\n  line\\\\next\\n\n"
+        );
+    }
+
+    #[test]
+    fn text_budget_counts_escaped_path_bytes() {
+        let mut writer = Writer::new(false, 10);
+        assert!(!writer.item(Some("a\t"), "12345678901", &[]));
+        assert_eq!(writer.finish(), "+1 more\n");
+    }
+
+    #[test]
+    fn escaped_text_length_matches_rendered_utf8_bytes() {
+        let text = "ordinary/路径\\name\t\u{0001}\u{0085}";
+        assert_eq!(escaped_text_len(text), escape_text(text).len());
+        assert_eq!(escape_text("ordinary/路径").as_ref(), "ordinary/路径");
     }
 }

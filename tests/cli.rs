@@ -1930,8 +1930,14 @@ fn literal_indexed_paths_precede_name_syntax_in_shared_queries() -> TestResult {
             String::from_utf8_lossy(&output.stderr)
         );
         let text = String::from_utf8(output.stdout)?;
+        let rendered_name = match name {
+            "control\t.rs" => "control\\t.rs",
+            "control\u{0001}.rs" => "control\\u0001.rs",
+            "newline\n.rs" => "newline\\n.rs",
+            _ => name,
+        };
         assert!(
-            text.starts_with(&format!("{name} ")),
+            text.starts_with(&format!("{rendered_name} ")),
             "show {name:?}: {text:?}"
         );
     }
@@ -2006,6 +2012,102 @@ fn literal_indexed_paths_precede_name_syntax_in_shared_queries() -> TestResult {
         assert!(
             json.contains(&format!("\"name\":\"{symbol}\"")),
             "path {from:?} to {to:?}: {json}"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn query_text_escapes_control_characters_in_paths_across_commands() -> TestResult {
+    let dir = TempDir::new("escaped-query-paths")?;
+    let root = dir.0.join("repo");
+    let name = "control\\name\trow\rreturn\nend.go";
+    dir.write(
+        &format!("repo/{name}"),
+        "package main\nfunc escaped_path_symbol() {}\nfunc main() {}\n",
+    )?;
+    let index = dir.0.join("index");
+    let indexed = run_in(&root, &index, &["index"])?;
+    assert_eq!(
+        indexed.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&indexed.stderr)
+    );
+
+    let escaped = "control\\\\name\\trow\\rreturn\\nend.go";
+    let cases: [(&str, &[&str], u32); 7] = [
+        ("find", &["find", "escaped_path_symbol"], 2),
+        ("ctx", &["ctx", "escaped_path_symbol"], 2),
+        ("show", &["show", "escaped_path_symbol"], 2),
+        (
+            "path",
+            &["path", "escaped_path_symbol", "escaped_path_symbol"],
+            2,
+        ),
+        ("impact", &["impact", "escaped_path_symbol"], 2),
+        ("audit", &["audit"], 2),
+        ("map", &["map"], 3),
+    ];
+    for (command, args, line) in cases {
+        let expected_text = match command {
+            "find" | "ctx" => format!("{escaped}\n  {line} func escaped_path_symbol()"),
+            "show" => format!("{escaped}:{line}-{line} fn escaped_path_symbol"),
+            "path" => format!(". escaped_path_symbol {escaped}:{line}"),
+            "impact" => format!("~ escaped_path_symbol {escaped}:{line}"),
+            "audit" => format!("escaped_path_symbol {escaped}:{line}"),
+            "map" => format!("main {escaped}:{line}"),
+            _ => return Err(format!("unexpected query command: {command}").into()),
+        };
+        let mut text_args = args.to_vec();
+        text_args.push("--read-only");
+        let output = run_in(&root, &index, &text_args)?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{command}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8(output.stdout)?;
+        assert!(
+            text.contains(&expected_text),
+            "{command}: expected {expected_text:?}, got {text:?}"
+        );
+        assert!(text.ends_with('\n'), "{command}: {text:?}");
+        assert!(!text.contains(name), "{command}: raw path in {text:?}");
+        assert!(
+            text.chars()
+                .filter(|&character| character != '\n')
+                .all(|character| !character.is_control()),
+            "{command}: control character in {text:?}"
+        );
+        let repeated = run_in(&root, &index, &text_args)?;
+        assert_eq!(text, String::from_utf8(repeated.stdout)?, "{command}");
+
+        let mut json_args = args.to_vec();
+        json_args.extend(["--json", "--read-only"]);
+        let output = run_in(&root, &index, &json_args)?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{command} --json: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let json = String::from_utf8(output.stdout)?;
+        assert_json_lines_parse(&json, &dir.0)?;
+        assert!(
+            json.contains(&format!("\"path\":{}", json_string(name))),
+            "{command} --json: {json:?}"
+        );
+        assert!(
+            json.contains(&format!("\"line\":{line}")),
+            "{command} --json: {json:?}"
+        );
+        assert!(json.ends_with('\n'), "{command} --json: {json:?}");
+        assert!(
+            !json.contains(name),
+            "{command} --json: raw path in {json:?}"
         );
     }
     Ok(())

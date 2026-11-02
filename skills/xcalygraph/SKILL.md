@@ -29,7 +29,7 @@ Local, deterministic index of the repository (symbols, calls, type uses, imports
 | `xcalygraph install`, `update [--check]`, `version` | install/repair binary and skill; version flags stamp/content mismatch; queries stay silent |
 | `xcalygraph help [COMMAND]` | full syntax of every command and flag |
 
-Use `exact symbol NAME` in `find`/`ctx` for exact lookup; a miss returns no match. `ctx` may add related context.
+Use `exact symbol NAME` in `find`/`ctx`; misses return no match; `ctx` may add related context.
 
 NAME: `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get`), `path:line`, `path::name`, a file path, or a unique bare name. A file-path match wins locator collisions, including through the existing `./` alias; xcalygraph checks the input spelling first, then its surrounding-whitespace-trimmed form before locator syntax.
 
@@ -37,7 +37,8 @@ Flags: `-p GLOB` (paths, gitignore syntax, repeatable), `-l go,rust` (languages)
 
 ## Reading the output
 
-- `<line> <signature>` lines are grouped under their file path.
+- `<line> <signature>` lines group under file paths.
+- Text escapes are reversible; decode paths and commands before reuse.
 - Map JSON adds counts, task runs, API sig/handlers, cycle/layer members and env path/line; audit separates name/path/line and adds drift kind/status.
 - Card markers: `m` member, `f` fields, `^` supertype, `v` implementation, `<` incoming (caller site), `>` outgoing (definition), `t` test, `t2` test through one caller, `e` env read, `!` notice.
 - `?` marks inferred name/dispatch edges and indirect test/impact paths; `--exact` drops them and dependent test commands.

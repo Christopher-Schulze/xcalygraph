@@ -1231,7 +1231,7 @@ fn render(
         if options.json {
             record.len()
         } else {
-            text.len() + 1
+            super::output::escaped_text_len(&text) + 1
         }
     };
     let wanted: usize = commands

@@ -69,8 +69,63 @@ fn commands(output: &Output) -> Result<Vec<String>, Box<dyn Error>> {
     Ok(text
         .lines()
         .filter_map(|line| line.strip_prefix("r "))
-        .map(str::to_owned)
-        .collect())
+        .map(decode_text_escapes)
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+fn decode_text_escapes(text: &str) -> io::Result<String> {
+    let mut output = String::with_capacity(text.len());
+    let mut characters = text.chars();
+    while let Some(character) = characters.next() {
+        if character != '\\' {
+            output.push(character);
+            continue;
+        }
+        let Some(escape) = characters.next() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "incomplete text escape",
+            ));
+        };
+        match escape {
+            '\\' => output.push('\\'),
+            'n' => output.push('\n'),
+            'r' => output.push('\r'),
+            't' => output.push('\t'),
+            'u' => {
+                let mut codepoint = 0u32;
+                for _ in 0..4 {
+                    let Some(digit) = characters.next().filter(char::is_ascii_hexdigit) else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "invalid text escape",
+                        ));
+                    };
+                    let Some(value) = digit.to_digit(16) else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "invalid text escape",
+                        ));
+                    };
+                    codepoint = codepoint * 16 + value;
+                }
+                let Some(control) = char::from_u32(codepoint) else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "invalid text escape codepoint",
+                    ));
+                };
+                output.push(control);
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unknown text escape",
+                ));
+            }
+        }
+    }
+    Ok(output)
 }
 
 fn execute(root: &Path, fixture: &Path, command: &str) -> io::Result<Output> {
