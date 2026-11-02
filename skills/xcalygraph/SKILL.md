@@ -36,11 +36,12 @@ Flags: `-p GLOB` (paths, gitignore syntax, repeatable), `-l go,rust` (languages)
 ## Reading the output
 
 - `<line> <signature>` lines are grouped under their file path.
+- Map JSON adds counts, task runs, API sig/handlers, cycle/layer members and env path/line; audit separates name/path/line and adds drift kind/status.
 - Card markers: `m` member, `f` fields, `^` supertype, `v` implementation, `<` incoming (caller site), `>` outgoing (definition), `t` test, `t2` test through one caller, `e` env read, `!` notice.
-- A trailing `?` marks inferred edges (name-based or dispatch) and whole indirect test/impact paths; `--exact` drops inferred paths and dependent test commands.
-- `impact` run lines keep Go module/package context, use Cargo manifest paths, or select Python pytest node IDs; shell arguments are quoted as needed. Unsupported test runners have `t` facts but no `r` command.
-- `impact --diff` cites REV paths and lines for removals; `moved?` cites both locations, `sig?` an inferred moved signature change, and `uncertain?` an ambiguous or unavailable identity. Inspect paths in incomplete-extraction notices, including outside filters.
-- `+N more`, `+N`, `+` or a JSON `{}` marks truncated output. Narrow with `-p`, `-k`, `-l` or raise `-b`.
+- `?` marks inferred name/dispatch edges and indirect test/impact paths; `--exact` drops them and dependent test commands.
+- `impact` run lines retain Go module/package, Cargo manifest and pytest node-ID context; args are quoted. Unsupported runners emit `t`, no `r`.
+- `impact --diff` cites REV path/line for removals, both locations for `moved?`, `sig?` for inferred signature changes and `uncertain?` for ambiguous/unavailable identities; inspect incomplete paths beyond filters too.
+- Truncation: `+N more`, `+N`, `+` or JSON `{}`; narrow with `-p`, `-k`, `-l` or raise `-b`.
 - A shared-index failure can use `.xcalygraph/` locally; the stderr notice asks to ignore it in git.
 
 ## Exit codes

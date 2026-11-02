@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use super::output::{Value, Writer, json_object};
+use super::output::{OutputFact, Value, Writer, json_object};
 use super::{Filter, Index};
 use crate::domain::facts::{EnvSource, FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST, SymKind};
 use crate::domain::graph::{EdgeKind, ModuleEdge};
@@ -15,8 +15,269 @@ const MODULE_DEPTH: usize = 3;
 
 struct Section {
     keyword: &'static str,
-    lines: Vec<(String, String)>,
+    lines: Vec<RenderedFact>,
     cut: usize,
+}
+
+struct RenderedFact {
+    text: String,
+    json: String,
+}
+
+impl RenderedFact {
+    fn from_fact(fact: &impl OutputFact) -> Self {
+        Self {
+            text: fact.text(),
+            json: fact.json_line(),
+        }
+    }
+}
+
+struct SymbolFact {
+    relation: &'static str,
+    name: String,
+    path: String,
+    line: u32,
+}
+
+enum MapFact {
+    Section(String),
+    Root {
+        name: String,
+        files: u64,
+        symbols: u64,
+        languages: Vec<String>,
+    },
+    Module {
+        name: String,
+        files: u32,
+        symbols: u32,
+        top: Vec<String>,
+    },
+    Symbol(SymbolFact),
+    Task {
+        symbol: SymbolFact,
+        runs: Vec<String>,
+    },
+    Api {
+        symbol: SymbolFact,
+        signature: Option<String>,
+        handlers: Vec<String>,
+    },
+    Cycle(Vec<String>),
+    Layer {
+        depth: u32,
+        members: Vec<String>,
+    },
+    External {
+        name: String,
+        uses: u32,
+    },
+    Env {
+        name: String,
+        reads: u32,
+        sources: Vec<String>,
+        first: Option<(String, u32)>,
+    },
+    More {
+        text: String,
+        count: u64,
+    },
+}
+
+impl OutputFact for MapFact {
+    fn text(&self) -> String {
+        match self {
+            Self::Section(name) => name.clone(),
+            Self::Root {
+                name,
+                files,
+                symbols,
+                languages,
+            } => format!(
+                "{name} {files} files {symbols} symbols {}",
+                languages.join(" ")
+            )
+            .trim_end()
+            .to_owned(),
+            Self::Module {
+                name,
+                files,
+                symbols,
+                top,
+            } => format!("{name} {files}f {symbols}s {}", top.join(" "))
+                .trim_end()
+                .to_owned(),
+            Self::Symbol(symbol) => symbol.text(),
+            Self::Task { symbol, runs } => {
+                let mut text = symbol.text();
+                if !runs.is_empty() {
+                    text.push_str(" > ");
+                    text.push_str(&runs.join(", "));
+                }
+                text
+            }
+            Self::Api {
+                symbol,
+                signature,
+                handlers,
+            } => {
+                let mut text = if let Some(signature) = signature {
+                    format!(
+                        "{} {signature} {}:{}",
+                        symbol.name, symbol.path, symbol.line
+                    )
+                } else {
+                    symbol.text()
+                };
+                if !handlers.is_empty() {
+                    text.push_str(" < ");
+                    text.push_str(&handlers.join(", "));
+                }
+                text
+            }
+            Self::Cycle(members) => members.join(" <-> "),
+            Self::Layer { depth, members } => format!("{depth} {}", members.join(" ")),
+            Self::External { name, uses } => format!("{name} {uses}"),
+            Self::Env {
+                name,
+                reads,
+                sources,
+                first,
+            } => env_text(name, *reads, sources, first.as_ref()),
+            Self::More { text, .. } => text.clone(),
+        }
+    }
+
+    fn json_line(&self) -> String {
+        let summary = match self {
+            Self::Root { languages, .. } => Some(languages.join(" ")),
+            Self::Module { top, .. } => Some(top.join(" ")),
+            Self::Cycle(members) => Some(members.join(" <-> ")),
+            Self::Layer { members, .. } => Some(members.join(" ")),
+            Self::Env { sources, .. } => Some(env_sources(sources)),
+            _ => None,
+        };
+        let mut fields = Vec::new();
+        match self {
+            Self::Section(name) => {
+                fields.extend([("t", Value::Str("sec")), ("name", Value::Str(name))])
+            }
+            Self::Root {
+                name,
+                files,
+                symbols,
+                ..
+            } => fields.extend([
+                ("t", Value::Str("root")),
+                ("name", Value::Str(name)),
+                ("n", Value::Int(*files)),
+                ("sig", Value::Str(summary.as_deref().unwrap_or_default())),
+                ("symbols", Value::Int(*symbols)),
+            ]),
+            Self::Module {
+                name,
+                files,
+                symbols,
+                ..
+            } => fields.extend([
+                ("t", Value::Str("mod")),
+                ("name", Value::Str(name)),
+                ("n", Value::Int(u64::from(*symbols))),
+                ("sig", Value::Str(summary.as_deref().unwrap_or_default())),
+                ("files", Value::Int(u64::from(*files))),
+            ]),
+            Self::Symbol(symbol) => symbol_fields(&mut fields, symbol),
+            Self::Task { symbol, runs } => {
+                symbol_fields(&mut fields, symbol);
+                if !runs.is_empty() {
+                    fields.push(("runs", Value::Strings(runs)));
+                }
+            }
+            Self::Api {
+                symbol,
+                signature,
+                handlers,
+            } => {
+                symbol_fields(&mut fields, symbol);
+                if let Some(signature) = signature {
+                    fields.push(("sig", Value::Str(signature)));
+                }
+                if !handlers.is_empty() {
+                    fields.push(("handlers", Value::Strings(handlers)));
+                }
+            }
+            Self::Cycle(members) => fields.extend([
+                ("t", Value::Str("cycle")),
+                ("name", Value::Str(summary.as_deref().unwrap_or_default())),
+                ("n", Value::Int(members.len() as u64)),
+                ("members", Value::Strings(members)),
+            ]),
+            Self::Layer { depth, members } => fields.extend([
+                ("t", Value::Str("layer")),
+                ("n", Value::Int(u64::from(*depth))),
+                ("name", Value::Str(summary.as_deref().unwrap_or_default())),
+                ("members", Value::Strings(members)),
+            ]),
+            Self::External { name, uses } => fields.extend([
+                ("t", Value::Str("ext")),
+                ("name", Value::Str(name)),
+                ("n", Value::Int(u64::from(*uses))),
+            ]),
+            Self::Env {
+                name, reads, first, ..
+            } => {
+                fields.extend([
+                    ("t", Value::Str("env")),
+                    ("name", Value::Str(name)),
+                    ("n", Value::Int(u64::from(*reads))),
+                    ("sig", Value::Str(summary.as_deref().unwrap_or_default())),
+                ]);
+                if let Some((path, line)) = first {
+                    fields.push(("path", Value::Str(path)));
+                    fields.push(("line", Value::Int(u64::from(*line))));
+                }
+            }
+            Self::More { count, .. } => {
+                fields.extend([("t", Value::Str("more")), ("n", Value::Int(*count))])
+            }
+        }
+        json_object(&fields)
+    }
+}
+
+impl SymbolFact {
+    fn text(&self) -> String {
+        if self.name == self.path {
+            self.path.clone()
+        } else {
+            format!("{} {}:{}", self.name, self.path, self.line)
+        }
+    }
+}
+
+fn symbol_fields<'a>(fields: &mut Vec<(&'static str, Value<'a>)>, symbol: &'a SymbolFact) {
+    fields.extend([
+        ("t", Value::Str("sym")),
+        ("rel", Value::Str(symbol.relation)),
+        ("name", Value::Str(&symbol.name)),
+        ("path", Value::Str(&symbol.path)),
+        ("line", Value::Int(u64::from(symbol.line))),
+    ]);
+}
+
+fn env_sources(sources: &[String]) -> String {
+    if sources.is_empty() {
+        "-".to_owned()
+    } else {
+        sources.join(",")
+    }
+}
+
+fn env_text(name: &str, reads: u32, sources: &[String], first: Option<&(String, u32)>) -> String {
+    let sources = env_sources(sources);
+    let first = first.map_or_else(String::new, |(path, line)| format!(" {path}:{line}"));
+    format!("{name} {reads}r {sources}{first}")
 }
 
 pub fn render(
@@ -30,7 +291,9 @@ pub fn render(
     let mut sections = vec![
         Section {
             keyword: "",
-            lines: vec![root_line(index, filter, root_name)],
+            lines: vec![RenderedFact::from_fact(&root_line(
+                index, filter, root_name,
+            ))],
             cut: 0,
         },
         section("modules", modules(index, filter), MODULE_LINES),
@@ -67,7 +330,13 @@ pub fn render(
                     + section
                         .lines
                         .iter()
-                        .map(|(text, record)| if json { record.len() } else { text.len() + 1 })
+                        .map(|fact| {
+                            if json {
+                                fact.json.len()
+                            } else {
+                                fact.text.len() + 1
+                            }
+                        })
                         .sum::<usize>()
             })
             .sum()
@@ -97,20 +366,10 @@ pub fn render(
     let mut cut = 0;
     for section in &sections {
         if !section.keyword.is_empty() {
-            writer.line(
-                section.keyword,
-                &[
-                    ("t", Value::Str("sec")),
-                    ("name", Value::Str(section.keyword)),
-                ],
-            );
+            writer.fact(&MapFact::Section(section.keyword.to_owned()));
         }
-        for (text, record) in &section.lines {
-            if json {
-                writer.raw(record);
-            } else {
-                writer.line(text, &[]);
-            }
+        for fact in &section.lines {
+            writer.rendered_fact(&fact.text, &fact.json);
         }
         cut += section.cut;
     }
@@ -118,17 +377,17 @@ pub fn render(
     writer.finish()
 }
 
-fn section(keyword: &'static str, mut lines: Vec<(String, String)>, cap: usize) -> Section {
+fn section(keyword: &'static str, mut lines: Vec<MapFact>, cap: usize) -> Section {
     let cut = lines.len().saturating_sub(cap);
     lines.truncate(cap);
     Section {
         keyword,
-        lines,
+        lines: lines.iter().map(RenderedFact::from_fact).collect(),
         cut,
     }
 }
 
-fn root_line(index: &Index, filter: &Filter, root_name: &str) -> (String, String) {
+fn root_line(index: &Index, filter: &Filter, root_name: &str) -> MapFact {
     let mut languages: BTreeMap<&str, u32> = BTreeMap::new();
     let mut files = 0;
     for file in index.derived.files() {
@@ -154,21 +413,16 @@ fn root_line(index: &Index, filter: &Filter, root_name: &str) -> (String, String
         .iter()
         .map(|(id, count)| format!("{id}:{count}"))
         .collect();
-    let text = format!(
-        "{root_name} {files} files {symbols} symbols {}",
-        languages.join(" ")
-    );
-    let record = json_object(&[
-        ("t", Value::Str("root")),
-        ("name", Value::Str(root_name)),
-        ("n", Value::Int(files)),
-        ("sig", Value::Str(&languages.join(" "))),
-    ]);
-    (text.trim_end().to_owned(), record)
+    MapFact::Root {
+        name: root_name.to_owned(),
+        files,
+        symbols: symbols as u64,
+        languages,
+    }
 }
 
 /// Module tree by path, depth max 3: deeper modules fold into their ancestor at depth 3.
-fn modules(index: &Index, filter: &Filter) -> Vec<(String, String)> {
+fn modules(index: &Index, filter: &Filter) -> Vec<MapFact> {
     struct Entry {
         files: u32,
         symbols: u32,
@@ -213,7 +467,7 @@ fn modules(index: &Index, filter: &Filter) -> Vec<(String, String)> {
     let hidden = largest.len().saturating_sub(MODULE_LINES);
     largest.truncate(MODULE_LINES);
     largest.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut lines: Vec<(String, String)> = largest
+    let mut lines: Vec<MapFact> = largest
         .into_iter()
         .map(|(name, mut entry)| {
             entry
@@ -225,55 +479,41 @@ fn modules(index: &Index, filter: &Filter) -> Vec<(String, String)> {
                 .take(3)
                 .map(|&(_, symbol)| index.string(index.derived.symbols()[symbol as usize].name))
                 .collect();
-            let text = format!(
-                "{name} {}f {}s {}",
-                entry.files,
-                entry.symbols,
-                top.join(" ")
-            );
-            let record = json_object(&[
-                ("t", Value::Str("mod")),
-                ("name", Value::Str(&name)),
-                ("n", Value::Int(u64::from(entry.symbols))),
-                ("sig", Value::Str(&top.join(" "))),
-            ]);
-            (text.trim_end().to_owned(), record)
+            MapFact::Module {
+                name,
+                files: entry.files,
+                symbols: entry.symbols,
+                top: top.into_iter().map(str::to_owned).collect(),
+            }
         })
         .collect();
     if hidden > 0 {
-        lines.push((
-            format!("+{hidden} smaller modules"),
-            json_object(&[("t", Value::Str("more")), ("n", Value::Int(hidden as u64))]),
-        ));
+        lines.push(MapFact::More {
+            text: format!("+{hidden} smaller modules"),
+            count: hidden as u64,
+        });
     }
     lines
 }
 
-fn symbol_line(index: &Index, node: u32, rel: &str) -> (String, String) {
+fn symbol_line(index: &Index, node: u32, rel: &'static str) -> SymbolFact {
     let label = index.label(node);
     let path = index.path_of(node);
     let line = index.line_of(node);
-    let text = if label == path {
-        path.to_owned()
-    } else {
-        format!("{label} {path}:{line}")
-    };
-    let record = json_object(&[
-        ("t", Value::Str("sym")),
-        ("rel", Value::Str(rel)),
-        ("name", Value::Str(&label)),
-        ("path", Value::Str(path)),
-        ("line", Value::Int(u64::from(line))),
-    ]);
-    (text, record)
+    SymbolFact {
+        relation: rel,
+        name: label.into_owned(),
+        path: path.to_owned(),
+        line,
+    }
 }
 
-fn entrypoints(index: &Index, filter: &Filter) -> Vec<(String, String)> {
-    let mut lines: Vec<(String, String)> = Vec::new();
+fn entrypoints(index: &Index, filter: &Filter) -> Vec<MapFact> {
+    let mut lines: Vec<MapFact> = Vec::new();
     for (id, symbol) in index.derived.symbols().iter().enumerate() {
         let task = matches!(symbol.kind(), SymKind::Task | SymKind::Svc);
         if symbol.flags & FLAG_ENTRY != 0 && !task && filter.symbol(index, symbol) {
-            lines.push(symbol_line(index, id as u32, "entry"));
+            lines.push(MapFact::Symbol(symbol_line(index, id as u32, "entry")));
         }
     }
     let symbols = index.derived.symbols();
@@ -284,11 +524,11 @@ fn entrypoints(index: &Index, filter: &Filter) -> Vec<(String, String)> {
             .get(first..first + file.symbol_count as usize)
             .is_some_and(|own| own.iter().any(|symbol| symbol.flags & FLAG_ENTRY != 0));
         if file.entry != 0 && !entry_symbol && filter.file(index, file) {
-            lines.push(symbol_line(
+            lines.push(MapFact::Symbol(symbol_line(
                 index,
                 index.symbol_count() + id as u32,
                 "entry",
-            ));
+            )));
         }
     }
     lines
@@ -296,8 +536,8 @@ fn entrypoints(index: &Index, filter: &Filter) -> Vec<(String, String)> {
 
 /// Makefile targets, package scripts, CI jobs and services with what they run:
 /// `<name> <path>:<line> > <target>, ...`; tasks running most first.
-fn tasks(index: &Index, filter: &Filter) -> Vec<(String, String)> {
-    let mut found: Vec<(usize, String, String)> = Vec::new();
+fn tasks(index: &Index, filter: &Filter) -> Vec<MapFact> {
+    let mut found: Vec<(usize, String, MapFact)> = Vec::new();
     for (id, symbol) in index.derived.symbols().iter().enumerate() {
         if !matches!(symbol.kind(), SymKind::Task | SymKind::Svc) || !filter.symbol(index, symbol) {
             continue;
@@ -308,28 +548,25 @@ fn tasks(index: &Index, filter: &Filter) -> Vec<(String, String)> {
             .outgoing(node)
             .iter()
             .filter(|edge| edge.kind() == EdgeKind::Runs)
-            .map(|edge| index.label(edge.node))
+            .map(|edge| index.label(edge.node).into_owned())
             .collect();
-        let (mut text, record) = symbol_line(index, node, "task");
-        if !runs.is_empty() {
-            text.push_str(" > ");
-            text.push_str(&runs.join(", "));
-        }
-        found.push((runs.len(), text, record));
+        let run_count = runs.len();
+        let fact = MapFact::Task {
+            symbol: symbol_line(index, node, "task"),
+            runs,
+        };
+        found.push((run_count, fact.text(), fact));
     }
     found.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-    found
-        .into_iter()
-        .map(|(_, text, record)| (text, record))
-        .collect()
+    found.into_iter().map(|(_, _, fact)| fact).collect()
 }
 
 /// API operations (OpenAPI `op`, Protobuf rpcs, GraphQL root fields) with their handlers:
 /// `<name> [METHOD /path] <path>:<line> < <handler>, ...`; implemented operations first.
-fn api(index: &Index, filter: &Filter) -> Vec<(String, String)> {
+fn api(index: &Index, filter: &Filter) -> Vec<MapFact> {
     use crate::domain::filetype::FileType;
     let symbols = index.derived.symbols();
-    let mut found: Vec<(bool, String, String)> = Vec::new();
+    let mut found: Vec<(bool, String, MapFact)> = Vec::new();
     for (id, symbol) in symbols.iter().enumerate() {
         let file_type = index.file_of(id as u32).file_type();
         let root_field = symbol.parent != u32::MAX
@@ -351,29 +588,25 @@ fn api(index: &Index, filter: &Filter) -> Vec<(String, String)> {
             .incoming(node)
             .iter()
             .filter(|edge| edge.kind() == EdgeKind::Implements)
-            .map(|edge| index.label(edge.node))
+            .map(|edge| index.label(edge.node).into_owned())
             .collect();
-        let (mut text, record) = symbol_line(index, node, "api");
-        if symbol.kind() == SymKind::Op {
-            let signature = index.string(symbol.signature);
-            if !signature.is_empty() && signature != index.string(symbol.name) {
-                text = text.replacen(' ', &format!(" {signature} "), 1);
-            }
-        }
-        if !handlers.is_empty() {
-            text.push_str(" < ");
-            text.push_str(&handlers.join(", "));
-        }
-        found.push((handlers.is_empty(), text, record));
+        let signature = (symbol.kind() == SymKind::Op)
+            .then(|| index.string(symbol.signature))
+            .filter(|signature| !signature.is_empty() && *signature != index.string(symbol.name))
+            .map(str::to_owned);
+        let has_no_handlers = handlers.is_empty();
+        let fact = MapFact::Api {
+            symbol: symbol_line(index, node, "api"),
+            signature,
+            handlers,
+        };
+        found.push((has_no_handlers, fact.text(), fact));
     }
-    found.sort();
-    found
-        .into_iter()
-        .map(|(_, text, record)| (text, record))
-        .collect()
+    found.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    found.into_iter().map(|(_, _, fact)| fact).collect()
 }
 
-fn hubs(index: &Index, filter: &Filter) -> Vec<(String, String)> {
+fn hubs(index: &Index, filter: &Filter) -> Vec<MapFact> {
     let mut ranked: Vec<(f32, u32)> = index
         .derived
         .symbols()
@@ -388,7 +621,7 @@ fn hubs(index: &Index, filter: &Filter) -> Vec<(String, String)> {
     ranked
         .into_iter()
         .take(SECTION_LINES)
-        .map(|(_, node)| symbol_line(index, node, "hub"))
+        .map(|(_, node)| MapFact::Symbol(symbol_line(index, node, "hub")))
         .collect()
 }
 
@@ -406,20 +639,12 @@ pub(super) fn included_modules(index: &Index, filter: &Filter) -> Vec<bool> {
     included
 }
 
-fn cycles(index: &Index, included: &[bool]) -> Vec<(String, String)> {
-    let mut lines: Vec<(String, String)> = cycle_groups(index, included)
+fn cycles(index: &Index, included: &[bool]) -> Vec<MapFact> {
+    let mut lines: Vec<MapFact> = cycle_groups(index, included)
         .into_iter()
-        .map(|members| {
-            let text = members.join(" <-> ");
-            let record = json_object(&[
-                ("t", Value::Str("cycle")),
-                ("name", Value::Str(&text)),
-                ("n", Value::Int(members.len() as u64)),
-            ]);
-            (text, record)
-        })
+        .map(|members| MapFact::Cycle(members.into_iter().map(str::to_owned).collect()))
         .collect();
-    lines.sort();
+    lines.sort_by_key(OutputFact::text);
     lines
 }
 
@@ -462,7 +687,7 @@ pub(super) fn cycle_groups<'a>(index: &'a Index, included: &[bool]) -> Vec<Vec<&
 }
 
 /// Modules per layer, top layer first; layer 0 has no dependencies inside the root.
-fn layers(index: &Index, included: &[bool]) -> Vec<(String, String)> {
+fn layers(index: &Index, included: &[bool]) -> Vec<MapFact> {
     let modules = index.derived.modules();
     let has_edges: Vec<bool> = {
         let mut flags = vec![false; modules.len()];
@@ -489,18 +714,15 @@ fn layers(index: &Index, included: &[bool]) -> Vec<(String, String)> {
         .rev()
         .map(|(layer, mut members)| {
             members.sort_unstable();
-            let text = format!("{layer} {}", members.join(" "));
-            let record = json_object(&[
-                ("t", Value::Str("layer")),
-                ("n", Value::Int(u64::from(layer))),
-                ("name", Value::Str(&members.join(" "))),
-            ]);
-            (text, record)
+            MapFact::Layer {
+                depth: layer,
+                members: members.into_iter().map(str::to_owned).collect(),
+            }
         })
         .collect()
 }
 
-fn externals(index: &Index, included: &[bool]) -> Vec<(String, String)> {
+fn externals(index: &Index, included: &[bool]) -> Vec<MapFact> {
     let mut uses: BTreeMap<&str, u32> = BTreeMap::new();
     for external in index.derived.externals() {
         if !included
@@ -518,18 +740,16 @@ fn externals(index: &Index, included: &[bool]) -> Vec<(String, String)> {
         .into_iter()
         .map(|(name, count)| {
             let name = name.trim_start_matches("ext:");
-            let record = json_object(&[
-                ("t", Value::Str("ext")),
-                ("name", Value::Str(name)),
-                ("n", Value::Int(u64::from(count))),
-            ]);
-            (format!("{name} {count}"), record)
+            MapFact::External {
+                name: name.to_owned(),
+                uses: count,
+            }
         })
         .collect()
 }
 
 /// Per variable: read count, definition sources and the first read location.
-fn envs(index: &Index, filter: &Filter) -> Vec<(String, String)> {
+fn envs(index: &Index, filter: &Filter) -> Vec<MapFact> {
     struct Usage<'a> {
         reads: u32,
         sources: Vec<&'static str>,
@@ -561,23 +781,11 @@ fn envs(index: &Index, filter: &Filter) -> Vec<(String, String)> {
     ordered.sort_by(|a, b| b.1.reads.cmp(&a.1.reads).then(a.0.cmp(b.0)));
     ordered
         .into_iter()
-        .map(|(name, usage)| {
-            let sources = if usage.sources.is_empty() {
-                "-".to_owned()
-            } else {
-                usage.sources.join(",")
-            };
-            let first = usage
-                .first
-                .map_or_else(String::new, |(path, line)| format!(" {path}:{line}"));
-            let text = format!("{name} {}r {sources}{first}", usage.reads);
-            let record = json_object(&[
-                ("t", Value::Str("env")),
-                ("name", Value::Str(name)),
-                ("n", Value::Int(u64::from(usage.reads))),
-                ("sig", Value::Str(&sources)),
-            ]);
-            (text, record)
+        .map(|(name, usage)| MapFact::Env {
+            name: name.to_owned(),
+            reads: usage.reads,
+            sources: usage.sources.into_iter().map(str::to_owned).collect(),
+            first: usage.first.map(|(path, line)| (path.to_owned(), line)),
         })
         .collect()
 }

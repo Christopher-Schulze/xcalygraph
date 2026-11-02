@@ -122,6 +122,7 @@ Resolution order for all of them is `docs/spec.md` section 6: lexical scope, imp
 - `impact --diff` matches definitions by file, package, kind, lexical parents and receiver before considering evidence-backed cross-file moves; duplicate names in unrelated files do not by themselves hide a removal.
 - Budget: stdout never exceeds `3 x -b` bytes, including truncation, ambiguity candidate lists (at most 600 tokens) and `impact` run commands (reserved before notices and changes, package-level form when the precise one does not fit). Truncation ends with `+<n> more` or JSON `{"t":"more","n":<n>}`; if that cannot fit, text uses `+<n>` or `+`, JSON uses `{"t":"more"}` or `{}`. An empty JSON object always means truncation. Grouping never lets a lower-ranked hit displace a higher-ranked one: the best hits that fit are chosen first, then grouped.
 - `--json` writes JSON Lines with the fields of `docs/spec.md` section 8; empty fields are omitted.
+- Map JSON keeps file/symbol counts, task targets, API signatures and handlers, cycle/layer members, and environment read locations in typed fields. Audit JSON keeps finding names, source paths and lines separate; drift records also expose direction and status.
 
 ## Architecture
 

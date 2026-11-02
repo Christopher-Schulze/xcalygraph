@@ -4,7 +4,7 @@ mod support;
 
 use std::error::Error;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
@@ -227,6 +227,30 @@ fn run_in(root: &Path, index: &Path, args: &[&str]) -> io::Result<Output> {
         .arg(index)
         .env("HOME", index)
         .output()
+}
+
+fn assert_json_lines_parse(text: &str, fixture: &Path) -> TestResult {
+    let mut parser = support::command("python3", fixture)
+        .args([
+            "-c",
+            "import json,sys; [json.loads(line) for line in sys.stdin]",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let Some(mut input) = parser.stdin.take() else {
+        return Err(io::Error::other("JSON parser stdin was not piped").into());
+    };
+    input.write_all(text.as_bytes())?;
+    drop(input);
+    let output = parser.wait_with_output()?;
+    assert!(
+        output.status.success(),
+        "invalid JSON Lines: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
 }
 
 #[test]
@@ -1981,6 +2005,14 @@ fn filtered_cycles_are_recomputed_for_map_and_audit() -> TestResult {
             "repo/e/e.go",
             "package e\n\nimport \"example.com/app/d\"\n\nfunc E() { d.D() }\n",
         ),
+        (
+            "repo/f/f.go",
+            "package f\n\nimport \"example.com/app/a\"\n\nfunc F() { a.A() }\n",
+        ),
+        (
+            "repo/g/g.go",
+            "package g\n\nimport \"example.com/app/f\"\n\nfunc G() { f.F() }\n",
+        ),
     ] {
         dir.write(path, source)?;
     }
@@ -1999,6 +2031,27 @@ fn filtered_cycles_are_recomputed_for_map_and_audit() -> TestResult {
             let complete = String::from_utf8(complete.stdout)?;
             assert!(complete.contains("a <-> b <-> c"), "{command}: {complete}");
             assert!(complete.contains("d <-> e"), "{command}: {complete}");
+            if json && command == "map" {
+                assert!(
+                    complete.contains("\"t\":\"cycle\",\"name\":\"a <-> b <-> c\",\"n\":3,\"members\":[\"a\",\"b\",\"c\"]"),
+                    "{complete}"
+                );
+                assert!(
+                    complete.lines().any(|line| {
+                        line.contains("\"t\":\"layer\"")
+                            && line.contains("\"members\":[")
+                            && line.contains("\"g\"")
+                    }),
+                    "{complete}"
+                );
+            }
+            if json && command == "audit" {
+                assert!(
+                    complete.contains("\"rel\":\"cycles\"")
+                        && complete.contains("\"members\":[\"a\",\"b\",\"c\"]"),
+                    "{complete}"
+                );
+            }
 
             let filtered = run_in(&root, &index, &filtered)?;
             assert_eq!(filtered.status.code(), Some(0), "{command}: filtered graph");
@@ -2099,7 +2152,15 @@ fn show_and_audit_results_obey_shared_filters() -> TestResult {
         assert!(audit_path.contains("A_MISSING"), "{audit_path}");
         assert!(!audit_path.contains("B_MISSING"), "{audit_path}");
         assert!(!audit_path.contains("cycles"), "{audit_path}");
-        assert!(audit_path.contains("defined UNUSED_FLAG"), "{audit_path}");
+        if json {
+            assert!(
+                audit_path.contains("\"name\":\"UNUSED_FLAG\"")
+                    && audit_path.contains("\"kind\":\"defined\",\"status\":\"unread\""),
+                "{audit_path}"
+            );
+        } else {
+            assert!(audit_path.contains("defined UNUSED_FLAG"), "{audit_path}");
+        }
 
         let audit_language = run_in(&root, &index, &audit_language)?;
         let audit_language = String::from_utf8(audit_language.stdout)?;
@@ -2664,13 +2725,28 @@ fn git_history_handles_special_paths_from_a_subdirectory() -> TestResult {
         String::from_utf8_lossy(&output.stderr)
     );
     let text = String::from_utf8(output.stdout)?;
-    assert!(text.contains("tab\\t.go 4 commits"), "{text}");
-    assert!(text.contains("üñ\\n.go 4 commits"), "{text}");
-    assert!(text.contains("tab\\t.go üñ\\n.go 4"), "{text}");
+    assert_json_lines_parse(&text, &dir.0)?;
+    assert!(
+        text.contains("\"path\":\"tab\\t.go\",\"commits\":4"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\"path\":\"üñ\\n.go\",\"commits\":4"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\"path\":\"tab\\t.go\",\"other_path\":\"üñ\\n.go\",\"n\":4"),
+        "{text}"
+    );
     assert!(!text.contains("root.go"), "{text}");
     let top = run_in(&repo, &dir.0.join("top-index"), &["audit", "--json"])?;
     assert_eq!(top.status.code(), Some(0));
-    assert!(String::from_utf8(top.stdout)?.contains("\\nroot.go 4 commits"));
+    let top = String::from_utf8(top.stdout)?;
+    assert_json_lines_parse(&top, &dir.0)?;
+    assert!(
+        top.contains("\"path\":\"\\nroot.go\",\"commits\":4"),
+        "{top}"
+    );
     Ok(())
 }
 
@@ -3570,6 +3646,175 @@ fn env_definitions_feed_map_env_and_audit_drift_without_values() -> TestResult {
     assert!(found.starts_with("docker-compose.yml"), "{found}");
     for output in [&map, &audit, &found] {
         assert!(!output.contains("secret-value"), "{output}");
+    }
+    Ok(())
+}
+
+#[test]
+fn map_and_audit_json_preserve_typed_facts_and_provenance() -> TestResult {
+    let dir = TempDir::new("json-facts")?;
+    let root = dir.0.join("repo-ü");
+    let index = dir.0.join("index");
+    dir.write("repo-ü/.env.example", "UNUSED_FLAG=1\n")?;
+    dir.write("repo-ü/go.mod", "module example.com/app\n\ngo 1.23\n")?;
+    dir.write(
+        "repo-ü/Makefile",
+        "build: gen\n\tgo build ./...\n\nrun: build\n\tgo run ./cmd/server\n",
+    )?;
+    dir.write(
+        "repo-ü/api/openapi.yaml",
+        "openapi: 3.0.0\npaths:\n  /users/{id}:\n    get:\n      operationId: getUser\n",
+    )?;
+    dir.write(
+        "repo-ü/src/ü.go",
+        "package server\n\nimport \"os\"\n\nfunc GetUser(id string) string { return id }\nfunc ReadConfig() string { return os.Getenv(\"MISSING_TOKEN\") }\n",
+    )?;
+    dir.write(
+        "repo-ü/tests/ü_test.go",
+        "package server\n\nimport (\"os\"; \"testing\")\n\nfunc TestReadConfig(t *testing.T) { _ = os.Getenv(\"TEST_TOKEN\") }\n",
+    )?;
+    dir.write(
+        "repo-ü/docs/guide.md",
+        "# Guide\n\nSee [missing](docs/missing.md).\n",
+    )?;
+
+    let map_text = run_in(&root, &index, &["map"])?;
+    assert_eq!(map_text.status.code(), Some(0));
+    let map_text = String::from_utf8(map_text.stdout)?;
+    assert!(
+        map_text.starts_with("repo-ü 7 files 7 symbols go:2\n"),
+        "{map_text}"
+    );
+    assert!(map_text.contains("src 1f 2s"), "{map_text}");
+    assert!(map_text.contains("run Makefile:4 > build"), "{map_text}");
+    assert!(
+        map_text.contains("api.getUser GET /users/{id} api/openapi.yaml:4 < src.GetUser"),
+        "{map_text}"
+    );
+    assert!(
+        map_text.contains("MISSING_TOKEN 1r - src/ü.go:6"),
+        "{map_text}"
+    );
+
+    let map_json = run_in(&root, &index, &["map", "--json"])?;
+    assert_eq!(map_json.status.code(), Some(0));
+    let map_json = String::from_utf8(map_json.stdout)?;
+    assert_json_lines_parse(&map_json, &dir.0)?;
+    assert!(
+        map_json.lines().any(|line| {
+            line.starts_with("{\"t\":\"root\"")
+                && line.contains("\"n\":7")
+                && line.contains("\"symbols\":7")
+                && line.contains("repo-ü")
+        }),
+        "{map_json}"
+    );
+    assert!(
+        map_json.lines().any(|line| {
+            line.starts_with("{\"t\":\"mod\"")
+                && line.contains("\"name\":\"src\"")
+                && line.contains("\"files\":1")
+        }),
+        "{map_json}"
+    );
+    assert!(map_json.contains("\"runs\":[\"build\"]"), "{map_json}");
+    assert!(
+        map_json.contains("\"sig\":\"GET /users/{id}\",\"handlers\":[\"src.GetUser\"]"),
+        "{map_json}"
+    );
+    assert!(
+        map_json.contains(
+            "\"name\":\"MISSING_TOKEN\",\"n\":1,\"sig\":\"-\",\"path\":\"src/ü.go\",\"line\":6"
+        ),
+        "{map_json}"
+    );
+    assert_eq!(
+        map_json,
+        String::from_utf8(run_in(&root, &index, &["map", "--json"])?.stdout)?
+    );
+
+    let audit_text = run_in(&root, &index, &["audit"])?;
+    assert_eq!(audit_text.status.code(), Some(0));
+    let audit_text = String::from_utf8(audit_text.stdout)?;
+    assert!(
+        audit_text.contains("src.ReadConfig src/ü.go:6"),
+        "{audit_text}"
+    );
+    assert!(
+        audit_text.contains("docs/missing.md docs/guide.md:3"),
+        "{audit_text}"
+    );
+    assert!(
+        audit_text.contains("read MISSING_TOKEN src/ü.go:6 undefined"),
+        "{audit_text}"
+    );
+
+    let audit_json = run_in(&root, &index, &["audit", "--json"])?;
+    assert_eq!(audit_json.status.code(), Some(0));
+    let audit_json = String::from_utf8(audit_json.stdout)?;
+    assert_json_lines_parse(&audit_json, &dir.0)?;
+    for record in [
+        "\"rel\":\"unused\",\"name\":\"src.ReadConfig\",\"path\":\"src/ü.go\",\"line\":6",
+        "\"rel\":\"stale\",\"name\":\"docs/missing.md\",\"path\":\"docs/guide.md\",\"line\":3",
+        "\"rel\":\"drift\",\"name\":\"MISSING_TOKEN\",\"path\":\"src/ü.go\",\"line\":6,\"kind\":\"read\",\"status\":\"undefined\"",
+        "\"rel\":\"drift\",\"name\":\"UNUSED_FLAG\",\"path\":\".env.example\",\"line\":1,\"kind\":\"defined\",\"status\":\"unread\"",
+        "\"rel\":\"drift\",\"name\":\"TEST_TOKEN\",\"path\":\"tests/ü_test.go\",\"line\":5,\"kind\":\"read\",\"status\":\"undefined\"",
+    ] {
+        assert!(
+            audit_json.contains(record),
+            "missing {record}\n{audit_json}"
+        );
+    }
+    assert_eq!(
+        audit_json,
+        String::from_utf8(run_in(&root, &index, &["audit", "--json"])?.stdout)?
+    );
+
+    let filtered_map = run_in(&root, &index, &["map", "-p", "src/", "--json"])?;
+    let filtered_map = String::from_utf8(filtered_map.stdout)?;
+    assert_json_lines_parse(&filtered_map, &dir.0)?;
+    assert!(filtered_map.contains("\"n\":1"), "{filtered_map}");
+    assert!(filtered_map.contains("\"symbols\":2"), "{filtered_map}");
+    assert!(
+        filtered_map.contains("\"path\":\"src/ü.go\""),
+        "{filtered_map}"
+    );
+    assert!(!filtered_map.contains("UNUSED_FLAG"), "{filtered_map}");
+
+    let filtered_audit = run_in(&root, &index, &["audit", "-p", "src/", "--json"])?;
+    let filtered_audit = String::from_utf8(filtered_audit.stdout)?;
+    assert_json_lines_parse(&filtered_audit, &dir.0)?;
+    assert!(
+        filtered_audit.contains("\"path\":\"src/ü.go\""),
+        "{filtered_audit}"
+    );
+    assert!(
+        !filtered_audit.contains("docs/guide.md"),
+        "{filtered_audit}"
+    );
+    assert!(!filtered_audit.contains("UNUSED_FLAG"), "{filtered_audit}");
+
+    let no_tests = run_in(&root, &index, &["audit", "--no-tests", "--json"])?;
+    let no_tests = String::from_utf8(no_tests.stdout)?;
+    assert_json_lines_parse(&no_tests, &dir.0)?;
+    assert!(!no_tests.contains("TEST_TOKEN"), "{no_tests}");
+
+    for command in ["map", "audit"] {
+        for json in [false, true] {
+            for budget in [1, 10, 100] {
+                let budget = budget.to_string();
+                let mut args = vec![command, "-b", &budget];
+                if json {
+                    args.push("--json");
+                }
+                let output = run_in(&root, &index, &args)?;
+                let output = String::from_utf8(output.stdout)?;
+                assert!(output.len() <= budget.parse::<usize>()? * 3, "{output}");
+                if json {
+                    assert_json_lines_parse(&output, &dir.0)?;
+                }
+            }
+        }
     }
     Ok(())
 }

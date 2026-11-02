@@ -20,6 +20,13 @@ pub enum Value<'a> {
     Str(&'a str),
     Int(u64),
     Float(f32),
+    Strings(&'a [String]),
+}
+
+/// A semantic query fact with text and JSON Lines views derived from the same fields.
+pub(super) trait OutputFact {
+    fn text(&self) -> String;
+    fn json_line(&self) -> String;
 }
 
 pub struct Writer {
@@ -131,13 +138,14 @@ impl Writer {
     }
 
     /// A pre-rendered JSON Lines record.
-    pub fn raw(&mut self, record: &str) {
+    pub fn raw(&mut self, record: &str) -> bool {
         if self.full || record.len() > self.remaining() {
             self.full = true;
             self.cut = self.cut.saturating_add(1);
-            return;
+            return false;
         }
         self.out.push_str(record);
+        true
     }
 
     /// A line that is not grouped under a file (section keywords, notices).
@@ -147,6 +155,22 @@ impl Writer {
             self.current_file = None;
         }
         written
+    }
+
+    pub(super) fn fact(&mut self, fact: &impl OutputFact) -> bool {
+        if self.json {
+            self.raw(&fact.json_line())
+        } else {
+            self.line(&fact.text(), &[])
+        }
+    }
+
+    pub(super) fn rendered_fact(&mut self, text: &str, json: &str) -> bool {
+        if self.json {
+            self.raw(json)
+        } else {
+            self.line(text, &[])
+        }
     }
 
     pub fn finish(mut self) -> String {
@@ -188,6 +212,17 @@ pub fn json_object(fields: &[(&str, Value)]) -> String {
             Value::Str(text) => json_string(text),
             Value::Int(number) => number.to_string(),
             Value::Float(number) => format!("{:.3}", number),
+            Value::Strings(values) => {
+                let mut rendered = String::from("[");
+                for (position, value) in values.iter().enumerate() {
+                    if position > 0 {
+                        rendered.push(',');
+                    }
+                    rendered.push_str(&json_string(value));
+                }
+                rendered.push(']');
+                rendered
+            }
         };
         if !first {
             out.push(',');
@@ -329,6 +364,11 @@ mod tests {
         assert_eq!(
             line,
             "{\"t\":\"sym\",\"sig\":\"f(\\\"x\\\")\\n\",\"line\":3,\"score\":1.500}\n"
+        );
+        let values = vec!["run \"all\"".to_owned(), "line\nnext".to_owned()];
+        assert_eq!(
+            json_object(&[("runs", Value::Strings(&values))]),
+            "{\"runs\":[\"run \\\"all\\\"\",\"line\\nnext\"]}\n"
         );
         let mut writer = Writer::new(true, 13);
         writer.item(Some("a"), "", &[("t", Value::Str("sym"))]);

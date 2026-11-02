@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use super::output::{Value, Writer};
+use super::output::{OutputFact, Value, Writer, json_object};
 use super::{Filter, Index, Node};
 use crate::domain::facts::{
     EnvSource, FLAG_DECLARATION, FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST, SymKind,
@@ -14,6 +14,190 @@ use crate::domain::role::Role;
 
 const SECTION_LINES: usize = 15;
 const HOTSPOTS: usize = 10;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DriftKind {
+    Read,
+    Defined,
+}
+
+enum AuditFact {
+    Section(String),
+    Symbol {
+        section: &'static str,
+        name: String,
+        path: String,
+        line: u32,
+    },
+    Cycle(Vec<String>),
+    Stale {
+        reference: String,
+        path: String,
+        line: u32,
+    },
+    Drift {
+        name: String,
+        path: String,
+        line: u32,
+        kind: DriftKind,
+    },
+    Asset(String),
+    Coupling {
+        left: String,
+        right: String,
+        shared: u32,
+    },
+    Hotspot {
+        path: String,
+        commits: u32,
+    },
+    More {
+        section: String,
+        count: usize,
+    },
+    Notice(&'static str),
+}
+
+impl OutputFact for AuditFact {
+    fn text(&self) -> String {
+        match self {
+            Self::Section(name) => name.clone(),
+            Self::Symbol {
+                name, path, line, ..
+            } => format!("{name} {path}:{line}"),
+            Self::Cycle(members) => members.join(" <-> "),
+            Self::Stale {
+                reference,
+                path,
+                line,
+            } => format!("{reference} {path}:{line}"),
+            Self::Drift {
+                name,
+                path,
+                line,
+                kind,
+            } => match kind {
+                DriftKind::Read => format!("read {name} {path}:{line} undefined"),
+                DriftKind::Defined => format!("defined {name} {path}:{line} unread"),
+            },
+            Self::Asset(path) => path.clone(),
+            Self::Coupling {
+                left,
+                right,
+                shared,
+            } => format!("{left} {right} {shared}"),
+            Self::Hotspot { path, commits } => format!("{path} {commits} commits"),
+            Self::More { count, .. } => format!("+{count} more"),
+            Self::Notice(name) => format!("! {name}"),
+        }
+    }
+
+    fn json_line(&self) -> String {
+        let cycle_name = match self {
+            Self::Cycle(members) => Some(members.join(" <-> ")),
+            _ => None,
+        };
+        let mut fields = Vec::new();
+        match self {
+            Self::Section(name) => {
+                fields.extend([("t", Value::Str("sec")), ("name", Value::Str(name))])
+            }
+            Self::Symbol {
+                section,
+                name,
+                path,
+                line,
+            } => fields.extend([
+                ("t", Value::Str("note")),
+                ("rel", Value::Str(section)),
+                ("name", Value::Str(name)),
+                ("path", Value::Str(path)),
+                ("line", Value::Int(u64::from(*line))),
+            ]),
+            Self::Cycle(members) => {
+                fields.extend([
+                    ("t", Value::Str("note")),
+                    ("rel", Value::Str("cycles")),
+                    (
+                        "name",
+                        Value::Str(cycle_name.as_deref().unwrap_or_default()),
+                    ),
+                    ("n", Value::Int(members.len() as u64)),
+                    ("members", Value::Strings(members)),
+                ]);
+            }
+            Self::Stale {
+                reference,
+                path,
+                line,
+            } => fields.extend([
+                ("t", Value::Str("note")),
+                ("rel", Value::Str("stale")),
+                ("name", Value::Str(reference)),
+                ("path", Value::Str(path)),
+                ("line", Value::Int(u64::from(*line))),
+            ]),
+            Self::Drift {
+                name,
+                path,
+                line,
+                kind,
+            } => fields.extend([
+                ("t", Value::Str("note")),
+                ("rel", Value::Str("drift")),
+                ("name", Value::Str(name)),
+                ("path", Value::Str(path)),
+                ("line", Value::Int(u64::from(*line))),
+                (
+                    "kind",
+                    Value::Str(match kind {
+                        DriftKind::Read => "read",
+                        DriftKind::Defined => "defined",
+                    }),
+                ),
+                (
+                    "status",
+                    Value::Str(match kind {
+                        DriftKind::Read => "undefined",
+                        DriftKind::Defined => "unread",
+                    }),
+                ),
+            ]),
+            Self::Asset(path) => fields.extend([
+                ("t", Value::Str("note")),
+                ("rel", Value::Str("assets")),
+                ("name", Value::Str(path)),
+                ("path", Value::Str(path)),
+            ]),
+            Self::Coupling {
+                left,
+                right,
+                shared,
+            } => fields.extend([
+                ("t", Value::Str("note")),
+                ("rel", Value::Str("coupling")),
+                ("path", Value::Str(left)),
+                ("other_path", Value::Str(right)),
+                ("n", Value::Int(u64::from(*shared))),
+            ]),
+            Self::Hotspot { path, commits } => fields.extend([
+                ("t", Value::Str("note")),
+                ("rel", Value::Str("hotspots")),
+                ("path", Value::Str(path)),
+                ("commits", Value::Int(u64::from(*commits))),
+            ]),
+            Self::More { section, count } => fields.extend([
+                ("t", Value::Str("more")),
+                ("name", Value::Str(section)),
+                ("n", Value::Int(*count as u64)),
+            ]),
+            Self::Notice(name) => {
+                fields.extend([("t", Value::Str("note")), ("name", Value::Str(name))])
+            }
+        }
+        json_object(&fields)
+    }
+}
 
 /// Names that frameworks, runtimes or the language call implicitly (Java serialization hooks).
 fn implicit(name: &str) -> bool {
@@ -70,14 +254,16 @@ pub fn render(
     section(
         &mut writer,
         "dead",
-        dead.iter().map(|&node| symbol_line(index, node)).collect(),
+        dead.iter()
+            .map(|&node| symbol_fact(index, node, "dead"))
+            .collect(),
     );
     section(
         &mut writer,
         "unused",
         unused
             .iter()
-            .map(|&node| symbol_line(index, node))
+            .map(|&node| symbol_fact(index, node, "unused"))
             .collect(),
     );
     section(&mut writer, "cycles", cycles(index, filter));
@@ -90,56 +276,36 @@ pub fn render(
             section(&mut writer, "hotspots", hotspots(index, filter, history));
         }
         None => {
-            writer.line(
-                "! git unavailable",
-                &[
-                    ("t", Value::Str("note")),
-                    ("name", Value::Str("git unavailable")),
-                ],
-            );
+            writer.fact(&AuditFact::Notice("git unavailable"));
         }
     }
     writer.finish()
 }
 
-fn section(writer: &mut Writer, keyword: &str, lines: Vec<String>) {
+fn section(writer: &mut Writer, keyword: &str, lines: Vec<AuditFact>) {
     if lines.is_empty() {
         return;
     }
-    writer.line(
-        keyword,
-        &[("t", Value::Str("sec")), ("name", Value::Str(keyword))],
-    );
-    for (shown, line) in lines.iter().enumerate() {
+    writer.fact(&AuditFact::Section(keyword.to_owned()));
+    for (shown, fact) in lines.iter().enumerate() {
         if shown >= SECTION_LINES {
-            writer.line(
-                &format!("+{} more", lines.len() - shown),
-                &[
-                    ("t", Value::Str("more")),
-                    ("name", Value::Str(keyword)),
-                    ("n", Value::Int((lines.len() - shown) as u64)),
-                ],
-            );
+            writer.fact(&AuditFact::More {
+                section: keyword.to_owned(),
+                count: lines.len() - shown,
+            });
             break;
         }
-        writer.line(
-            line,
-            &[
-                ("t", Value::Str("note")),
-                ("rel", Value::Str(keyword)),
-                ("name", Value::Str(line)),
-            ],
-        );
+        writer.fact(fact);
     }
 }
 
-fn symbol_line(index: &Index, node: u32) -> String {
-    format!(
-        "{} {}:{}",
-        index.label(node),
-        index.path_of(node),
-        index.line_of(node)
-    )
+fn symbol_fact(index: &Index, node: u32, section: &'static str) -> AuditFact {
+    AuditFact::Symbol {
+        section,
+        name: index.label(node).into_owned(),
+        path: index.path_of(node).to_owned(),
+        line: index.line_of(node),
+    }
 }
 
 /// Owning type of each member symbol (methods declared outside their type included).
@@ -291,17 +457,17 @@ fn implements_supertype(index: &Index, node: u32, owners: &HashMap<u32, u32>) ->
         })
 }
 
-fn cycles(index: &Index, filter: &Filter) -> Vec<String> {
+fn cycles(index: &Index, filter: &Filter) -> Vec<AuditFact> {
     let included = super::map::included_modules(index, filter);
-    let mut lines: Vec<String> = super::map::cycle_groups(index, &included)
+    let mut lines: Vec<AuditFact> = super::map::cycle_groups(index, &included)
         .into_iter()
-        .map(|members| members.join(" <-> "))
+        .map(|members| AuditFact::Cycle(members.into_iter().map(str::to_owned).collect()))
         .collect();
-    lines.sort();
+    lines.sort_by_key(OutputFact::text);
     lines
 }
 
-fn stale(index: &Index, filter: &Filter, root: &std::path::Path) -> Vec<String> {
+fn stale(index: &Index, filter: &Filter, root: &std::path::Path) -> Vec<AuditFact> {
     let mut lines: Vec<(String, u32, String)> = index
         .derived
         .stale()
@@ -335,12 +501,16 @@ fn stale(index: &Index, filter: &Filter, root: &std::path::Path) -> Vec<String> 
     lines.dedup();
     lines
         .into_iter()
-        .map(|(path, line, text)| format!("{text} {path}:{line}"))
+        .map(|(path, line, reference)| AuditFact::Stale {
+            reference,
+            path,
+            line,
+        })
         .collect()
 }
 
 /// Asset files that no code, document, template or config references or imports.
-fn unreferenced_assets(index: &Index, filter: &Filter) -> Vec<String> {
+fn unreferenced_assets(index: &Index, filter: &Filter) -> Vec<AuditFact> {
     let symbols = index.symbol_count();
     index
         .derived
@@ -360,13 +530,13 @@ fn unreferenced_assets(index: &Index, filter: &Filter) -> Vec<String> {
                     )
                 })
         })
-        .map(|(_, file)| index.string(file.path).to_owned())
+        .map(|(_, file)| AuditFact::Asset(index.string(file.path).to_owned()))
         .collect()
 }
 
 /// Variables read without a definition site and defined without a read site; only when the
 /// root defines any environment variable (otherwise every read would be listed).
-fn drift(index: &Index, filter: &Filter, root: &std::path::Path) -> Vec<String> {
+fn drift(index: &Index, filter: &Filter, root: &std::path::Path) -> Vec<AuditFact> {
     let envs = index.derived.envs();
     let defined: BTreeSet<&str> = envs
         .iter()
@@ -388,11 +558,12 @@ fn drift(index: &Index, filter: &Filter, root: &std::path::Path) -> Vec<String> 
     {
         let name = index.string(env.name);
         if !defined.contains(name) {
-            lines.push(format!(
-                "read {name} {}:{} undefined",
-                index.path_of(env.node),
-                env.line
-            ));
+            lines.push(AuditFact::Drift {
+                name: name.to_owned(),
+                path: index.path_of(env.node).to_owned(),
+                line: env.line,
+                kind: DriftKind::Read,
+            });
         }
     }
     // Unread definitions count only for runtime configuration: CI and Dockerfile variables are
@@ -421,18 +592,25 @@ fn drift(index: &Index, filter: &Filter, root: &std::path::Path) -> Vec<String> 
     {
         let name = index.string(env.name);
         if unread.contains(name) && !wrapped.contains(name) {
-            lines.push(format!(
-                "defined {name} {}:{} unread",
-                index.path_of(env.node),
-                env.line
-            ));
+            lines.push(AuditFact::Drift {
+                name: name.to_owned(),
+                path: index.path_of(env.node).to_owned(),
+                line: env.line,
+                kind: DriftKind::Defined,
+            });
         }
     }
-    lines.sort();
-    lines.dedup_by(|a, b| {
-        a.split_whitespace()
-            .take(2)
-            .eq(b.split_whitespace().take(2))
+    lines.sort_by_key(OutputFact::text);
+    let mut seen = BTreeSet::new();
+    lines.retain(|fact| match fact {
+        AuditFact::Drift { name, kind, .. } => {
+            let kind = match kind {
+                DriftKind::Read => "read",
+                DriftKind::Defined => "defined",
+            };
+            seen.insert((kind, name.clone()))
+        }
+        _ => true,
     });
     lines
 }
@@ -473,7 +651,7 @@ fn quoted_in_code<'a>(
 }
 
 /// Co-change pairs with at least one source file and without any static edge between the two.
-fn coupling(index: &Index, filter: &Filter, history: &History) -> Vec<String> {
+fn coupling(index: &Index, filter: &Filter, history: &History) -> Vec<AuditFact> {
     let files = index.derived.files();
     let file_index: HashMap<&str, u32> = files
         .iter()
@@ -490,7 +668,7 @@ fn coupling(index: &Index, filter: &Filter, history: &History) -> Vec<String> {
             }
         }
     }
-    let mut pairs: Vec<(u32, String)> = history
+    let mut pairs: Vec<(u32, String, AuditFact)> = history
         .co_change
         .iter()
         .filter_map(|(left, right, count)| {
@@ -511,23 +689,29 @@ fn coupling(index: &Index, filter: &Filter, history: &History) -> Vec<String> {
                 && (source(a) || source(b))
                 && filter.file(index, &files[a as usize])
                 && filter.file(index, &files[b as usize]);
-            (wanted && !linked.contains(&(a.min(b), a.max(b))))
-                .then(|| (*count, format!("{left} {right} {count}")))
+            (wanted && !linked.contains(&(a.min(b), a.max(b)))).then(|| {
+                let fact = AuditFact::Coupling {
+                    left: left.clone(),
+                    right: right.clone(),
+                    shared: *count,
+                };
+                (*count, fact.text(), fact)
+            })
         })
         .collect();
     pairs.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-    pairs.into_iter().map(|(_, line)| line).collect()
+    pairs.into_iter().map(|(_, _, fact)| fact).collect()
 }
 
 /// Churn x (1 + highest symbol rank in the file, normalized), top 10.
-fn hotspots(index: &Index, filter: &Filter, history: &History) -> Vec<String> {
+fn hotspots(index: &Index, filter: &Filter, history: &History) -> Vec<AuditFact> {
     let symbols = index.derived.symbols();
     let max_rank = symbols
         .iter()
         .map(|symbol| symbol.rank)
         .fold(0.0f32, f32::max)
         .max(f32::EPSILON);
-    let mut scored: Vec<(f32, String)> = index
+    let mut scored: Vec<(f32, String, AuditFact)> = index
         .derived
         .files()
         .iter()
@@ -538,16 +722,17 @@ fn hotspots(index: &Index, filter: &Filter, history: &History) -> Vec<String> {
             let rank = (file.first_symbol..file.first_symbol + file.symbol_count)
                 .map(|symbol| symbols[symbol as usize].rank / max_rank)
                 .fold(0.0f32, f32::max);
-            Some((
-                churn as f32 * (1.0 + rank),
-                format!("{path} {churn} commits"),
-            ))
+            let fact = AuditFact::Hotspot {
+                path: path.to_owned(),
+                commits: churn,
+            };
+            Some((churn as f32 * (1.0 + rank), fact.text(), fact))
         })
         .collect();
     scored.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
     scored
         .into_iter()
         .take(HOTSPOTS)
-        .map(|(_, line)| line)
+        .map(|(_, _, fact)| fact)
         .collect()
 }

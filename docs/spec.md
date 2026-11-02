@@ -322,21 +322,26 @@ Text:
 
 JSON Lines (`--json`): one object per line; absent fields omitted.
 
+Record-specific fields: `root` uses `n` for files and `symbols` for symbols; `mod` uses `n` for symbols and `files` for files; `task.runs` lists run targets; `api.sig` is the operation signature and `handlers` lists implementations; `cycle` and `layer` expose `members`; `env` uses `n` for reads, `sig` for definition sources and `path`/`line` for the first read; audit `note` records keep source `path`/`line` separate from `name`, and drift adds `kind` (`read` or `defined`) and `status` (`undefined` or `unread`); coupling uses `path`, `other_path` and `n` (shared commits); hotspots use `path` and `commits`.
+
 | field | type | description |
 |-------|------|-------------|
-| `t` | string | record type: `sym`, `file`, `edge`, `sec`, `note`, `more` |
+| `t` | string | record type: `sym`, `file`, `edge`, `sec`, `note`, `more`, `root`, `mod`, `cycle`, `layer`, `ext`, `env` |
 | `path` | string | root-relative path |
-| `line`, `end` | int | 1-based line range |
-| `kind` | string | symbol kind or edge kind |
-| `name` | string | qualified name |
-| `sig` | string | signature |
-| `new_path`, `new_line` | string, int | current location of an inferred moved definition |
+| `line`, `end`, `new_line` | int | 1-based source or current line |
+| `kind` | string | symbol kind, edge kind or audit drift direction |
+| `name` | string | symbol, root/module, reference or finding name |
+| `sig` | string | signature or record-specific summary |
+| `new_path` | string | current path of an inferred moved definition |
 | `sig_change` | string | `changed` when an inferred move also changed its exported signature |
 | `doc` | string | doc sentence |
-| `rel` | string | edge role: `in`, `out`, `sup`, `sub`, `test`, `env`, `run`, `chg` |
+| `rel` | string | edge role (`in`, `out`, `sup`, `sub`, `test`, `env`, `run`, `chg`), map relation (`entry`, `task`, `hub`, `api`) or audit relation from section 7.7 |
 | `conf` | string | `exact` or `inferred` |
 | `score` | float | ranking score (`find`, `ctx`) |
-| `n` | int | count (`sec`, `more`) |
+| `n` | int | record-specific count or depth |
+| `symbols`, `files`, `commits` | int | symbol, file or commit count |
+| `status`, `other_path` | string | audit drift status; second path in a coupling pair |
+| `runs`, `handlers`, `members` | string[] | task targets, API handlers, cycle or layer members |
 
 ## 9. Index store
 
