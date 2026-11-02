@@ -16,7 +16,7 @@ pub const FIELD_WEIGHTS: [f32; FIELDS] = [1.8, 3.0, 0.5, 1.5, 1.0, 1.0, 0.5];
 pub const K1: f32 = 1.2;
 pub const B: f32 = 0.75;
 
-/// Splits on non-alphanumerics, camelCase and PascalCase boundaries and letter-digit
+/// Splits Unicode alphanumeric runs on separators, camelCase/PascalCase and letter-digit
 /// boundaries; lowercases. `HTTPServer2` -> `http`, `server`, `2`.
 pub fn tokenize(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();
@@ -40,6 +40,40 @@ pub fn for_each_token(text: &str, buffer: &mut String, mut emit: impl FnMut(&str
     });
 }
 
+/// Calls `emit` with Unicode alphanumeric runs, retaining underscores for source-word deduplication.
+/// ASCII bytes are scanned directly; query tokenization splits underscores after this shared pass.
+pub fn for_each_word(text: &str, mut emit: impl FnMut(&str)) {
+    let bytes = text.as_bytes();
+    let mut start = 0;
+    let mut in_word = false;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        let character = if byte.is_ascii() {
+            None
+        } else {
+            text[index..].chars().next()
+        };
+        let is_word = character.map_or_else(
+            || byte.is_ascii_alphanumeric() || byte == b'_',
+            |ch| ch.is_alphanumeric() || ch == '_',
+        );
+        if is_word {
+            if !in_word {
+                start = index;
+                in_word = true;
+            }
+        } else if in_word {
+            emit(&text[start..index]);
+            in_word = false;
+        }
+        index += character.map_or(1, char::len_utf8);
+    }
+    if in_word {
+        emit(&text[start..]);
+    }
+}
+
 /// One-word form of an auth phrase: `sign in`, `log in` -> `login`.
 fn phrase(previous: &str, token: &str) -> Option<&'static str> {
     match (previous, token) {
@@ -51,56 +85,57 @@ fn phrase(previous: &str, token: &str) -> Option<&'static str> {
 }
 
 fn each_token(text: &str, buffer: &mut String, mut emit: impl FnMut(&str)) {
-    for word in text.split(|ch: char| !ch.is_alphanumeric()) {
-        if word.is_empty() {
-            continue;
+    for_each_word(text, |word| {
+        for part in word.split('_').filter(|part| !part.is_empty()) {
+            each_token_word(part, buffer, &mut emit);
         }
-        if word.is_ascii() {
-            let bytes = word.as_bytes();
-            let mut start = 0;
-            for index in 1..bytes.len() {
-                let (previous, current) = (bytes[index - 1], bytes[index]);
-                let next_lower = bytes.get(index + 1).is_some_and(u8::is_ascii_lowercase);
-                let boundary = (previous.is_ascii_lowercase() && current.is_ascii_uppercase())
-                    || (previous.is_ascii_uppercase()
-                        && current.is_ascii_uppercase()
-                        && next_lower)
-                    || (previous.is_ascii_alphabetic() && current.is_ascii_digit())
-                    || (previous.is_ascii_digit() && current.is_ascii_alphabetic());
-                if boundary {
-                    emit_lower(&word[start..index], buffer, &mut emit);
-                    start = index;
-                }
-            }
-            emit_lower(&word[start..], buffer, &mut emit);
-            continue;
-        }
-        let chars: Vec<(usize, char)> = word.char_indices().collect();
+    });
+}
+
+fn each_token_word(word: &str, buffer: &mut String, emit: &mut impl FnMut(&str)) {
+    if word.is_ascii() {
+        let bytes = word.as_bytes();
         let mut start = 0;
-        for index in 1..chars.len() {
-            let (previous, current) = (chars[index - 1].1, chars[index].1);
-            let next_lower = chars
-                .get(index + 1)
-                .is_some_and(|(_, ch)| ch.is_lowercase());
-            let boundary = (previous.is_lowercase() && current.is_uppercase())
-                || (previous.is_uppercase() && current.is_uppercase() && next_lower)
-                || (previous.is_alphabetic() && current.is_ascii_digit())
-                || (previous.is_ascii_digit() && current.is_alphabetic());
+        for index in 1..bytes.len() {
+            let (previous, current) = (bytes[index - 1], bytes[index]);
+            let next_lower = bytes.get(index + 1).is_some_and(u8::is_ascii_lowercase);
+            let boundary = (previous.is_ascii_lowercase() && current.is_ascii_uppercase())
+                || (previous.is_ascii_uppercase() && current.is_ascii_uppercase() && next_lower)
+                || (previous.is_ascii_alphabetic() && current.is_ascii_digit())
+                || (previous.is_ascii_digit() && current.is_ascii_alphabetic());
             if boundary {
-                buffer.clear();
-                buffer.push_str(&word[chars[start].0..chars[index].0].to_lowercase());
-                stem(buffer);
-                canonicalize(buffer);
-                emit(buffer);
+                emit_lower(&word[start..index], buffer, emit);
                 start = index;
             }
         }
-        buffer.clear();
-        buffer.push_str(&word[chars[start].0..].to_lowercase());
-        stem(buffer);
-        canonicalize(buffer);
-        emit(buffer);
+        emit_lower(&word[start..], buffer, emit);
+        return;
     }
+    let chars: Vec<(usize, char)> = word.char_indices().collect();
+    let mut start = 0;
+    for index in 1..chars.len() {
+        let (previous, current) = (chars[index - 1].1, chars[index].1);
+        let next_lower = chars
+            .get(index + 1)
+            .is_some_and(|(_, ch)| ch.is_lowercase());
+        let boundary = (previous.is_lowercase() && current.is_uppercase())
+            || (previous.is_uppercase() && current.is_uppercase() && next_lower)
+            || (previous.is_alphabetic() && current.is_ascii_digit())
+            || (previous.is_ascii_digit() && current.is_alphabetic());
+        if boundary {
+            buffer.clear();
+            buffer.push_str(&word[chars[start].0..chars[index].0].to_lowercase());
+            stem(buffer);
+            canonicalize(buffer);
+            emit(buffer);
+            start = index;
+        }
+    }
+    buffer.clear();
+    buffer.push_str(&word[chars[start].0..].to_lowercase());
+    stem(buffer);
+    canonicalize(buffer);
+    emit(buffer);
 }
 
 fn emit_lower(part: &str, buffer: &mut String, emit: &mut impl FnMut(&str)) {
@@ -290,6 +325,19 @@ mod tests {
         for (input, want) in cases {
             assert_eq!(tokenize(input), want, "{input}");
         }
+    }
+
+    #[test]
+    fn unicode_word_runs_feed_the_same_query_tokens() {
+        let mut words = Vec::new();
+        for_each_word("parse_json ÖffneÜberCache 東京", |word| {
+            words.push(word.to_owned())
+        });
+        assert_eq!(words, ["parse_json", "ÖffneÜberCache", "東京"]);
+        assert_eq!(
+            tokenize("parse_json ÖffneÜberCache 東京"),
+            ["pars", "json", "öffne", "über", "cach", "東京"]
+        );
     }
 
     #[test]

@@ -157,13 +157,13 @@ fn collect(
         // token shared by several words (`delete` of `deleteUser`, `deleteComment`) repeats, so
         // its frequency still counts.
         line_words.clear();
-        for word in words(line) {
-            let lower = word.to_ascii_lowercase();
+        for_each_body_word(line, |word| {
+            let lower = word.to_lowercase();
             if !KEYWORDS.contains(&lower.as_str()) && seen.insert(lower) {
                 line_words.push_str(word);
                 line_words.push(' ');
             }
-        }
+        });
         search::for_each_token(&line_words, &mut buffer, |token| {
             if count >= BODY_TERMS || token.len() < 3 {
                 return;
@@ -630,16 +630,22 @@ fn line_text<'a>(content: &'a [u8], starts: &[usize], line: u32) -> Option<&'a [
     content.get(start..end.max(start))
 }
 
-/// ASCII identifier-like words of at least 2 characters outside URLs (`in` of `sign in`
-/// counts for the phrase), digits-only words excluded.
-fn words(text: &[u8]) -> impl Iterator<Item = &str> {
-    text.split(|byte| {
+/// Unicode alphanumeric source words of at least two UTF-8 bytes outside URLs; digits-only words
+/// are excluded. Invalid UTF-8 becomes separators while its valid neighboring words survive.
+fn for_each_body_word(text: &[u8], mut emit: impl FnMut(&str)) {
+    for chunk in text.split(|byte| {
         byte.is_ascii_whitespace() || matches!(byte, b'\'' | b'"' | b'`' | b'(' | b')')
-    })
-    .filter(|chunk| !chunk.windows(3).any(|window| window == b"://"))
-    .flat_map(|chunk| chunk.split(|byte| !(byte.is_ascii_alphanumeric() || *byte == b'_')))
-    .filter(|word| word.len() >= 2 && word.iter().any(u8::is_ascii_alphabetic))
-    .filter_map(|word| std::str::from_utf8(word).ok())
+    }) {
+        if chunk.windows(3).any(|window| window == b"://") {
+            continue;
+        }
+        let chunk = String::from_utf8_lossy(chunk);
+        search::for_each_word(&chunk, |word| {
+            if word.len() >= 2 && word.chars().any(char::is_alphabetic) {
+                emit(word);
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -677,11 +683,50 @@ mod tests {
         assert_eq!(facts.terms, "");
     }
 
+    #[test]
+    fn unicode_body_words_match_query_tokenization() {
+        let content = "/// Öffne den RückgabeWert für die Übersicht.\nfn öffneÜberCache() {\n    let mietÜbersicht = \"RückgabeWert\";\n    // Prüfe den Zustand 中\n}\n";
+        let mut facts = Facts {
+            symbols: vec![Symbol {
+                kind: Some(SymKind::Fn),
+                name: "öffneÜberCache".to_owned(),
+                line: 2,
+                end_line: 5,
+                ..Symbol::default()
+            }],
+            ..Facts::default()
+        };
+
+        add(content.as_bytes(), &mut facts, &[]);
+
+        for token in
+            search::tokenize("öffne über cache mietÜbersicht RückgabeWert Prüfe Zustand 中")
+        {
+            assert!(
+                facts.symbols[0]
+                    .terms
+                    .split_whitespace()
+                    .any(|indexed| indexed == token),
+                "body index omitted query token {token:?}: {}",
+                facts.symbols[0].terms
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_utf8_bytes_separate_words_without_losing_neighbors() {
+        let mut words = Vec::new();
+        for_each_body_word(b"before \xff after", |word| words.push(word.to_owned()));
+        assert_eq!(words, ["before", "after"]);
+    }
+
     fn kept_words(text: &str) -> Vec<String> {
         let mut bytes = text.as_bytes().to_vec();
         without_class_lists(&mut bytes);
         assert_eq!(bytes.len(), text.len());
-        words(&bytes).map(str::to_owned).collect()
+        let mut words = Vec::new();
+        for_each_body_word(&bytes, |word| words.push(word.to_owned()));
+        words
     }
 
     #[test]
