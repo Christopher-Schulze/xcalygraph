@@ -21,11 +21,27 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
+      - name: Linux tools
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes hyperfine jq musl-tools pipx python3 rsync shellcheck tar
+          python3 --version
+          pipx --version
+          hyperfine --version
+          jq --version
+          rsync --version | head -n 1
+          shellcheck --version
+      - name: Graphify
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          pipx install --python python3 "graphifyy==0.9.97"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          test "$(graphify --version)" = "graphify 0.9.97"
+          graphify --version
       - name: Toolchain
         run: rustup target add ${{ matrix.target }}
-      - name: musl tools
-        if: contains(matrix.target, 'musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: Gate
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: scripts/tests/test.sh
@@ -47,7 +63,7 @@ jobs:
           merge-multiple: true
       - name: Checksums and installer
         run: |
-          cd dist && sha256sum *.tar.gz > SHA256SUMS
+          cd dist && sha256sum -- *.tar.gz > SHA256SUMS
           cp ../scripts/utils/install.sh install.sh
       - name: Release
         env:

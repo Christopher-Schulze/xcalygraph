@@ -27,9 +27,15 @@ export HOME="${work}/home" TMPDIR="${work}/temporary" XDG_CONFIG_HOME="${work}/h
 export RUSTUP_HOME="${TOOLCHAIN_HOME}" CARGO_HOME="${PACKAGE_HOME}"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 RUSTFLAGS="-Dwarnings"
 
-for tool in cargo git python3 graphify shellcheck hyperfine; do
+for tool in cargo git python3 graphify shellcheck hyperfine jq rsync; do
   command -v "${tool}" >/dev/null || { echo "test.sh: ${tool} is required" >&2; exit 1; }
 done
+readonly expected_graphify_version="graphify 0.9.97"
+graphify_version="$(graphify --version)" || { echo "test.sh: could not read Graphify version" >&2; exit 1; }
+[[ "${graphify_version}" == "${expected_graphify_version}" ]] || {
+  echo "test.sh: expected ${expected_graphify_version}, got ${graphify_version}" >&2
+  exit 1
+}
 find "${REPO_ROOT}/scripts" -type f -name '*.sh' -print0 | xargs -0 shellcheck
 
 CARGO_TARGET_DIR="$(bash "${REPO_ROOT}/scripts/utils/verification-target.sh")"

@@ -52,6 +52,21 @@ with tempfile.TemporaryDirectory(prefix="release-provenance.", dir=repo / ".cach
     name = f"xcalygraph-0.0.0-{platform}"
     guard = root / "scripts/utils/guard-benchmark.sh"
 
+    missing_tar_path = work / "path-without-tar"
+    missing_tar_path.mkdir()
+    for tool in ("awk", "bash", "cargo", "dirname", "git", "jq", "python3", "rustc"):
+        wrapper = missing_tar_path / tool
+        if tool == "dirname":
+            wrapper.write_text('#!/bin/bash\nvalue="$1"\n[[ "${value}" == */* ]] && value="${value%/*}" || value=.\nprintf "%s\\n" "${value}"\n')
+        else:
+            wrapper.write_text("#!/bin/bash\nexit 0\n")
+        wrapper.chmod(0o755)
+    missing_tar = subprocess.run(["/bin/bash", "-c", 'source "$1"; build_archives --debug "$2"',
+                                  "build", str(release), triple], cwd=root,
+                                 env=dict(environment, PATH=str(missing_tar_path)), capture_output=True, text=True)
+    assert missing_tar.returncode != 0 and "required command missing: tar" in missing_tar.stderr
+    assert list(dist.iterdir()) == [sentinel] and not list(dist.glob(".xcalygraph-release.*"))
+
     def disk():
         subprocess.run(["df", "-h", "/"], check=True, stdout=subprocess.DEVNULL)
         assert shutil.disk_usage(work).free > 2 * 1024**3 + 128 * 1024**2

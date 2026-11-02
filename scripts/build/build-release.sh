@@ -3,7 +3,7 @@
 # Usage: scripts/build/build-release.sh [TARGET...]
 #   TARGET is a Rust target triple (default: the host). Writes dist/xcalygraph-<version>-<os>-<arch>.tar.gz
 #   (binary, licenses, third-party license notices) and dist/SHA256SUMS.
-# Requires: cargo, jq, python3, tar, and shasum or sha256sum.
+# Requires: bash, cargo, git, jq, python3, rustc, awk, tar, and shasum or sha256sum.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
@@ -100,6 +100,21 @@ checksum() {
   if command -v sha256sum >/dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi
 }
 
+check_requirements() {
+  local tool
+  for tool in bash cargo git jq python3 rustc awk tar; do
+    command -v "${tool}" >/dev/null || {
+      echo "build-release.sh: required command missing: ${tool}" >&2
+      return 1
+    }
+  done
+  if ! command -v sha256sum >/dev/null && ! command -v shasum >/dev/null; then
+    echo "build-release.sh: required command missing: sha256sum or shasum" >&2
+    return 1
+  fi
+  return 0
+}
+
 package_release() {
   local stage="$1" name="$2" binary="$3"
   mkdir "${stage}/${name}" || return 1
@@ -177,7 +192,7 @@ build_archives() (
   shift
   local -a targets=("$@") archives=()
   cd "${REPO_ROOT}" || return 1
-  command -v jq >/dev/null || { echo "build-release.sh: jq missing" >&2; return 1; }
+  check_requirements || return 1
   version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "xcalygraph") | .version')" || return 1
   if (( ${#targets[@]} == 0 )); then
     targets=("$(rustc -vV | awk '/^host:/ { print $2 }')")
