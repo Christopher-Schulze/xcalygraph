@@ -1,6 +1,6 @@
 ---
 name: xcalygraph
-description: Code graph CLI for structure questions: where something is defined or handled, who calls or uses it, what implements an interface, what a change affects, how a repository is laid out. Use before reading files when locating code or tracing relations; use rg or direct reads for exact text, known files, logs and non-code content.
+description: Code graph CLI for locating definitions, handlers, callers, implementations, impact and repository structure. Use before source reads for code navigation; use rg or direct reads for exact text, known files, logs and non-code content.
 ---
 
 # xcalygraph
@@ -28,6 +28,8 @@ Local, deterministic index of the repository (symbols, calls, type uses, imports
 | `xcalygraph index`, `ls`, `clean [ROOT...] [--missing]` | refresh explicitly; list indexes (root, size, last use); delete all, some or orphaned indexes, preserving unverified entries |
 | `xcalygraph install`, `update [--check]`, `version` | install/repair binary and skill; version flags stamp/content mismatch; queries stay silent |
 | `xcalygraph help [COMMAND]` | full syntax of every command and flag |
+
+Use `exact symbol NAME` in `find`/`ctx` for exact lookup; a miss returns no match. `ctx` may add related context.
 
 NAME: `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get`), `path:line`, `path::name`, a file path, or a unique bare name. A file-path match wins locator collisions, including through the existing `./` alias; xcalygraph checks the input spelling first, then its surrounding-whitespace-trimmed form before locator syntax.
 

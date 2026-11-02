@@ -1,6 +1,6 @@
 //! `find`: ranked symbols and files, one line each (`docs/spec.md` section 7.2).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::{Filter, Index, Node};
 use crate::domain::search::{self, B, FIELD_WEIGHTS, FIELDS, K1};
@@ -26,6 +26,54 @@ pub struct Hit {
 
 /// Scores every candidate of the query; sorted by score, then path, then line.
 pub fn search(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
+    let Some(name) = exact_symbol_name(query) else {
+        return search_terms(index, filter, query);
+    };
+    let exact: HashSet<u32> = super::names::lookup(index, filter, name)
+        .into_iter()
+        .filter(|&node| matches!(index.node(node), Node::Symbol(_)))
+        .collect();
+    if exact.is_empty() {
+        return Vec::new();
+    }
+    let mut hits = search_terms(index, filter, name);
+    hits.retain(|hit| exact.contains(&hit.node));
+    hits
+}
+
+fn exact_symbol_name(query: &str) -> Option<&str> {
+    let mut words = query.split_whitespace().peekable();
+    while let Some(word) = words.next() {
+        if intent_word(word).eq_ignore_ascii_case("exact")
+            && words
+                .peek()
+                .is_some_and(|next| intent_word(next).eq_ignore_ascii_case("symbol"))
+        {
+            words.next();
+            return words
+                .next()
+                .map(exact_name_token)
+                .filter(|name| !name.is_empty());
+        }
+    }
+    None
+}
+
+fn intent_word(word: &str) -> &str {
+    word.trim_matches(|character: char| !character.is_alphanumeric() && character != '_')
+}
+
+fn exact_name_token(word: &str) -> &str {
+    word.trim_matches(|character: char| {
+        matches!(
+            character,
+            '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | '?' | '!'
+        )
+    })
+    .trim_end_matches(['.', ',', ';', ':', '?', '!'])
+}
+
+fn search_terms(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
     let terms = search::query_terms(query);
     if terms.is_empty() {
         return Vec::new();

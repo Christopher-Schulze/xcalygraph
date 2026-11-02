@@ -403,3 +403,172 @@ fn exact_names_keep_their_bonus_for_ascii_and_unicode() -> Result<(), Box<dyn Er
     }
     Ok(())
 }
+
+#[test]
+fn explicit_exact_symbol_queries_reject_semantic_neighbors_and_keep_behavioral_search()
+-> Result<(), Box<dyn Error>> {
+    let work = TempDir::new()?;
+    let root = work.0.join("root");
+    fs::create_dir_all(root.join("src"))?;
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub mod accounts;\npub mod auth;\npub mod billing;\n",
+    )?;
+    fs::write(
+        root.join("src/accounts.rs"),
+        "pub fn validate_request() -> bool { false }\n",
+    )?;
+    fs::write(
+        root.join("src/auth.rs"),
+        "pub fn validate_request() -> bool { true }\n",
+    )?;
+    fs::write(
+        root.join("src/billing.rs"),
+        "pub struct BillingClient;\n\
+         pub fn invoice_billing_client_config() {}\n\
+         pub fn payment_billing_client_config() {}\n\
+         pub fn authorize_invoice_before_creation() -> bool { true }\n\
+         pub fn validate_invoice() {}\n\
+         /// Performs billing persistence.\n\
+         pub fn persist_billing_client() {}\n",
+    )?;
+    let index = work.0.join("index");
+    let run = |verb: &str, query: &str, json: bool| {
+        let mut command = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &work.0);
+        command
+            .args([verb, query, "-b", "600", "-C"])
+            .arg(&root)
+            .arg("--index-dir")
+            .arg(&index);
+        if json {
+            command.arg("--json");
+        }
+        command.output()
+    };
+
+    for query in [
+        "where is the exact symbol `InvoiceBillingClient` defined?",
+        "WHERE IS THE EXACT SYMBOL PaymentBillingClient defined?",
+    ] {
+        for verb in ["find", "ctx"] {
+            for json in [false, true] {
+                let output = run(verb, query, json)?;
+                assert_eq!(
+                    output.status.code(),
+                    Some(4),
+                    "{verb} json={json} query={query}: {}",
+                    String::from_utf8_lossy(&output.stdout)
+                );
+                assert!(
+                    output.stdout.is_empty(),
+                    "{verb} json={json} query={query}: {}",
+                    String::from_utf8_lossy(&output.stdout)
+                );
+            }
+        }
+    }
+
+    for verb in ["find", "ctx"] {
+        for json in [false, true] {
+            let output = run(
+                verb,
+                "where is the exact symbol `BillingClient` defined",
+                json,
+            )?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let answer = String::from_utf8(output.stdout)?;
+            assert!(answer.contains("BillingClient"), "{answer}");
+            if verb == "find" {
+                assert!(
+                    !answer.contains("invoice_billing_client_config"),
+                    "{answer}"
+                );
+                assert!(
+                    !answer.contains("payment_billing_client_config"),
+                    "{answer}"
+                );
+            } else {
+                let exact = answer
+                    .find("BillingClient")
+                    .ok_or("missing exact ctx seed")?;
+                for related in [
+                    "invoice_billing_client_config",
+                    "payment_billing_client_config",
+                ] {
+                    if let Some(related) = answer.find(related) {
+                        assert!(exact < related, "exact seed must precede context: {answer}");
+                    }
+                }
+            }
+
+            let output = run(
+                verb,
+                "where is the exact symbol auth::validate_request defined",
+                json,
+            )?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let answer = String::from_utf8(output.stdout)?;
+            assert!(answer.contains("src/auth.rs"), "{answer}");
+            if verb == "find" {
+                assert!(!answer.contains("src/accounts.rs"), "{answer}");
+            } else if let Some(accounts) = answer.find("src/accounts.rs") {
+                assert!(
+                    answer
+                        .find("src/auth.rs")
+                        .is_some_and(|auth| auth < accounts),
+                    "qualified exact seed must precede unrelated context: {answer}"
+                );
+            }
+
+            let output = run(
+                verb,
+                "where is the exact symbol validate_request defined",
+                json,
+            )?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let answer = String::from_utf8(output.stdout)?;
+            assert!(answer.contains("src/auth.rs"), "{answer}");
+            assert!(answer.contains("src/accounts.rs"), "{answer}");
+
+            let output = run(verb, "how is an invoice authorized before creation", json)?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let answer = String::from_utf8(output.stdout)?;
+            assert!(
+                answer.contains("authorize_invoice_before_creation"),
+                "{answer}"
+            );
+
+            let output = run(
+                verb,
+                "where are invoice validation and billing persistence implemented",
+                json,
+            )?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let answer = String::from_utf8(output.stdout)?;
+            assert!(answer.contains("validate_invoice"), "{answer}");
+            assert!(answer.contains("persist_billing_client"), "{answer}");
+        }
+    }
+
+    Ok(())
+}

@@ -267,6 +267,8 @@ Sections in priority order: root line (name, files per language, symbol count) -
 
 ### 7.2 find
 
+An explicit, case-insensitive `exact symbol NAME` cue resolves the following identifier through exact symbol lookup; a missing name returns no hits instead of semantic candidates. `ctx` uses the resolved hits for seed selection before adding related graph context.
+
 1. Tokenize the query; look up exact names for the raw query and each term. Query-only expansions: `-ization` -> `-iz`, `-ation` -> `-at`, `retriev`/`retrieval` -> `get`, other ASCII terms of at least 4 bytes -> the term plus `iz`; retain the original term.
 2. Candidates = union of the postings.
 3. Score = BM25F (k1 1.2, b 0.75; field weights name 3, body 1.8, parent 1.5, path 1, doc 1, signature 0.5, used by 0.5; tokens stemmed, code abbreviations and synonyms canonicalized: `remove` and `delete`, `sign in` and `login`, `invalidate` and `refresh`; per term use the higher score of its original and 0.5 x its expansion) times the share of query terms the node matches, + exact-name bonus 5 when the whole query names the symbol, multiplied by the role weight (src 1, test 0.3, gen 0.2, doc 0.5, config 0.5, manifest 0.5, asset 0.3), + 2 x normalized log rank.
