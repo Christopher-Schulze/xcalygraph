@@ -72,6 +72,7 @@ struct RevisionFile {
 struct CurrentFile {
     file: u32,
     path: String,
+    size: u64,
     file_type: Option<FileType>,
     package: Option<String>,
     hash: Option<u128>,
@@ -83,6 +84,7 @@ struct Change {
     diff: git::FileDiff,
     previous: Option<RevisionFile>,
     current: Option<CurrentFile>,
+    path_only: Option<&'static str>,
 }
 
 struct RevisionLocation<'a> {
@@ -105,6 +107,7 @@ struct DiffOutput<'a> {
     moved: &'a [Move<'a>],
     survivors: &'a [u32],
     incomplete: &'a [(&'a str, &'a str)],
+    path_only: &'a [(String, &'static str)],
 }
 
 pub struct ImpactOptions<'a> {
@@ -154,9 +157,46 @@ pub fn render_diff(
     rev: &str,
     options: &ImpactOptions,
 ) -> Result<String, AppError> {
-    let diffs = git::diff(options.root, rev)
+    let mut diffs = git::diff(options.root, rev)
         .ok_or_else(|| AppError::Invalid(format!("git diff against '{rev}' unavailable")))?;
-    let mut changes = collect_changes(index, options.store, options.root, rev, diffs)?;
+    let records = options
+        .store
+        .read_files()
+        .map_err(|error| AppError::Invalid(format!("cannot read index file records: {error}")))?;
+    let indexed_paths: BTreeSet<&str> = index
+        .derived
+        .files()
+        .iter()
+        .map(|file| index.string(file.path))
+        .collect();
+    let revision_sizes = revision_sizes(options.root, &diffs, &indexed_paths)?;
+    let path_only_current = path_only_current_paths(&diffs, &records, &indexed_paths);
+    let paths = patch_paths(&diffs, &records, &indexed_paths, &revision_sizes);
+    let ranges = git::ranges(options.root, rev, &paths)
+        .ok_or_else(|| AppError::Invalid(format!("git diff ranges against '{rev}' unavailable")))?;
+    for diff in &mut diffs {
+        if !diff.deleted
+            && let Some(ranges) = ranges.get(&diff.path)
+        {
+            diff.ranges.clone_from(ranges);
+        }
+    }
+    diffs.retain(|diff| {
+        diff.deleted
+            || diff.untracked
+            || !diff.ranges.is_empty()
+            || path_only_revision(diff, &revision_sizes)
+            || path_only_current.contains(&diff.path)
+    });
+    let mut changes = collect_changes(
+        index,
+        options.store,
+        options.root,
+        diffs,
+        &records,
+        &revision_sizes,
+        &path_only_current,
+    )?;
     for change in &mut changes {
         if let (Some(previous), Some(current)) = (&mut change.previous, &mut change.current)
             && previous.package == current.package
@@ -209,6 +249,9 @@ pub fn render_diff(
         let Some(previous) = &change.previous else {
             continue;
         };
+        if change.path_only.is_some() {
+            continue;
+        }
         if !filter.removed_file(&previous.path, previous.file_type, previous.role) {
             continue;
         }
@@ -299,7 +342,11 @@ pub fn render_diff(
         surviving_references(index, filter, options.store, &removed_names)?
     };
     let mut incomplete = Vec::new();
+    let mut path_only = BTreeMap::new();
     for change in &changes {
+        if let Some(side) = change.path_only {
+            path_only.insert(change.diff.path.clone(), side);
+        }
         if let Some(previous) = &change.previous
             && previous.incomplete
         {
@@ -311,6 +358,7 @@ pub fn render_diff(
             incomplete.push((current.path.as_str(), "current"));
         }
     }
+    let path_only: Vec<_> = path_only.into_iter().collect();
     Ok(render(
         index,
         filter,
@@ -320,6 +368,7 @@ pub fn render_diff(
             moved: &moved,
             survivors: &survivors,
             incomplete: &incomplete,
+            path_only: &path_only,
         },
         options,
     ))
@@ -486,14 +535,20 @@ fn definitions(facts: &Facts, identities: &[Option<String>]) -> Option<Vec<Defin
 
 fn revision_file(
     root: &Path,
-    rev: &str,
+    object: &str,
+    size: u64,
     path: &str,
     file_type: Option<FileType>,
     keep_content: bool,
-) -> Result<Option<RevisionFile>, AppError> {
-    let Some(content) = git::show(root, rev, path) else {
-        return Ok(None);
-    };
+) -> Result<RevisionFile, AppError> {
+    let content = git::blob(root, object).map_err(|error| {
+        AppError::Invalid(format!("revision blob for '{path}' unavailable: {error}"))
+    })?;
+    if content.len() as u64 != size {
+        return Err(AppError::Invalid(format!(
+            "revision blob for '{path}' changed size during diff analysis"
+        )));
+    }
     // A file deleted since REV has no current record; classify it from its REV content.
     let classification = crate::domain::role::classify(&crate::domain::role::FileFacts {
         path,
@@ -513,7 +568,7 @@ fn revision_file(
     };
     let parsed = extract::extract_with_identities(&record, &content);
     let facts = parsed.facts;
-    Ok(Some(RevisionFile {
+    Ok(RevisionFile {
         path: path.to_owned(),
         file_type,
         role: classification.role,
@@ -523,21 +578,111 @@ fn revision_file(
         })?,
         content: if keep_content { content } else { Vec::new() },
         incomplete: parsed.incomplete,
-    }))
+    })
+}
+
+fn revision_sizes(
+    root: &Path,
+    diffs: &[git::FileDiff],
+    indexed_paths: &BTreeSet<&str>,
+) -> Result<HashMap<String, u64>, AppError> {
+    let mut sizes = HashMap::new();
+    for diff in diffs {
+        if !diff.deleted && !indexed_paths.contains(diff.path.as_str()) {
+            continue;
+        }
+        let Some(object) = &diff.old_object else {
+            continue;
+        };
+        if !diff.old_regular
+            || crate::domain::role::is_sensitive(&diff.path)
+            || sizes.contains_key(object)
+        {
+            continue;
+        }
+        let size = git::object_size(root, object).map_err(|error| {
+            AppError::Invalid(format!(
+                "revision blob metadata for '{}' unavailable: {error}",
+                diff.path
+            ))
+        })?;
+        sizes.insert(object.clone(), size);
+    }
+    Ok(sizes)
+}
+
+fn path_only_revision(diff: &git::FileDiff, revision_sizes: &HashMap<String, u64>) -> bool {
+    let Some(object) = &diff.old_object else {
+        return false;
+    };
+    !diff.old_regular
+        || crate::domain::role::is_sensitive(&diff.path)
+        || revision_sizes
+            .get(object)
+            .is_none_or(|&size| !crate::domain::role::needs_content(&diff.path, size))
+}
+
+fn path_only_current_paths(
+    diffs: &[git::FileDiff],
+    records: &[CorpusRecord],
+    indexed_paths: &BTreeSet<&str>,
+) -> BTreeSet<String> {
+    let mut paths = BTreeSet::new();
+    for diff in diffs {
+        if diff.deleted || diff.untracked || !indexed_paths.contains(diff.path.as_str()) {
+            continue;
+        }
+        let Ok(position) = records.binary_search_by(|record| record.path.cmp(&diff.path)) else {
+            continue;
+        };
+        if !crate::domain::role::needs_content(&diff.path, records[position].size) {
+            paths.insert(diff.path.clone());
+        }
+    }
+    paths
+}
+
+fn patch_paths(
+    diffs: &[git::FileDiff],
+    records: &[CorpusRecord],
+    indexed_paths: &BTreeSet<&str>,
+    revision_sizes: &HashMap<String, u64>,
+) -> Vec<String> {
+    let mut paths = BTreeSet::new();
+    for diff in diffs {
+        if diff.deleted || diff.untracked || !indexed_paths.contains(diff.path.as_str()) {
+            continue;
+        }
+        let Ok(position) = records.binary_search_by(|record| record.path.cmp(&diff.path)) else {
+            continue;
+        };
+        if !crate::domain::role::needs_content(&diff.path, records[position].size) {
+            continue;
+        }
+        if let Some(object) = &diff.old_object {
+            let Some(&revision_size) = revision_sizes.get(object) else {
+                continue;
+            };
+            if !crate::domain::role::needs_content(&diff.path, revision_size) {
+                continue;
+            }
+        }
+        paths.insert(diff.path.clone());
+    }
+    paths.into_iter().collect()
 }
 
 fn collect_changes(
     index: &Index,
     store: &crate::infra::store::Store,
     root: &Path,
-    rev: &str,
     diffs: Vec<git::FileDiff>,
+    records: &[CorpusRecord],
+    revision_sizes: &HashMap<String, u64>,
+    path_only_current: &BTreeSet<String>,
 ) -> Result<Vec<Change>, AppError> {
     let mut shards = HashMap::new();
     let mut changes = Vec::new();
-    let records = store
-        .read_files()
-        .map_err(|error| AppError::Invalid(format!("cannot read index file records: {error}")))?;
     for diff in diffs {
         let file = (!diff.deleted)
             .then(|| {
@@ -553,6 +698,20 @@ fn collect_changes(
         }
         let current = if let Some(file) = file {
             let record = &index.derived.files()[file];
+            let corpus_record = records
+                .binary_search_by(|entry| entry.path.as_str().cmp(diff.path.as_str()))
+                .ok()
+                .and_then(|position| records.get(position))
+                .ok_or_else(|| {
+                    AppError::Invalid(format!("index file record missing for '{}'", diff.path))
+                })?;
+            if corpus_record.role != record.role() || corpus_record.file_type != record.file_type()
+            {
+                return Err(AppError::Invalid(format!(
+                    "index file record disagrees for '{}'",
+                    diff.path
+                )));
+            }
             let verify_empty = matches!(
                 record.role(),
                 crate::domain::role::Role::Src
@@ -560,23 +719,13 @@ fn collect_changes(
                     | crate::domain::role::Role::Gen
             ) && record.file_type().is_some_and(FileType::is_code);
             let source = if record.symbol_count > 0 || verify_empty {
-                let source = records
-                    .binary_search_by(|entry| entry.path.as_str().cmp(diff.path.as_str()))
-                    .ok()
-                    .and_then(|position| records.get(position))
-                    .ok_or_else(|| {
-                        AppError::Invalid(format!("index file record missing for '{}'", diff.path))
-                    })?;
-                if source.role != record.role()
-                    || source.file_type != record.file_type()
-                    || !crate::domain::role::needs_content(&source.path, source.size)
-                {
+                if !crate::domain::role::needs_content(&corpus_record.path, corpus_record.size) {
                     return Err(AppError::Invalid(format!(
                         "index file record disagrees for '{}'",
                         diff.path
                     )));
                 }
-                Some(source)
+                Some(corpus_record)
             } else {
                 None
             };
@@ -691,6 +840,7 @@ fn collect_changes(
             Some(CurrentFile {
                 file: file as u32,
                 path: diff.path.clone(),
+                size: corpus_record.size,
                 file_type: record.file_type(),
                 package: facts.and_then(|facts| facts.package.clone()),
                 hash,
@@ -700,22 +850,44 @@ fn collect_changes(
         } else {
             None
         };
-        let previous = if diff.untracked || crate::domain::role::is_sensitive(&diff.path) {
+        let old_size = diff
+            .old_object
+            .as_ref()
+            .and_then(|object| revision_sizes.get(object))
+            .copied();
+        let old_path_only = path_only_revision(&diff, revision_sizes);
+        let path_only = if old_path_only {
+            Some("path-only revision")
+        } else if path_only_current.contains(&diff.path) {
+            Some("path-only current")
+        } else {
+            None
+        };
+        let previous = if diff.untracked || diff.old_object.is_none() || path_only.is_some() {
             None
         } else {
-            revision_file(
+            Some(revision_file(
                 root,
-                rev,
+                diff.old_object.as_deref().ok_or_else(|| {
+                    AppError::Invalid(format!(
+                        "revision blob identity missing for '{}'",
+                        diff.path
+                    ))
+                })?,
+                old_size.ok_or_else(|| {
+                    AppError::Invalid(format!("revision blob size missing for '{}'", diff.path))
+                })?,
                 &diff.path,
                 current.as_ref().and_then(|file| file.file_type),
                 diff.deleted,
-            )?
+            )?)
         };
-        if previous.is_some() || current.is_some() {
+        if previous.is_some() || current.is_some() || path_only.is_some() {
             changes.push(Change {
                 diff,
                 previous,
                 current,
+                path_only,
             });
         }
     }
@@ -890,9 +1062,21 @@ fn match_moves(
         .any(|change| change.diff.deleted && change.previous.is_some());
     let has_addition = changes
         .iter()
-        .any(|change| change.previous.is_none() && change.current.is_some());
+        .any(|change| change.diff.old_object.is_none() && change.current.is_some());
+    let mut rename_paths = BTreeSet::new();
+    for change in changes.iter() {
+        let is_deleted_candidate = change.diff.deleted && change.previous.is_some();
+        let is_added_candidate = !change.diff.deleted
+            && change.diff.old_object.is_none()
+            && change.current.as_ref().is_some_and(|current| {
+                crate::domain::role::needs_content(&current.path, current.size)
+            });
+        if is_deleted_candidate || is_added_candidate {
+            rename_paths.insert(change.diff.path.clone());
+        }
+    }
     let renames = if has_deletion && has_addition {
-        git::renames(root, rev).ok_or_else(|| {
+        git::renames(root, rev, &rename_paths.into_iter().collect::<Vec<_>>()).ok_or_else(|| {
             AppError::Invalid(format!("git rename detection against '{rev}' unavailable"))
         })?
     } else {
@@ -944,7 +1128,7 @@ fn match_moves(
                     rename_pairs.contains(&(previous.path.as_str(), current.path.as_str()));
                 let possible = file_scoped(previous.file_type)
                     && change.diff.deleted
-                    && next.previous.is_none()
+                    && next.diff.old_object.is_none()
                     && old
                         .signature
                         .as_ref()
@@ -953,7 +1137,7 @@ fn match_moves(
                 let (identical, similar) = if !renamed
                     && !same_scope(previous, current)
                     && change.diff.deleted
-                    && next.previous.is_none()
+                    && next.diff.old_object.is_none()
                 {
                     let pair = (old_file, new_file);
                     if let std::collections::hash_map::Entry::Vacant(entry) =
@@ -1049,7 +1233,7 @@ fn changed_targets(index: &Index, filter: &Filter, changes: &[Change]) -> Vec<Ta
         let Some(current) = &change.current else {
             continue;
         };
-        if current.incomplete {
+        if current.incomplete || change.path_only.is_some() {
             continue;
         }
         let record = &index.derived.files()[current.file as usize];
@@ -1059,7 +1243,7 @@ fn changed_targets(index: &Index, filter: &Filter, changes: &[Change]) -> Vec<Ta
         let symbols: Vec<u32> =
             (record.first_symbol..record.first_symbol + record.symbol_count).collect();
         let file_node = index.symbol_count() + current.file;
-        if change.previous.is_none() {
+        if change.diff.old_object.is_none() {
             let seeds: Vec<u32> = symbols
                 .iter()
                 .copied()
@@ -1117,6 +1301,7 @@ fn render(
         moved,
         survivors,
         incomplete,
+        path_only,
     } = diff;
     let mut writer = Writer::new(options.json, options.budget);
     let incomplete_current: BTreeSet<&str> = incomplete
@@ -1247,7 +1432,15 @@ fn render(
                 / 2,
         ),
     );
-    write_changes(index, &mut writer, targets, removed, moved, incomplete);
+    write_changes(
+        index,
+        &mut writer,
+        targets,
+        removed,
+        moved,
+        incomplete,
+        path_only,
+    );
     for (shown, (depth, node, exact)) in affected.iter().enumerate() {
         if shown >= AFFECTED_LINES {
             more(&mut writer, affected.len() - shown, "affected");
@@ -1331,13 +1524,17 @@ fn write_changes(
     removed: &[RevisionLocation<'_>],
     moved: &[Move<'_>],
     incomplete: &[(&str, &str)],
+    path_only: &[(String, &'static str)],
 ) {
-    for (shown, &(path, side)) in incomplete.iter().enumerate() {
-        if shown >= CHANGED_LINES {
-            more(writer, incomplete.len() - shown, "incomplete files");
-            break;
-        }
-        let message = format!("incomplete {side}");
+    let note_count = incomplete.len() + path_only.len();
+    for shown in 0..note_count.min(CHANGED_LINES) {
+        let (path, message) = if shown < path_only.len() {
+            let (path, name) = &path_only[shown];
+            (path.as_str(), (*name).to_owned())
+        } else {
+            let (path, side) = incomplete[shown - path_only.len()];
+            (path, format!("incomplete {side}"))
+        };
         writer.line(
             &format!("! {message} {path}"),
             &[
@@ -1346,6 +1543,9 @@ fn write_changes(
                 ("path", Value::Str(path)),
             ],
         );
+    }
+    if note_count > CHANGED_LINES {
+        more(writer, note_count - CHANGED_LINES, "diff notes");
     }
     // Code changes first; config, docs and other files after.
     let mut ordered: Vec<&Target> = targets.iter().collect();

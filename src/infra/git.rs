@@ -1,12 +1,11 @@
-//! Git through the `git` CLI (`docs/decisions.md` D12): changed line ranges and file content at
-//! a revision. Every function returns `None` when git or the work tree is unavailable.
+//! Git through the `git` CLI (`docs/decisions.md` D12): changed path metadata, line ranges and
+//! eligible blob content at a revision. Content reads preserve Git failures as errors.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
 
-/// Changed line ranges of one file in the new version; an empty range list means the whole
-/// file is new (untracked).
+/// Changed new-side line ranges; an empty list means Git produced no text hunk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileDiff {
     /// Root-relative path.
@@ -16,6 +15,10 @@ pub struct FileDiff {
     pub untracked: bool,
     /// The file existed at the revision and is gone from the work tree; `ranges` is empty.
     pub deleted: bool,
+    /// Blob identity at the revision; `None` means the path was absent there.
+    pub old_object: Option<String>,
+    /// Whether the old object is a regular-file blob eligible for content extraction.
+    pub old_regular: bool,
 }
 
 fn git(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
@@ -41,22 +44,20 @@ pub fn diff(root: &Path, rev: &str) -> Option<Vec<FileDiff>> {
         root,
         &[
             "diff",
-            "--patch-with-raw",
+            "--raw",
             "-z",
-            "--unified=0",
+            "--no-abbrev",
             "--no-color",
             "--no-ext-diff",
             "--no-textconv",
             "--no-renames",
             "--no-relative",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
             rev,
             "--",
             ".",
         ],
     )?;
-    let mut diffs = parse_diff(&output, &prefix)?;
+    let mut diffs = parse_raw_diff(&output, &prefix)?;
     let untracked = git(
         root,
         &[
@@ -77,6 +78,8 @@ pub fn diff(root: &Path, rev: &str) -> Option<Vec<FileDiff>> {
                 ranges: Vec::new(),
                 untracked: true,
                 deleted: false,
+                old_object: None,
+                old_regular: false,
             });
         }
     }
@@ -84,26 +87,67 @@ pub fn diff(root: &Path, rev: &str) -> Option<Vec<FileDiff>> {
     Some(diffs)
 }
 
-/// Git's similarity-based file rename candidates, restricted to the queried root.
-pub fn renames(root: &Path, rev: &str) -> Option<Vec<(String, String)>> {
+/// Changed new-side line ranges for the exact root-relative paths that may be read.
+pub fn ranges(
+    root: &Path,
+    rev: &str,
+    paths: &[String],
+) -> Option<HashMap<String, Vec<(u32, u32)>>> {
+    if paths.is_empty() {
+        return Some(HashMap::new());
+    }
     let prefix = prefix(root)?;
-    let output = git(
-        root,
-        &[
-            "diff",
-            "--name-status",
-            "-z",
-            "--no-color",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--find-renames",
-            "--no-relative",
-            rev,
-            "--",
-            ".",
-        ],
-    )?;
-    let mut fields = output.split(|&byte| byte == 0);
+    let mut command = Command::new("git");
+    command.arg("-C").arg(root).args([
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "--no-relative",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        "--unified=0",
+        rev,
+        "--",
+    ]);
+    for path in paths {
+        command.arg(format!(":(top,literal){prefix}{path}"));
+    }
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_patch_ranges(&output.stdout, &prefix, paths)
+}
+
+/// Git's similarity-based rename candidates, restricted to the supplied eligible paths.
+pub fn renames(root: &Path, rev: &str, paths: &[String]) -> Option<Vec<(String, String)>> {
+    if paths.is_empty() {
+        return Some(Vec::new());
+    }
+    let prefix = prefix(root)?;
+    let mut command = Command::new("git");
+    command.arg("-C").arg(root).args([
+        "diff",
+        "--name-status",
+        "-z",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--find-renames",
+        "--no-relative",
+        rev,
+        "--",
+    ]);
+    for path in paths {
+        command.arg(format!(":(top,literal){prefix}{path}"));
+    }
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut fields = output.stdout.split(|&byte| byte == 0);
     let mut renames = Vec::new();
     while let Some(status) = fields.next() {
         if status.is_empty() {
@@ -126,56 +170,72 @@ pub fn renames(root: &Path, rev: &str) -> Option<Vec<(String, String)>> {
     Some(renames)
 }
 
-/// Read NUL-delimited raw paths and associate patch hunks by their decoded Git path.
-fn parse_diff(output: &[u8], prefix: &str) -> Option<Vec<FileDiff>> {
-    if output.is_empty() {
-        return Some(Vec::new());
-    }
-    let boundary = output.windows(2).position(|bytes| bytes == [0, 0])?;
-    let mut fields = output[..boundary].split(|&byte| byte == 0);
+/// Read NUL-delimited raw changes without requesting or capturing blob contents.
+fn parse_raw_diff(output: &[u8], prefix: &str) -> Option<Vec<FileDiff>> {
     let mut diffs = Vec::new();
-    let mut current = HashMap::new();
-    while let Some(header) = fields.next() {
-        let [status] = header.rsplit(|&byte| byte == b' ').next()? else {
-            return None;
-        };
-        let status = *status;
-        if !header.starts_with(b":") || !matches!(status, b'A' | b'M' | b'D' | b'T') {
+    let mut fields = output.split(|&byte| byte == 0);
+    while let Some(header) = fields.next().filter(|header| !header.is_empty()) {
+        let metadata = header.strip_prefix(b":")?;
+        let mut parts = metadata
+            .split(|byte| byte.is_ascii_whitespace())
+            .filter(|part| !part.is_empty());
+        let old_mode = parts.next()?;
+        let _new_mode = parts.next()?;
+        let old_id = parts.next()?;
+        let new_id = parts.next()?;
+        let status = parts.next()?;
+        if parts.next().is_some()
+            || !matches!(status, b"A" | b"M" | b"D" | b"T")
+            || !valid_object_id(old_id)
+            || !valid_object_id(new_id)
+        {
             return None;
         }
+        let old_object = if old_id.iter().all(|&byte| byte == b'0') {
+            None
+        } else {
+            Some(String::from_utf8(old_id.to_vec()).ok()?)
+        };
+        let old_regular = matches!(old_mode, b"100644" | b"100755");
         let path = fields.next()?.strip_prefix(prefix.as_bytes())?;
         let Ok(path) = std::str::from_utf8(path) else {
             continue;
         };
-        if status == b'D' || status == b'T' {
+        if status == b"D" || status == b"T" {
             diffs.push(FileDiff {
                 path: path.to_owned(),
                 ranges: Vec::new(),
                 untracked: false,
                 deleted: true,
+                old_object: old_object.clone(),
+                old_regular,
             });
         }
-        if status != b'D' {
-            current.insert(path.to_owned(), diffs.len());
+        if status != b"D" {
             diffs.push(FileDiff {
                 path: path.to_owned(),
                 ranges: Vec::new(),
                 untracked: false,
                 deleted: false,
+                old_object,
+                old_regular,
             });
         }
     }
-    patch_ranges(&output[boundary + 2..], prefix, &current, &mut diffs)?;
-    diffs.retain(|diff| diff.deleted || !diff.ranges.is_empty());
     Some(diffs)
 }
 
-fn patch_ranges(
+fn valid_object_id(object: &[u8]) -> bool {
+    matches!(object.len(), 40 | 64) && object.iter().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn parse_patch_ranges(
     patch: &[u8],
     prefix: &str,
-    paths: &HashMap<String, usize>,
-    diffs: &mut [FileDiff],
-) -> Option<()> {
+    paths: &[String],
+) -> Option<HashMap<String, Vec<(u32, u32)>>> {
+    let allowed: HashSet<&str> = paths.iter().map(String::as_str).collect();
+    let mut ranges = HashMap::<String, Vec<(u32, u32)>>::new();
     let mut current = None;
     let mut in_hunk = false;
     for line in patch.split(|&byte| byte == b'\n') {
@@ -189,15 +249,16 @@ fn patch_ranges(
             } else {
                 let path = path.strip_prefix(b"b/")?.strip_prefix(prefix.as_bytes())?;
                 match std::str::from_utf8(path) {
-                    Ok(path) => Some(*paths.get(path)?),
+                    Ok(path) if allowed.contains(path) => Some(path.to_owned()),
+                    Ok(_) => return None,
                     Err(_) => None,
                 }
             };
         } else if let Some(hunk) = line.strip_prefix(b"@@ ") {
             in_hunk = true;
-            let Some(index) = current else {
+            if current.is_none() {
                 continue;
-            };
+            }
             let side = hunk
                 .split(|byte| byte.is_ascii_whitespace())
                 .find(|part| part.starts_with(b"+"))?;
@@ -209,10 +270,10 @@ fn patch_ranges(
             } else {
                 (start, start.saturating_add(count - 1))
             };
-            diffs.get_mut(index)?.ranges.push(range);
+            ranges.entry(current.clone()?).or_default().push(range);
         }
     }
-    Some(())
+    Some(ranges)
 }
 
 /// Git's C-style quoted patch paths, including octal-encoded UTF-8 bytes.
@@ -310,16 +371,39 @@ pub fn history(root: &Path, limit: usize) -> Option<Vec<Vec<String>>> {
     Some(commits)
 }
 
-/// Content of a root-relative file at `rev`; `None` when it did not exist there.
-pub fn show(root: &Path, rev: &str, path: &str) -> Option<Vec<u8>> {
-    let prefix = prefix(root)?;
+fn checked_git(root: &Path, args: &[&str]) -> Result<Output, String> {
+    let command = args.first().copied().unwrap_or("command");
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["show", &format!("{rev}:{prefix}{path}")])
+        .args(args)
         .output()
-        .ok()?;
-    output.status.success().then_some(output.stdout)
+        .map_err(|error| format!("cannot start git {command}: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("git {command} exited with {}", output.status));
+    }
+    Ok(output)
+}
+
+/// Size of a validated blob object, without reading its content.
+pub fn object_size(root: &Path, object: &str) -> Result<u64, String> {
+    if !valid_object_id(object.as_bytes()) {
+        return Err("invalid Git blob identity".to_owned());
+    }
+    let output = checked_git(root, &["cat-file", "-s", object])?;
+    std::str::from_utf8(&output.stdout)
+        .map_err(|_| "git returned a non-UTF-8 blob size".to_owned())?
+        .trim()
+        .parse()
+        .map_err(|_| "git returned an invalid blob size".to_owned())
+}
+
+/// Content of a validated blob object. Callers must enforce the path and size policy first.
+pub fn blob(root: &Path, object: &str) -> Result<Vec<u8>, String> {
+    if !valid_object_id(object.as_bytes()) {
+        return Err("invalid Git blob identity".to_owned());
+    }
+    Ok(checked_git(root, &["cat-file", "blob", object])?.stdout)
 }
 
 #[cfg(test)]
@@ -327,25 +411,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unified_zero_hunks_become_new_side_ranges() {
-        let text = b":100644 100644 0000000 0000000 M\0sub/a.go\0:100644 000000 0000000 0000000 D\0sub/old.go\0\0diff --git a/sub/a.go b/sub/a.go\n--- a/sub/a.go\n+++ b/sub/a.go\n@@ -3,0 +4,2 @@ func x\n+a\n+b\n@@ -10 +12 @@\n-x\n+y\n@@ -20,3 +23,0 @@\n-gone\ndiff --git a/sub/old.go b/sub/old.go\n--- a/sub/old.go\n+++ /dev/null\n@@ -1,3 +0,0 @@\n";
-        let diffs = parse_diff(text, "sub/");
+    fn unified_zero_hunks_become_new_side_ranges() -> Result<(), Box<dyn std::error::Error>> {
+        let old = "1".repeat(40);
+        let current = "2".repeat(40);
+        let removed = "3".repeat(40);
+        let zero = "0".repeat(40);
+        let raw = format!(
+            ":100644 100644 {old} {current} M\0sub/a.go\0:100644 000000 {removed} {zero} D\0sub/old.go\0"
+        );
+        let diffs = parse_raw_diff(raw.as_bytes(), "sub/")
+            .ok_or_else(|| std::io::Error::other("raw diff parse failed"))?;
         assert_eq!(
             diffs,
-            Some(vec![
+            vec![
                 FileDiff {
                     path: "a.go".to_owned(),
-                    ranges: vec![(4, 5), (12, 12), (23, 23)],
+                    ranges: Vec::new(),
                     untracked: false,
                     deleted: false,
+                    old_object: Some(old),
+                    old_regular: true,
                 },
                 FileDiff {
                     path: "old.go".to_owned(),
                     ranges: Vec::new(),
                     untracked: false,
                     deleted: true,
+                    old_object: Some(removed),
+                    old_regular: true,
                 }
-            ])
+            ]
         );
+        let paths = ["a.go".to_owned()];
+        let patch = b"diff --git a/sub/a.go b/sub/a.go\n--- a/sub/a.go\n+++ b/sub/a.go\n@@ -3,0 +4,2 @@ func x\n+a\n+b\n@@ -10 +12 @@\n-x\n+y\n@@ -20,3 +23,0 @@\n-gone\n";
+        let ranges = parse_patch_ranges(patch, "sub/", &paths)
+            .ok_or_else(|| std::io::Error::other("patch range parse failed"))?;
+        assert_eq!(
+            ranges,
+            HashMap::from([("a.go".to_owned(), vec![(4, 5), (12, 12), (23, 23)],)])
+        );
+        Ok(())
     }
 }

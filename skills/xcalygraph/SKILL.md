@@ -5,14 +5,14 @@ description: Code graph CLI for locating definitions, handlers, callers, impleme
 
 # xcalygraph
 
-Local, deterministic index of the repository (symbols, calls, type uses, imports, implementations, tests, env reads). Every query refreshes the index incrementally first; answers cite `path:line`.
+Local deterministic repository index: symbols, calls, type uses, imports, implementations, tests and env reads. Queries refresh incrementally; answers cite `path:line`.
 
 ## When
 
 - Unknown code: `map`, then `find` or `ctx`.
 - "Where is X handled", "who calls X", "what implements X", "path from A to B": `find`, `show`, `path`.
 - Before or after editing: `impact NAME` or `impact --diff`; cleanup and review: `audit`.
-- Exact strings, config values, logs, prose: `rg` and direct reads are better.
+- Exact strings/config/logs/prose: use `rg` or read directly.
 
 ## Commands
 
@@ -43,9 +43,9 @@ Flags: `-p GLOB` (paths, gitignore syntax, repeatable), `-l go,rust` (languages)
 - Card markers: `m` member, `f` fields, `^` supertype, `v` implementation, `<` incoming (caller site), `>` outgoing (definition), `t` test, `t2` test through one caller, `e` env read, `!` notice.
 - `?` marks inferred name/dispatch edges and indirect test/impact paths; `--exact` drops them and dependent test commands.
 - `impact` run lines retain Go module/package, Cargo manifest and pytest node-ID context; args are quoted. Unsupported runners emit `t`, no `r`.
-- `impact --diff` cites REV path/line for removals, both locations for `moved?`, `sig?` for inferred signature changes and `uncertain?` for ambiguous/unavailable identities; inspect incomplete paths beyond filters too.
+- `impact --diff`: removals cite REV path:line; `moved?` gives both locations; `sig?`=inferred signature change; `uncertain?`=ambiguous/unavailable identity; sensitive, oversized or non-regular sides get path-only notes; missing known REV blobs error; inspect paths beyond filters.
 - Truncation: `+N more`, `+N`, `+` or JSON `{}`; narrow with `-p`, `-k`, `-l` or raise `-b`.
-- A shared-index failure can use `.xcalygraph/` locally; the stderr notice asks to ignore it in git.
+- On shared-index failure, use local `.xcalygraph/`; stderr asks to ignore it in git.
 
 ## Exit codes
 

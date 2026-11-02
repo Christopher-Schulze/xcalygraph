@@ -1580,6 +1580,54 @@ fn git(root: &Path, args: &[&str]) -> io::Result<()> {
     }
 }
 
+#[cfg(unix)]
+struct GitProbe {
+    path: std::ffi::OsString,
+    real_git: PathBuf,
+    trace: PathBuf,
+    captured: PathBuf,
+}
+
+#[cfg(unix)]
+fn install_git_probe(dir: &TempDir) -> Result<GitProbe, Box<dyn Error>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = std::env::var_os("PATH").ok_or("PATH unavailable")?;
+    let real_git = std::env::split_paths(&path)
+        .map(|directory| directory.join("git"))
+        .find(|candidate| candidate.is_file())
+        .ok_or("git unavailable")?;
+    dir.write(
+        "bin/git",
+        r#"#!/bin/sh
+printf '%s\n' "$*" >> "$TRACE_PATH"
+case "$3" in
+  diff|show) ;;
+  cat-file) [ "$4" = "blob" ] || exec "$REAL_GIT" "$@" ;;
+  *) exec "$REAL_GIT" "$@" ;;
+esac
+capture="${CAPTURE_PATH}.$$"
+"$REAL_GIT" "$@" > "$capture"
+status=$?
+cat "$capture" >> "$CAPTURE_PATH"
+cat "$capture"
+rm -f "$capture"
+exit "$status"
+"#,
+    )?;
+    let shim = dir.0.join("bin/git");
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755))?;
+    let search_path = std::env::join_paths(
+        std::iter::once(dir.0.join("bin")).chain(std::env::split_paths(&path)),
+    )?;
+    Ok(GitProbe {
+        path: search_path,
+        real_git,
+        trace: dir.0.join("git-invocations"),
+        captured: dir.0.join("git-content-output"),
+    })
+}
+
 const DISPATCH_GO: &str = "package app
 
 type Store interface {
@@ -3099,41 +3147,53 @@ fn impact_diff_distinguishes_method_owners_and_symbol_kinds() -> TestResult {
 #[cfg(unix)]
 #[test]
 fn impact_diff_never_reads_deleted_sensitive_revision_content() -> TestResult {
-    use std::os::unix::fs::PermissionsExt;
-
     let dir = TempDir::new("impact-sensitive-revision")?;
     let root = dir.0.join("repo");
-    dir.write("repo/.env", "DUMMY=fixture\n")?;
-    dir.write("repo/safe.go", "package sample\nfunc Safe() {}\n")?;
-    git(&root, &["init", "-q"])?;
-    git(&root, &["add", "-f", ".env", "safe.go"])?;
-    git(&root, &["commit", "-q", "-m", "initial"])?;
-    git(&root, &["rm", "-q", ".env", "safe.go"])?;
-    let path = std::env::var_os("PATH").ok_or("PATH unavailable")?;
-    let real_git = std::env::split_paths(&path)
-        .map(|directory| directory.join("git"))
-        .find(|candidate| candidate.is_file())
-        .ok_or("git unavailable")?;
-    let shim = dir
-        .write(
-            "bin/git",
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TRACE_PATH\"\nexec \"$REAL_GIT\" \"$@\"\n",
-        )
-        .map(|_| dir.0.join("bin/git"))?;
-    fs::set_permissions(shim, fs::Permissions::from_mode(0o755))?;
-    let search_path = std::env::join_paths(
-        std::iter::once(dir.0.join("bin")).chain(std::env::split_paths(&path)),
+    let sensitive_paths = [
+        ".env",
+        ".env.local",
+        "certs/server.pem",
+        "certs/service.key",
+        "certs/identity.p12",
+        "keys/id_rsa_backup",
+        "keys/id_ed25519_backup",
+        "private/.ssh/id_rsa",
+        "cloud/.aws/credentials",
+        "accounts/.gnupg/private-key",
+    ];
+    let mut markers = Vec::new();
+    for (index, path) in sensitive_paths.iter().enumerate() {
+        let marker = format!("SENSITIVE_REVISION_MARKER_{index}");
+        dir.write(&format!("repo/{path}"), &format!("{marker}\n"))?;
+        markers.push(marker);
+    }
+    dir.write(
+        "repo/safe.go",
+        "package sample\n// SAFE_REVISION_MARKER\nfunc Safe() {}\n",
     )?;
-    let trace = dir.0.join("git-invocations");
+    git(&root, &["init", "-q"])?;
+    let mut add = vec!["add", "-f"];
+    add.extend(sensitive_paths);
+    add.push("safe.go");
+    git(&root, &add)?;
+    git(&root, &["commit", "-q", "-m", "initial"])?;
+    let mut remove = vec!["rm", "-q"];
+    remove.extend(sensitive_paths);
+    remove.push("safe.go");
+    git(&root, &remove)?;
+    dir.write("repo/fresh.go", "package sample\nfunc Fresh() {}\n")?;
+    git(&root, &["add", "fresh.go"])?;
+    let probe = install_git_probe(&dir)?;
     let output = support::command(BINARY, &dir.0)
         .args(["impact", "--diff", "--json", "-C"])
         .arg(&root)
         .arg("--index-dir")
         .arg(dir.0.join("index"))
         .env("HOME", dir.0.join("home"))
-        .env("PATH", search_path)
-        .env("REAL_GIT", real_git)
-        .env("TRACE_PATH", &trace)
+        .env("PATH", &probe.path)
+        .env("REAL_GIT", &probe.real_git)
+        .env("TRACE_PATH", &probe.trace)
+        .env("CAPTURE_PATH", &probe.captured)
         .output()?;
     assert_eq!(
         output.status.code(),
@@ -3141,10 +3201,41 @@ fn impact_diff_never_reads_deleted_sensitive_revision_content() -> TestResult {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let calls = fs::read_to_string(trace)?;
-    assert!(calls.contains("HEAD:safe.go"), "{calls}");
+    let calls = fs::read_to_string(&probe.trace)?;
+    let captured = fs::read_to_string(&probe.captured)?;
+    for marker in markers {
+        assert!(
+            !captured.contains(&marker),
+            "read protected content: {marker}"
+        );
+    }
+    assert!(captured.contains("SAFE_REVISION_MARKER"), "{captured}");
     assert!(!calls.contains("HEAD:.env"), "{calls}");
-    assert!(String::from_utf8(output.stdout)?.contains("\"name\":\"Safe\""));
+    let rename_call = calls
+        .lines()
+        .find(|line| line.contains("--find-renames"))
+        .ok_or("safe deletion and addition should request rename detection")?;
+    assert!(
+        rename_call.contains(":(top,literal)safe.go"),
+        "{rename_call}"
+    );
+    assert!(
+        rename_call.contains(":(top,literal)fresh.go"),
+        "{rename_call}"
+    );
+    for path in sensitive_paths {
+        assert!(!rename_call.contains(path), "{rename_call}");
+    }
+    let json = String::from_utf8(output.stdout)?;
+    assert!(json.contains("\"name\":\"Safe\""), "{json}");
+    for path in sensitive_paths {
+        assert!(
+            json.contains(&format!(
+                "\"name\":\"path-only revision\",\"path\":\"{path}\""
+            )),
+            "{json}"
+        );
+    }
     Ok(())
 }
 
@@ -3167,6 +3258,8 @@ fn impact_diff_handles_modified_sensitive_files_as_path_only() -> TestResult {
         String::from_utf8_lossy(&indexed.stderr)
     );
     dir.write("repo/.env", "DUMMY=after\n")?;
+    dir.write("repo/.env.new", "DUMMY=new\n")?;
+    git(&root, &["add", "-f", ".env.new"])?;
 
     let output = run_in(&root, &index, &["impact", "--diff", "--json"])?;
     assert_eq!(
@@ -3180,6 +3273,147 @@ fn impact_diff_handles_modified_sensitive_files_as_path_only() -> TestResult {
         !text.contains("DUMMY=before") && !text.contains("DUMMY=after"),
         "{text}"
     );
+    assert!(
+        text.contains("\"name\":\"path-only revision\",\"path\":\".env\""),
+        "{text}"
+    );
+    assert!(
+        text.contains("\"name\":\"path-only current\",\"path\":\".env.new\""),
+        "{text}"
+    );
+    assert!(!text.contains("\"kind\":\"new 0\""), "{text}");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn impact_diff_keeps_oversized_revision_blobs_path_only() -> TestResult {
+    const LARGE_REVISION_BYTES: usize = 8 * 1024 * 1024 + 1;
+
+    let dir = TempDir::new("impact-large-revision")?;
+    let root = dir.0.join("repo");
+    let mut large = b"LARGE_REVISION_MARKER\n".to_vec();
+    large.resize(LARGE_REVISION_BYTES, b'x');
+    dir.write_bytes("repo/large.txt", &large)?;
+    dir.write("repo/safe.go", "package sample\nfunc Safe() {}\n")?;
+    git(&root, &["init", "-q"])?;
+    git(&root, &["add", "large.txt", "safe.go"])?;
+    git(&root, &["commit", "-q", "-m", "initial"])?;
+    git(&root, &["rm", "-q", "large.txt", "safe.go"])?;
+    let probe = install_git_probe(&dir)?;
+
+    let output = support::command(BINARY, &dir.0)
+        .args(["impact", "--diff", "--json", "-C"])
+        .arg(&root)
+        .arg("--index-dir")
+        .arg(dir.0.join("index"))
+        .env("HOME", dir.0.join("home"))
+        .env("PATH", &probe.path)
+        .env("REAL_GIT", &probe.real_git)
+        .env("TRACE_PATH", &probe.trace)
+        .env("CAPTURE_PATH", &probe.captured)
+        .output()?;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = String::from_utf8(output.stdout)?;
+    let calls = fs::read_to_string(&probe.trace)?;
+    let captured = fs::read_to_string(&probe.captured)?;
+    assert!(!captured.contains("LARGE_REVISION_MARKER"));
+    assert!(
+        json.contains("\"name\":\"path-only revision\",\"path\":\"large.txt\""),
+        "{json}"
+    );
+    assert!(json.contains("\"name\":\"Safe\""), "{json}");
+    assert!(!calls.contains("HEAD:large.txt"), "{calls}");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn impact_diff_keeps_gitlinks_path_only() -> TestResult {
+    let dir = TempDir::new("impact-gitlink-revision")?;
+    let submodule = dir.0.join("submodule");
+    dir.write("submodule/source.go", "package sample\nfunc Nested() {}\n")?;
+    git(&submodule, &["init", "-q"])?;
+    git(&submodule, &["add", "source.go"])?;
+    git(&submodule, &["commit", "-q", "-m", "submodule"])?;
+    let revision = support::command("git", &dir.0)
+        .arg("-C")
+        .arg(&submodule)
+        .args(["rev-parse", "HEAD"])
+        .output()?;
+    assert!(
+        revision.status.success(),
+        "{}",
+        String::from_utf8_lossy(&revision.stderr)
+    );
+    let revision = String::from_utf8(revision.stdout)?.trim().to_owned();
+    let dir_entry = format!("160000,{revision},nested");
+
+    let root = dir.0.join("repo");
+    dir.write("repo/safe.go", "package sample\nfunc Safe() {}\n")?;
+    git(&root, &["init", "-q"])?;
+    git(&root, &["add", "safe.go"])?;
+    git(&root, &["update-index", "--add", "--cacheinfo", &dir_entry])?;
+    git(&root, &["commit", "-q", "-m", "initial"])?;
+    git(&root, &["update-index", "--force-remove", "nested"])?;
+
+    let output = run_in(&root, &dir.0.join("index"), &["impact", "--diff", "--json"])?;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = String::from_utf8(output.stdout)?;
+    assert!(
+        json.contains("\"name\":\"path-only revision\",\"path\":\"nested\""),
+        "{json}"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn impact_diff_reports_existing_revision_read_failures() -> TestResult {
+    let dir = TempDir::new("impact-revision-read-error")?;
+    let root = dir.0.join("repo");
+    dir.write("repo/safe.go", "package sample\nfunc Safe() {}\n")?;
+    git(&root, &["init", "-q"])?;
+    git(&root, &["config", "gc.auto", "0"])?;
+    git(&root, &["add", "safe.go"])?;
+    git(&root, &["commit", "-q", "-m", "initial"])?;
+    let object = support::command("git", &dir.0)
+        .arg("-C")
+        .arg(&root)
+        .args(["rev-parse", "HEAD:safe.go"])
+        .output()?;
+    assert!(
+        object.status.success(),
+        "{}",
+        String::from_utf8_lossy(&object.stderr)
+    );
+    let object = String::from_utf8(object.stdout)?.trim().to_owned();
+    assert!(matches!(object.len(), 40 | 64), "{object}");
+    assert!(
+        object.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "{object}"
+    );
+    let (directory, filename) = object.split_at(2);
+    let blob = root.join(".git/objects").join(directory).join(filename);
+    assert!(blob.is_file(), "missing loose test blob {blob:?}");
+    fs::remove_file(blob)?;
+    fs::remove_file(root.join("safe.go"))?;
+
+    let output = run_in(&root, &dir.0.join("index"), &["impact", "--diff", "--json"])?;
+    assert_ne!(output.status.code(), Some(0));
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("revision blob"), "{stderr}");
+    assert!(String::from_utf8(output.stdout)?.is_empty());
     Ok(())
 }
 
