@@ -872,8 +872,10 @@ fn assemble(assembly: Assembly) -> Parsed {
         refs.push(entry.reference);
     }
     #[cfg(feature = "lang-typescript")]
-    if !repeated_interfaces.is_empty() {
-        let groups = super::lang::typescript::interface_groups(&symbols, &source_identities);
+    if repeated_interfaces.values().any(|&count| count > 1) {
+        let nodes: Vec<_> = defs.iter().map(|def| def.node).collect();
+        let groups =
+            super::lang::typescript::interface_groups(&symbols, &source_identities, &nodes, source);
         source_identities.extend(groups);
     }
     source_identities.sort_unstable_by_key(|identity| (identity.kind, identity.index));

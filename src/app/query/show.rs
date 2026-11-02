@@ -277,9 +277,30 @@ fn relation(
     cap: usize,
     site: bool,
 ) {
-    for (shown, edge) in list.iter().enumerate() {
+    let mut positions: HashMap<(u32, EdgeKind), usize> = HashMap::new();
+    let mut distinct: Vec<&EdgeRecord> = Vec::with_capacity(list.len());
+    for &edge in list {
+        let groups = index.derived.interface_groups();
+        if groups
+            .binary_search_by_key(&edge.node, |pair| pair[0])
+            .is_err()
+        {
+            distinct.push(edge);
+            continue;
+        }
+        let key = (index.derived.interface_canonical(edge.node), edge.kind());
+        if let Some(&position) = positions.get(&key) {
+            if edge.is_exact() && !distinct[position].is_exact() {
+                distinct[position] = edge;
+            }
+        } else {
+            positions.insert(key, distinct.len());
+            distinct.push(edge);
+        }
+    }
+    for (shown, edge) in distinct.iter().enumerate() {
         if shown >= cap {
-            writer.skip(list.len() - shown);
+            writer.skip(distinct.len() - shown);
             break;
         }
         write_edge(

@@ -29,7 +29,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 74;
+pub const RESOLVE_VERSION: u32 = 75;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -4200,6 +4200,16 @@ impl<'a> Index<'a> {
             // the implementation the method belongs to: any part of the class carries them.
             let parts = if objc {
                 self.objc_class_parts(&types)
+            } else if types.len() == 1 && self.interface_canonical.contains_key(&types[0]) {
+                std::iter::once(types[0])
+                    .chain(
+                        self.supertypes
+                            .get(&types[0])
+                            .into_iter()
+                            .flatten()
+                            .copied(),
+                    )
+                    .collect()
             } else {
                 types[..1].to_vec()
             };

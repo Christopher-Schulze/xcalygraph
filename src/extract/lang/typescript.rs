@@ -93,13 +93,6 @@ pub(in crate::extract) fn interface_member_identity(
     if interface.has_error() || interface.is_missing() {
         return None;
     }
-    let mut header = interface.walk();
-    if interface
-        .named_children(&mut header)
-        .any(|child| child.kind() == "extends_type_clause")
-    {
-        return None;
-    }
     let body = interface.child_by_field_name("body")?;
     let mut cursor = body.walk();
     let mut identity = String::from("interface_members:");
@@ -153,6 +146,8 @@ pub(in crate::extract) fn interface_member_identity(
 pub(in crate::extract) fn interface_groups(
     symbols: &[crate::domain::facts::Symbol],
     identities: &[crate::domain::facts::SourceIdentity],
+    nodes: &[Option<tree_sitter::Node<'_>>],
+    source: &[u8],
 ) -> Vec<crate::domain::facts::SourceIdentity> {
     use crate::domain::facts::{SourceIdentity, SourceIdentityKind};
     use std::collections::HashMap;
@@ -193,7 +188,10 @@ pub(in crate::extract) fn interface_groups(
             };
             member_sets.push(*members);
         }
-        if member_sets.len() != parts.len() || !compatible_interface_members(&member_sets) {
+        if member_sets.len() != parts.len()
+            || !compatible_interface_members(&member_sets)
+            || !compatible_direct_base(parts[0], &member_sets, symbols, &names, nodes, source)
+        {
             continue;
         }
         let canonical = parts[0].to_string();
@@ -204,6 +202,125 @@ pub(in crate::extract) fn interface_groups(
         }));
     }
     groups
+}
+
+/// A single local, nongeneric interface base proves compatibility only when its members do not
+/// overlap the declarations being merged. Other inheritance needs stronger type evidence.
+#[cfg(feature = "lang-typescript")]
+fn compatible_direct_base(
+    part: u32,
+    members: &[&str],
+    symbols: &[crate::domain::facts::Symbol],
+    names: &std::collections::HashMap<&str, Vec<u32>>,
+    nodes: &[Option<tree_sitter::Node<'_>>],
+    source: &[u8],
+) -> bool {
+    let Some(interface) = nodes.get(part as usize).copied().flatten() else {
+        return false;
+    };
+    let mut walker = interface.walk();
+    let Some(clause) = interface
+        .named_children(&mut walker)
+        .find(|child| child.kind() == "extends_type_clause")
+    else {
+        return true;
+    };
+    if symbols[part as usize].exported {
+        return false;
+    }
+    let mut root = interface;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    if root.kind() != "program" {
+        return false;
+    }
+    let mut walker = root.walk();
+    let mut external_module = false;
+    for child in root.named_children(&mut walker) {
+        match child.kind() {
+            "import_statement" => external_module = true,
+            "export_statement" => {
+                external_module = true;
+                if child.child_by_field_name("declaration").is_none() {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    if !external_module {
+        return false;
+    }
+    if interface.child_by_field_name("type_parameters").is_some() {
+        return false;
+    }
+    let mut walker = clause.walk();
+    let mut bases = clause.named_children(&mut walker);
+    let (Some(base), None) = (bases.next(), bases.next()) else {
+        return false;
+    };
+    if base.kind() != "type_identifier" {
+        return false;
+    }
+    let Ok(name) = base.utf8_text(source) else {
+        return false;
+    };
+    if name.contains('\\') {
+        return false;
+    }
+    let Some([index]) = names.get(name).map(Vec::as_slice) else {
+        return false;
+    };
+    if *index == part
+        || symbols[*index as usize].kind != Some(SymKind::Iface)
+        || symbols[*index as usize].exported
+    {
+        return false;
+    }
+    let Some(base) = nodes.get(*index as usize).copied().flatten() else {
+        return false;
+    };
+    if base.child_by_field_name("type_parameters").is_some() {
+        return false;
+    }
+    let mut walker = base.walk();
+    if base
+        .named_children(&mut walker)
+        .any(|child| child.kind() == "extends_type_clause")
+    {
+        return false;
+    }
+    let Some(base_members) = interface_member_identity(base, source) else {
+        return false;
+    };
+    if !compatible_interface_members(&[&base_members]) {
+        return false;
+    }
+    let Some(base_names) = interface_member_names(&base_members) else {
+        return false;
+    };
+    members.iter().all(|part| {
+        interface_member_names(part).is_some_and(|names| names.is_disjoint(&base_names))
+    })
+}
+
+#[cfg(feature = "lang-typescript")]
+fn interface_member_names(identity: &str) -> Option<std::collections::HashSet<&str>> {
+    let mut rest = identity.strip_prefix("interface_members:")?;
+    let mut names = std::collections::HashSet::new();
+    while !rest.is_empty() {
+        let (&tag, tail) = rest.as_bytes().split_first()?;
+        if !matches!(tag, b'p' | b'm' | b'o') {
+            return None;
+        }
+        let tail = std::str::from_utf8(tail).ok()?;
+        let (name, tail) = take_identity_part(tail)?;
+        let (_, tail) = take_identity_part(tail)?;
+        names.insert(name);
+        rest = tail;
+    }
+    Some(names)
 }
 
 #[cfg(feature = "lang-typescript")]

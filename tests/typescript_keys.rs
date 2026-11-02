@@ -183,6 +183,90 @@ fn equivalent_interface_property_spellings_merge_only_when_compatible() -> Resul
 }
 
 #[test]
+fn inherited_interfaces_merge_without_hiding_incompatible_base_members()
+-> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("valid.ts"),
+        include_bytes!("fixtures/typescript-inherited-valid.ts"),
+    )?;
+    fs::write(
+        root.join("invalid.ts"),
+        include_bytes!("fixtures/typescript-inherited-invalid.ts"),
+    )?;
+    fs::write(
+        root.join("script.ts"),
+        include_bytes!("fixtures/typescript-inherited-script.ts"),
+    )?;
+    fs::write(
+        root.join("alias.ts"),
+        include_bytes!("fixtures/typescript-inherited-export-alias.ts"),
+    )?;
+    fs::write(
+        root.join("augment.ts"),
+        include_bytes!("fixtures/typescript-inherited-augment.ts"),
+    )?;
+    fs::write(
+        root.join("ambiguous.ts"),
+        include_bytes!("fixtures/typescript-inherited-ambiguous.ts"),
+    )?;
+    let show = fixture.run(&["show", "valid.Inherited"])?;
+    let text = String::from_utf8(show.stdout)?;
+    assert!(show.status.success(), "{text}");
+    for expected in ["valid.ts:2", "valid.ts:3", "left", "right", "valid.Base"] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    let invalid = fixture.run(&["show", "invalid.Broken", "--read-only"])?;
+    assert_eq!(invalid.status.code(), Some(3));
+    for name in [
+        "invalid.Unknown",
+        "invalid.BrokenMethod",
+        "valid.GenericChild",
+        "script.GlobalChild",
+        "alias.AliasChild",
+        "invalid.Augmented",
+        "invalid.Exposed",
+    ] {
+        assert_eq!(
+            fixture.run(&["show", name, "--read-only"])?.status.code(),
+            Some(3),
+            "{name}"
+        );
+    }
+    let caller = fixture.run(&["show", "valid.callBase", "--read-only", "--exact"])?;
+    assert!(caller.status.success());
+    let caller = String::from_utf8(caller.stdout)?;
+    assert!(caller.contains("> valid.Base.run "), "{caller}");
+    let caller = fixture.run(&["show", "valid.callField", "--read-only", "--exact"])?;
+    assert!(caller.status.success());
+    let caller = String::from_utf8(caller.stdout)?;
+    assert!(caller.contains("> valid.Service.execute "), "{caller}");
+    assert!(!caller.contains("OtherService.execute"), "{caller}");
+    let base = fixture.run(&["show", "valid.Base", "--read-only"])?;
+    assert!(base.status.success());
+    let base = String::from_utf8(base.stdout)?;
+    assert_eq!(base.matches("v valid.Inherited ").count(), 1, "{base}");
+    let second = fixture.run(&["show", "valid.ts:3", "--read-only", "--exact"])?;
+    assert!(second.status.success());
+    let second = String::from_utf8(second.stdout)?;
+    assert!(second.contains("^ valid.Base "), "{second}");
+    let impact = fixture.run(&["impact", "valid.ts:3", "--read-only", "--exact"])?;
+    assert!(impact.status.success());
+    let impact = String::from_utf8(impact.stdout)?;
+    assert!(
+        impact.contains("valid.inspect") && impact.contains("valid.callBase"),
+        "{impact}"
+    );
+    let ambiguous = fixture.run(&["show", "ambiguous.run", "--read-only", "--exact"])?;
+    assert!(ambiguous.status.success());
+    let ambiguous = String::from_utf8(ambiguous.stdout)?;
+    assert!(!ambiguous.contains("Service.execute"), "{ambiguous}");
+    Ok(())
+}
+
+#[test]
 fn same_file_interfaces_merge_without_losing_declaration_locations() -> Result<(), Box<dyn Error>> {
     let fixture = Fixture::new()?;
     fs::create_dir(fixture.0.join("repo"))?;
@@ -421,6 +505,10 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         root.join("valid.ts"),
         include_bytes!("fixtures/typescript-equivalent-valid.ts"),
     )?;
+    fs::write(
+        root.join("inherited.ts"),
+        include_bytes!("fixtures/typescript-inherited-valid.ts"),
+    )?;
     let mut images = Vec::new();
     let mut answers = Vec::new();
     for workers in ["1", "4"] {
@@ -450,7 +538,9 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         assert!(answer.status.success());
         let equivalent = run(&["show", "valid.Strings", "--json", "--read-only"])?;
         assert!(equivalent.status.success());
-        answers.push((answer.stdout, equivalent.stdout));
+        let inherited = run(&["show", "inherited.Inherited", "--json", "--read-only"])?;
+        assert!(inherited.status.success());
+        answers.push((answer.stdout, equivalent.stdout, inherited.stdout));
     }
     assert_eq!(images[0], images[1]);
     assert_eq!(answers[0], answers[1]);
