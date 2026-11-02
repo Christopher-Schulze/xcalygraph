@@ -101,6 +101,8 @@ with tempfile.TemporaryDirectory(prefix="performance-corpora.", dir=repo / ".cac
             utilities.append("check-build-space.sh")
         for utility in utilities:
             shutil.copyfile(repo / "scripts/utils" / utility, project / "scripts/utils" / utility)
+        shutil.copyfile(repo / "scripts/benchmarks/output-writer.sh",
+                        project / "scripts/benchmarks/output-writer.sh")
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith(("GIT_", "XCALYGRAPH_", "BASH_FUNC_", "CARGO_", "RUSTUP_"))
                        and key not in ("BASH_ENV", "ENV", "CDPATH", "TAR_OPTIONS", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER")}
@@ -153,28 +155,38 @@ with tempfile.TemporaryDirectory(prefix="performance-corpora.", dir=repo / ".cac
     measured_runner = project / "scripts/benchmarks/run-benchmarks.sh"
     measured_runner.write_text(source.replace(build, 'BINARY="${PERFORMANCE_TEST_BINARY}"', 1))
     environment["PERFORMANCE_TEST_BINARY"] = str(binary)
-    result = subprocess.run(["bash", str(measured_runner), "alpha", "alpha/../../victim", "a/b", "a-b"], cwd=invocation,
-                            env=environment, capture_output=True, timeout=180)
-    assert result.returncode == 0, result.stderr + result.stdout
-    assert (victim / "sentinel").read_text() == "preserve\n"
-    evidence = result.stdout.rfind(b"evidence: ")
-    end = result.stdout.find(b" (identity.tsv and measurement artifacts)", evidence)
-    assert evidence >= 0 and end >= 0, result.stdout
-    identity = Path(os.fsdecode(result.stdout[evidence + len(b"evidence: "):end])) / "identity.tsv"
-    records = [line.split("\t") for line in identity.read_text().splitlines() if line.startswith("corpus\t")]
-    assert len(records) == 4 and all(len(record) == 5 for record in records), records
-    actual = {json.loads(record[2]): (Path(json.loads(record[3])), Path(json.loads(record[4]))) for record in records}
-    assert set(actual) == {"alpha", "alpha/../../victim", "a/b", "a-b"}
-    for name, directory, content in (("alpha", "alpha", "pub fn alpha() {}\n"),
-                                     ("alpha/../../victim", "beta", "pub fn beta() {}\n"),
-                                     ("a/b", "alpha", "pub fn alpha() {}\n"),
-                                     ("a-b", "beta", "pub fn beta() {}\n")):
-        input_root, snapshot = actual[name]
-        assert input_root == invocation / directory
-        assert (snapshot / "main.rs").read_text() == content
-    assert len(list(identity.parent.glob("*.full.time"))) == 4
-    upstream = subprocess.run(["bash", str(measured_runner), "--upstream", "alpha"], cwd=invocation,
-                              env=environment, capture_output=True, timeout=180)
+    def run_shell(shell, *arguments):
+        tools = work / ("measurement-shell-" + str(len(list(work.glob("measurement-shell-*")))))
+        tools.mkdir()
+        (tools / "bash").symlink_to(shell)
+        shell_environment = dict(environment, PATH=str(tools) + os.pathsep + environment["PATH"])
+        return subprocess.run([shell, str(measured_runner), *arguments], cwd=invocation, env=shell_environment,
+                              capture_output=True, timeout=180)
+
+    for shell in shells:
+        result = run_shell(shell, "alpha", "alpha/../../victim", "a/b", "a-b")
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert (victim / "sentinel").read_text() == "preserve\n"
+        evidence = result.stdout.rfind(b"evidence: ")
+        end = result.stdout.find(b" (identity.tsv and measurement artifacts)", evidence)
+        assert evidence >= 0 and end >= 0, result.stdout
+        evidence_dir = Path(os.fsdecode(result.stdout[evidence + len(b"evidence: "):end]))
+        assert (evidence_dir / "results.txt").read_bytes() == result.stdout
+        assert (evidence_dir / ".xcalygraph-disposable").read_bytes() == b"xcalygraph-cache-v1\n"
+        identity = evidence_dir / "identity.tsv"
+        records = [line.split("\t") for line in identity.read_text().splitlines() if line.startswith("corpus\t")]
+        assert len(records) == 4 and all(len(record) == 5 for record in records), records
+        actual = {json.loads(record[2]): (Path(json.loads(record[3])), Path(json.loads(record[4]))) for record in records}
+        assert set(actual) == {"alpha", "alpha/../../victim", "a/b", "a-b"}
+        for name, directory, content in (("alpha", "alpha", "pub fn alpha() {}\n"),
+                                         ("alpha/../../victim", "beta", "pub fn beta() {}\n"),
+                                         ("a/b", "alpha", "pub fn alpha() {}\n"),
+                                         ("a-b", "beta", "pub fn beta() {}\n")):
+            input_root, snapshot = actual[name]
+            assert input_root == invocation / directory
+            assert (snapshot / "main.rs").read_text() == content
+        assert len(list(identity.parent.glob("*.full.time"))) == 4
+    upstream = run_shell(shells[-1], "--upstream", "alpha")
     assert upstream.returncode == 0, upstream.stderr + upstream.stdout
     rows = [line.split() for line in upstream.stdout.splitlines() if line.startswith(b"alpha ")]
     assert len(rows) == 1 and len(rows[0]) == 12, upstream.stdout

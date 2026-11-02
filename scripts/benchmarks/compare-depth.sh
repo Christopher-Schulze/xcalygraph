@@ -44,10 +44,8 @@ bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
 mkdir -p "${WORK_BASE}"
 WORK="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")"
 readonly WORK
-exec 3>&1
-exec > >(tee "${WORK}/results.txt")
-tee_pid=$!
-readonly tee_pid
+source "${REPO_ROOT}/scripts/benchmarks/output-writer.sh"
+start_output_writer "${WORK}/results.txt"
 readonly BENCHMARK_HOME="${WORK}/home"
 mkdir -p "${BENCHMARK_HOME}"
 copy="$(env HOME="${BENCHMARK_HOME}" bash "${REPO_ROOT}/scripts/utils/prepare-corpus.sh" "${source_dir}" "${REPO_ROOT}/.cache/corpus-snapshots" --graphify)"
@@ -165,6 +163,5 @@ for relation, rows in sorted(misses.items()):
         print("  " + row)
 PYTHON
 echo "evidence: ${WORK}; snapshot: ${copy}"
-exec >&3 3>&-
-wait "${tee_pid}"
+finish_output_writer
 ( set -o noclobber; printf 'xcalygraph-cache-v1\n' > "${WORK}/.xcalygraph-disposable" )

@@ -157,10 +157,8 @@ readonly BINARY
 mkdir -p "${WORK_BASE}"
 WORK="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")"
 readonly WORK
-exec 3>&1
-exec > >(tee "${WORK}/results.txt")
-tee_pid=$!
-readonly tee_pid
+source "${REPO_ROOT}/scripts/benchmarks/output-writer.sh"
+start_output_writer "${WORK}/results.txt"
 readonly BENCHMARK_HOME="${WORK}/home"
 mkdir -p "${BENCHMARK_HOME}"
 sha256_file() {
@@ -215,7 +213,7 @@ for corpus in "${corpora[@]}"; do
   [[ -n "${root}" && -d "${root}" && -n "${questions}" ]] || { echo "run-evaluation.sh: ${corpus}: missing corpus or questions" >&2; exit 1; }
   snapshot_args=()
   (( upstream )) && snapshot_args+=(--graphify)
-  root="$(env HOME="${BENCHMARK_HOME}" bash "${REPO_ROOT}/scripts/utils/prepare-corpus.sh" "${root}" "${SNAPSHOTS}" "${snapshot_args[@]}")"
+  root="$(env HOME="${BENCHMARK_HOME}" bash "${REPO_ROOT}/scripts/utils/prepare-corpus.sh" "${root}" "${SNAPSHOTS}" ${snapshot_args[@]+"${snapshot_args[@]}"})"
   printf '%s\t%s\t%s\n' "${corpus}" "${root}" "$(sha256_file "${questions}")" >> "${WORK}/identity.tsv"
   index="${WORK}/index-${corpus//\//-}"
   misses="${WORK}/misses-${corpus//\//-}.txt"
@@ -318,6 +316,5 @@ for corpus in "${corpora[@]}"; do
   fi
 done
 echo "evidence: ${WORK} (identity.tsv, misses-<corpus>.txt, upstream-errors.log)"
-exec >&3 3>&-
-wait "${tee_pid}"
+finish_output_writer
 ( set -o noclobber; printf 'xcalygraph-cache-v1\n' > "${WORK}/.xcalygraph-disposable" )

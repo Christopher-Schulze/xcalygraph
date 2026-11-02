@@ -236,10 +236,8 @@ readonly BINARY
 mkdir -p "${WORK_BASE}"
 WORK="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")"
 readonly WORK
-exec 3>&1
-exec > >(tee "${WORK}/results.txt")
-tee_pid=$!
-readonly tee_pid
+source "${REPO_ROOT}/scripts/benchmarks/output-writer.sh"
+start_output_writer "${WORK}/results.txt"
 readonly BENCHMARK_HOME="${WORK}/home"
 mkdir -p "${BENCHMARK_HOME}"
 printf 'binary_sha256\t%s\n' "$(python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${BINARY}")" > "${WORK}/identity.tsv"
@@ -385,6 +383,5 @@ PYTHON
     "${name}" "${files}" "${build_ms}" "${rss_mb}" "${fresh_ms}" "${change_ms}" "${index_kb}" "${write_kb}" "${upstream_line}"
 done
 echo "evidence: ${WORK} (identity.tsv and measurement artifacts)"
-exec >&3 3>&-
-wait "${tee_pid}"
+finish_output_writer
 ( set -o noclobber; printf 'xcalygraph-cache-v1\n' > "${WORK}/.xcalygraph-disposable" )

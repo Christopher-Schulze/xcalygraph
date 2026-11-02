@@ -80,6 +80,8 @@ with tempfile.TemporaryDirectory(prefix="performance-source-paths.", dir=repo / 
     for item in ("read-private-corpus.sh", "guard-benchmark.sh", "verification-target.sh", "verification-source.sh",
                  "verification-lock.sh", "prepare-corpus.sh", "check-build-space.sh"):
         shutil.copyfile(repo / "scripts/utils" / item, project / "scripts/utils" / item)
+    shutil.copyfile(repo / "scripts/benchmarks/output-writer.sh",
+                    project / "scripts/benchmarks/output-writer.sh")
     environment["CARGO_TARGET_DIR"] = str(target)
     subprocess.run(["git", "init", "-q", str(project)], env=environment, check=True)
     subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=project, env=environment, capture_output=True, check=True)
