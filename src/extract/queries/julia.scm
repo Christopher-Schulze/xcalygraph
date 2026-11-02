@@ -10,12 +10,21 @@
 (function_definition (signature (typed_expression . (call_expression . (field_expression (identifier) @name .))))) @definition.function
 (function_definition (signature (where_expression . (typed_expression . (call_expression . (identifier) @name))))) @definition.function
 (function_definition (signature (where_expression . (typed_expression . (call_expression . (field_expression (identifier) @name .)))))) @definition.function
+; Declared argument bindings let call resolution use the type evidence already present in a signature.
+(function_definition (signature (call_expression (argument_list (typed_expression (identifier) @binding.name (_) @binding.type) @binding))))
+(function_definition (signature (where_expression (call_expression (argument_list (typed_expression (identifier) @binding.name (_) @binding.type) @binding)))))
+(function_definition (signature (typed_expression (call_expression (argument_list (typed_expression (identifier) @binding.name (_) @binding.type) @binding)))))
+(function_definition (signature (where_expression (typed_expression (call_expression (argument_list (typed_expression (identifier) @binding.name (_) @binding.type) @binding))))))
 (macro_definition (signature (call_expression . (identifier) @name))) @definition.macro
 ; Short form `f(x) = ...` and method extensions `Base.show(io, x) = ...`.
 (assignment . (call_expression . (identifier) @name) (operator)) @definition.function
 (assignment . (call_expression . (field_expression (identifier) @name .)) (operator)) @definition.function
 (assignment . (where_expression . (call_expression . (identifier) @name)) (operator)) @definition.function
 (assignment . (where_expression . (call_expression . (field_expression (identifier) @name .))) (operator)) @definition.function
+(assignment . (call_expression (argument_list (typed_expression (identifier) @binding.name (_) @binding.type) @binding)) (operator))
+(assignment . (where_expression (call_expression (argument_list (typed_expression (identifier) @binding.name (_) @binding.type) @binding))) (operator))
+(assignment . (typed_expression (call_expression (argument_list (typed_expression (identifier) @binding.name (_) @binding.type) @binding))) (operator))
+(assignment . (where_expression (typed_expression (call_expression (argument_list (typed_expression (identifier) @binding.name (_) @binding.type) @binding)))) (operator))
 (struct_definition (type_head (identifier) @name)) @definition.struct
 (struct_definition (type_head (binary_expression . (identifier) @name))) @definition.struct
 (struct_definition (type_head (binary_expression (operator) (identifier) @name)) @reference.inherit)
@@ -33,8 +42,8 @@
   (argument_list . (string_literal (content) @import.path))
   (#eq? @_include "include")) @import
 
-(call_expression . (identifier) @name) @reference.call
-(call_expression . (field_expression value: (_) @qualifier (identifier) @name .)) @reference.call
+(call_expression . (identifier) @name (argument_list) @call.arguments) @reference.call
+(call_expression . (field_expression value: (_) @qualifier (identifier) @name .) (argument_list) @call.arguments) @reference.call
 (binary_expression (operator) @_pipe . (identifier) @name (#eq? @_pipe "|>")) @reference.call
 (typed_expression (_) (identifier) @name) @reference.type
 (parametrized_type_expression . (identifier) @name) @reference.type

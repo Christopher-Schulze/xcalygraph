@@ -2,8 +2,9 @@
 
 use super::codec::{DecodeError, DecodeResult, Decoder, Encoder};
 use crate::domain::facts::{
-    AssetMeta, Binding, ConfigKey, EnvDef, EnvRead, EnvSource, Facts, Fields, Import, Manifest,
-    Ref, RefKind, SourceIdentity, SourceIdentityKind, SymKind, Symbol, TextSegment, ValueKind,
+    AssetMeta, Binding, ConfigKey, EnvDef, EnvRead, EnvSource, Facts, Fields, Import,
+    JuliaCallArgument, Manifest, Ref, RefKind, SourceIdentity, SourceIdentityKind, SymKind, Symbol,
+    TextSegment, ValueKind,
 };
 
 /// Search terms as a token list, so each token is interned once in the shard's string table.
@@ -70,6 +71,16 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
         opt_index(encoder, reference.scope);
         encoder.var_u32(reference.line);
         encoder.u8(reference.arity);
+    }
+    encoder.var_usize(facts.julia_builtin_calls.len());
+    for &reference in &facts.julia_builtin_calls {
+        encoder.var_u32(reference);
+    }
+    encoder.var_usize(facts.julia_call_arguments.len());
+    for argument in &facts.julia_call_arguments {
+        encoder.var_u32(argument.reference);
+        encoder.u8(argument.position);
+        encoder.str(&argument.binding);
     }
     encoder.var_usize(facts.bindings.len());
     for binding in &facts.bindings {
@@ -196,6 +207,44 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             line: decoder.var_u32()?,
             arity: decoder.u8()?,
         });
+    }
+    let mut previous_builtin = None;
+    for _ in 0..decoder.len()? {
+        let reference = decoder.var_u32()?;
+        let Some(fact) = facts.refs.get(reference as usize) else {
+            return Err(DecodeError("Julia builtin reference"));
+        };
+        if fact.kind != RefKind::Call
+            || fact.qualifier.is_some()
+            || previous_builtin.is_some_and(|previous| previous >= reference)
+        {
+            return Err(DecodeError("Julia builtin reference"));
+        }
+        facts.julia_builtin_calls.push(reference);
+        previous_builtin = Some(reference);
+    }
+    let mut previous_argument = None;
+    for _ in 0..decoder.len()? {
+        let reference = decoder.var_u32()?;
+        let position = decoder.u8()?;
+        let binding = decoder.string()?;
+        let Some(fact) = facts.refs.get(reference as usize) else {
+            return Err(DecodeError("Julia call argument reference"));
+        };
+        let key = (reference, position);
+        if fact.kind != RefKind::Call
+            || (fact.arity != crate::domain::facts::NO_ARITY && position >= fact.arity)
+            || binding.is_empty()
+            || previous_argument.is_some_and(|previous| previous >= key)
+        {
+            return Err(DecodeError("Julia call argument"));
+        }
+        facts.julia_call_arguments.push(JuliaCallArgument {
+            reference,
+            position,
+            binding,
+        });
+        previous_argument = Some(key);
     }
     for _ in 0..decoder.len()? {
         facts.bindings.push(Binding {
@@ -344,13 +393,29 @@ mod tests {
                 line: 2,
                 reexport: true,
             }],
-            refs: vec![Ref {
-                kind: RefKind::Call,
-                name: "Query".to_owned(),
-                qualifier: Some("s.db".to_owned()),
-                scope: Some(1),
-                line: 12,
-                arity: 2,
+            refs: vec![
+                Ref {
+                    kind: RefKind::Call,
+                    name: "Query".to_owned(),
+                    qualifier: Some("s.db".to_owned()),
+                    scope: Some(1),
+                    line: 12,
+                    arity: 2,
+                },
+                Ref {
+                    kind: RefKind::Call,
+                    name: "length".to_owned(),
+                    qualifier: None,
+                    scope: Some(1),
+                    line: 13,
+                    arity: 1,
+                },
+            ],
+            julia_builtin_calls: vec![1],
+            julia_call_arguments: vec![JuliaCallArgument {
+                reference: 1,
+                position: 0,
+                binding: "rows".to_owned(),
             }],
             source_identities: Some(
                 vec![

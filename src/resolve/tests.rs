@@ -374,6 +374,64 @@ fn parameter_counts_come_from_the_declaration_list() {
     assert_eq!(count("const value = 1", "value"), None);
 }
 
+#[test]
+fn julia_dispatch_reads_only_supported_nominal_parameter_types() {
+    let signature = "function Base.convert(value::Tuple{Queue, Other}, item::Queue = nothing)";
+    assert_eq!(
+        super::julia_parameter_type(signature, "convert", 1),
+        Some("Queue")
+    );
+    assert_eq!(
+        super::julia_method_accepts(signature, "convert", 1),
+        Some(true)
+    );
+    assert_eq!(
+        super::julia_parameter_type(signature, "convert", 0),
+        None,
+        "generic tuple annotations stay unknown"
+    );
+    assert_eq!(
+        super::julia_parameter_name("Base.length(value = …)", "length", 0),
+        Some("value"),
+        "compacted signatures retain parameter names for facts-backed types"
+    );
+    assert_eq!(
+        super::julia_parameter_name("Base.find(value::Queue; strict::Bool=false)", "find", 0),
+        None,
+        "keyword signatures stay unknown"
+    );
+    assert_eq!(
+        super::julia_method_accepts("Base.find(value::Queue; strict::Bool=false)", "find", 2),
+        Some(false),
+        "Julia keyword parameters do not add positional arity"
+    );
+    assert_eq!(
+        super::julia_parameter_name("Base.convert(value::T) where T", "convert", 0),
+        None,
+        "type variables stay unknown"
+    );
+    assert_eq!(
+        super::julia_parameter_name("Base.length(value) …", "length", 0),
+        None,
+        "clipped signatures stay unknown"
+    );
+
+    assert_eq!(
+        super::julia_parameter_type("Base.join(values::Queue...)", "join", 2),
+        Some("Queue")
+    );
+    assert_eq!(
+        super::julia_parameter_type("Base.find(value::Queue; strict::Bool=false)", "find", 0),
+        None,
+        "keyword signatures stay unknown"
+    );
+    assert_eq!(
+        super::julia_parameter_type("Base.convert(value::T) where T", "convert", 0),
+        None,
+        "type variables stay unknown"
+    );
+}
+
 fn targets_at(
     graph: &Graph,
     caller_suffix: &str,
@@ -539,5 +597,83 @@ fn objective_c_selector_expression_resolves_its_full_selector() -> std::io::Resu
     );
     assert_eq!(reset_selector[0].0, Confidence::Inferred);
     assert!(reset_selector[0].1.contains("reset"));
+    Ok(())
+}
+
+#[test]
+fn julia_base_extensions_dispatch_on_typed_arguments() -> std::io::Result<()> {
+    let root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/resolve/julia-dispatch-app");
+    let graph = graph_of(&root)?;
+    let calls = crate::domain::graph::EdgeKind::Calls;
+
+    let queue = targets_at(&graph, "App.queue_size", 6, calls);
+    assert_eq!(
+        queue.len(),
+        1,
+        "typed Queue call must select only its most-specific extension: {queue:?}"
+    );
+    assert_eq!(queue[0].0, Confidence::Inferred);
+    assert!(queue[0].1.contains("Base.length"));
+    assert!(!queue[0].1.contains("Other"));
+    let queue_edges: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == calls && edge.line == 6)
+        .filter(|edge| {
+            graph
+                .symbols
+                .get(edge.source as usize)
+                .is_some_and(|source| source.qualified.ends_with("App.queue_size"))
+        })
+        .collect();
+    assert_eq!(
+        queue_edges.len(),
+        1,
+        "Queue source targets must stay unique"
+    );
+    let queue_target = &graph.symbols[queue_edges[0].target as usize];
+    assert_eq!(graph.files[queue_target.file as usize].path, "src/types.jl");
+    assert_eq!(queue_target.line, 8);
+    assert!(
+        !queue_target.signature.contains("::"),
+        "long method signature must exercise the facts-backed annotation fallback: {}",
+        queue_target.signature
+    );
+
+    let other = targets_at(&graph, "App.other_size", 10, calls);
+    assert_eq!(
+        other.len(),
+        1,
+        "typed Other call must select one extension: {other:?}"
+    );
+    assert_eq!(other[0].0, Confidence::Inferred);
+    assert!(other[0].1.contains("Base.length") && other[0].1.contains("Other"));
+    assert!(!other[0].1.contains("Queue"));
+    let other_edges: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == calls && edge.line == 10)
+        .filter(|edge| {
+            graph
+                .symbols
+                .get(edge.source as usize)
+                .is_some_and(|source| source.qualified.ends_with("App.other_size"))
+        })
+        .collect();
+    assert_eq!(
+        other_edges.len(),
+        1,
+        "Other source targets must stay unique"
+    );
+    let other_target = &graph.symbols[other_edges[0].target as usize];
+    assert_eq!(graph.files[other_target.file as usize].path, "src/types.jl");
+    assert_eq!(other_target.line, 9);
+
+    let unknown = targets_at(&graph, "App.unknown_size", 14, calls);
+    assert!(
+        unknown.is_empty(),
+        "untyped call must remain unresolved: {unknown:?}"
+    );
     Ok(())
 }

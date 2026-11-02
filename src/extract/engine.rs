@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator};
 
 use crate::domain::facts::{
-    self, Binding, EnvRead, Facts, Fields, Import, Ref, RefKind, SourceIdentity,
+    self, Binding, EnvRead, Facts, Fields, Import, JuliaCallArgument, Ref, RefKind, SourceIdentity,
     SourceIdentityKind, SymKind, Symbol,
 };
 
@@ -101,6 +101,15 @@ struct RawRef {
     position: usize,
     line: u32,
     arity: u8,
+    julia_arguments: Vec<(u8, String)>,
+}
+
+struct AssembledRef {
+    reference: Ref,
+    identity: Option<String>,
+    julia_builtin: bool,
+    arguments: Vec<(u8, String)>,
+    position: usize,
 }
 
 #[derive(Default)]
@@ -289,6 +298,7 @@ fn collect(
             }
             reference.kind = kind;
             reference.arity = match kind {
+                Some(RefKind::Call) if path.ends_with(".jl") => julia_arity(primary_node),
                 Some(RefKind::Call) => arity(primary_node),
                 // Base lists: the type argument count tells `IRequest` from `IRequest<T>`.
                 Some(RefKind::Inherit | RefKind::Implement) => type_argument_count(name),
@@ -309,6 +319,13 @@ fn collect(
             if let Some(qualifier) = get("qualifier") {
                 reference.qualifier =
                     Some(facts::clip(&facts::normalize_space(text(qualifier)), 80));
+            }
+            if path.ends_with(".jl")
+                && kind == Some(RefKind::Call)
+                && reference.qualifier.is_none()
+                && let Some(arguments) = get("call.arguments")
+            {
+                reference.julia_arguments = julia_arguments(arguments, source);
             }
         } else {
             match primary {
@@ -358,7 +375,12 @@ fn collect(
                         entry.name = Some(text(node).to_owned());
                     }
                     if let Some(node) = get("binding.type") {
-                        entry.type_name = Some(type_name(text(node)));
+                        let type_text = text(node);
+                        entry.type_name = Some(if path.ends_with(".jl") {
+                            facts::normalize_space(type_text)
+                        } else {
+                            type_name(type_text)
+                        });
                         entry.declared = true;
                     } else if let Some(node) = get("binding.ctor") {
                         // A constructor call fixes the type as firmly as a declaration.
@@ -617,26 +639,37 @@ fn assemble(assembly: Assembly) -> Parsed {
         })
         .map(|symbol| symbol.name.as_str())
         .collect();
-    let mut facts_refs: Vec<(Ref, Option<String>)> = refs
+    let mut facts_refs: Vec<AssembledRef> = refs
         .into_iter()
-        .filter(|(name_node, raw)| {
-            !def_name_nodes.contains(name_node)
-                && !(raw.qualifier.is_none()
-                    && (hooks.builtin)(&raw.name)
-                    && !local_functions.contains(raw.name.as_str()))
-        })
-        .filter_map(|(_, raw)| {
-            Some((
-                Ref {
-                    kind: raw.kind?,
+        .filter(|(name_node, _)| !def_name_nodes.contains(name_node))
+        .filter_map(|(_, mut raw)| {
+            let kind = raw.kind?;
+            let builtin = raw.qualifier.is_none() && (hooks.builtin)(&raw.name);
+            let local_function = local_functions.contains(raw.name.as_str());
+            let julia_builtin =
+                path.ends_with(".jl") && builtin && !local_function && kind == RefKind::Call;
+            if builtin && !local_function && !julia_builtin {
+                return None;
+            }
+            let arguments = if julia_builtin {
+                std::mem::take(&mut raw.julia_arguments)
+            } else {
+                Vec::new()
+            };
+            Some(AssembledRef {
+                reference: Ref {
+                    kind,
                     name: raw.name,
                     qualifier: raw.qualifier,
                     scope: scope_of(raw.position),
                     line: raw.line,
                     arity: raw.arity,
                 },
-                raw.source_identity,
-            ))
+                identity: raw.source_identity,
+                julia_builtin,
+                arguments,
+                position: raw.position,
+            })
         })
         .collect();
     if !locals.is_empty() {
@@ -647,7 +680,8 @@ fn assemble(assembly: Assembly) -> Parsed {
         // A local shadows every unqualified use of its name (`count := rc.Len; count()`); in
         // Ruby only bare names, since `foo(1)` calls the method even when a local `foo` exists.
         let ruby = path.ends_with(".rb");
-        facts_refs.retain(|(reference, _)| {
+        facts_refs.retain(|entry| {
+            let reference = &entry.reference;
             let shadowable = match reference.kind {
                 RefKind::Value => true,
                 RefKind::Call => !ruby || reference.arity == facts::NO_ARITY,
@@ -660,8 +694,8 @@ fn assemble(assembly: Assembly) -> Parsed {
     }
     for (impl_node, target, trait_name) in &impls {
         if let Some(trait_name) = trait_name {
-            facts_refs.push((
-                Ref {
+            facts_refs.push(AssembledRef {
+                reference: Ref {
                     kind: RefKind::Implement,
                     name: trait_name.clone(),
                     qualifier: Some(target.clone()),
@@ -669,41 +703,68 @@ fn assemble(assembly: Assembly) -> Parsed {
                     line: row(*impl_node),
                     arity: facts::NO_ARITY,
                 },
-                None,
-            ));
+                identity: None,
+                julia_builtin: false,
+                arguments: Vec::new(),
+                position: impl_node.start_byte(),
+            });
         }
     }
-    facts_refs.sort_by(|(a, _), (b, _)| {
-        (a.line, &a.name, a.kind, &a.qualifier, a.scope).cmp(&(
-            b.line,
-            &b.name,
-            b.kind,
-            &b.qualifier,
-            b.scope,
-        ))
+    facts_refs.sort_by(|a, b| {
+        (
+            a.reference.line,
+            &a.reference.name,
+            a.reference.kind,
+            &a.reference.qualifier,
+            a.reference.scope,
+            a.position,
+        )
+            .cmp(&(
+                b.reference.line,
+                &b.reference.name,
+                b.reference.kind,
+                &b.reference.qualifier,
+                b.reference.scope,
+                b.position,
+            ))
     });
     // A value reference repeated in its scope adds no edge: binding shadowing only grows with
     // the line and edges keep their first line, so the first occurrence decides.
     let mut seen_values = HashSet::new();
-    facts_refs.retain(|(reference, identity)| {
+    facts_refs.retain(|entry| {
+        let reference = &entry.reference;
         reference.kind != RefKind::Value
             || seen_values.insert((
                 reference.name.clone(),
                 reference.qualifier.clone(),
                 reference.scope,
-                identity.clone(),
+                entry.identity.clone(),
             ))
     });
     let mut refs = Vec::with_capacity(facts_refs.len());
-    for (index, (reference, identity)) in facts_refs.into_iter().enumerate() {
-        if let (Some(identity), Ok(index)) = (identity, u32::try_from(index)) {
-            source_identities.push(SourceIdentity {
-                kind: SourceIdentityKind::Reference,
-                index,
-                identity,
-            });
+    let mut julia_builtin_calls = Vec::new();
+    let mut julia_call_arguments = Vec::new();
+    for (index, entry) in facts_refs.into_iter().enumerate() {
+        if let Ok(reference_index) = u32::try_from(index) {
+            if entry.julia_builtin {
+                julia_builtin_calls.push(reference_index);
+            }
+            for (position, binding) in entry.arguments {
+                julia_call_arguments.push(JuliaCallArgument {
+                    reference: reference_index,
+                    position,
+                    binding,
+                });
+            }
+            if let Some(identity) = entry.identity {
+                source_identities.push(SourceIdentity {
+                    kind: SourceIdentityKind::Reference,
+                    index: reference_index,
+                    identity,
+                });
+            }
         }
-        refs.push(reference);
+        refs.push(entry.reference);
     }
     source_identities.sort_unstable_by_key(|identity| (identity.kind, identity.index));
     let source_identities =
@@ -813,6 +874,8 @@ fn assemble(assembly: Assembly) -> Parsed {
             symbols,
             imports: facts_imports,
             refs,
+            julia_builtin_calls,
+            julia_call_arguments,
             source_identities,
             bindings: facts_bindings,
             envs: facts_envs,
@@ -1068,6 +1131,44 @@ fn arity(call: Node) -> u8 {
         })
         .sum();
     u8::try_from(count).unwrap_or(facts::NO_ARITY - 1)
+}
+
+fn julia_arity(call: Node) -> u8 {
+    let mut walker = call.walk();
+    let Some(arguments) = call
+        .named_children(&mut walker)
+        .find(|child| child.kind() == "argument_list")
+    else {
+        return facts::NO_ARITY;
+    };
+    let mut inner = arguments.walk();
+    let count = arguments
+        .named_children(&mut inner)
+        .filter(|argument| {
+            argument.kind() != "named_argument" && !argument.kind().contains("comment")
+        })
+        .count();
+    u8::try_from(count).unwrap_or(facts::NO_ARITY - 1)
+}
+
+fn julia_arguments(arguments: Node, source: &[u8]) -> Vec<(u8, String)> {
+    let mut result = Vec::new();
+    let mut position = 0usize;
+    let mut walker = arguments.walk();
+    for argument in arguments.named_children(&mut walker) {
+        if argument.kind() == "named_argument" || argument.kind().contains("comment") {
+            continue;
+        }
+        if position < usize::from(facts::NO_ARITY)
+            && argument.kind() == "identifier"
+            && let Ok(position) = u8::try_from(position)
+            && let Ok(binding) = argument.utf8_text(source)
+        {
+            result.push((position, binding.to_owned()));
+        }
+        position += 1;
+    }
+    result
 }
 
 fn source_definition_identity(path: &str, node: Node, name: &str, source: &[u8]) -> Option<String> {

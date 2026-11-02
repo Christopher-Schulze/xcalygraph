@@ -1,0 +1,7 @@
+file:src/app.jl -imports-> file:src/types.jl @1
+src/app.App.other_size -calls?-> src/types.Types.length @10
+src/app.App.queue_size -calls?-> src/types.Types.length @6
+src/types.Types.QueueWithAnIntentionallyLongConcreteTypeNameUsedToExerciseCompactSignatureTypeRecoveryInJuliaBaseDispatchAndMustBeRecoveredFromDeclaredBindingsAfterMethodHeaderCompaction -implements-> src/types.Types.AbstractQueue @4
+src/types.Types.length -uses-> src/types.Types.AbstractQueue @7
+src/types.Types.length -uses-> src/types.Types.Other @9
+src/types.Types.length -uses-> src/types.Types.QueueWithAnIntentionallyLongConcreteTypeNameUsedToExerciseCompactSignatureTypeRecoveryInJuliaBaseDispatchAndMustBeRecoveredFromDeclaredBindingsAfterMethodHeaderCompaction @8

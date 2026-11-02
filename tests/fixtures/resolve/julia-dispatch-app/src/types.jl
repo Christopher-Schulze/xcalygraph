@@ -1,0 +1,11 @@
+module Types
+
+abstract type AbstractQueue end
+struct QueueWithAnIntentionallyLongConcreteTypeNameUsedToExerciseCompactSignatureTypeRecoveryInJuliaBaseDispatchAndMustBeRecoveredFromDeclaredBindingsAfterMethodHeaderCompaction <: AbstractQueue end
+struct Other end
+
+Base.length(value::AbstractQueue) = 0
+Base.length(value::QueueWithAnIntentionallyLongConcreteTypeNameUsedToExerciseCompactSignatureTypeRecoveryInJuliaBaseDispatchAndMustBeRecoveredFromDeclaredBindingsAfterMethodHeaderCompaction) = 1
+Base.length(value::Other) = 2
+
+end

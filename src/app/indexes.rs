@@ -14,8 +14,8 @@ use crate::infra::file_access;
 use crate::infra::store::container::{Container, FORMAT_VERSION, Kind};
 use crate::infra::store::{self, SHARDS, Store};
 
-// Formats 7-9 retain the container envelope and meta encoding used for ownership checks.
-const CLEANUP_FORMATS: [u32; 4] = [FORMAT_VERSION, 9, 8, 7];
+// Formats 7-10 retain the container envelope and meta encoding used for ownership checks.
+const CLEANUP_FORMATS: [u32; 5] = [FORMAT_VERSION, 10, 9, 8, 7];
 
 struct Entry {
     dir: PathBuf,

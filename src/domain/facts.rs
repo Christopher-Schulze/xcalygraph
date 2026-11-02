@@ -238,6 +238,14 @@ pub struct Binding {
     pub declared: bool,
 }
 
+/// Simple Julia variable argument of a call, indexed into [`Facts::refs`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JuliaCallArgument {
+    pub reference: u32,
+    pub position: u8,
+    pub binding: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvRead {
     pub name: String,
@@ -377,6 +385,10 @@ pub struct Facts {
     pub symbols: Vec<Symbol>,
     pub imports: Vec<Import>,
     pub refs: Vec<Ref>,
+    /// Unqualified builtins retained so cross-file Julia Base extensions can be dispatched.
+    pub julia_builtin_calls: Vec<u32>,
+    /// Sparse simple-variable arguments for Julia calls, sorted by reference and position.
+    pub julia_call_arguments: Vec<JuliaCallArgument>,
     /// Exact language-level callable identities, stored only for labeled declarations/calls.
     pub source_identities: Option<Box<[SourceIdentity]>>,
     pub bindings: Vec<Binding>,
@@ -399,6 +411,20 @@ pub struct Facts {
 }
 
 impl Facts {
+    pub fn is_julia_builtin_call(&self, reference: u32) -> bool {
+        self.julia_builtin_calls.binary_search(&reference).is_ok()
+    }
+
+    pub fn call_arguments_for(&self, reference: u32) -> &[JuliaCallArgument] {
+        let start = self
+            .julia_call_arguments
+            .partition_point(|argument| argument.reference < reference);
+        let end = start
+            + self.julia_call_arguments[start..]
+                .partition_point(|argument| argument.reference == reference);
+        &self.julia_call_arguments[start..end]
+    }
+
     pub fn source_identity(&self, kind: SourceIdentityKind, index: u32) -> Option<&str> {
         let identities = self.source_identities.as_deref()?;
         let position = identities

@@ -10,14 +10,23 @@ sym 25-25 struct Node parent=- owner= pub flags=0 sig="mutable struct Node; next
 import 2 "Base.Threads" names= alias=- reexport=false
 import 3 "..Util" names= alias=- reexport=false
 import 4 "repo.jl" names= alias=- reexport=false
+ref 4 Call include qualifier=- scope=Store args=1
 ref 6 Inherit AbstractRepo qualifier=- scope=Repo args=0
+ref 11 Call Dict qualifier=- scope=open_store args=0
 ref 11 Call Repo qualifier=- scope=open_store args=1
 ref 12 Call helper qualifier=- scope=open_store args=1
 ref 13 Call check qualifier=Util scope=open_store args=1
+ref 14 Call get qualifier=- scope=open_store args=3
 ref 16 Type Repo qualifier=- scope=size
+ref 16 Call length qualifier=- scope=size args=1
 ref 20 Type IO qualifier=- scope=show
 ref 20 Type Repo qualifier=- scope=show
+ref 20 Call print qualifier=- scope=show args=2
 ref 22 Call open_store qualifier=- scope=- args=1
 ref 26 Call helper qualifier=- scope=-
+bind 10 "path": String declared scope=open_store
+bind 16 "r": Repo declared scope=size
+bind 20 "io": IO declared scope=show
+bind 20 "r": Repo declared scope=show
 env 14 STORE_URL scope=open_store
 env 18 STORE_URL scope=-
