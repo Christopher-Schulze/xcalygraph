@@ -33,15 +33,22 @@ temporary.mkdir()
 environment = {key: value for key, value in os.environ.items()
                if not key.startswith(("GIT_", "XCALYGRAPH_"))
                and key not in ("BASH_ENV", "ENV", "CDPATH", "TAR_OPTIONS")}
+global_excludes = work / "global-excludes"
+global_excludes.write_text("globally-ignored.go\n")
+git_config = work / "gitconfig"
+git_config.write_text(f"[core]\n\texcludesFile = {global_excludes}\n")
 environment.update(HOME=str(home), TMPDIR=str(temporary), XDG_CONFIG_HOME=str(home / "config"),
-                   GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+                   GIT_CONFIG_GLOBAL=str(git_config), GIT_CONFIG_NOSYSTEM="1")
 helper = repo / "scripts/utils/prepare-corpus.sh"
 (root / "main.go").write_text("package sample\nfunc Earlier() {}\nfunc Entry() { Earlier() }\n")
 (root / ".gitignore").write_text("ignored/\n")
+(root / "globally-ignored.go").write_text("package ignored\n")
 (root / "ignored").mkdir()
 (root / "ignored/private.go").write_text("package ignored\n")
+(root / "ignored/tracked.go").write_text("package tracked\nfunc TrackedIgnored() {}\n")
 subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True, env=environment)
 subprocess.run(["git", "-C", str(root), "add", "."], check=True, env=environment)
+subprocess.run(["git", "-C", str(root), "add", "-f", "ignored/tracked.go"], check=True, env=environment)
 
 
 def prepare(upstream=False, succeeds=True):
@@ -57,8 +64,28 @@ first = prepare()
 metadata = first.parent / "snapshot.json"
 before = metadata.stat()
 assert not (first / "ignored/private.go").exists()
+assert (first / "ignored/tracked.go").is_file()
+assert not (first / "globally-ignored.go").exists()
 assert prepare() == first
 assert metadata.stat().st_ino == before.st_ino and metadata.stat().st_mtime_ns == before.st_mtime_ns
+
+foreign = work / "foreign-git"
+foreign.mkdir()
+(foreign / "decoy.txt").write_text("foreign source\n")
+for command in (["git", "init", "-q", "-b", "main", str(foreign)],
+                ["git", "-C", str(foreign), "add", "."],
+                ["git", "-C", str(foreign), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                 "commit", "-qm", "foreign fixture"]):
+    subprocess.run(command, env=environment, check=True)
+foreign_environment = dict(environment, GIT_DIR=str(foreign / ".git"), GIT_WORK_TREE=str(root),
+                           GIT_INDEX_FILE=str(work / "foreign.index"))
+foreign_snapshot = subprocess.run(["bash", str(helper), str(root), str(work / "foreign-snapshots")],
+                                  env=foreign_environment, capture_output=True, text=True)
+assert foreign_snapshot.returncode == 0, foreign_snapshot.stderr
+foreign_source = Path(foreign_snapshot.stdout.strip())
+assert json.loads((foreign_source.parent / "snapshot.json").read_text()) == json.loads(metadata.read_text())
+assert (foreign_source / "ignored/tracked.go").is_file()
+assert not (work / "foreign.index").exists(), "snapshot enumeration wrote through the inherited Git index override"
 
 # These exact additions were absent from the previously reused comparison copy.
 (root / "routes.rs").write_text("pub fn classify() {}\n")
@@ -117,5 +144,5 @@ failed_snapshots = [p.parent for p in cache.glob("*/*/snapshot.json")
                     and [f["path"] for f in json.loads(p.read_text())["source"]["files"]] == ["data.bin"]]
 assert len(failed_snapshots) == 1 and (failed_snapshots[0] / "graphify.log").exists()
 assert not (failed_snapshots[0] / "graph.json.identity").exists()
-print("PASS: reuse, add/remove/rename/edit invalidation, isolated HOME, real Graphify/xcalygraph agreement, corrupt graph/extra-file rejection and unsupported corpus failure")
+print("PASS: reuse, add/remove/rename/edit invalidation, Git environment isolation, real Graphify/xcalygraph agreement, corrupt graph/extra-file rejection and unsupported corpus failure")
 PYTHON

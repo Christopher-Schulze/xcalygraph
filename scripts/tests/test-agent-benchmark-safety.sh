@@ -87,6 +87,19 @@ printf '%s\0' "$first" "$second" "$home1" "$home2"
     run_dir, binary_dir, foreign = (work / name for name in ("binding-run", "binding-bin", "foreign-bin"))
     for directory in (run_dir, binary_dir, foreign):
         directory.mkdir()
+    foreign_git = work / "foreign-git"
+    foreign_git.mkdir()
+    (foreign_git / "decoy.txt").write_text("foreign agent workspace\n")
+    for command in (["git", "init", "-q", "-b", "main", str(foreign_git)],
+                    ["git", "-C", str(foreign_git), "add", "."],
+                    ["git", "-C", str(foreign_git), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                     "commit", "-qm", "foreign fixture"]):
+        subprocess.run(command, env=environment, check=True)
+    foreign_index = work / "foreign-index"
+    foreign_index.mkdir()
+    (foreign_index / "sentinel").write_text("preserve\n")
+    foreign_git_config = work / "foreign-gitconfig"
+    foreign_git_config.write_text("[core]\n\texcludesFile = /dev/null\n")
     captured = binary_dir / "xcalygraph"
     shutil.copyfile(binary, captured)
     captured.chmod(0o500)
@@ -99,8 +112,8 @@ printf '%s\0' "$first" "$second" "$home1" "$home2"
                                     "skill_sha256": hashlib.sha256((repo / "skills/xcalygraph/SKILL.md").read_bytes()).hexdigest(),
                                     "binary_stat": [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
                                                     info.st_ctime_ns, stat.S_IMODE(info.st_mode), info.st_nlink]}))
-    foreign_config = work / "foreign-config"
-    foreign_config.mkdir()
+    foreign_claude_config = work / "foreign-config"
+    foreign_claude_config.mkdir()
     startup = work / "shell-startup"
     startup.write_text('xcalygraph() { return 77; }\n')
     bind = r'''
@@ -111,19 +124,25 @@ verify_arm "$home" "$3" "$4" --content
 xcalygraph() { return 77; }
 export -f xcalygraph
 export BASH_ENV="$5"
-invoke_agent xcalygraph "$home" "$3" bash -c 'printf "%s\0%s\0" "$CLAUDE_CONFIG_DIR" "$(command -v xcalygraph)"; xcalygraph version >&2'
+invoke_agent xcalygraph "$home" "$3" bash -c 'printf "%s\0" "$CLAUDE_CONFIG_DIR" "$(command -v xcalygraph)" "${GIT_DIR-}" "${GIT_WORK_TREE-}" "${GIT_INDEX_FILE-}" "${GIT_CONFIG_GLOBAL-}" "${GIT_CONFIG_NOSYSTEM-}" "${XCALYGRAPH_INDEX_DIR-}"; xcalygraph version >&2'
 printf '%s\0' "$home"
 '''
     bound_env = dict(environment, PATH=str(foreign) + os.pathsep + environment["PATH"],
-                     CLAUDE_CONFIG_DIR=str(foreign_config))
+                     CLAUDE_CONFIG_DIR=str(foreign_claude_config), GIT_DIR=str(foreign_git / ".git"),
+                     GIT_WORK_TREE=str(foreign_git), GIT_INDEX_FILE=str(foreign_index / "index"),
+                     GIT_CONFIG_GLOBAL=str(foreign_git_config), GIT_CONFIG_NOSYSTEM="0",
+                     XCALYGRAPH_INDEX_DIR=str(foreign_index))
     bound = subprocess.run(["bash", "-c", bind, "binding", str(runner), str(run_dir), str(captured),
                             str(identity), str(startup)], env=bound_env, capture_output=True)
     assert bound.returncode == 0, bound.stderr
     values = bound.stdout.split(b"\0")
-    assert len(values) == 4 and values[-1] == b"", bound.stdout
-    config, selected, installed_home = (Path(os.fsdecode(value)) for value in values[:-1])
+    assert len(values) == 10 and values[-1] == b"", bound.stdout
+    config, selected = (Path(os.fsdecode(value)) for value in values[:2])
+    installed_home = Path(os.fsdecode(values[8]))
     assert selected == captured and b"xcalygraph " in bound.stderr, bound.stderr
     assert config == installed_home / ".claude"
+    assert values[2:5] == [b"", b"", b""] and values[5:7] == [b"/dev/null", b"1"] and values[7] == b"", bound.stdout
+    assert (foreign_index / "sentinel").read_text() == "preserve\n"
     failed = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; invoke_agent xcalygraph "$2" "$3" false',
                              "failed", str(runner), str(installed_home), str(captured)],
                             env=bound_env, capture_output=True, text=True)
@@ -132,7 +151,7 @@ printf '%s\0' "$home"
                                "graphify", str(runner), str(run_dir)], env=bound_env, capture_output=True, text=True)
     assert graphify.returncode == 0, graphify.stderr
     graphify_home = Path(graphify.stdout.removesuffix("\n"))
-    assert (graphify_home / ".claude/skills/graphify/SKILL.md").is_file() and not list(foreign_config.iterdir())
+    assert (graphify_home / ".claude/skills/graphify/SKILL.md").is_file() and not list(foreign_claude_config.iterdir())
     refused = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; invoke_agent xcalygraph "$2" "$3" true',
                               "refuse", str(runner), str(installed_home), str(work / "bad:path/xcalygraph")],
                              env=environment, capture_output=True, text=True)
@@ -215,5 +234,5 @@ printf '%s\0' "$home"
                                    "setup", str(runner)], env=environment, capture_output=True, text=True)
         assert rejected.returncode != 0 and "symlink" in rejected.stderr
         assert not list(foreign.iterdir())
-    print("PASS: planning, guarded debug capture, binary/skill binding, shell overrides, previous evidence and linked-cache refusal")
+    print("PASS: planning, guarded debug capture, binary/skill binding, Git/xcalygraph/shell override isolation, previous evidence and linked-cache refusal")
 PYTHON

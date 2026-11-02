@@ -119,11 +119,22 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
     alias = work / "repo-alias"
     alias.symlink_to(root, target_is_directory=True)
     alias_environment = dict(validation_environment, PWD=str(alias))
+    foreign_git = work / "foreign-git"
+    foreign_git.mkdir()
+    (foreign_git / "decoy.txt").write_text("foreign source\n")
+    for command in (["git", "init", "-q", "-b", "main", str(foreign_git)],
+                    ["git", "-C", str(foreign_git), "add", "."],
+                    ["git", "-C", str(foreign_git), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                     "commit", "-qm", "foreign fixture"]):
+        subprocess.run(command, env=environment, check=True)
+    poisoned_alias_environment = dict(alias_environment, GIT_DIR=str(foreign_git / ".git"),
+                                      GIT_WORK_TREE=str(alias), GIT_INDEX_FILE=str(work / "foreign.index"))
     alias_entry = alias / "scripts/benchmarks/run-evaluation.sh"
     alias_validation = subprocess.run(["bash", str(alias_entry), "--set", "../../../.cache/cases", "--validate"],
-                                      cwd=alias, env=alias_environment, capture_output=True, text=True)
+                                      cwd=alias, env=poisoned_alias_environment, capture_output=True, text=True)
     assert alias_validation.returncode == 0, alias_validation.stderr + alias_validation.stdout
     assert str(alias) in alias_validation.stdout, alias_validation.stdout
+    assert not (work / "foreign.index").exists(), "evaluator wrote through the inherited Git index override"
     restored_metadata = json.loads((frozen.parent / "snapshot.json").read_text())
     assert restored_metadata == metadata
 
@@ -259,5 +270,5 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
     assert rejected.returncode != 0 and "symlink" in rejected.stderr
     assert not list(foreign.iterdir())
     assert sentinel.read_text() == "preserve\n" and list(decoy.iterdir()) == [sentinel]
-    print("PASS: evaluator scoring, exposure, baseline reuse, completed-run markers and linked-cache refusal")
+    print("PASS: evaluator scoring, Git override isolation, exposure, baseline reuse, completed-run markers and linked-cache refusal")
 PYTHON

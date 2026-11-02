@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Internal JSONL evaluation runner used by run-evaluation.sh --set sealed.
 # Usage: evaluate-sealed.sh MANIFEST final|development|validate BINARY [--budget N] [--reuse-graphify RUN] [CORPUS...]
-# All tools run on verified frozen sources with an isolated HOME and explicit index path.
+# All tools run on verified frozen sources with isolated HOME and Git environments and explicit index paths.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && printf '%s.' "$PWD")"
 REPO_ROOT="${REPO_ROOT%.}"
@@ -45,10 +45,10 @@ def restore_source(repo, work, corpus, environment):
         origin = repo / "research/upstream/graphify"
     # A nested corpus archives its subtree; never checkout or modify the live tree.
     prefix = subprocess.run(["git", "-C", str(origin), "rev-parse", "--show-prefix"],
-                            capture_output=True, text=True, check=True).stdout.strip()
+                            env=environment, capture_output=True, text=True, check=True).stdout.strip()
     archive = subprocess.run(["git", "-C", str(origin), "archive", "--format=tar",
                               corpus["commit"] + (":" + prefix.rstrip("/") if prefix else "")],
-                             capture_output=True, check=True).stdout
+                             env=environment, capture_output=True, check=True).stdout
     target = work / ("restore-" + name.replace("/", "-"))
     target.mkdir()
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as bundle:
@@ -324,7 +324,9 @@ def main():
     work = Path(tempfile.mkdtemp(prefix="sealed.", dir=base))
     home = work / "home"
     home.mkdir()
-    environment = dict(os.environ, HOME=str(home), PYTHONHASHSEED="0", PYTHONSAFEPATH="1", PYTHONDONTWRITEBYTECODE="1")
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update(HOME=str(home), PYTHONHASHSEED="0", PYTHONSAFEPATH="1", PYTHONDONTWRITEBYTECODE="1",
+                       GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
     write_new(work / "manifest.json", manifest_data)
     binary_sha256 = sha(binary.read_bytes()) if phase != "validate" else None
     write_new(work / "identity.json", json_bytes({"manifest_sha256": sha(manifest_data), "binary_sha256": binary_sha256,

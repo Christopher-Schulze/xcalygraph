@@ -15,6 +15,16 @@ import stat
 import subprocess
 import sys
 
+# Keep Git rooted at the requested corpus while preserving configured ignore rules.
+GIT_CONTEXT_VARIABLES = (
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_PREFIX", "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_IMPLICIT_WORK_TREE",
+)
+GIT_ENVIRONMENT = os.environ.copy()
+for name in GIT_CONTEXT_VARIABLES:
+    GIT_ENVIRONMENT.pop(name, None)
+
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
@@ -26,14 +36,14 @@ def encoded(value):
 
 def source_files(root):
     git = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
-                         capture_output=True, check=False)
+                         env=GIT_ENVIRONMENT, capture_output=True, check=False)
     ignored = subprocess.run(["git", "-C", str(root), "check-ignore", "-q", "."],
-                             capture_output=True, check=False)
+                             env=GIT_ENVIRONMENT, capture_output=True, check=False)
     command = ["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "."]
     if git.returncode != 0 or ignored.returncode == 0:
         command = ["rg", "--files", "--hidden", "--no-ignore-parent", "-0", "-g", "!.git/**", "-g", "!.cache/**",
                    "-g", "!target/**", "-g", "!node_modules/**", "-g", "!graphify-out/**"]
-    result = subprocess.run(command, cwd=root, capture_output=True, check=False)
+    result = subprocess.run(command, cwd=root, env=GIT_ENVIRONMENT, capture_output=True, check=False)
     if result.returncode != 0:
         raise ValueError("source enumeration failed: " + result.stderr.decode(errors="replace"))
     files = []
@@ -146,7 +156,7 @@ def prepare(root, base, upstream):
                 raise ValueError("incomplete Graphify build; existing evidence retained")
             home = target / "home"
             home.mkdir()
-            environment = dict(os.environ, HOME=str(home), **tool["environment"])
+            environment = dict(GIT_ENVIRONMENT, HOME=str(home), **tool["environment"])
             with (target / "graphify.log").open("xb") as log:
                 result = subprocess.run([executable, "update", "."], cwd=source, env=environment,
                                         stdout=log, stderr=subprocess.STDOUT, check=False)

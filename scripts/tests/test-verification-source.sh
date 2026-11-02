@@ -24,7 +24,8 @@ with tempfile.TemporaryDirectory(prefix="verification-source.", dir=repo / ".cac
     root, home, tmp, targets = (work / name for name in ("project", "home", "tmp", "targets"))
     for directory in (root / "src", root / "dep/src", root / "scripts/utils", home, tmp, targets):
         directory.mkdir(parents=True)
-    (root / ".gitignore").write_text("/target/\n")
+    (root / ".gitignore").write_text("/target/\n/README.md\n")
+    (root / "README.md").write_text("tracked despite ignore\n")
     (root / "Cargo.toml").write_text('[package]\nname = "xcalygraph"\nversion = "0.0.0"\nedition = "2024"\n'
                                       '[dependencies]\nfixture-dep = { path = "dep" }\n'
                                       '[workspace]\nmembers = ["dep"]\nresolver = "3"\n')
@@ -53,6 +54,7 @@ with tempfile.TemporaryDirectory(prefix="verification-source.", dir=repo / ".cac
                        CARGO_TARGET_DIR=str(targets), CARGO_NET_OFFLINE="true",
                        GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
     subprocess.run(["git", "init", "-q", str(root)], check=True, env=environment)
+    subprocess.run(["git", "-C", str(root), "add", "-f", "README.md"], check=True, env=environment)
     selected = subprocess.run(["bash", str(root / "scripts/utils/verification-target.sh")], cwd=root,
                               env=environment, capture_output=True, text=True, check=True)
     target = Path(selected.stdout.strip())
@@ -162,6 +164,32 @@ with tempfile.TemporaryDirectory(prefix="verification-source.", dir=repo / ".cac
     assert binary_output() == "FIRST dependency"
 
     state = target / ".xcalygraph-verification-source"
+    successful_records = [line[3:] for line in state.read_text().splitlines() if line.startswith("ok ")]
+    assert successful_records
+    baseline_identity = json.loads(successful_records[-1])
+    foreign = work / "foreign-git"
+    foreign.mkdir()
+    (foreign / "decoy.txt").write_text("foreign source\n")
+    for command in (["git", "init", "-q", "-b", "main", str(foreign)],
+                    ["git", "-C", str(foreign), "add", "."],
+                    ["git", "-C", str(foreign), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                     "commit", "-qm", "foreign fixture"]):
+        subprocess.run(command, env=environment, check=True)
+    foreign_index = foreign / ".git/index"
+    foreign_index_before = foreign_index.read_bytes()
+    poisoned_environment = dict(environment, GIT_DIR=str(foreign / ".git"), GIT_WORK_TREE=str(root),
+                                GIT_INDEX_FILE=str(foreign_index))
+    context_check = ("import os; names = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE'); "
+                     "assert not any(name in os.environ for name in names); "
+                     "assert os.environ['GIT_CONFIG_GLOBAL'] == '/dev/null'; "
+                     "assert os.environ['GIT_CONFIG_NOSYSTEM'] == '1'")
+    isolated = subprocess.run(["bash", str(root / "scripts/utils/verification-source.sh"),
+                               "python3", "-c", context_check], cwd=root, env=poisoned_environment,
+                              capture_output=True, text=True)
+    assert isolated.returncode == 0, isolated.stderr
+    successful_records = [line[3:] for line in state.read_text().splitlines() if line.startswith("ok ")]
+    assert json.loads(successful_records[-1]) == baseline_identity, "foreign Git state changed the guarded source identity"
+    assert foreign_index.read_bytes() == foreign_index_before, "source guard changed the foreign Git index"
     with state.open("ab") as stream:
         stream.write(b"incomplete")
     recovered = cargo("build", "--locked", "-v", guarded=True)
@@ -312,5 +340,5 @@ with tempfile.TemporaryDirectory(prefix="verification-source.", dir=repo / ".cac
                                         cwd=collision, env=collision_env, capture_output=True, text=True)
     assert registry_collision.returncode != 0 and "ambiguous local Cargo" in registry_collision.stderr
     assert [(path.stat().st_ino, path.read_bytes()) for path in registry_artifacts] == registry_identities
-    print("PASS: real Cargo freshness, local dependencies, reuse, interrupted recovery, locking and foreign state")
+    print("PASS: real Cargo freshness, local dependencies, reuse, interrupted recovery, locking, Git context isolation and foreign state")
 PYTHON

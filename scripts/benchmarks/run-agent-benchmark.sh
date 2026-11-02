@@ -234,9 +234,12 @@ home, directory = sys.argv[1:3]
 if directory and os.pathsep in directory:
     raise SystemExit("run-agent-benchmark.sh: binary directory cannot be represented in PATH")
 environment = {key: value for key, value in os.environ.items()
-               if not key.startswith("BASH_FUNC_") and key not in ("BASH_ENV", "ENV", "ZDOTDIR", "CDPATH")}
+               if not key.startswith(("BASH_FUNC_", "GIT_", "XCALYGRAPH_"))
+               and key not in ("BASH_ENV", "ENV", "ZDOTDIR", "CDPATH")}
 environment["HOME"] = home
 environment["CLAUDE_CONFIG_DIR"] = os.path.join(home, ".claude")
+environment["GIT_CONFIG_GLOBAL"] = os.devnull
+environment["GIT_CONFIG_NOSYSTEM"] = "1"
 if directory:
     environment["PATH"] = directory + os.pathsep + environment.get("PATH", os.defpath)
 os.execvpe(sys.argv[3], sys.argv[3:], environment)

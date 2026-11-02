@@ -155,11 +155,14 @@ with tempfile.TemporaryDirectory(prefix="performance-corpora.", dir=repo / ".cac
     measured_runner = project / "scripts/benchmarks/run-benchmarks.sh"
     measured_runner.write_text(source.replace(build, 'BINARY="${PERFORMANCE_TEST_BINARY}"', 1))
     environment["PERFORMANCE_TEST_BINARY"] = str(binary)
-    def run_shell(shell, *arguments):
+    def run_shell(shell, *arguments, extra_environment=None):
         tools = work / ("measurement-shell-" + str(len(list(work.glob("measurement-shell-*")))))
         tools.mkdir()
         (tools / "bash").symlink_to(shell)
-        shell_environment = dict(environment, PATH=str(tools) + os.pathsep + environment["PATH"])
+        shell_environment = dict(environment)
+        if extra_environment:
+            shell_environment.update(extra_environment)
+        shell_environment["PATH"] = str(tools) + os.pathsep + shell_environment["PATH"]
         return subprocess.run([shell, str(measured_runner), *arguments], cwd=invocation, env=shell_environment,
                               capture_output=True, timeout=180)
 
@@ -186,12 +189,41 @@ with tempfile.TemporaryDirectory(prefix="performance-corpora.", dir=repo / ".cac
             assert input_root == invocation / directory
             assert (snapshot / "main.rs").read_text() == content
         assert len(list(identity.parent.glob("*.full.time"))) == 4
-    upstream = run_shell(shells[-1], "--upstream", "alpha")
+    git_tools = work / "git-tools"
+    git_tools.mkdir()
+    git_probe = work / "graphify-git-context.tsv"
+    git_wrapper = git_tools / "git"
+    git_wrapper.write_text("#!/bin/sh\n"
+                           "if [ \"$#\" -eq 2 ] && [ \"$1\" = rev-parse ] && [ \"$2\" = HEAD ]; then\n"
+                           "  printf '%s\\t%s\\t%s\\n' \"${GIT_DIR-}\" \"${GIT_WORK_TREE-}\" \"${GIT_INDEX_FILE-}\" >> \"$TASK111_GIT_PROBE\"\n"
+                           "fi\n"
+                           "exec \"$TASK111_REAL_GIT\" \"$@\"\n")
+    git_wrapper.chmod(0o755)
+    foreign_git = work / "foreign-git"
+    foreign_git.mkdir()
+    (foreign_git / "decoy.txt").write_text("foreign graph provenance\n")
+    real_git = shutil.which("git")
+    assert real_git
+    for command in ([real_git, "init", "-q", "-b", "main", str(foreign_git)],
+                    [real_git, "-C", str(foreign_git), "add", "."],
+                    [real_git, "-C", str(foreign_git), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                     "commit", "-qm", "foreign fixture"]):
+        subprocess.run(command, env=environment, check=True)
+    foreign_index = foreign_git / ".git/index"
+    foreign_index_before = foreign_index.read_bytes()
+    graphify_environment = dict(environment, PATH=str(git_tools) + os.pathsep + environment["PATH"],
+                                GIT_DIR=str(foreign_git / ".git"), GIT_WORK_TREE=str(foreign_git),
+                                GIT_INDEX_FILE=str(foreign_index), TASK111_GIT_PROBE=str(git_probe),
+                                TASK111_REAL_GIT=real_git)
+    upstream = run_shell(shells[-1], "--upstream", "alpha", extra_environment=graphify_environment)
     assert upstream.returncode == 0, upstream.stderr + upstream.stdout
+    contexts = git_probe.read_text().splitlines()
+    assert contexts and all(context == "\t\t" for context in contexts), contexts
+    assert foreign_index.read_bytes() == foreign_index_before
     rows = [line.split() for line in upstream.stdout.splitlines() if line.startswith(b"alpha ")]
     assert len(rows) == 1 and len(rows[0]) == 12, upstream.stdout
     assert all(float(value) >= 0 for value in rows[0][1:]), rows
     assert (victim / "sentinel").read_text() == "preserve\n"
     assert (invocation / "alpha/main.rs").read_text() == "pub fn alpha() {}\n"
-    print("PASS: real corpus preflight, guard re-entry and debug-binary measurements preserve selection and evidence")
+    print("PASS: real corpus preflight, guard re-entry and debug-binary measurements preserve selection, Graphify Git provenance and evidence")
 PYTHON

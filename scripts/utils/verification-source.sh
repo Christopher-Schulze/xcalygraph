@@ -22,6 +22,19 @@ import sys
 root = Path(sys.argv[1]).resolve()
 export_lock = sys.argv[2] == "1"
 identity = hashlib.sha256(os.fsencode(root)).hexdigest()
+# Keep source identity and Git-sourced Cargo operations rooted in this checkout.
+GIT_CONTEXT_VARIABLES = (
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_PREFIX", "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_IMPLICIT_WORK_TREE",
+)
+
+def source_environment():
+    environment = os.environ.copy()
+    for name in GIT_CONTEXT_VARIABLES:
+        environment.pop(name, None)
+    return environment
+
 target = Path(os.environ["CARGO_TARGET_DIR"])
 if (not target.is_absolute() or target.name != identity or target.parent.name != ".xcalygraph-verification"
         or target.is_symlink() or target.parent.is_symlink()
@@ -80,7 +93,7 @@ def hash_paths(paths):
 
 def snapshot():
     result = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-                            cwd=root, check=True, stdout=subprocess.PIPE)
+                            cwd=root, env=source_environment(), check=True, stdout=subprocess.PIPE)
     paths = {Path(os.fsdecode(path)) for path in result.stdout.split(b"\0") if path}
     if target.is_relative_to(root):
         relative_target = target.relative_to(root)
@@ -90,7 +103,7 @@ def snapshot():
     if (root / "build.rs").exists():
         paths.add(Path("build.rs"))
     metadata = subprocess.run(["cargo", "metadata", "--locked", "--format-version", "1"],
-                              cwd=root, check=True, stdout=subprocess.PIPE)
+                              cwd=root, env=source_environment(), check=True, stdout=subprocess.PIPE)
     graph = json.loads(metadata.stdout)["packages"]
     counts = Counter(normalized(package["name"]) for package in graph)
     targets = defaultdict(set)
@@ -177,8 +190,8 @@ with os.fdopen(descriptor, "r+b") as state:
             for package in changed:
                 arguments.extend(("--package", package))
             subprocess.run(["cargo", "clean", "--locked", *arguments],
-                           cwd=root, check=True, pass_fds=(state.fileno(),))
-        child_env = os.environ.copy()
+                           cwd=root, env=source_environment(), check=True, pass_fds=(state.fileno(),))
+        child_env = source_environment()
         child_env.pop("XCALYGRAPH_VERIFICATION_FD", None)
         child_fd = state.fileno()
         if export_lock:
