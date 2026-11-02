@@ -58,13 +58,40 @@ pub fn render(index: &Index, filter: &Filter, node: u32, options: &ShowOptions) 
             header(index, filter, &mut writer, part);
             members(index, filter, &mut writer, part, cap);
         }
-        let supertypes = edges(
-            index,
-            filter,
-            index.derived.outgoing(node),
-            &[EdgeKind::Inherits, EdgeKind::Implements],
-        );
-        relation(index, &mut writer, "^", "sup", &supertypes, cap, false);
+        let mut supertypes: Vec<_> = index
+            .derived
+            .interface_parts(node)
+            .filter(|&part| filter.node(index, part))
+            .flat_map(|part| {
+                edges(
+                    index,
+                    filter,
+                    index.derived.outgoing(part),
+                    &[EdgeKind::Inherits, EdgeKind::Implements],
+                )
+            })
+            .collect();
+        supertypes.sort_by(|a, b| {
+            kind_order(a.kind())
+                .cmp(&kind_order(b.kind()))
+                .then(rank_of(index, b.node).total_cmp(&rank_of(index, a.node)))
+                .then(a.node.cmp(&b.node))
+                .then(b.is_exact().cmp(&a.is_exact()))
+        });
+        let mut positions: HashMap<(u32, EdgeKind), usize> = HashMap::new();
+        let mut distinct: Vec<&EdgeRecord> = Vec::with_capacity(supertypes.len());
+        for edge in supertypes {
+            let key = (index.derived.interface_canonical(edge.node), edge.kind());
+            if let Some(&position) = positions.get(&key) {
+                if edge.is_exact() && !distinct[position].is_exact() {
+                    distinct[position] = edge;
+                }
+            } else {
+                positions.insert(key, distinct.len());
+                distinct.push(edge);
+            }
+        }
+        relation(index, &mut writer, "^", "sup", &distinct, cap, false);
         let subtypes = edges(
             index,
             filter,

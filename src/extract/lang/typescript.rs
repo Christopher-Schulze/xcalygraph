@@ -169,7 +169,9 @@ pub(in crate::extract) fn interface_groups(
     let mut groups = Vec::new();
     for parts in names.values().filter(|parts| parts.len() > 1) {
         let first = &symbols[parts[0] as usize];
-        let Some(header) = lookup.get(&(SourceIdentityKind::InterfaceHeader, parts[0])) else {
+        let Some(header) =
+            nodes[parts[0] as usize].and_then(|node| interface_header_without_bases(node, source))
+        else {
             continue;
         };
         let mut member_sets = Vec::new();
@@ -177,7 +179,10 @@ pub(in crate::extract) fn interface_groups(
             let symbol = &symbols[part as usize];
             if symbol.kind != Some(SymKind::Iface)
                 || symbol.exported != first.exported
-                || lookup.get(&(SourceIdentityKind::InterfaceHeader, part)) != Some(header)
+                || nodes[part as usize]
+                    .and_then(|node| interface_header_without_bases(node, source))
+                    .as_ref()
+                    != Some(&header)
             {
                 member_sets.clear();
                 break;
@@ -190,7 +195,7 @@ pub(in crate::extract) fn interface_groups(
         }
         if member_sets.len() != parts.len()
             || !compatible_interface_members(&member_sets)
-            || !compatible_direct_base(parts[0], &member_sets, symbols, &names, nodes, source)
+            || !compatible_local_bases(parts, &member_sets, symbols, &names, nodes, source)
         {
             continue;
         }
@@ -204,28 +209,51 @@ pub(in crate::extract) fn interface_groups(
     groups
 }
 
-/// A single local, nongeneric interface base proves compatibility when inherited properties
-/// match exactly and inherited methods are not overridden. Other cases need stronger evidence.
 #[cfg(feature = "lang-typescript")]
-fn compatible_direct_base(
-    part: u32,
+fn interface_header_without_bases(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let mut walker = node.walk();
+    match node
+        .named_children(&mut walker)
+        .find(|child| child.kind() == "extends_type_clause")
+    {
+        Some(clause) => {
+            crate::extract::engine::signature_identity_without_node(node, source, clause)
+        }
+        None => crate::extract::engine::signature_identity(node, source),
+    }
+}
+
+/// Local, nongeneric interface bases prove compatibility only when their complete supported
+/// members agree and overlapping inherited methods retain their complete signatures.
+#[cfg(feature = "lang-typescript")]
+fn compatible_local_bases(
+    parts: &[u32],
     members: &[&str],
     symbols: &[crate::domain::facts::Symbol],
     names: &std::collections::HashMap<&str, Vec<u32>>,
     nodes: &[Option<tree_sitter::Node<'_>>],
     source: &[u8],
 ) -> bool {
-    let Some(interface) = nodes.get(part as usize).copied().flatten() else {
+    use std::collections::HashSet;
+
+    let Some(interface) = nodes.get(parts[0] as usize).copied().flatten() else {
         return false;
     };
-    let mut walker = interface.walk();
-    let Some(clause) = interface
-        .named_children(&mut walker)
-        .find(|child| child.kind() == "extends_type_clause")
-    else {
+    let has_bases = parts.iter().any(|&part| {
+        nodes
+            .get(part as usize)
+            .copied()
+            .flatten()
+            .is_some_and(|node| {
+                let mut walker = node.walk();
+                node.named_children(&mut walker)
+                    .any(|child| child.kind() == "extends_type_clause")
+            })
+    });
+    if !has_bases {
         return true;
-    };
-    if symbols[part as usize].exported {
+    }
+    if symbols[parts[0] as usize].exported {
         return false;
     }
     let mut root = interface;
@@ -255,69 +283,110 @@ fn compatible_direct_base(
     if interface.child_by_field_name("type_parameters").is_some() {
         return false;
     }
-    let mut walker = clause.walk();
-    let mut bases = clause.named_children(&mut walker);
-    let (Some(base), None) = (bases.next(), bases.next()) else {
-        return false;
-    };
-    if base.kind() != "type_identifier" {
-        return false;
+    let mut pending: Vec<_> = parts.iter().map(|&part| (part, false)).collect();
+    let mut visiting = HashSet::new();
+    let mut visited = HashSet::new();
+    let mut inherited = Vec::new();
+    while let Some((index, exiting)) = pending.pop() {
+        if exiting {
+            visiting.remove(&index);
+            visited.insert(index);
+            continue;
+        }
+        if visited.contains(&index) {
+            continue;
+        }
+        if !visiting.insert(index) {
+            return false;
+        }
+        let Some(base) = nodes.get(index as usize).copied().flatten() else {
+            return false;
+        };
+        if !parts.contains(&index) {
+            if symbols[index as usize].kind != Some(SymKind::Iface)
+                || symbols[index as usize].exported
+                || base.child_by_field_name("type_parameters").is_some()
+            {
+                return false;
+            }
+            let Some(identity) = interface_member_identity(base, source) else {
+                return false;
+            };
+            inherited.push(identity);
+        }
+        pending.push((index, true));
+        let mut walker = base.walk();
+        if let Some(clause) = base
+            .named_children(&mut walker)
+            .find(|child| child.kind() == "extends_type_clause")
+        {
+            let mut walker = clause.walk();
+            for child in clause.named_children(&mut walker) {
+                if child.kind() != "type_identifier" {
+                    return false;
+                }
+                let Ok(name) = child.utf8_text(source) else {
+                    return false;
+                };
+                if name.contains('\\') {
+                    return false;
+                }
+                let Some([parent]) = names.get(name).map(Vec::as_slice) else {
+                    return false;
+                };
+                pending.push((*parent, false));
+            }
+        }
     }
-    let Ok(name) = base.utf8_text(source) else {
-        return false;
-    };
-    if name.contains('\\') {
-        return false;
+    let mut inherited_methods = std::collections::HashMap::new();
+    for identity in &inherited {
+        let Some(methods) = interface_method_signatures(identity) else {
+            return false;
+        };
+        for (name, signatures) in methods {
+            if let Some(previous) = inherited_methods.get(name) {
+                if previous != &signatures {
+                    return false;
+                }
+            } else {
+                inherited_methods.insert(name, signatures);
+            }
+        }
     }
-    let Some([index]) = names.get(name).map(Vec::as_slice) else {
-        return false;
-    };
-    if *index == part
-        || symbols[*index as usize].kind != Some(SymKind::Iface)
-        || symbols[*index as usize].exported
-    {
-        return false;
+    let mut local_methods = std::collections::HashMap::new();
+    for identity in members {
+        let Some(methods) = interface_method_signatures(identity) else {
+            return false;
+        };
+        for (name, signatures) in methods {
+            local_methods
+                .entry(name)
+                .or_insert_with(HashSet::new)
+                .extend(signatures);
+        }
     }
-    let Some(base) = nodes.get(*index as usize).copied().flatten() else {
-        return false;
-    };
-    if base.child_by_field_name("type_parameters").is_some() {
-        return false;
+    for (name, inherited) in inherited_methods {
+        if local_methods
+            .get(name)
+            .is_some_and(|local| !inherited.is_subset(local))
+        {
+            return false;
+        }
     }
-    let mut walker = base.walk();
-    if base
-        .named_children(&mut walker)
-        .any(|child| child.kind() == "extends_type_clause")
-    {
-        return false;
-    }
-    let Some(base_members) = interface_member_identity(base, source) else {
-        return false;
-    };
-    let mut all_members = Vec::with_capacity(members.len() + 1);
-    all_members.push(base_members.as_str());
-    all_members.extend_from_slice(members);
-    if !compatible_interface_members(&all_members) {
-        return false;
-    }
-    let Some((_, base_methods)) = interface_member_names(&base_members) else {
-        return false;
-    };
-    members.iter().all(|part| {
-        interface_member_names(part).is_some_and(|(names, _)| names.is_disjoint(&base_methods))
-    })
+    let all_members: Vec<_> = inherited
+        .iter()
+        .map(String::as_str)
+        .chain(members.iter().copied())
+        .collect();
+    compatible_interface_members(&all_members)
 }
 
 #[cfg(feature = "lang-typescript")]
-fn interface_member_names(
+fn interface_method_signatures(
     identity: &str,
-) -> Option<(
-    std::collections::HashSet<&str>,
-    std::collections::HashSet<&str>,
-)> {
+) -> Option<std::collections::HashMap<&str, std::collections::HashSet<(u8, &str)>>> {
     let mut rest = identity.strip_prefix("interface_members:")?;
-    let mut names = std::collections::HashSet::new();
-    let mut methods = std::collections::HashSet::new();
+    let mut methods = std::collections::HashMap::new();
     while !rest.is_empty() {
         let (&tag, tail) = rest.as_bytes().split_first()?;
         if !matches!(tag, b'p' | b'm' | b'o') {
@@ -325,14 +394,16 @@ fn interface_member_names(
         }
         let tail = std::str::from_utf8(tail).ok()?;
         let (name, tail) = take_identity_part(tail)?;
-        let (_, tail) = take_identity_part(tail)?;
-        names.insert(name);
+        let (signature, tail) = take_identity_part(tail)?;
         if matches!(tag, b'm' | b'o') {
-            methods.insert(name);
+            methods
+                .entry(name)
+                .or_insert_with(std::collections::HashSet::new)
+                .insert((tag, signature));
         }
         rest = tail;
     }
-    Some((names, methods))
+    Some(methods)
 }
 
 #[cfg(feature = "lang-typescript")]

@@ -29,7 +29,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 75;
+pub const RESOLVE_VERSION: u32 = 76;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1880,7 +1880,18 @@ impl<'a> Index<'a> {
     fn members(&self, type_symbol: u32, name: &str) -> Vec<u32> {
         let mut found = self.members_direct(type_symbol, name);
         if found.is_empty() {
-            for &supertype in self.supertypes.get(&type_symbol).into_iter().flatten() {
+            let supertypes = if self.interface_canonical.contains_key(&type_symbol) {
+                self.interface_ancestors(type_symbol)
+                    .into_iter()
+                    .skip(1)
+                    .collect()
+            } else {
+                self.supertypes
+                    .get(&type_symbol)
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            for supertype in supertypes {
                 if supertype != type_symbol {
                     let inherited = self.members_direct(supertype, name);
                     found.extend(inherited);
@@ -1890,6 +1901,28 @@ impl<'a> Index<'a> {
         found.sort_unstable();
         found.dedup();
         found
+    }
+
+    /// The locally verified interface group may have a transitive, multi-base hierarchy.
+    fn interface_ancestors(&self, type_symbol: u32) -> Vec<u32> {
+        let mut ancestors = vec![type_symbol];
+        let mut visited = HashSet::default();
+        visited.insert(type_symbol);
+        let mut cursor = 0;
+        while cursor < ancestors.len() {
+            for &parent in self
+                .supertypes
+                .get(&ancestors[cursor])
+                .into_iter()
+                .flatten()
+            {
+                if visited.insert(parent) {
+                    ancestors.push(parent);
+                }
+            }
+            cursor += 1;
+        }
+        ancestors
     }
 
     fn members_direct(&self, type_symbol: u32, name: &str) -> Vec<u32> {
@@ -4201,15 +4234,7 @@ impl<'a> Index<'a> {
             let parts = if objc {
                 self.objc_class_parts(&types)
             } else if types.len() == 1 && self.interface_canonical.contains_key(&types[0]) {
-                std::iter::once(types[0])
-                    .chain(
-                        self.supertypes
-                            .get(&types[0])
-                            .into_iter()
-                            .flatten()
-                            .copied(),
-                    )
-                    .collect()
+                self.interface_ancestors(types[0])
             } else {
                 types[..1].to_vec()
             };
@@ -4545,6 +4570,13 @@ impl<'a> Index<'a> {
                 .entry(type_symbol)
                 .or_default()
                 .push(trait_symbol);
+            let canonical = self.canonical_interface(type_symbol);
+            if canonical != type_symbol {
+                self.supertypes
+                    .entry(canonical)
+                    .or_default()
+                    .push(trait_symbol);
+            }
         }
         self.implementation_pairs = pairs;
     }

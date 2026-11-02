@@ -267,6 +267,68 @@ fn inherited_interfaces_merge_without_hiding_incompatible_base_members()
 }
 
 #[test]
+fn complex_local_inheritance_keeps_valid_members_and_rejects_conflicts()
+-> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("valid.ts"),
+        include_bytes!("fixtures/typescript-inherited-complex-valid.ts"),
+    )?;
+    fs::write(
+        root.join("invalid.ts"),
+        include_bytes!("fixtures/typescript-inherited-complex-invalid.ts"),
+    )?;
+    let show = fixture.run(&["show", "valid.Child"])?;
+    let text = String::from_utf8(show.stdout)?;
+    assert!(show.status.success(), "{text}");
+    for expected in ["valid.ts:4", "valid.ts:5", "valid.Left", "valid.Right"] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    let overload = fixture.run(&["show", "valid.OverChild", "--read-only"])?;
+    assert!(
+        overload.status.success(),
+        "{}",
+        String::from_utf8_lossy(&overload.stdout)
+    );
+    let different = fixture.run(&["show", "valid.Different", "--read-only"])?;
+    let text = String::from_utf8(different.stdout)?;
+    assert!(different.status.success(), "{text}");
+    assert!(
+        text.contains("valid.Root") && text.contains("valid.Right"),
+        "{text}"
+    );
+    for name in [
+        "invalid.Conflict",
+        "invalid.Cycle",
+        "invalid.Incomplete",
+        "invalid.DifferentConflict",
+    ] {
+        assert_eq!(
+            fixture.run(&["show", name, "--read-only"])?.status.code(),
+            Some(3),
+            "{name}"
+        );
+    }
+    for (caller, target) in [
+        ("valid.callRoot", "valid.Root.root"),
+        ("valid.callService", "valid.Service.execute"),
+        ("valid.callDifferent", "valid.Root.root"),
+    ] {
+        let output = fixture.run(&["show", caller, "--exact", "--read-only"])?;
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout)?;
+        assert!(text.contains(target), "{caller}: {text}");
+    }
+    let impact = fixture.run(&["impact", "valid.Root", "--exact", "--read-only"])?;
+    assert!(impact.status.success());
+    let impact = String::from_utf8(impact.stdout)?;
+    assert!(impact.contains("valid.Child"), "{impact}");
+    Ok(())
+}
+
+#[test]
 fn identical_inherited_property_overrides_merge_without_accepting_conflicts()
 -> Result<(), Box<dyn Error>> {
     let fixture = Fixture::new()?;
@@ -293,12 +355,12 @@ fn identical_inherited_property_overrides_merge_without_accepting_conflicts()
             .code(),
         Some(3)
     );
-    assert_eq!(
-        fixture
-            .run(&["show", "valid.MethodChild", "--read-only"])?
-            .status
-            .code(),
-        Some(3)
+    let method = fixture.run(&["show", "valid.MethodChild", "--read-only"])?;
+    let text = String::from_utf8(method.stdout)?;
+    assert!(method.status.success(), "{text}");
+    assert!(
+        text.contains("valid.ts:6") && text.contains("valid.ts:7"),
+        "{text}"
     );
     Ok(())
 }
@@ -550,6 +612,10 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         root.join("overrides.ts"),
         include_bytes!("fixtures/typescript-inherited-overrides-valid.ts"),
     )?;
+    fs::write(
+        root.join("complex.ts"),
+        include_bytes!("fixtures/typescript-inherited-complex-valid.ts"),
+    )?;
     let mut images = Vec::new();
     let mut answers = Vec::new();
     for workers in ["1", "4"] {
@@ -583,11 +649,14 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         assert!(inherited.status.success());
         let overrides = run(&["show", "overrides.Child", "--json", "--read-only"])?;
         assert!(overrides.status.success());
+        let complex = run(&["show", "complex.Child", "--json", "--read-only"])?;
+        assert!(complex.status.success());
         answers.push((
             answer.stdout,
             equivalent.stdout,
             inherited.stdout,
             overrides.stdout,
+            complex.stdout,
         ));
     }
     assert_eq!(images[0], images[1]);
