@@ -1,7 +1,7 @@
 //! Single-file components (Vue, Svelte, Astro): script blocks and Astro frontmatter are parsed
 //! as TypeScript or JavaScript in place (other bytes blanked, so lines stay exact); component
-//! tags of the template count as calls; the file itself is a component symbol named after its
-//! stem (`docs/spec.md` section 3, embedded code). Svelte markup expressions (`{format(x)}`,
+//! tags outside comments, scripts and styles count as calls; the file itself is a component
+//! symbol named after its stem (`docs/spec.md` section 3, embedded code). Svelte markup expressions (`{format(x)}`,
 //! `onclick={save}`, `{#if ready}`) are parsed in place as statements and `use:enhance`
 //! directives count as values, all scoped to the component, so script functions used only by
 //! the markup are not dead; `$store` reads name the store.
@@ -14,7 +14,11 @@ use crate::extract::engine;
 
 pub fn extract(record: &FileRecord, content: &[u8], capture_identities: bool) -> engine::Parsed {
     let text = String::from_utf8_lossy(content);
-    let (scripts, typescript) = script_ranges(&text, record.file_type == Some(FileType::Astro));
+    let MarkupContext {
+        scripts,
+        skipped,
+        typescript,
+    } = markup_context(&text, record.file_type == Some(FileType::Astro));
     let mut blanked: Vec<u8> = text
         .bytes()
         .map(|byte| if byte == b'\n' { b'\n' } else { b' ' })
@@ -23,11 +27,7 @@ pub fn extract(record: &FileRecord, content: &[u8], capture_identities: bool) ->
         blanked[range.clone()].copy_from_slice(&text.as_bytes()[range.clone()]);
     }
     let svelte = record.file_type == Some(FileType::Svelte);
-    let mut skipped = scripts.clone();
     if svelte {
-        skipped.extend(element_ranges(&text, "<style", "</style>"));
-        skipped.extend(element_ranges(&text, "<!--", "-->"));
-        skipped.sort_by_key(|range| range.start);
         svelte_expressions(&text, &skipped, &mut blanked);
     }
     let (file_type, path) = if typescript {
@@ -91,7 +91,7 @@ pub fn extract(record: &FileRecord, content: &[u8], capture_identities: bool) ->
         exported: true,
         ..Symbol::default()
     });
-    for (line, tag) in component_tags(&text, &scripts) {
+    for (line, tag) in component_tags(&text, &skipped) {
         facts.refs.push(Ref {
             kind: RefKind::Call,
             name: tag,
@@ -145,19 +145,161 @@ const RUNES: [&str; 7] = [
     "state", "derived", "effect", "props", "bindable", "inspect", "host",
 ];
 
-/// Byte ranges from each `open` to the end of the following `close`.
-fn element_ranges(text: &str, open: &str, close: &str) -> Vec<std::ops::Range<usize>> {
-    let lower = text.to_ascii_lowercase();
-    let mut ranges = Vec::new();
+struct MarkupContext {
+    scripts: Vec<std::ops::Range<usize>>,
+    skipped: Vec<std::ops::Range<usize>>,
+    typescript: bool,
+}
+
+/// Finds script contents and template regions outside comments, scripts and styles.
+fn markup_context(text: &str, astro: bool) -> MarkupContext {
+    let mut context = MarkupContext {
+        scripts: Vec::new(),
+        skipped: Vec::new(),
+        typescript: astro,
+    };
     let mut from = 0;
-    while let Some(start) = lower[from..].find(open).map(|offset| from + offset) {
-        let end = lower[start..]
-            .find(close)
-            .map_or(text.len(), |offset| start + offset + close.len());
-        ranges.push(start..end);
-        from = end;
+    if astro
+        && text.starts_with("---")
+        && let Some(end) = text[3..].find("\n---").map(|offset| offset + 3)
+    {
+        let close_end = end + "\n---".len();
+        context.scripts.push(3..end);
+        context.skipped.push(0..close_end);
+        from = close_end;
     }
-    ranges
+
+    let lower = text.to_ascii_lowercase();
+    while from < text.len() {
+        if let Some(rest) = text.get(from..)
+            && rest.starts_with("<!--")
+        {
+            let end = rest
+                .find("-->")
+                .map_or(text.len(), |offset| from + offset + "-->".len());
+            context.skipped.push(from..end);
+            from = end;
+            continue;
+        }
+        if text.as_bytes()[from] == b'<'
+            && let Some(tag) = markup_tag(text, from)
+        {
+            if !tag.closing
+                && (tag.name.eq_ignore_ascii_case("script")
+                    || tag.name.eq_ignore_ascii_case("style"))
+            {
+                let is_script = tag.name.eq_ignore_ascii_case("script");
+                let attributes = &lower[from..tag.end];
+                if is_script
+                    && (attributes.contains("lang=\"ts\"")
+                        || attributes.contains("lang='ts'")
+                        || attributes.contains("lang=\"typescript\""))
+                {
+                    context.typescript = true;
+                }
+                let close = raw_element_close(text, &lower, tag.end, tag.name);
+                if is_script && let Some(close) = close.as_ref() {
+                    context.scripts.push(tag.end..close.start);
+                }
+                let block_end = close.map_or(text.len(), |close| close.end);
+                context.skipped.push(from..block_end);
+                from = block_end;
+                continue;
+            }
+            from = tag.end;
+            continue;
+        }
+        from += 1;
+    }
+    context
+}
+
+struct MarkupTag<'a> {
+    name: &'a str,
+    closing: bool,
+    start: usize,
+    end: usize,
+}
+
+/// Parses one HTML-like tag and skips `>` characters inside quoted attributes.
+fn markup_tag(text: &str, start: usize) -> Option<MarkupTag<'_>> {
+    let bytes = text.as_bytes();
+    if bytes.get(start) != Some(&b'<') {
+        return None;
+    }
+    let mut name_start = start + 1;
+    let closing = bytes.get(name_start) == Some(&b'/');
+    if closing {
+        name_start += 1;
+    }
+    if !bytes.get(name_start)?.is_ascii_alphabetic() {
+        return None;
+    }
+    let mut name_end = name_start + 1;
+    while bytes
+        .get(name_end)
+        .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        name_end += 1;
+    }
+    if bytes
+        .get(name_end)
+        .is_some_and(|byte| !byte.is_ascii_whitespace() && !matches!(byte, b'/' | b'>'))
+    {
+        return None;
+    }
+    let end = markup_tag_end(bytes, start);
+    Some(MarkupTag {
+        name: &text[name_start..name_end],
+        closing,
+        start,
+        end,
+    })
+}
+
+fn markup_tag_end(bytes: &[u8], start: usize) -> usize {
+    let mut quote = None;
+    for (index, &byte) in bytes.iter().enumerate().skip(start + 1) {
+        match quote {
+            Some(delimiter) if byte == delimiter => quote = None,
+            Some(_) => {}
+            None => match byte {
+                b'\'' | b'"' => quote = Some(byte),
+                b'>' => return index + 1,
+                _ => {}
+            },
+        }
+    }
+    bytes.len()
+}
+
+fn raw_element_close<'a>(
+    text: &'a str,
+    lower: &str,
+    from: usize,
+    name: &str,
+) -> Option<MarkupTag<'a>> {
+    let needle = if name.eq_ignore_ascii_case("script") {
+        "</script"
+    } else if name.eq_ignore_ascii_case("style") {
+        "</style"
+    } else {
+        return None;
+    };
+    let mut search_from = from;
+    while let Some(start) = lower[search_from..]
+        .find(needle)
+        .map(|offset| search_from + offset)
+    {
+        if let Some(tag) = markup_tag(text, start)
+            && tag.closing
+            && tag.name.eq_ignore_ascii_case(name)
+        {
+            return Some(tag);
+        }
+        search_from = start + 2;
+    }
+    None
 }
 
 /// Copies the code of each markup expression into `blanked` as a parenthesized statement
@@ -278,60 +420,49 @@ fn directive_values(text: &str, skipped: &[std::ops::Range<usize>]) -> Vec<(u32,
     found
 }
 
-/// Byte ranges of script contents and whether any is TypeScript.
-fn script_ranges(text: &str, astro: bool) -> (Vec<std::ops::Range<usize>>, bool) {
-    let mut ranges = Vec::new();
-    let mut typescript = astro;
-    if astro
-        && text.starts_with("---")
-        && let Some(end) = text[3..].find("\n---")
-    {
-        ranges.push(3..3 + end);
-    }
-    let lower = text.to_ascii_lowercase();
-    let mut from = 0;
-    while let Some(open) = lower[from..].find("<script") {
-        let open = from + open;
-        let Some(tag_end) = lower[open..].find('>').map(|end| open + end + 1) else {
-            break;
-        };
-        let tag = &lower[open..tag_end];
-        if tag.contains("lang=\"ts\"")
-            || tag.contains("lang='ts'")
-            || tag.contains("lang=\"typescript\"")
-        {
-            typescript = true;
-        }
-        let Some(close) = lower[tag_end..].find("</script>").map(|end| tag_end + end) else {
-            break;
-        };
-        ranges.push(tag_end..close);
-        from = close + "</script>".len();
-    }
-    (ranges, typescript)
-}
-
-/// Component tags outside scripts: `<PascalCase` and multi-word `<kebab-case`, with line.
-fn component_tags(text: &str, scripts: &[std::ops::Range<usize>]) -> Vec<(u32, String)> {
+/// Component tags outside excluded markup: `<PascalCase` and multi-word `<kebab-case`, with line.
+fn component_tags(text: &str, skipped: &[std::ops::Range<usize>]) -> Vec<(u32, String)> {
     let mut tags = Vec::new();
     let bytes = text.as_bytes();
     let mut line = 1u32;
     let mut index = 0;
+    let mut skipped_index = 0;
     while index < bytes.len() {
+        while skipped
+            .get(skipped_index)
+            .is_some_and(|range| range.end <= index)
+        {
+            skipped_index += 1;
+        }
+        if let Some(range) = skipped.get(skipped_index)
+            && range.start <= index
+        {
+            line += bytes[index..range.end]
+                .iter()
+                .filter(|&&byte| byte == b'\n')
+                .count() as u32;
+            index = range.end;
+            skipped_index += 1;
+            continue;
+        }
+        if bytes[index] == b'<'
+            && let Some(tag) = markup_tag(text, index)
+        {
+            let is_component = tag.name.starts_with(|ch: char| ch.is_ascii_uppercase())
+                || (tag.name.contains('-')
+                    && tag.name.starts_with(|ch: char| ch.is_ascii_lowercase()));
+            if !tag.closing && is_component && tag.name != "DOCTYPE" {
+                tags.push((line, pascal_case(tag.name)));
+            }
+            line += bytes[index..tag.end]
+                .iter()
+                .filter(|&&byte| byte == b'\n')
+                .count() as u32;
+            index = tag.end;
+            continue;
+        }
         if bytes[index] == b'\n' {
             line += 1;
-        }
-        let inside_script = scripts.iter().any(|range| range.contains(&index));
-        if bytes[index] == b'<' && !inside_script {
-            let name: String = text[index + 1..]
-                .chars()
-                .take_while(|ch| ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.'))
-                .collect();
-            let is_component = name.starts_with(|ch: char| ch.is_ascii_uppercase())
-                || (name.contains('-') && name.starts_with(|ch: char| ch.is_ascii_lowercase()));
-            if is_component && name != "DOCTYPE" {
-                tags.push((line, pascal_case(&name)));
-            }
         }
         index += 1;
     }
@@ -395,6 +526,61 @@ mod tests {
             facts.imports.first().map(|i| i.spec.as_str()),
             Some("./UserCard.vue")
         );
+    }
+
+    #[test]
+    fn component_extraction_ignores_markup_comments_and_styles() {
+        let cases = [
+            (
+                "src/components/probe.vue",
+                FileType::Vue,
+                "<!--\n<GhostComment />\n<script>function ghostHtml() {}</script>\n-->\n<RealWidget /> • markup text\n<style>\n/* <GhostStyle />\n<script>function ghostCss() {}</script> */\n</style>\n<script>function liveScript() {}</script>\n",
+                &[("liveScript", 10)][..],
+            ),
+            (
+                "src/components/probe.svelte",
+                FileType::Svelte,
+                "<!--\n<GhostComment />\n<script>function ghostHtml() {}</script>\n-->\n<RealWidget /> • markup text\n<style>\n/* <GhostStyle />\n<script>function ghostCss() {}</script> */\n</style>\n<script>function liveScript() {}</script>\n",
+                &[("liveScript", 10)][..],
+            ),
+            (
+                "src/components/probe.astro",
+                FileType::Astro,
+                "---\nfunction liveFrontmatter() {}\n---\n<!--\n<GhostComment />\n<script>function ghostHtml() {}</script>\n-->\n<RealWidget /> • markup text\n<style>\n/* <GhostStyle />\n<script>function ghostCss() {}</script> */\n</style>\n<script>function liveScript() {}</script>\n",
+                &[("liveFrontmatter", 2), ("liveScript", 13)][..],
+            ),
+        ];
+
+        for (path, file_type, source, expected_symbols) in cases {
+            let facts = extract(&record(path, file_type), source.as_bytes(), false).facts;
+            let symbols: Vec<(&str, u32)> = facts
+                .symbols
+                .iter()
+                .map(|symbol| (symbol.name.as_str(), symbol.line))
+                .collect();
+            for expected in expected_symbols {
+                assert!(symbols.contains(expected), "{path}: missing {expected:?}");
+            }
+            for unexpected in ["ghostHtml", "ghostCss"] {
+                assert!(
+                    symbols.iter().all(|(name, _)| *name != unexpected),
+                    "{path}: extracted {unexpected}"
+                );
+            }
+
+            let calls: Vec<(&str, u32)> = facts
+                .refs
+                .iter()
+                .filter(|reference| reference.kind == RefKind::Call)
+                .map(|reference| (reference.name.as_str(), reference.line))
+                .collect();
+            let expected_tag_line = if file_type == FileType::Astro { 8 } else { 5 };
+            assert_eq!(
+                calls,
+                [("RealWidget", expected_tag_line)],
+                "{path}: unexpected component calls"
+            );
+        }
     }
 
     #[test]

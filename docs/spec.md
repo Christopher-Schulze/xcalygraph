@@ -83,7 +83,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | Rust | `rust` | `.rs` | deep | `#[test]` functions, `#[cfg(test)]` modules, files under `tests/` |
 | TypeScript | `typescript` | `.ts`, `.tsx`, `.mts`, `.cts`, `.ets` | deep | `*.test.*`, `*.spec.*`, `*.stories.*`, files under `__tests__/`, `__mocks__/`, `test/`, `tests/`, `e2e/`, `mocks/` |
 | JavaScript | `javascript` | `.js`, `.jsx`, `.mjs`, `.cjs` | deep | as TypeScript |
-| Vue, Svelte, Astro | `vue`, `svelte`, `astro` | `.vue`, `.svelte`, `.astro` | deep: script blocks as TypeScript or JavaScript, template component usage as calls | as TypeScript |
+| Vue, Svelte, Astro | `vue`, `svelte`, `astro` | `.vue`, `.svelte`, `.astro` | deep: actual script blocks outside HTML comments and styles as TypeScript or JavaScript; template component tags outside comments, scripts and styles as calls | as TypeScript |
 | Python | `python` | `.py`, `.pyi` | deep | `test_*.py`, `*_test.py`, files under `tests/`; `test_*` functions, `Test*` classes |
 | Java | `java` | `.java` | deep | files under `src/test/`; classes `*Test`, `*Tests`, `*IT`; `@Test` methods |
 | Kotlin | `kotlin` | `.kt`, `.kts` | deep | as Java |
