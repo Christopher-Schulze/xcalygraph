@@ -34,14 +34,22 @@ pub fn installed_version(home: &Path) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
-/// One notice line when the installed skill differs from this binary; empty when equal or absent.
+/// One notice line when the installed skill stamp or bytes differ from this binary.
 pub fn mismatch_line(home: &Path) -> String {
-    match installed_version(home) {
-        Some(installed) if installed != VERSION => {
-            format!("! installed skill {installed}, binary {VERSION}; run 'xcalygraph install'\n")
-        }
-        _ => String::new(),
+    let Some(installed) = installed_version(home) else {
+        return String::new();
+    };
+    if installed != VERSION {
+        return format!(
+            "! installed skill {installed}, binary {VERSION}; run 'xcalygraph install'\n"
+        );
     }
+    if fs::read(skill_dir(home).join("SKILL.md"))
+        .is_ok_and(|content| content.as_slice() == SKILL.as_bytes())
+    {
+        return String::new();
+    }
+    format!("! installed skill content differs from binary {VERSION}; run 'xcalygraph install'\n")
 }
 
 /// What `install` puts in place.

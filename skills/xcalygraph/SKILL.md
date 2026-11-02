@@ -26,7 +26,7 @@ Local, deterministic index of the repository (symbols, calls, type uses, imports
 | `xcalygraph impact NAME... \| --diff [REV]` | dependents of a change, tests reaching them, test commands to run |
 | `xcalygraph audit` | dead code, unused exports, cycles, stale doc references, env drift, unreferenced assets, files co-changed without static link, hotspots |
 | `xcalygraph index`, `ls`, `clean [ROOT...] [--missing]` | refresh explicitly; list indexes (root, size, last use); delete all, some or orphaned indexes, preserving unverified entries |
-| `xcalygraph install`, `update [--check]`, `version` | install or repair binary and skill; self-update with skill refresh; versions |
+| `xcalygraph install`, `update [--check]`, `version` | install/repair binary and skill; version flags stamp/content mismatch; queries stay silent |
 | `xcalygraph help [COMMAND]` | full syntax of every command and flag |
 
 NAME: `pkg.Type.Method`, `crate::mod::fn`, a qualified suffix (`Store.Get`), `path:line`, `path::name`, a file path, or a unique bare name. A file-path match wins locator collisions, including through the existing `./` alias; xcalygraph checks the input spelling first, then its surrounding-whitespace-trimmed form before locator syntax.

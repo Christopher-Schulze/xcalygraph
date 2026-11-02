@@ -375,7 +375,7 @@ Location: `<index-dir>/<root basename>-<XXH3-64 hex of the canonical root path>/
 | update flow | latest release metadata -> download asset -> verify SHA-256 -> smoke test (`version` reports the release) -> atomic replace of the running binary -> `install --skill-only` with the new binary (failure: exit 1 naming the replaced binary and `xcalygraph install` as the remaining step); when already current, the skill is rewritten if its stamp or content differs |
 | progress | phases on stderr when it is a terminal (spinner, download bar with bytes, speed and remaining time, one line per finished phase); off a terminal only the result lines on stdout |
 | installer | `install.sh` attached to every release (`releases/latest/download/install.sh`): latest or `--version X.Y.Z`, SHA-256 check, smoke test, then the binary installs itself, the skill and the link; `--no-skill` installs only the binary using an exclusive temporary file beside it and rejects directory targets |
-| version mismatch | binary vs installed skill, one line from `version`, `install`, `update`; query commands stay silent |
+| version mismatch | `version` reports a differing skill stamp or embedded content with an `xcalygraph install` repair action; `install` and non-check `update` repair differing content; query commands stay silent |
 | platforms | darwin-arm64, darwin-amd64, linux-arm64, linux-amd64 |
 | binary location | `~/.local/bin/xcalygraph` |
 

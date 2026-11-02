@@ -672,6 +672,89 @@ fn install_writes_the_skill_and_version_reports_mismatches() -> TestResult {
 }
 
 #[test]
+fn version_detects_and_install_repairs_skill_content_mismatches() -> TestResult {
+    let dir = TempDir::new("skill-content")?;
+    let home = dir.0.join("home");
+    let invoke = |args: &[&str]| {
+        support::command(BINARY, &dir.0)
+            .args(args)
+            .env("HOME", &home)
+            .output()
+    };
+    let installed = invoke(&["install", "--skill-only", "--no-link"])?;
+    assert_eq!(installed.status.code(), Some(0));
+
+    let skill = home.join(".agents/skills/xcalygraph/SKILL.md");
+    let stamp = home.join(".agents/skills/xcalygraph/.version");
+    assert_eq!(
+        fs::read(&skill)?,
+        include_bytes!("../skills/xcalygraph/SKILL.md")
+    );
+    assert_eq!(
+        fs::read_to_string(&stamp)?.trim(),
+        env!("CARGO_PKG_VERSION")
+    );
+    let matching = invoke(&["version"])?;
+    assert_eq!(matching.status.code(), Some(0));
+    assert!(!String::from_utf8(matching.stdout)?.contains("! installed skill"));
+
+    fs::write(&skill, b"modified installed skill\n")?;
+    let changed = invoke(&["version"])?;
+    let changed = String::from_utf8(changed.stdout)?;
+    assert!(
+        changed.contains(&format!(
+            "! installed skill content differs from binary {}; run 'xcalygraph install'",
+            env!("CARGO_PKG_VERSION")
+        )),
+        "{changed}"
+    );
+
+    let root = dir.0.join("repo");
+    fs::create_dir_all(&root)?;
+    fs::write(root.join("main.go"), "package main\n\nfunc main() {}\n")?;
+    let query = support::command(BINARY, &dir.0)
+        .args(["map", "-C"])
+        .arg(&root)
+        .arg("--index-dir")
+        .arg(dir.0.join("index"))
+        .env("HOME", &home)
+        .output()?;
+    assert_eq!(
+        query.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&query.stderr)
+    );
+    assert!(
+        !String::from_utf8(query.stdout)?.contains("! installed skill"),
+        "query commands stay silent about install state"
+    );
+
+    fs::remove_file(&skill)?;
+    let missing = invoke(&["version"])?;
+    let missing = String::from_utf8(missing.stdout)?;
+    assert!(
+        missing.contains("! installed skill content differs from binary"),
+        "{missing}"
+    );
+    let repaired = invoke(&["install", "--skill-only", "--no-link"])?;
+    assert_eq!(repaired.status.code(), Some(0));
+    assert!(
+        String::from_utf8(repaired.stdout)?.contains(" written\n"),
+        "skill content must be restored"
+    );
+    assert_eq!(
+        fs::read(&skill)?,
+        include_bytes!("../skills/xcalygraph/SKILL.md")
+    );
+    assert_eq!(
+        fs::read_to_string(&stamp)?.trim(),
+        env!("CARGO_PKG_VERSION")
+    );
+    Ok(())
+}
+
+#[test]
 fn install_test_does_not_inherit_an_external_install_destination() -> TestResult {
     let fixture = TempDir::new("inherited-install")?;
     let foreign = fixture.0.join("foreign");
@@ -840,8 +923,27 @@ fn update_check_compares_with_the_latest_release() -> TestResult {
     let refreshed_text = String::from_utf8(refreshed.stdout)?;
     assert!(refreshed_text.contains("written"), "{refreshed_text}");
     assert_eq!(
+        fs::read(skill.join("SKILL.md"))?,
+        include_bytes!("../skills/xcalygraph/SKILL.md")
+    );
+    assert_eq!(
         fs::read_to_string(skill.join(".version"))?.trim(),
         env!("CARGO_PKG_VERSION")
+    );
+    fs::write(skill.join("SKILL.md"), "modified installed skill\n")?;
+    let content_refreshed = support::command(BINARY, &dir.0)
+        .arg("update")
+        .env("HOME", dir.0.join("home"))
+        .env(
+            "XCALYGRAPH_UPDATE_URL",
+            format!("file://{}", dir.0.join("latest.json").display()),
+        )
+        .output()?;
+    assert_eq!(content_refreshed.status.code(), Some(0));
+    assert!(String::from_utf8(content_refreshed.stdout)?.contains("written"));
+    assert_eq!(
+        fs::read(skill.join("SKILL.md"))?,
+        include_bytes!("../skills/xcalygraph/SKILL.md")
     );
     dir.write("latest.json", "{\"tag_name\": \"v99.0.0\", \"assets\": []}")?;
     let newer = support::command(BINARY, &dir.0)
