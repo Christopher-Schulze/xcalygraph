@@ -267,6 +267,102 @@ fn inherited_interfaces_merge_without_hiding_incompatible_base_members()
 }
 
 #[test]
+fn generic_bases_have_source_backed_inheritance_edges() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("valid.ts"),
+        include_bytes!("fixtures/typescript-inherited-generic-valid.ts"),
+    )?;
+    let base = fixture.run(&["show", "valid.Box", "--exact"])?;
+    assert!(base.status.success());
+    let text = String::from_utf8(base.stdout)?;
+    assert!(text.contains("v valid.Child"), "{text}");
+    let impact = fixture.run(&["impact", "valid.Box", "--exact", "--read-only"])?;
+    assert!(impact.status.success());
+    let text = String::from_utf8(impact.stdout)?;
+    assert!(text.contains("valid.Child"), "{text}");
+    Ok(())
+}
+
+#[test]
+fn generic_inherited_types_resolve_and_conflicts_remain_distinct() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("valid.ts"),
+        include_bytes!("fixtures/typescript-inherited-generic-valid.ts"),
+    )?;
+    fs::write(
+        root.join("invalid.ts"),
+        include_bytes!("fixtures/typescript-inherited-generic-invalid.ts"),
+    )?;
+    for name in [
+        "valid.Child",
+        "valid.Override",
+        "valid.PairChild",
+        "valid.Text",
+    ] {
+        let result = fixture.run(&["show", name])?;
+        assert!(
+            result.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        let text = String::from_utf8(result.stdout)?;
+        let expected = if name.ends_with("PairChild") {
+            "valid.Pair"
+        } else {
+            "valid.Box"
+        };
+        assert!(text.contains(expected), "{name}: {text}");
+    }
+    for name in [
+        "invalid.Conflict",
+        "invalid.First",
+        "invalid.BadConstraint",
+        "invalid.BadQualified",
+        "invalid.EscapedChild",
+        "invalid.NonGenericChild",
+        "invalid.Named",
+    ] {
+        assert_eq!(
+            fixture.run(&["show", name, "--read-only"])?.status.code(),
+            Some(3),
+            "{name}"
+        );
+    }
+    let call = fixture.run(&["show", "valid.call", "--read-only", "--exact"])?;
+    assert!(call.status.success());
+    let text = String::from_utf8(call.stdout)?;
+    assert!(text.contains("valid.Service.execute"), "{text}");
+    assert!(!text.contains("valid.T.execute"), "{text}");
+    let second = fixture.run(&["show", "valid.second", "--read-only", "--exact"])?;
+    assert!(second.status.success());
+    let text = String::from_utf8(second.stdout)?;
+    assert!(text.contains("valid.Other.other"), "{text}");
+    let upper = fixture.run(&["show", "valid.upper", "--read-only", "--exact"])?;
+    assert!(upper.status.success());
+    let text = String::from_utf8(upper.stdout)?;
+    assert!(!text.contains("valid.T.toUpperCase"), "{text}");
+    let impact = fixture.run(&["impact", "valid.Box", "--read-only", "--exact"])?;
+    assert!(impact.status.success());
+    let text = String::from_utf8(impact.stdout)?;
+    assert!(text.contains("valid.call"), "{text}");
+    for name in ["valid.Nested", "valid.NestedOverride"] {
+        let output = fixture.run(&["show", name, "--read-only"])?;
+        assert!(
+            output.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn complex_local_inheritance_keeps_valid_members_and_rejects_conflicts()
 -> Result<(), Box<dyn Error>> {
     let fixture = Fixture::new()?;
@@ -616,6 +712,10 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         root.join("complex.ts"),
         include_bytes!("fixtures/typescript-inherited-complex-valid.ts"),
     )?;
+    fs::write(
+        root.join("generic.ts"),
+        include_bytes!("fixtures/typescript-inherited-generic-valid.ts"),
+    )?;
     let mut images = Vec::new();
     let mut answers = Vec::new();
     for workers in ["1", "4"] {
@@ -651,12 +751,15 @@ fn merged_interfaces_are_deterministic_across_worker_counts() -> Result<(), Box<
         assert!(overrides.status.success());
         let complex = run(&["show", "complex.Child", "--json", "--read-only"])?;
         assert!(complex.status.success());
+        let generic = run(&["show", "generic.Child", "--json", "--read-only"])?;
+        assert!(generic.status.success());
         answers.push((
             answer.stdout,
             equivalent.stdout,
             inherited.stdout,
             overrides.stdout,
             complex.stdout,
+            generic.stdout,
         ));
     }
     assert_eq!(images[0], images[1]);

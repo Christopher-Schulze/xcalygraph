@@ -28,6 +28,7 @@
 (implements_clause (type_identifier) @name @reference.implementation)
 (implements_clause (generic_type name: (type_identifier) @name) @reference.implementation)
 (extends_type_clause (type_identifier) @name @reference.inherit)
+(extends_type_clause (generic_type name: (type_identifier) @name) @reference.inherit)
 
 (import_statement) @import.tree @import
 (export_statement source: (string)) @import.tree @import

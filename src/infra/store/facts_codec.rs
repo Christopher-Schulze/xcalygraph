@@ -399,7 +399,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             },
         });
     }
-    let mut identities = Vec::new();
+    let mut identities: Vec<SourceIdentity> = Vec::new();
     let mut previous = None;
     for _ in 0..decoder.len()? {
         let kind = SourceIdentityKind::from_u8(decoder.u8()?)
@@ -410,7 +410,8 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             SourceIdentityKind::Symbol
             | SourceIdentityKind::InterfaceHeader
             | SourceIdentityKind::InterfaceMembers
-            | SourceIdentityKind::InterfaceGroup => facts.symbols.len(),
+            | SourceIdentityKind::InterfaceGroup
+            | SourceIdentityKind::InterfaceGenericFields => facts.symbols.len(),
             SourceIdentityKind::Reference => facts.refs.len(),
         };
         if usize::try_from(index).map_or(true, |index| index >= limit)
@@ -420,6 +421,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
                 SourceIdentityKind::InterfaceHeader
                     | SourceIdentityKind::InterfaceMembers
                     | SourceIdentityKind::InterfaceGroup
+                    | SourceIdentityKind::InterfaceGenericFields
             ) && facts
                 .symbols
                 .get(index as usize)
@@ -448,6 +450,28 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
                 || target.parent.is_some()
             {
                 return Err(DecodeError("interface group"));
+            }
+        }
+        if kind == SourceIdentityKind::InterfaceGenericFields {
+            let fields = crate::domain::facts::interface_generic_fields(&identity)
+                .ok_or(DecodeError("interface generic fields"))?;
+            if !identities.iter().any(|entry| {
+                entry.kind == SourceIdentityKind::InterfaceGroup
+                    && entry.index == index
+                    && entry.identity == index.to_string()
+            }) || fields.iter().any(|&(base, name, _)| {
+                base == index
+                    || facts.symbols.get(base as usize).is_none_or(|symbol| {
+                        symbol.kind != Some(SymKind::Iface)
+                            || symbol.parent.is_some()
+                            || symbol.exported
+                    })
+                    || !facts.fields.iter().any(|fields| {
+                        fields.owner == base
+                            && fields.names.iter().any(|field| field.text() == Some(name))
+                    })
+            }) {
+                return Err(DecodeError("interface generic fields"));
             }
         }
         identities.push(SourceIdentity {
@@ -648,6 +672,69 @@ mod tests {
         let mut invalid = Encoder::default();
         encode(&mut invalid, &facts);
         assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn generic_field_evidence_requires_a_group_and_real_base_fields() -> DecodeResult<()> {
+        let mut facts = sample();
+        facts.symbols[0].kind = Some(SymKind::Iface);
+        let mut base = facts.symbols[0].clone();
+        base.name = "Box".to_owned();
+        base.exported = false;
+        facts.symbols.push(base);
+        facts.fields.push(Fields {
+            owner: 2,
+            names: vec![FieldName::Text("item".to_owned())],
+            types: vec!["T".to_owned()],
+        });
+        let mut identities = facts
+            .source_identities
+            .as_deref()
+            .unwrap_or_default()
+            .to_vec();
+        identities.push(SourceIdentity {
+            kind: SourceIdentityKind::InterfaceGroup,
+            index: 0,
+            identity: "0".to_owned(),
+        });
+        identities.push(SourceIdentity {
+            kind: SourceIdentityKind::InterfaceGenericFields,
+            index: 0,
+            identity: crate::domain::facts::interface_generic_fields_identity(&[(
+                2, "item", "Service",
+            )]),
+        });
+        facts.source_identities = Some(identities.into_boxed_slice());
+        let mut encoder = Encoder::default();
+        encode(&mut encoder, &facts);
+        assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
+        let identities = facts
+            .source_identities
+            .as_mut()
+            .ok_or(DecodeError("identities"))?;
+        identities
+            .last_mut()
+            .ok_or(DecodeError("identity"))?
+            .identity =
+            crate::domain::facts::interface_generic_fields_identity(&[(2, "missing", "Service")]);
+        let mut invalid = Encoder::default();
+        encode(&mut invalid, &facts);
+        assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
+        let identities = facts
+            .source_identities
+            .as_mut()
+            .ok_or(DecodeError("identities"))?;
+        identities
+            .last_mut()
+            .ok_or(DecodeError("identity"))?
+            .identity = crate::domain::facts::interface_generic_fields_identity(&[
+            (2, "item", "Service"),
+            (2, "item", "T"),
+        ]);
+        let mut duplicate = Encoder::default();
+        encode(&mut duplicate, &facts);
+        assert!(decode(&mut Decoder::new(&duplicate.bytes)).is_err());
         Ok(())
     }
 

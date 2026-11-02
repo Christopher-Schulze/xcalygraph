@@ -166,9 +166,17 @@ pub(in crate::extract) fn interface_groups(
         .iter()
         .map(|identity| ((identity.kind, identity.index), identity.identity.as_str()))
         .collect();
+    let escaped_names: Vec<_> = names
+        .keys()
+        .filter(|name| name.contains('\\'))
+        .map(|name| decode_string_content(name).and_then(|units| String::from_utf16(&units).ok()))
+        .collect();
     let mut groups = Vec::new();
     for parts in names.values().filter(|parts| parts.len() > 1) {
         let first = &symbols[parts[0] as usize];
+        if first.name.contains('\\') || escaped_name_may_match(&first.name, &escaped_names) {
+            continue;
+        }
         let Some(header) =
             nodes[parts[0] as usize].and_then(|node| interface_header_without_bases(node, source))
         else {
@@ -193,11 +201,31 @@ pub(in crate::extract) fn interface_groups(
             };
             member_sets.push(*members);
         }
-        if member_sets.len() != parts.len()
-            || !compatible_interface_members(&member_sets)
-            || !compatible_local_bases(parts, &member_sets, symbols, &names, nodes, source)
-        {
+        if member_sets.len() != parts.len() || !compatible_interface_members(&member_sets) {
             continue;
+        }
+        let mut generic_fields = Vec::new();
+        if !compatible_local_bases(
+            parts,
+            &member_sets,
+            symbols,
+            &names,
+            &escaped_names,
+            nodes,
+            source,
+        ) {
+            let Some(fields) = compatible_generic_base(
+                parts,
+                &member_sets,
+                symbols,
+                &names,
+                &escaped_names,
+                nodes,
+                source,
+            ) else {
+                continue;
+            };
+            generic_fields = fields;
         }
         let canonical = parts[0].to_string();
         groups.extend(parts.iter().map(|&index| SourceIdentity {
@@ -205,6 +233,18 @@ pub(in crate::extract) fn interface_groups(
             index,
             identity: canonical.clone(),
         }));
+        if !generic_fields.is_empty() {
+            generic_fields.sort_unstable();
+            let fields: Vec<_> = generic_fields
+                .iter()
+                .map(|(base, field, concrete)| (*base, field.as_str(), concrete.as_str()))
+                .collect();
+            groups.push(SourceIdentity {
+                kind: SourceIdentityKind::InterfaceGenericFields,
+                index: parts[0],
+                identity: crate::domain::facts::interface_generic_fields_identity(&fields),
+            });
+        }
     }
     groups
 }
@@ -223,6 +263,13 @@ fn interface_header_without_bases(node: tree_sitter::Node, source: &[u8]) -> Opt
     }
 }
 
+#[cfg(feature = "lang-typescript")]
+fn escaped_name_may_match(name: &str, escaped_names: &[Option<String>]) -> bool {
+    escaped_names
+        .iter()
+        .any(|candidate| candidate.as_ref().is_none_or(|decoded| decoded == name))
+}
+
 /// Local, nongeneric interface bases prove compatibility only when their complete supported
 /// members agree and overlapping inherited methods retain their complete signatures.
 #[cfg(feature = "lang-typescript")]
@@ -231,6 +278,7 @@ fn compatible_local_bases(
     members: &[&str],
     symbols: &[crate::domain::facts::Symbol],
     names: &std::collections::HashMap<&str, Vec<u32>>,
+    escaped_names: &[Option<String>],
     nodes: &[Option<tree_sitter::Node<'_>>],
     source: &[u8],
 ) -> bool {
@@ -253,31 +301,7 @@ fn compatible_local_bases(
     if !has_bases {
         return true;
     }
-    if symbols[parts[0] as usize].exported {
-        return false;
-    }
-    let mut root = interface;
-    while let Some(parent) = root.parent() {
-        root = parent;
-    }
-    if root.kind() != "program" {
-        return false;
-    }
-    let mut walker = root.walk();
-    let mut external_module = false;
-    for child in root.named_children(&mut walker) {
-        match child.kind() {
-            "import_statement" => external_module = true,
-            "export_statement" => {
-                external_module = true;
-                if child.child_by_field_name("declaration").is_none() {
-                    return false;
-                }
-            }
-            _ => {}
-        }
-    }
-    if !external_module {
+    if symbols[parts[0] as usize].exported || !private_module_interface(interface) {
         return false;
     }
     if interface.child_by_field_name("type_parameters").is_some() {
@@ -328,7 +352,7 @@ fn compatible_local_bases(
                 let Ok(name) = child.utf8_text(source) else {
                     return false;
                 };
-                if name.contains('\\') {
+                if name.contains('\\') || escaped_name_may_match(name, escaped_names) {
                     return false;
                 }
                 let Some([parent]) = names.get(name).map(Vec::as_slice) else {
@@ -379,6 +403,280 @@ fn compatible_local_bases(
         .chain(members.iter().copied())
         .collect();
     compatible_interface_members(&all_members)
+}
+
+#[cfg(feature = "lang-typescript")]
+fn private_module_interface(interface: tree_sitter::Node) -> bool {
+    let mut root = interface;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    if root.kind() != "program" {
+        return false;
+    }
+    let mut walker = root.walk();
+    let mut external = false;
+    for child in root.named_children(&mut walker) {
+        match child.kind() {
+            "import_statement" => external = true,
+            "export_statement" => {
+                external = true;
+                if child.child_by_field_name("declaration").is_none() {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    external
+}
+
+#[cfg(feature = "lang-typescript")]
+type GenericFields = Vec<(u32, String, String)>;
+
+/// Prove a direct local instantiation with explicit unconstrained parameters and simple fields.
+#[cfg(feature = "lang-typescript")]
+fn compatible_generic_base(
+    parts: &[u32],
+    members: &[&str],
+    symbols: &[crate::domain::facts::Symbol],
+    names: &std::collections::HashMap<&str, Vec<u32>>,
+    escaped_names: &[Option<String>],
+    nodes: &[Option<tree_sitter::Node<'_>>],
+    source: &[u8],
+) -> Option<GenericFields> {
+    let interface = nodes.get(parts[0] as usize).copied().flatten()?;
+    if symbols[parts[0] as usize].exported
+        || !private_module_interface(interface)
+        || interface.child_by_field_name("type_parameters").is_some()
+    {
+        return None;
+    }
+    let header = crate::extract::engine::signature_identity(interface, source)?;
+    for &part in &parts[1..] {
+        if crate::extract::engine::signature_identity(
+            nodes.get(part as usize).copied().flatten()?,
+            source,
+        )? != header
+        {
+            return None;
+        }
+    }
+    let mut walker = interface.walk();
+    let clause = interface
+        .named_children(&mut walker)
+        .find(|child| child.kind() == "extends_type_clause")?;
+    let mut walker = clause.walk();
+    let mut bases = clause.named_children(&mut walker);
+    let (Some(application), None) = (bases.next(), bases.next()) else {
+        return None;
+    };
+    if application.kind() != "generic_type" {
+        return None;
+    }
+    let base_name = application.child_by_field_name("name")?;
+    if base_name.kind() != "type_identifier" {
+        return None;
+    }
+    let name = base_name.utf8_text(source).ok()?;
+    if name.contains('\\') || escaped_name_may_match(name, escaped_names) {
+        return None;
+    }
+    let [base_index] = names.get(name)?.as_slice() else {
+        return None;
+    };
+    let base_symbol = symbols.get(*base_index as usize)?;
+    if base_symbol.kind != Some(SymKind::Iface) || base_symbol.exported {
+        return None;
+    }
+    let base = nodes.get(*base_index as usize).copied().flatten()?;
+    let mut walker = base.walk();
+    if base
+        .named_children(&mut walker)
+        .any(|child| child.kind() == "extends_type_clause")
+    {
+        return None;
+    }
+    let parameters = base.child_by_field_name("type_parameters")?;
+    let arguments = application.child_by_field_name("type_arguments")?;
+    let mut parameter_cursor = parameters.walk();
+    let mut argument_cursor = arguments.walk();
+    let parameters: Vec<_> = parameters.named_children(&mut parameter_cursor).collect();
+    let arguments: Vec<_> = arguments.named_children(&mut argument_cursor).collect();
+    if parameters.is_empty() || parameters.len() != arguments.len() {
+        return None;
+    }
+    let mut bindings = Vec::new();
+    for (parameter, argument) in parameters.into_iter().zip(arguments) {
+        if parameter.kind() != "type_parameter"
+            || parameter.child_by_field_name("constraint").is_some()
+            || parameter.child_by_field_name("value").is_some()
+        {
+            return None;
+        }
+        let param = parameter
+            .child_by_field_name("name")?
+            .utf8_text(source)
+            .ok()?;
+        if param.contains('\\') || !matches!(argument.kind(), "type_identifier" | "predefined_type")
+        {
+            return None;
+        }
+        let actual = argument.utf8_text(source).ok()?;
+        if actual.contains('\\')
+            || escaped_name_may_match(actual, escaped_names)
+            || bindings.iter().any(|(name, _)| *name == param)
+        {
+            return None;
+        }
+        if argument.kind() == "type_identifier" {
+            let [target] = names.get(actual)?.as_slice() else {
+                return None;
+            };
+            if !symbols
+                .get(*target as usize)?
+                .kind
+                .is_some_and(SymKind::is_type)
+            {
+                return None;
+            }
+        }
+        bindings.push((param, actual));
+    }
+    let (identity, fields) = instantiated_generic_properties(base, *base_index, source, &bindings)?;
+    let all: Vec<_> = std::iter::once(identity.as_str())
+        .chain(members.iter().copied())
+        .collect();
+    compatible_interface_members(&all).then_some(fields)
+}
+
+#[cfg(feature = "lang-typescript")]
+fn instantiated_generic_properties(
+    base: tree_sitter::Node,
+    base_index: u32,
+    source: &[u8],
+    bindings: &[(&str, &str)],
+) -> Option<(String, GenericFields)> {
+    use std::fmt::Write as _;
+    let body = base.child_by_field_name("body")?;
+    let mut cursor = body.walk();
+    let mut replacements = std::collections::HashMap::new();
+    let mut fields = Vec::new();
+    for member in body.named_children(&mut cursor) {
+        if member.kind().contains("comment") {
+            continue;
+        }
+        if member.kind() != "property_signature" {
+            return None;
+        }
+        let type_node = member
+            .child_by_field_name("type")
+            .and_then(|annotation| annotation.named_child(0));
+        let mut element = type_node;
+        while element.is_some_and(|node| node.kind() == "array_type") {
+            element = element.and_then(|node| node.named_child(0));
+        }
+        let substitution = element
+            .filter(|node| node.kind() == "type_identifier")
+            .and_then(|node| node.utf8_text(source).ok())
+            .and_then(|name| {
+                bindings
+                    .iter()
+                    .find(|(parameter, _)| *parameter == name)
+                    .copied()
+            });
+        if let Some(node) = type_node {
+            let mut pending = vec![node];
+            while let Some(node) = pending.pop() {
+                if matches!(
+                    node.kind(),
+                    "infer_type" | "type_parameters" | "mapped_type_clause"
+                ) {
+                    return None;
+                }
+                if matches!(
+                    node.kind(),
+                    "type_identifier"
+                        | "identifier"
+                        | "property_identifier"
+                        | "shorthand_property_identifier"
+                ) && bindings
+                    .iter()
+                    .any(|(parameter, _)| node.utf8_text(source).ok() == Some(*parameter))
+                    && Some(node) != element.filter(|_| substitution.is_some())
+                {
+                    return None;
+                }
+                let mut walker = node.walk();
+                pending.extend(node.named_children(&mut walker));
+            }
+        }
+        if let Some((parameter, actual)) = substitution {
+            let name_node = member.child_by_field_name("name")?;
+            let name = match name_node.kind() {
+                "property_identifier" => {
+                    FieldName::Text(name_node.utf8_text(source).ok()?.to_owned())
+                }
+                "string" | "number" => simple_property_key(name_node, source)?,
+                _ => return None,
+            };
+            let text = name.text()?.to_owned();
+            if text.is_empty()
+                || replacements
+                    .insert(name.token(), (parameter, actual))
+                    .is_some()
+            {
+                return None;
+            }
+            if type_node == element {
+                fields.push((base_index, text, actual.to_owned()));
+            }
+        }
+    }
+    let original = interface_member_identity(base, source)?;
+    let mut rest = original.strip_prefix("interface_members:")?;
+    let mut result = String::from("interface_members:");
+    while !rest.is_empty() {
+        let (&tag, tail) = rest.as_bytes().split_first()?;
+        let (name, tail) = take_identity_part(std::str::from_utf8(tail).ok()?)?;
+        let (signature, tail) = take_identity_part(tail)?;
+        let signature = match replacements.get(name) {
+            Some(&(parameter, actual)) => substitute_signature_token(signature, parameter, actual)?,
+            None => signature.to_owned(),
+        };
+        let _ = write!(
+            result,
+            "{}{}:{name}{}:{signature}",
+            tag as char,
+            name.len(),
+            signature.len()
+        );
+        rest = tail;
+    }
+    Some((result, fields))
+}
+
+#[cfg(feature = "lang-typescript")]
+fn substitute_signature_token(signature: &str, parameter: &str, actual: &str) -> Option<String> {
+    use std::fmt::Write as _;
+    let (kind, mut rest) = signature.split_once(':')?;
+    let mut result = kind.to_owned();
+    let mut replaced = false;
+    loop {
+        let (token, tail) = take_identity_part(rest)?;
+        let token = if token == parameter {
+            replaced = true;
+            actual
+        } else {
+            token
+        };
+        let _ = write!(result, ":{}:{token}", token.len());
+        if tail.is_empty() {
+            break;
+        }
+        rest = tail.strip_prefix(':')?;
+    }
+    replaced.then_some(result)
 }
 
 #[cfg(feature = "lang-typescript")]

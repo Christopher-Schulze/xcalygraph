@@ -252,6 +252,8 @@ pub enum SourceIdentityKind {
     InterfaceMembers,
     /// Verified same-file group, identified by its first local symbol index.
     InterfaceGroup,
+    /// Source-proven concrete field types for generic bases of an interface group.
+    InterfaceGenericFields,
 }
 
 impl SourceIdentityKind {
@@ -262,9 +264,44 @@ impl SourceIdentityKind {
             value if value == Self::InterfaceHeader as u8 => Some(Self::InterfaceHeader),
             value if value == Self::InterfaceMembers as u8 => Some(Self::InterfaceMembers),
             value if value == Self::InterfaceGroup as u8 => Some(Self::InterfaceGroup),
+            value if value == Self::InterfaceGenericFields as u8 => {
+                Some(Self::InterfaceGenericFields)
+            }
             _ => None,
         }
     }
+}
+
+/// Encode `(base symbol, field name, concrete type)` triples in sorted, unambiguous form.
+pub fn interface_generic_fields_identity(fields: &[(u32, &str, &str)]) -> String {
+    let mut identity = String::from("generic_fields:");
+    for &(base, name, concrete) in fields {
+        push_length_prefixed(&mut identity, &base.to_string());
+        push_length_prefixed(&mut identity, name);
+        push_length_prefixed(&mut identity, concrete);
+    }
+    identity
+}
+
+/// Decode generic-field evidence, rejecting malformed, duplicate or unsorted entries.
+pub fn interface_generic_fields(identity: &str) -> Option<Vec<(u32, &str, &str)>> {
+    let mut rest = identity.strip_prefix("generic_fields:")?;
+    let mut fields = Vec::new();
+    let mut previous = None;
+    while !rest.is_empty() {
+        let (base, tail) = take_length_prefixed(rest)?;
+        let base = base.parse::<u32>().ok()?;
+        let (name, tail) = take_length_prefixed(tail)?;
+        let (concrete, tail) = take_length_prefixed(tail)?;
+        if name.is_empty() || concrete.is_empty() || previous.is_some_and(|key| key >= (base, name))
+        {
+            return None;
+        }
+        fields.push((base, name, concrete));
+        previous = Some((base, name));
+        rest = tail;
+    }
+    (!fields.is_empty()).then_some(fields)
 }
 
 /// Sparse exact source identity, indexed into the local symbol or reference vector.

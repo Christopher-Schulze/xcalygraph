@@ -29,7 +29,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 76;
+pub const RESOLVE_VERSION: u32 = 77;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -4246,7 +4246,55 @@ impl<'a> Index<'a> {
                 return Receiver::Unknown;
             };
             let owner_file = self.symbols[type_symbol as usize].file;
-            match self.resolve_type(owner_file, None, None, field_type) {
+            let concrete = if types.len() == 1 {
+                let group = types[0];
+                let group_file = self.symbols[group as usize].file;
+                let local = group.checked_sub(self.base[group_file as usize]);
+                local
+                    .and_then(|local| {
+                        self.facts(group_file)?
+                            .source_identity(SourceIdentityKind::InterfaceGenericFields, local)
+                    })
+                    .and_then(facts::interface_generic_fields)
+                    .and_then(|fields| {
+                        fields.into_iter().find(|(base, name, _)| {
+                            self.base[group_file as usize].checked_add(*base) == Some(type_symbol)
+                                && name == field
+                        })
+                    })
+                    .map(|(_, _, concrete)| concrete)
+            } else {
+                None
+            };
+            if concrete.is_some_and(|name| {
+                matches!(
+                    name,
+                    "string"
+                        | "number"
+                        | "boolean"
+                        | "bigint"
+                        | "symbol"
+                        | "object"
+                        | "void"
+                        | "undefined"
+                        | "null"
+                        | "never"
+                        | "unknown"
+                        | "any"
+                )
+            }) {
+                return Receiver::External;
+            }
+            match self.resolve_type(owner_file, None, None, concrete.unwrap_or(field_type)) {
+                Some((next, next_confidence))
+                    if concrete.is_some()
+                        && (next.len() != 1
+                            || next_confidence != Confidence::Exact
+                            || self.symbols[next[0] as usize].file != owner_file
+                            || self.symbols[next[0] as usize].parent != NONE) =>
+                {
+                    return Receiver::Unknown;
+                }
                 Some((next, next_confidence)) => {
                     types = next;
                     confidence = confidence.max(next_confidence);
