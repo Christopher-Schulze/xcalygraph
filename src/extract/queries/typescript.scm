@@ -56,6 +56,8 @@
 (public_field_definition name: (property_identifier) @field.name value: (new_expression constructor: (_) @field.type)) @field
 (interface_declaration body: (interface_body (property_signature name: (property_identifier) @field.name) @field))
 (interface_declaration body: (interface_body (property_signature name: (property_identifier) @field.name type: (type_annotation [(type_identifier) (nested_type_identifier) (predefined_type)] @field.type)) @field))
+(interface_declaration body: (interface_body (property_signature name: [(string) (number)] @field.name @field.literal) @field))
+(interface_declaration body: (interface_body (property_signature name: [(string) (number)] @field.name @field.literal type: (type_annotation [(type_identifier) (nested_type_identifier) (predefined_type)] @field.type)) @field))
 (required_parameter (accessibility_modifier) pattern: (identifier) @field.name type: (type_annotation (_) @field.type)) @field
 (assignment_expression
   left: (member_expression object: (this) property: (property_identifier) @field.name)

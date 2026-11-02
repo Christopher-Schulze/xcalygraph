@@ -439,10 +439,30 @@ fn collect(
                     }
                 }
                 "field" => {
+                    if primary_node.kind() == "property_signature"
+                        && primary_node
+                            .parent()
+                            .and_then(|body| body.parent())
+                            .is_some_and(|interface| {
+                                interface.kind() == "interface_declaration" && interface.has_error()
+                            })
+                    {
+                        continue;
+                    }
                     let entry = fields.entry(key).or_default();
                     entry.position = primary_node.start_byte();
                     if let Some(node) = get("field.name") {
-                        entry.name = Some(text(node).to_owned());
+                        if let Some(literal) = get("field.literal") {
+                            #[cfg(feature = "lang-typescript")]
+                            {
+                                entry.name =
+                                    super::lang::typescript::simple_property_key(literal, source);
+                            }
+                            #[cfg(not(feature = "lang-typescript"))]
+                            let _ = literal;
+                        } else {
+                            entry.name = Some(text(node).to_owned());
+                        }
                     }
                     if let Some(node) = get("field.type") {
                         entry.type_name = type_name(text(node));

@@ -47,6 +47,39 @@ pub static JAVASCRIPT: Pack = Pack {
     hooks: HOOKS,
 };
 
+/// Direct literal keys that need neither escape decoding nor ambiguous field-list rendering.
+#[cfg(feature = "lang-typescript")]
+pub(in crate::extract) fn simple_property_key(
+    node: tree_sitter::Node,
+    source: &[u8],
+) -> Option<String> {
+    let text = node.utf8_text(source).ok()?;
+    let key = match node.kind() {
+        "string" => {
+            let quote = text.chars().next()?;
+            if !matches!(quote, '\'' | '"') {
+                return None;
+            }
+            text.strip_prefix(quote)?.strip_suffix(quote)?
+        }
+        "number" => {
+            if !text.bytes().all(|byte| byte.is_ascii_digit())
+                || (text.len() > 1 && text.starts_with('0'))
+                || text.parse::<u64>().ok()? > 9_007_199_254_740_991
+            {
+                return None;
+            }
+            text
+        }
+        _ => return None,
+    };
+    (!key.is_empty()
+        && key
+            .chars()
+            .all(|ch| ch.is_alphanumeric() || matches!(ch, '_' | '$' | '-')))
+    .then(|| key.to_owned())
+}
+
 /// `export`ed declarations, plus members of exported classes and interfaces that are not
 /// `private`, `protected` or `#private`.
 /// Overload signatures (`function scale(x: number): number;`) declare the implementation that
@@ -248,15 +281,34 @@ mod tests {
         let config = fields("Config");
         assert!(config.is_some(), "Config properties were not captured");
         if let Some(config) = config {
-            assert_eq!(config.names, ["width", "height", "nested", "choice"]);
+            assert_eq!(
+                config.names,
+                [
+                    "width",
+                    "height",
+                    "nested",
+                    "choice",
+                    "display-name",
+                    "quoted-key",
+                    "ümlaut",
+                    "123",
+                    "9007199254740991"
+                ]
+            );
             assert_eq!(config.types[0..2], ["number", "number"]);
             assert_eq!(config.types[3], "");
-            assert!(
-                !config
-                    .names
-                    .iter()
-                    .any(|name| name == "inner" || name == "run" || name == "display-name")
+            assert_eq!(
+                config.types[4..8],
+                ["string", "string", "string", "boolean"]
             );
+            assert_eq!(config.types[8], "number");
+            assert!(!config.names.iter().any(|name| name == "inner"
+                || name == "run"
+                || name == "a,b"
+                || name == "escaped\\u0061"
+                || name == "escapeda"
+                || name == "0x10"
+                || name == "16"));
         }
         let other = fields("Other");
         assert!(other.is_some(), "Other properties were not captured");
@@ -265,6 +317,19 @@ mod tests {
             assert_eq!(other.types, ["boolean"]);
         }
         assert!(fields("Unrelated").is_some());
+        let malformed = crate::extract::extract(&record, b"interface Broken { -1: string; }");
+        assert!(malformed.fields.is_empty(), "malformed key became a field");
+        let malformed = crate::extract::extract(&record, b"interface Broken { -foo: string; }");
+        assert!(
+            malformed.fields.is_empty(),
+            "malformed identifier became a field"
+        );
+        let mixed = crate::extract::extract(
+            &record,
+            b"interface Broken { -foo: string; }\ninterface Fine { value: number; 7: boolean; }",
+        );
+        assert_eq!(mixed.fields.len(), 1);
+        assert_eq!(mixed.fields[0].names, ["value", "7"]);
     }
 
     fn rows(statement: &str) -> Vec<(String, String, Option<String>, bool)> {
