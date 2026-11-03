@@ -2331,7 +2331,9 @@ fn doc_comment(node: Node, source: &[u8]) -> String {
             if text.starts_with("//!") || text.starts_with("/*!") {
                 break;
             }
-            lines.push(strip_comment(text));
+            if sibling.start_byte() != 0 || !text.starts_with("#!") {
+                lines.push(strip_comment(text));
+            }
         }
         expected_row = sibling.start_position().row;
         current = sibling.prev_named_sibling();
@@ -2381,6 +2383,8 @@ fn strip_comment(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use super::*;
 
     #[test]
@@ -2471,5 +2475,124 @@ mod tests {
         );
         assert_eq!(rust_string_literal("r\"unterminated\"#"), None);
         assert_eq!(rust_string_literal("\"\\xFF.rs\""), None);
+    }
+
+    #[test]
+    #[cfg(any(
+        feature = "lang-bash",
+        feature = "lang-python",
+        feature = "lang-ruby",
+        feature = "lang-scala",
+        feature = "lang-elixir",
+        feature = "lang-julia",
+        feature = "lang-r",
+        feature = "lang-commonlisp",
+        feature = "lang-powershell",
+        feature = "lang-robot"
+    ))]
+    fn leading_shebang_comments_do_not_displace_real_documentation() -> Result<(), Box<dyn Error>> {
+        let cases = [
+            #[cfg(feature = "lang-bash")]
+            (
+                "bash",
+                "probe.sh",
+                &b"#!/usr/bin/env bash\n# Retain this comment.\ncleanup() { :; }\n"[..],
+            ),
+            #[cfg(feature = "lang-python")]
+            (
+                "python",
+                "probe.py",
+                &b"#!/usr/bin/env python3\n# Retain this comment.\ndef cleanup():\n    pass\n"[..],
+            ),
+            #[cfg(feature = "lang-ruby")]
+            (
+                "ruby",
+                "probe.rb",
+                &b"#!/usr/bin/env ruby\n# Retain this comment.\ndef cleanup\nend\n"[..],
+            ),
+            #[cfg(feature = "lang-scala")]
+            (
+                "scala",
+                "probe.scala",
+                &b"#!/usr/bin/env scala\n// Retain this comment.\ndef cleanup = ()\n"[..],
+            ),
+            #[cfg(feature = "lang-elixir")]
+            (
+                "elixir",
+                "probe.ex",
+                &b"#!/usr/bin/env elixir\n# Retain this comment.\ndefmodule Main do\n  def cleanup, do: :ok\nend\n"[..],
+            ),
+            #[cfg(feature = "lang-julia")]
+            (
+                "julia",
+                "probe.jl",
+                &b"#!/usr/bin/env julia\n# Retain this comment.\nfunction cleanup()\n    nothing\nend\n"[..],
+            ),
+            #[cfg(feature = "lang-r")]
+            (
+                "r",
+                "probe.R",
+                &b"#!/usr/bin/env Rscript\n# Retain this comment.\ncleanup <- function() {}\n"[..],
+            ),
+            #[cfg(feature = "lang-commonlisp")]
+            (
+                "lisp",
+                "probe.lisp",
+                &b"#!/usr/bin/env sbcl --script\n;; Retain this comment.\n(defun cleanup () nil)\n"[..],
+            ),
+            #[cfg(feature = "lang-powershell")]
+            (
+                "powershell",
+                "probe.ps1",
+                &b"#!/usr/bin/env pwsh\n# Retain this comment.\nfunction Cleanup { }\n"[..],
+            ),
+            #[cfg(feature = "lang-robot")]
+            (
+                "robot",
+                "probe.robot",
+                &b"#!/usr/bin/env robot\n# Retain this comment.\n*** Keywords ***\nCleanup\n    Log    done\n"[..],
+            ),
+        ];
+
+        for (language_id, path, source) in cases {
+            let file_type = crate::domain::filetype::FileType::from_id(language_id)
+                .ok_or_else(|| std::io::Error::other(format!("unknown file type {language_id}")))?;
+            let (_, language, _) = crate::extract::lang::lookup(file_type, path)
+                .ok_or_else(|| std::io::Error::other(format!("missing grammar for {path}")))?;
+            let mut parser = Parser::new();
+            parser.set_language(&language)?;
+            let tree = parser.parse(source, None).ok_or_else(|| {
+                std::io::Error::other(format!("{language_id} parser returned no tree"))
+            })?;
+            let root = tree.root_node();
+            let shebang = root.named_child(0).ok_or_else(|| {
+                std::io::Error::other(format!("{language_id} omitted its shebang node"))
+            })?;
+            assert!(shebang.kind().contains("comment"), "{language_id}");
+            assert!(
+                shebang
+                    .utf8_text(source)
+                    .is_ok_and(|text| text.starts_with("#!")),
+                "{language_id}: {}",
+                shebang.kind()
+            );
+            let first_non_comment = (0..root.named_child_count())
+                .filter_map(|index| {
+                    u32::try_from(index)
+                        .ok()
+                        .and_then(|index| root.named_child(index))
+                })
+                .find(|child| !child.kind().contains("comment"))
+                .ok_or_else(|| {
+                    std::io::Error::other(format!("{language_id} omitted its declaration"))
+                })?;
+            let doc = doc_comment(first_non_comment, source);
+            assert!(!doc.contains("/usr/bin/env"), "{language_id}: {doc:?}");
+            assert!(
+                doc.contains("Retain this comment."),
+                "{language_id}: {doc:?}"
+            );
+        }
+        Ok(())
     }
 }

@@ -154,7 +154,7 @@ Freshness:
 
 | fact | fields |
 |------|--------|
-| symbol | kind, name, parent symbol, line start, line end, signature (one line, whitespace-normalized, body removed, max 160 chars), doc (first sentence of the attached doc comment, max 120 chars), visibility (exported or private), flags (test, entry, generated) |
+| symbol | kind, name, parent symbol, line start, line end, signature (one line, whitespace-normalized, body removed, max 160 chars), doc (first sentence of the attached doc comment, max 120 chars; leading shebang directives are excluded), visibility (exported or private), flags (test, entry, generated) |
 | import | module specifier, alias, imported names, line |
 | ref | name (identifier or last two segments of a member chain), kind (call, type, inherit, implement), enclosing symbol, line, call arity; Rust records function and impl generic parameters and their source-backed trait bounds; Julia also stores sparse positional direct-variable arguments and marks retained unqualified builtins |
 | binding | variable name, declared type as written, enclosing symbol, line; Julia typed parameters retain their full annotation |

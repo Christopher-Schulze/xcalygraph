@@ -1,0 +1,2 @@
+doc "Keep this function comment."
+sym 3-3 fn cleanup parent=- owner= pub flags=0 sig="cleanup()" doc="Keep this function comment."
