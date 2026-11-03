@@ -12,7 +12,8 @@
 #   and recall rows (recall-calls / recall-types: distinct source-file/target pairs the compiler
 #   references, and how many have an edge; edges are deduplicated per source symbol and target,
 #   so recall is measured per file and target rather than per line).
-# Verdict per edge: correct when the compiler resolves a reference on the edge line to the edge
+# Verdict per edge: unknown when the compiler has no symbol for the target; correct when the
+# compiler resolves a reference on the edge line to the edge
 # target (same file, same name, definition within 5 lines) or to a method the target implements;
 # for inherits/implements, when the source type declared there has that relationship; incorrect
 # when the compiler resolves in-repo references (or relationships) there but none is the target;
@@ -158,10 +159,14 @@ with open(verdicts_path, "w") as verdicts:
                       if parent in definitions}
             dispatch = set()
         else:
-            oracle = references.get((source, int(line)), set())
+            # Module and namespace symbols (`utils` -> file) say nothing about the member called.
+            oracle = {symbol for symbol in references.get((source, int(line)), set())
+                      if not symbol.endswith("/")}
             dispatch = {parent for symbol in expected for parent in implements.get(symbol, ())}
         names = {descriptor_name(symbol) for symbol in oracle}
-        if not oracle:
+        # Without any in-repo reference there, or without a compiler symbol for the target (local
+        # functions, CommonJS export objects), the compiler cannot judge the edge.
+        if not oracle or not expected:
             verdict = "unknown"
         elif oracle & expected or oracle & dispatch:
             verdict = "correct"

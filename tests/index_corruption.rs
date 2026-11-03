@@ -19,23 +19,7 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new() -> io::Result<Self> {
-        let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".cache");
-        fs::create_dir_all(&cache)?;
-        if fs::symlink_metadata(&cache)?.file_type().is_symlink() {
-            return Err(io::Error::other("test cache must not be a symlink"));
-        }
-        for sequence in 0..1000 {
-            let path = cache.join(format!(
-                "index-corruption-{}-{sequence}",
-                std::process::id()
-            ));
-            match fs::create_dir(&path) {
-                Ok(()) => return Ok(Self(path)),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error),
-            }
-        }
-        Err(io::Error::other("no unused test directory"))
+        support::exclusive_dir("index-corruption").map(Self)
     }
 }
 

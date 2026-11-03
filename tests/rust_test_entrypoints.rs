@@ -6,31 +6,12 @@ use std::error::Error;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture(PathBuf);
 
 impl Fixture {
     fn new() -> io::Result<Self> {
-        let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".cache");
-        fs::create_dir_all(&cache)?;
-        if fs::symlink_metadata(&cache)?.file_type().is_symlink() {
-            return Err(io::Error::other("test cache must not be a symlink"));
-        }
-        loop {
-            let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-            let path = cache.join(format!(
-                "rust-test-entrypoints-{}-{sequence}",
-                std::process::id()
-            ));
-            match fs::create_dir(&path) {
-                Ok(()) => return Ok(Self(path)),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error),
-            }
-        }
+        support::exclusive_dir("rust-test-entrypoints").map(Self)
     }
 }
 

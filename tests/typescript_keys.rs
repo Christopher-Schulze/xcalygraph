@@ -4,27 +4,14 @@ mod support;
 
 use std::error::Error;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Output;
 
 struct Fixture(PathBuf);
 
 impl Fixture {
     fn new() -> Result<Self, Box<dyn Error>> {
-        let cache = Path::new(env!("CARGO_MANIFEST_DIR")).join(".cache");
-        fs::create_dir_all(&cache)?;
-        if fs::symlink_metadata(&cache)?.file_type().is_symlink() {
-            return Err("test cache must not be a symlink".into());
-        }
-        for sequence in 0..1000 {
-            let path = cache.join(format!("typescript-keys-{}-{sequence}", std::process::id()));
-            match fs::create_dir(&path) {
-                Ok(()) => return Ok(Self(path)),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error.into()),
-            }
-        }
-        Err("no unused test directory".into())
+        Ok(Self(support::exclusive_dir("typescript-keys")?))
     }
 
     fn run(&self, arguments: &[&str]) -> Result<Output, Box<dyn Error>> {

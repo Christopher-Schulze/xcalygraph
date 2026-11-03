@@ -5,14 +5,12 @@ mod support;
 use std::error::Error;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Output;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
 const BINARY: &str = env!("CARGO_BIN_EXE_xcalygraph");
-static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {
     directory: PathBuf,
@@ -22,21 +20,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> io::Result<Self> {
-        let cache = Path::new(env!("CARGO_MANIFEST_DIR")).join(".cache");
-        fs::create_dir_all(&cache)?;
-        if fs::symlink_metadata(&cache)?.file_type().is_symlink() {
-            return Err(io::Error::other("test cache must not be a symlink"));
-        }
-        let cache = cache.canonicalize()?;
-        let directory = loop {
-            let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-            let path = cache.join(format!("bash-options-{}-{sequence}", std::process::id()));
-            match fs::create_dir(&path) {
-                Ok(()) => break path,
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error),
-            }
-        };
+        let directory = support::exclusive_dir("bash-options")?;
         let root = directory.join("root");
         fs::create_dir(&root)?;
         Ok(Self {
