@@ -5823,6 +5823,8 @@ fn prefer_definitions(index: &Index<'_>, candidates: &[u32]) -> Option<Vec<u32>>
             {
                 return false;
             }
+            #[cfg(not(feature = "lang-typescript"))]
+            let _ = candidate;
             true
         })
         .collect();

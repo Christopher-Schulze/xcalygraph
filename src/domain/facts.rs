@@ -243,12 +243,15 @@ fn take_length_prefixed(source: &str) -> Option<(&str, &str)> {
 }
 
 /// Prefix of a complete TypeScript callable header identity stored on a symbol fact.
+#[cfg(feature = "lang-typescript")]
 pub const TYPESCRIPT_CALLABLE_IDENTITY_PREFIX: &str = "typescript_callable:v1:";
 
 /// Prefix of a TypeScript union of source-resolved field type names.
+#[cfg(feature = "lang-typescript")]
 pub const TYPESCRIPT_UNION_FIELD_TYPE_PREFIX: &str = "typescript_union:v1:";
 
 /// Prefix of a TypeScript intersection of source-resolved field type names.
+#[cfg(feature = "lang-typescript")]
 pub const TYPESCRIPT_INTERSECTION_FIELD_TYPE_PREFIX: &str = "typescript_intersection:v1:";
 
 /// Kind of local fact with a complete source-backed identity.
@@ -490,6 +493,7 @@ fn take_optional_string(source: &str) -> Option<(Option<String>, &str)> {
 }
 
 /// Encode `(base symbol, field name, concrete type)` triples in sorted, unambiguous form.
+#[cfg(any(feature = "lang-typescript", test))]
 pub fn interface_generic_fields_identity(fields: &[(u32, &str, &str)]) -> String {
     let mut identity = String::from("generic_fields:");
     for &(base, name, concrete) in fields {

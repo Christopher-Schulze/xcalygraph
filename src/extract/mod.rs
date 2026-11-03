@@ -196,6 +196,7 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
             &mut facts,
         );
     }
+    #[cfg(feature = "lang-bash")]
     if record.file_type == Some(FileType::Bash) {
         lang::bash::recover_functions(&String::from_utf8_lossy(content), &mut facts);
     }

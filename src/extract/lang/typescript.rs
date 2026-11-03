@@ -115,6 +115,7 @@ pub(in crate::extract) fn file_scope(
 }
 
 /// Source-level TypeScript module indicator status, independent of project compiler options.
+#[cfg(feature = "lang-typescript")]
 pub(crate) fn module_syntax(
     root: tree_sitter::Node,
     source: &[u8],
@@ -149,6 +150,7 @@ pub(crate) fn module_syntax(
     if has_jsx { "jsx" } else { "none" }
 }
 
+#[cfg(feature = "lang-typescript")]
 pub(crate) enum GlobalAugmentationEvidence {
     Absent,
     Complete(Vec<crate::domain::facts::SourceIdentity>),
@@ -156,6 +158,7 @@ pub(crate) enum GlobalAugmentationEvidence {
 }
 
 /// Capture complete interface declarations inside every source-level `declare global` block.
+#[cfg(feature = "lang-typescript")]
 pub(crate) fn global_augmentation_evidence(
     root: tree_sitter::Node,
     source: &[u8],
@@ -205,6 +208,7 @@ pub(crate) fn global_augmentation_evidence(
     GlobalAugmentationEvidence::Complete(identities)
 }
 
+#[cfg(feature = "lang-typescript")]
 fn is_typescript_declaration_path(path: &str) -> bool {
     [".d.ts", ".d.mts", ".d.cts", ".d.ets"]
         .iter()
@@ -214,6 +218,7 @@ fn is_typescript_declaration_path(path: &str) -> bool {
         })
 }
 
+#[cfg(feature = "lang-typescript")]
 fn collect_global_declarations(
     body: tree_sitter::Node,
     source: &[u8],
@@ -235,6 +240,7 @@ fn collect_global_declarations(
     Some(())
 }
 
+#[cfg(feature = "lang-typescript")]
 fn collect_global_declaration(
     node: tree_sitter::Node,
     source: &[u8],

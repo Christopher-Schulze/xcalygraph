@@ -42,6 +42,16 @@ pub struct Hooks {
 }
 
 /// What hooks may inspect about a definition.
+#[cfg_attr(
+    not(all(
+        feature = "lang-rust",
+        any(feature = "lang-typescript", feature = "lang-javascript")
+    )),
+    expect(
+        dead_code,
+        reason = "Definition carries the union of metadata read by Rust and TypeScript hooks"
+    )
+)]
 pub struct Definition<'a> {
     pub kind: SymKind,
     pub name: &'a str,
@@ -61,12 +71,41 @@ pub struct Definition<'a> {
     pub node_kind: &'a str,
 }
 
+#[cfg_attr(
+    not(feature = "lang-go"),
+    expect(
+        dead_code,
+        reason = "FileContext carries the package name used by the Go hook"
+    )
+)]
 pub struct FileContext<'a> {
     pub path: &'a str,
     pub package: Option<&'a str>,
 }
 
 /// Default import expansion: the tree text is the module specifier.
+#[cfg(any(
+    feature = "lang-go",
+    feature = "lang-bash",
+    feature = "lang-lua",
+    feature = "lang-zig",
+    feature = "lang-julia",
+    feature = "lang-r",
+    feature = "lang-ocaml",
+    feature = "lang-fortran",
+    feature = "lang-pascal",
+    feature = "lang-solidity",
+    feature = "lang-swift",
+    feature = "lang-powershell",
+    feature = "lang-robot",
+    feature = "lang-elixir",
+    feature = "lang-erlang",
+    feature = "lang-dm",
+    feature = "lang-verilog",
+    feature = "lang-ruby",
+    feature = "lang-commonlisp",
+    feature = "lang-dart"
+))]
 pub fn single_import(text: &str, line: u32, reexport: bool) -> Vec<Import> {
     vec![Import {
         spec: unquote(text).to_owned(),

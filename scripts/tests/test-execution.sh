@@ -9,6 +9,14 @@ REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 cd "${REPO_ROOT}"
 cargo fmt --all --check
+check_feature_subset() {
+  bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
+  RUSTFLAGS="-Dwarnings" cargo check --locked "$@" --bin xcalygraph
+}
+check_feature_subset --no-default-features
+check_feature_subset --no-default-features --features lang-bash
+check_feature_subset --no-default-features --features lang-javascript
+check_feature_subset --no-default-features --features lang-typescript
 bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
 cargo clippy --all-targets --locked -- -D warnings
 bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
