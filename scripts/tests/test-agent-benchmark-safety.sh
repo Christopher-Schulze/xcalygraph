@@ -234,5 +234,42 @@ printf '%s\0' "$home"
                                    "setup", str(runner)], env=environment, capture_output=True, text=True)
         assert rejected.returncode != 0 and "symlink" in rejected.stderr
         assert not list(foreign.iterdir())
-    print("PASS: planning, guarded debug capture, binary/skill binding, Git/xcalygraph/shell override isolation, previous evidence and linked-cache refusal")
+
+    # Outcome scoring from real stream-json shapes: every status is reachable and failable.
+    root, runner = project("scoring")
+    def trace(name, answer, commands=(), error=False):
+        path = work / (name + ".jsonl")
+        events = [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": command}} for command in commands]}},
+            {"type": "result", "subtype": "success", "is_error": error, "result": answer, "num_turns": 3,
+             "duration_ms": 1200, "total_cost_usd": 0.01,
+             "usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 100,
+                       "cache_creation_input_tokens": 0}}]
+        path.write_text("\n".join(json.dumps(event) for event in events) + "\n")
+        return path
+    cases = [("correct", "none", "1", trace("c", "src/app.ts::compose")),
+             ("wrong_symbol", "none", "1", trace("w", "src/app.ts::dispatch")),
+             ("miss", "none", "0", trace("m", "src/other.ts::compose")),
+             ("error", "none", "1", trace("e", "Not logged in", error=True)),
+             ("leak", "none", "1", trace("l", "src/app.ts::compose", ["xcalygraph find compose"])),
+             ("leak", "xcalygraph", "1", trace("g", "src/app.ts::compose", ["graphify query compose"])),
+             ("correct", "xcalygraph", "1", trace("x", "src/app.ts::compose", ["xcalygraph find compose"]))]
+    for status, arm, matched, path in cases:
+        scored = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; evaluate_trace "$2" "$3" "$4" "$5"',
+                                 "score", str(runner), str(path), arm, matched, "src/app.ts::compose"],
+                                env=environment, capture_output=True, text=True)
+        assert scored.returncode == 0, scored.stderr
+        fields = scored.stdout.rstrip("\n").split("\t")
+        assert fields[0] == status and fields[1:4] == ["115", "3", str(len(json.loads(path.read_text().splitlines()[0])["message"]["content"]))], (status, fields)
+    # PATH isolation: the no-tool arm cannot reach xcalygraph or graphify even when the caller can.
+    tools = work / "tools"
+    tools.mkdir()
+    for name in ("xcalygraph", "graphify"):
+        (tools / name).symlink_to(shutil.which("true"))
+    isolated = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; invoke_agent none "$2" "" bash -c \'command -v xcalygraph graphify || true\'',
+                               "isolate", str(runner), str(home)],
+                              env=dict(environment, PATH=str(tools) + os.pathsep + environment["PATH"]),
+                              capture_output=True, text=True)
+    assert isolated.returncode == 0 and isolated.stdout == "", (isolated.stdout, isolated.stderr)
+    print("PASS: planning, guarded debug capture, binary/skill binding, Git/xcalygraph/shell override isolation, previous evidence, linked-cache refusal, outcome scoring and PATH isolation")
 PYTHON

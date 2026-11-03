@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Agent benchmark (docs/spec.md section 12): headless Claude Code answers each question in three
 # arms (no tool, Graphify skill, xcalygraph skill); reports agent success and agent cost.
-# Usage: scripts/benchmarks/run-agent-benchmark.sh [--run] [--runs N] CORPUS...
+# Usage: scripts/benchmarks/run-agent-benchmark.sh [--run] [--runs N] [--model M] CORPUS...
 #   Without --run it prints the planned invocations only (dry run). Real runs use the owner's
 #   Claude subscription and need owner approval per milestone (AGENTS.md, Loop protocol).
-#   Each corpus/arm uses its own temporary HOME.
-#   Success: the final answer names the expected file. Cost: total tokens, turns and wall time
-#   from --output-format json.
-# Requires: python3, seq, claude, jq; graphify for the Graphify arm; Cargo for a guarded release build.
+#   Each arm uses its own temporary HOME and a git-archive copy of the corpus; PATH keeps no other
+#   arm's tool. Authentication: CLAUDE_CODE_OAUTH_TOKEN from the environment or config/.env
+#   (create it with `claude setup-token`).
+#   Status per answer: correct (expected file and symbol), wrong_symbol (file only), miss, error
+#   (agent or API failure) or leak (the trace used another arm's tool). Cost: tokens, turns, tool
+#   calls, wall time and USD from the stream-json trace, retained per run under traces/.
+# Requires: python3, seq, git, tar, claude; graphify for the Graphify arm; Cargo for a guarded release build.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
@@ -21,14 +24,16 @@ readonly PROMPT_SUFFIX="Answer with the file path and the symbol name that answe
 
 run=0
 runs=3
+model=""
 while (( $# > 0 )); do
   case "$1" in
     --run) run=1; shift ;;
     --runs) (( $# >= 2 )) || { echo "run-agent-benchmark.sh: --runs needs a positive integer" >&2; exit 2; }; runs="$2"; shift 2 ;;
+    --model) (( $# >= 2 )) && [[ -n "$2" ]] || { echo "run-agent-benchmark.sh: --model needs a name" >&2; exit 2; }; model="$2"; shift 2 ;;
     *) break ;;
   esac
 done
-(( $# > 0 )) || { echo "usage: run-agent-benchmark.sh [--run] [--runs N] CORPUS..." >&2; exit 2; }
+(( $# > 0 )) || { echo "usage: run-agent-benchmark.sh [--run] [--runs N] [--model M] CORPUS..." >&2; exit 2; }
 [[ "${runs}" =~ ^[0-9]+$ && "${runs}" =~ [1-9] ]] || {
   echo "run-agent-benchmark.sh: --runs needs a positive integer" >&2
   exit 2
@@ -41,17 +46,29 @@ while IFS= read -r attempt; do
   attempts+=("${attempt}")
 done <<< "${run_attempts}"
 if (( run )); then
-  for tool in claude jq; do
+  for tool in claude git tar; do
     command -v "${tool}" >/dev/null || { echo "run-agent-benchmark.sh: ${tool} missing" >&2; exit 1; }
   done
+  if [[ -z "${CLAUDE_CODE_OAUTH_TOKEN-}" && -f "${REPO_ROOT}/config/.env" ]]; then
+    CLAUDE_CODE_OAUTH_TOKEN="$(sed -n 's/^CLAUDE_CODE_OAUTH_TOKEN=//p' "${REPO_ROOT}/config/.env" | tail -n 1)"
+  fi
+  [[ -n "${CLAUDE_CODE_OAUTH_TOKEN-}" ]] || {
+    echo "run-agent-benchmark.sh: CLAUDE_CODE_OAUTH_TOKEN missing; run 'claude setup-token' and store it in config/.env" >&2
+    exit 1
+  }
+  export CLAUDE_CODE_OAUTH_TOKEN
 fi
+agent_flags=(--output-format stream-json --verbose --no-session-persistence --dangerously-skip-permissions)
+[[ -z "${model}" ]] || agent_flags+=(--model "${model}")
 
 corpus_root() {
   local private
   case "$1" in
     xcalygraph) printf '%s' "${REPO_ROOT}" ;;
     graphify) printf '%s' "${REPO_ROOT}/research/upstream/graphify" ;;
-    *) if [[ -f "${PRIVATE_LIST}" ]]; then
+    *) if [[ "$1" =~ ^[A-Za-z0-9._/-]+$ && "$1" != *..* && -d "${REPO_ROOT}/research/corpora/$1" ]]; then
+         printf '%s' "${REPO_ROOT}/research/corpora/$1"
+       elif [[ -f "${PRIVATE_LIST}" ]]; then
          private="$(bash "${REPO_ROOT}/scripts/utils/read-private-corpus.sh" get "${PRIVATE_LIST}" "$1" && printf '.')" || return 1
          private="${private%.}"
          if [[ "${private}" == -* ]]; then private="./${private}"; fi
@@ -60,8 +77,21 @@ corpus_root() {
   esac
 }
 
+# A corpus subdirectory such as bulletproof-react/apps/react-vite names its question set with dashes.
 question_file() {
-  if [[ -f "${QUESTIONS}/$1.tsv" ]]; then echo "${QUESTIONS}/$1.tsv"; else echo "${QUESTIONS}/private/$1.tsv"; fi
+  local name="${1//\//-}"
+  if [[ -f "${QUESTIONS}/${name}.tsv" ]]; then echo "${QUESTIONS}/${name}.tsv"; else echo "${QUESTIONS}/private/${name}.tsv"; fi
+}
+
+# Copies the committed corpus tree, so arms see neither local agent instructions nor build output.
+snapshot_corpus() {
+  local root="$1" destination="$2" prefix
+  mkdir "${destination}" || return
+  if prefix="$(git -C "${root}" rev-parse --show-prefix 2>/dev/null)"; then
+    git -C "${root}" archive --format=tar "HEAD:${prefix}" | tar -x -C "${destination}" || return
+  else
+    tar -C "${root}" --exclude .git -cf - . | tar -x -C "${destination}" || return
+  fi
 }
 
 validate_questions() {
@@ -176,7 +206,8 @@ create_run() {
   mkdir -p "${WORK_BASE}" || return
   local work
   work="$(mktemp -d "${WORK_BASE}/run.XXXXXXXX")" || return
-  ( set -o noclobber; printf 'corpus\tarm\trun\tquestion\tsuccess\ttokens\tturns\tms\n' > "${work}/results.tsv" ) || return
+  ( set -o noclobber; printf 'corpus\tarm\trun\tquestion\tstatus\ttokens\tturns\ttools\tms\tusd\n' > "${work}/results.tsv" ) || return
+  mkdir "${work}/traces" "${work}/corpora" || return
   printf '%s\n' "${work}"
 }
 
@@ -228,11 +259,15 @@ invoke_agent() {
   if [[ "${arm}" == xcalygraph ]]; then directory="${binary%/*}"; fi
   python3 -I -c '
 import os
+import shutil
 import sys
 
-home, directory = sys.argv[1:3]
+arm, home, directory = sys.argv[1:4]
 if directory and os.pathsep in directory:
     raise SystemExit("run-agent-benchmark.sh: binary directory cannot be represented in PATH")
+program = shutil.which(sys.argv[4])
+if program is None:
+    raise SystemExit("run-agent-benchmark.sh: " + sys.argv[4] + " missing")
 environment = {key: value for key, value in os.environ.items()
                if not key.startswith(("BASH_FUNC_", "GIT_", "XCALYGRAPH_"))
                and key not in ("BASH_ENV", "ENV", "ZDOTDIR", "CDPATH")}
@@ -240,10 +275,77 @@ environment["HOME"] = home
 environment["CLAUDE_CONFIG_DIR"] = os.path.join(home, ".claude")
 environment["GIT_CONFIG_GLOBAL"] = os.devnull
 environment["GIT_CONFIG_NOSYSTEM"] = "1"
+# Only the arm tool may be reachable: drop PATH entries that provide another arm tool.
+foreign = {"none": ("xcalygraph", "graphify"), "xcalygraph": ("xcalygraph", "graphify"),
+           "graphify": ("xcalygraph",)}[arm]
+entries = [entry for entry in environment.get("PATH", os.defpath).split(os.pathsep)
+           if entry and not any(os.path.exists(os.path.join(entry, tool)) for tool in foreign)]
 if directory:
-    environment["PATH"] = directory + os.pathsep + environment.get("PATH", os.defpath)
-os.execvpe(sys.argv[3], sys.argv[3:], environment)
-' "${home}" "${directory}" "$@"
+    entries.insert(0, directory)
+environment["PATH"] = os.pathsep.join(entries)
+os.execve(program, [program] + sys.argv[5:], environment)
+' "${arm}" "${home}" "${directory}" "$@"
+}
+
+# Reads one stream-json trace; prints status, tokens, turns, tool calls, milliseconds and USD.
+evaluate_trace() {
+  python3 -I - "$@" <<'PYTHON'
+import json
+import re
+import sys
+
+trace, arm, matched, expected = sys.argv[1:5]
+events = []
+for line in open(trace, encoding="utf-8", errors="replace"):
+    line = line.strip()
+    if line.startswith("{"):
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+result = next((event for event in reversed(events) if event.get("type") == "result"), None)
+commands, tools = [], 0
+for event in events:
+    if event.get("type") != "assistant":
+        continue
+    for block in (event.get("message") or {}).get("content") or []:
+        if isinstance(block, dict) and block.get("type") == "tool_use":
+            tools += 1
+            commands.append(json.dumps(block.get("input"), ensure_ascii=False))
+foreign = {"none": ("xcalygraph", "graphify"), "xcalygraph": ("graphify",), "graphify": ("xcalygraph",)}[arm]
+used = re.compile(r"(?<![\w./-])(" + "|".join(foreign) + r")(?=\s|\\n|\"|$)")
+if result is None or result.get("is_error") or result.get("subtype") != "success":
+    status = "error"
+elif any(used.search(command) for command in commands):
+    status = "leak"
+elif matched != "1":
+    status = "miss"
+else:
+    name = re.split(r"\.|::", expected.partition("::")[2])[-1] if "::" in expected else ""
+    answer = result.get("result") or ""
+    status = "correct" if not name or re.search(r"(?<![\w])" + re.escape(name) + r"(?![\w])", answer) else "wrong_symbol"
+usage = (result or {}).get("usage") or {}
+tokens = sum(int(usage.get(key) or 0) for key in
+             ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+print("\t".join([status, str(tokens), str((result or {}).get("num_turns") or 0), str(tools),
+                  str((result or {}).get("duration_ms") or 0), str((result or {}).get("total_cost_usd") or 0)]))
+PYTHON
+}
+
+answer_text() {
+  python3 -I -c '
+import json
+import sys
+answer = ""
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if event.get("type") == "result":
+        answer = event.get("result") or ""
+print(answer)
+' "$1"
 }
 
 select_corpora "$@"
@@ -270,35 +372,38 @@ for corpus in "${selected_corpora[@]}"; do
   [[ -d "${root}" && -f "${questions}" ]] || { echo "run-agent-benchmark.sh: ${corpus}: no root or questions" >&2; exit 1; }
   for arm in "${ARMS[@]}"; do
     home="${WORK}/home-${arm}.<new>"
+    workspace="${WORK}/corpora/${corpus//\//-}-${arm}"
     if (( run )); then
       home="$(prepare_home "${arm}" "${WORK}" "${BINARY}")"
       if [[ "${arm}" == xcalygraph ]]; then
         verify_arm "${home}" "${BINARY}" "${IDENTITY}" --content
         last_xcalygraph_home="${home}"
       fi
+      # One copy per arm: tool output written into the tree (graphify-out/) must not reach another arm.
+      snapshot_corpus "${root}" "${workspace}" || { echo "run-agent-benchmark.sh: ${corpus}: snapshot failed" >&2; exit 1; }
     fi
+    number=0
     while IFS=$'\t' read -r question expected || [[ -n "${question}${expected}" ]]; do
       [[ "${question}" == "question" && "${expected}" == "expected" || -z "${question}" ]] && continue
+      number=$((number + 1))
       path="${expected%%::*}"
       [[ -n "${path//[[:space:]]/}" ]] || { echo "run-agent-benchmark.sh: empty expected path" >&2; exit 1; }
       for attempt in "${attempts[@]}"; do
         if (( ! run )); then
-          printf 'HOME=%q claude -p %q --output-format json  # cwd %s, arm %s, run %d\n' \
-            "${home}" "${question} ${PROMPT_SUFFIX}" "${root}" "${arm}" "${attempt}"
+          printf 'HOME=%q claude -p %q %s  # cwd %s (git archive of %s), arm %s, run %d\n' \
+            "${home}" "${question} ${PROMPT_SUFFIX}" "${agent_flags[*]}" "${workspace}" "${root}" "${arm}" "${attempt}"
           continue
         fi
+        trace="${WORK}/traces/${corpus//\//-}-${arm}-q${number}-r${attempt}.jsonl"
         if [[ "${arm}" == xcalygraph ]]; then verify_arm "${home}" "${BINARY}" "${IDENTITY}"; fi
-        if ! output="$(cd "${root}" && invoke_agent "${arm}" "${home}" "${BINARY}" claude -p "${question} ${PROMPT_SUFFIX}" --output-format json)"; then
-          echo "run-agent-benchmark.sh: agent invocation failed; see ${WORK}" >&2
-          exit 1
-        fi
+        # A failed agent process is recorded as status error; its trace stays for inspection.
+        ( cd "${workspace}" && invoke_agent "${arm}" "${home}" "${BINARY}" claude -p "${question} ${PROMPT_SUFFIX}" \
+            "${agent_flags[@]}" ) > "${trace}" 2> "${trace%.jsonl}.stderr" || true
         if [[ "${arm}" == xcalygraph ]]; then verify_arm "${home}" "${BINARY}" "${IDENTITY}"; fi
-        answer="$(jq -r '.result // ""' <<<"${output}")"
-        success="$(score_answer "${path}" "${answer}" "${root}")" || exit 1
-        tokens="$(jq -r '((.usage.input_tokens // 0) + (.usage.output_tokens // 0) + (.usage.cache_read_input_tokens // 0) + (.usage.cache_creation_input_tokens // 0))' <<<"${output}")"
-        turns="$(jq -r '.num_turns // 0' <<<"${output}")"
-        ms="$(jq -r '.duration_ms // 0' <<<"${output}")"
-        printf '%s\t%s\t%d\t%s\t%d\t%s\t%s\t%s\n' "${corpus}" "${arm}" "${attempt}" "${question}" "${success}" "${tokens}" "${turns}" "${ms}" >> "${results}"
+        answer="$(answer_text "${trace}")"
+        matched="$(score_answer "${path}" "${answer}" "${workspace}")" || exit 1
+        measures="$(evaluate_trace "${trace}" "${arm}" "${matched}" "${expected}")" || exit 1
+        printf '%s\t%s\t%d\t%s\t%s\n' "${corpus}" "${arm}" "${attempt}" "${question}" "${measures}" >> "${results}"
       done
     done < "${questions}"
   done
@@ -307,7 +412,23 @@ if (( run )); then
   if [[ -n "${last_xcalygraph_home}" ]]; then
     verify_arm "${last_xcalygraph_home}" "${BINARY}" "${IDENTITY}" --content
   fi
-  awk -F'\t' 'NR > 1 { key = $1 "\t" $2; n[key]++; s[key] += $5; t[key] += $6; u[key] += $7; m[key] += $8 }
-    END { printf "corpus\tarm\truns\tsuccess\ttokens\tturns\tseconds\n";
-          for (k in n) printf "%s\t%d\t%d%%\t%d\t%.1f\t%.1f\n", k, n[k], 100 * s[k] / n[k], t[k] / n[k], u[k] / n[k], m[k] / n[k] / 1000 }' "${results}" | sort
+  python3 -I - "${results}" <<'PYTHON'
+import collections
+import csv
+import sys
+
+rows = list(csv.DictReader(open(sys.argv[1], encoding="utf-8"), delimiter="\t"))
+groups = collections.defaultdict(list)
+for row in rows:
+    groups[(row["corpus"], row["arm"])].append(row)
+print("corpus\tarm\truns\tcorrect\twrong_symbol\tmiss\terror\tleak\ttokens\tturns\ttools\tseconds\tusd")
+for (corpus, arm), items in sorted(groups.items()):
+    count = collections.Counter(item["status"] for item in items)
+    valid = [item for item in items if item["status"] not in ("error", "leak")] or [None]
+    mean = lambda key: sum(float(item[key]) for item in valid if item) / max(1, len([item for item in valid if item]))
+    answered = max(1, len(items) - count["error"] - count["leak"])
+    print(f"{corpus}\t{arm}\t{len(items)}\t{100 * count['correct'] / answered:.0f}%\t{count['wrong_symbol']}\t"
+          f"{count['miss']}\t{count['error']}\t{count['leak']}\t{mean('tokens'):.0f}\t{mean('turns'):.1f}\t"
+          f"{mean('tools'):.1f}\t{mean('ms') / 1000:.1f}\t{mean('usd'):.3f}")
+PYTHON
 fi

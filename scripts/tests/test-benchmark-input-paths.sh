@@ -70,7 +70,7 @@ with tempfile.TemporaryDirectory(prefix="benchmark-input-paths.", dir=repo / ".c
             return subprocess.run(command, cwd=work, env=environment, capture_output=True)
 
         plan = invoke("run-agent-benchmark.sh", "--runs", "1", "xcalygraph")
-        assert plan.returncode == 0 and ("# cwd " + str(root) + ", arm none").encode() in plan.stdout, plan.stderr
+        assert plan.returncode == 0 and ("(git archive of " + str(root) + "), arm none").encode() in plan.stdout, plan.stderr
         unknown = invoke("run-agent-benchmark.sh", "--runs", "1", "unknown-corpus")
         assert unknown.returncode != 0 and b"claude -p" not in unknown.stdout
         evaluation = invoke("run-evaluation.sh", "--no-upstream", "xcalygraph", trace=True)
@@ -110,20 +110,20 @@ with tempfile.TemporaryDirectory(prefix="benchmark-input-paths.", dir=repo / ".c
         (questions / "private/private-name.tsv").write_text("question\texpected\nFind Create\tmain.go::Create\n")
         listing.write_text(f"private-name\t{private}\n")
         private_plan = invoke("run-agent-benchmark.sh", "--runs", "1", "private-name")
-        assert private_plan.returncode == 0 and ("# cwd " + str(private) + ", arm none").encode() in private_plan.stdout
+        assert private_plan.returncode == 0 and ("(git archive of " + str(private) + "), arm none").encode() in private_plan.stdout
         private_evaluation = invoke("run-evaluation.sh", "--no-upstream", "private-name", trace=True)
         assert b"evaluation cache must not be a symlink" in private_evaluation.stderr
         assert assignment("root", str(private)) in private_evaluation.stderr
         relative = os.path.relpath(private, work)
         listing.write_text(f"# private corpora\nprivate-name\t{relative}")
         relative_plan = invoke("run-agent-benchmark.sh", "--runs", "1", "private-name")
-        assert relative_plan.returncode == 0 and ("# cwd " + relative + ", arm none").encode() in relative_plan.stdout
+        assert relative_plan.returncode == 0 and ("(git archive of " + relative + "), arm none").encode() in relative_plan.stdout
         relative_evaluation = invoke("run-evaluation.sh", "--no-upstream", "private-name", trace=True)
         assert b"evaluation cache must not be a symlink" in relative_evaluation.stderr
         assert assignment("root", str(work / relative)) in relative_evaluation.stderr
         listing.write_text("private-name\t-\n")
         dash_plan = invoke("run-agent-benchmark.sh", "--runs", "1", "private-name")
-        assert dash_plan.returncode == 0 and b"# cwd ./-, arm none" in dash_plan.stdout
+        assert dash_plan.returncode == 0 and b"(git archive of ./-), arm none" in dash_plan.stdout
 
         for name, directory in (("graphify", root / "research/upstream/graphify"),
                                 ("hono", root / "research/corpora/hono")):
@@ -138,7 +138,7 @@ with tempfile.TemporaryDirectory(prefix="benchmark-input-paths.", dir=repo / ".c
         (questions / "private" / (tricky + ".tsv")).write_text("question\texpected\nFind Create\tmain.go::Create\n")
         listing.write_text(f"{tricky}\t{private}\n")
         tricky_plan = invoke("run-agent-benchmark.sh", "--runs", "1", tricky)
-        assert tricky_plan.returncode == 0 and ("# cwd " + str(private) + ", arm none").encode() in tricky_plan.stdout
+        assert tricky_plan.returncode == 0 and ("(git archive of " + str(private) + "), arm none").encode() in tricky_plan.stdout
 
         valid = os.fsencode(private)
         for data in (b"private-name\t" + valid + b"\ncontinuation\n",
