@@ -487,7 +487,19 @@ fn collect(
                         }
                     }
                     if let Some(node) = get("field.type") {
-                        entry.type_name = type_name(text(node));
+                        #[cfg(feature = "lang-typescript")]
+                        {
+                            entry.type_name = if super::lang::typescript::is_typescript_path(path) {
+                                super::lang::typescript::field_type_identity(node, source)
+                                    .unwrap_or_default()
+                            } else {
+                                type_name(text(node))
+                            };
+                        }
+                        #[cfg(not(feature = "lang-typescript"))]
+                        {
+                            entry.type_name = type_name(text(node));
+                        }
                     }
                 }
                 "env" => {

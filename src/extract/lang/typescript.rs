@@ -456,6 +456,75 @@ pub(in crate::extract) fn normalize_identifier_name(name: &str) -> Option<String
     identifier.is_match(&decoded).then_some(decoded)
 }
 
+/// Stores flat source type combinations without collapsing them to their first name.
+#[cfg(feature = "lang-typescript")]
+pub(crate) fn field_type_identity(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    use crate::domain::facts::{
+        TYPESCRIPT_INTERSECTION_FIELD_TYPE_PREFIX, TYPESCRIPT_UNION_FIELD_TYPE_PREFIX,
+    };
+
+    let (prefix, separator) = match node.kind() {
+        "union_type" => (TYPESCRIPT_UNION_FIELD_TYPE_PREFIX, '|'),
+        "intersection_type" => (TYPESCRIPT_INTERSECTION_FIELD_TYPE_PREFIX, '&'),
+        "array_type" | "tuple_type" | "parenthesized_type" => return None,
+        _ => {
+            return node
+                .utf8_text(source)
+                .ok()
+                .map(crate::extract::engine::type_name);
+        }
+    };
+    if has_optional_field_marker(node, source) {
+        return None;
+    }
+    let mut cursor = node.walk();
+    let names: Vec<String> = node
+        .named_children(&mut cursor)
+        .map(|child| simple_type_reference_name(child, source))
+        .collect::<Option<_>>()?;
+    if names.len() < 2 {
+        return None;
+    }
+    Some(format!("{prefix}{}", names.join(&separator.to_string())))
+}
+
+#[cfg(feature = "lang-typescript")]
+fn has_optional_field_marker(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(annotation) = node
+        .parent()
+        .filter(|parent| parent.kind() == "type_annotation")
+    else {
+        return false;
+    };
+    let Some(field) = annotation.parent().filter(|parent| {
+        matches!(
+            parent.kind(),
+            "property_signature" | "public_field_definition"
+        )
+    }) else {
+        return false;
+    };
+    let Some(name) = field.child_by_field_name("name") else {
+        return false;
+    };
+    source
+        .get(name.end_byte()..annotation.start_byte())
+        .is_some_and(|between| between.contains(&b'?'))
+}
+
+#[cfg(feature = "lang-typescript")]
+fn simple_type_reference_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "type_identifier" => normalize_identifier_name(node.utf8_text(source).ok()?),
+        "nested_type_identifier" => Some(format!(
+            "{}.{}",
+            simple_type_reference_name(node.child_by_field_name("module")?, source)?,
+            simple_type_reference_name(node.child_by_field_name("name")?, source)?
+        )),
+        _ => None,
+    }
+}
+
 /// Normalize escaped names in the dotted receiver chains accepted by the resolver.
 #[cfg(feature = "lang-typescript")]
 pub(in crate::extract) fn normalize_member_qualifier(
@@ -2494,7 +2563,13 @@ mod tests {
                 ]
             );
             assert_eq!(config.types[0..2], ["number", "number"]);
-            assert_eq!(config.types[3], "");
+            assert_eq!(
+                config.types[3],
+                format!(
+                    "{}Other|Unrelated",
+                    crate::domain::facts::TYPESCRIPT_UNION_FIELD_TYPE_PREFIX
+                )
+            );
             assert_eq!(
                 config.types[4..8],
                 ["string", "string", "string", "boolean"]

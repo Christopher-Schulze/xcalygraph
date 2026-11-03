@@ -31,7 +31,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 83;
+pub const RESOLVE_VERSION: u32 = 84;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -4601,6 +4601,23 @@ impl<'a> Index<'a> {
         if chain.iter().all(|segment| is_identifier(segment)) {
             let receiver =
                 self.receiver_type(file, imports, reference.scope, &chain, reference.line);
+            #[cfg(feature = "lang-typescript")]
+            let receiver = match receiver {
+                Receiver::Composite(branches, confidence) => {
+                    if branches.iter().any(|branch| {
+                        branch
+                            .iter()
+                            .all(|&type_symbol| self.members(type_symbol, name).is_empty())
+                    }) {
+                        return Outcome::Unresolved;
+                    }
+                    let mut types: Vec<u32> = branches.into_iter().flatten().collect();
+                    types.sort_unstable();
+                    types.dedup();
+                    Receiver::Known(types, confidence)
+                }
+                receiver => receiver,
+            };
             // Declared type of a single receiver variable: selects among extension overloads.
             let receiver_name = (chain.len() == 1)
                 .then(|| self.binding(file, reference.scope, head, reference.line))
@@ -4778,6 +4795,50 @@ impl<'a> Index<'a> {
         }
     }
 
+    #[cfg(feature = "lang-typescript")]
+    fn typescript_composite_field_type(
+        &self,
+        file: u32,
+        scope: Option<u32>,
+        type_name: &str,
+    ) -> Option<(Vec<Vec<u32>>, Confidence)> {
+        use facts::{
+            TYPESCRIPT_INTERSECTION_FIELD_TYPE_PREFIX, TYPESCRIPT_UNION_FIELD_TYPE_PREFIX,
+        };
+
+        let (prefix, separator, union) =
+            if type_name.starts_with(TYPESCRIPT_UNION_FIELD_TYPE_PREFIX) {
+                (TYPESCRIPT_UNION_FIELD_TYPE_PREFIX, '|', true)
+            } else if type_name.starts_with(TYPESCRIPT_INTERSECTION_FIELD_TYPE_PREFIX) {
+                (TYPESCRIPT_INTERSECTION_FIELD_TYPE_PREFIX, '&', false)
+            } else {
+                return None;
+            };
+        let names: Vec<&str> = type_name.strip_prefix(prefix)?.split(separator).collect();
+        if names.len() < 2 || names.iter().any(|name| name.is_empty()) {
+            return None;
+        }
+        let mut types = Vec::with_capacity(names.len());
+        for name in names {
+            let (mut resolved, confidence) = self.resolve_type(file, None, scope, name)?;
+            if confidence != Confidence::Exact || resolved.len() != 1 {
+                return None;
+            }
+            types.push(resolved.pop()?);
+        }
+        types.sort_unstable();
+        types.dedup();
+        let branches = if union {
+            types
+                .into_iter()
+                .map(|type_symbol| vec![type_symbol])
+                .collect()
+        } else {
+            vec![types]
+        };
+        Some((branches, Confidence::Exact))
+    }
+
     /// Type of the receiver chain `x`, `self`, `x.field`, `self.field.other`. A receiver whose
     /// binding or field exists but whose type is not in the root is external: no fallback.
     fn receiver_type(
@@ -4832,7 +4893,9 @@ impl<'a> Index<'a> {
         let Some((mut types, mut confidence)) = start else {
             return Receiver::Unknown;
         };
-        for field in &chain[1..] {
+        for (field_index, field) in chain[1..].iter().enumerate() {
+            #[cfg(not(feature = "lang-typescript"))]
+            let _ = field_index;
             if types.is_empty() {
                 return Receiver::Unknown;
             }
@@ -4926,6 +4989,21 @@ impl<'a> Index<'a> {
                 && concrete.is_none()
                 && self.symbols[type_symbol as usize].file == owner_file)
                 .then(|| type_symbol - self.base[owner_file as usize]);
+            #[cfg(feature = "lang-typescript")]
+            if self.file_type(owner_file) == Some(FileType::TypeScript)
+                && concrete.is_none()
+                && (field_type.starts_with(facts::TYPESCRIPT_UNION_FIELD_TYPE_PREFIX)
+                    || field_type.starts_with(facts::TYPESCRIPT_INTERSECTION_FIELD_TYPE_PREFIX))
+            {
+                if field_index + 2 != chain.len() {
+                    return Receiver::External;
+                }
+                return self
+                    .typescript_composite_field_type(owner_file, field_scope, field_type)
+                    .map_or(Receiver::External, |(branches, next_confidence)| {
+                        Receiver::Composite(branches, confidence.max(next_confidence))
+                    });
+            }
             match self.resolve_type(
                 owner_file,
                 None,
@@ -5695,6 +5773,8 @@ enum Reach {
 
 enum Receiver {
     Known(Vec<u32>, Confidence),
+    #[cfg(feature = "lang-typescript")]
+    Composite(Vec<Vec<u32>>, Confidence),
     External,
     Unknown,
 }

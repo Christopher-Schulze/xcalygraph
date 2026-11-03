@@ -2129,3 +2129,73 @@ fn typescript_declarations_pair_only_with_unique_same_module_header_identity()
     );
     Ok(())
 }
+
+#[test]
+fn typescript_composite_fields_require_complete_source_type_proofs() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir_all(&root)?;
+    fs::write(
+        root.join("composite.ts"),
+        include_bytes!("fixtures/typescript-composite-property-types.ts"),
+    )?;
+    let has_line = |output: &str, expected: u32| {
+        output.split("composite.ts:").skip(1).any(|location| {
+            location
+                .chars()
+                .take_while(|character| character.is_ascii_digit())
+                .collect::<String>()
+                == expected.to_string()
+        })
+    };
+
+    let union = fixture.run(&["show", "composite.ts::union_common", "--exact"])?;
+    let union_text = String::from_utf8(union.stdout)?;
+    assert!(union.status.success(), "{union_text}");
+    assert!(has_line(&union_text, 2), "{union_text}");
+    assert!(has_line(&union_text, 7), "{union_text}");
+
+    let class_union = fixture.run(&[
+        "show",
+        "composite.ts::class_union_common",
+        "--exact",
+        "--read-only",
+    ])?;
+    let class_union_text = String::from_utf8(class_union.stdout)?;
+    assert!(class_union.status.success(), "{class_union_text}");
+    assert!(has_line(&class_union_text, 2), "{class_union_text}");
+    assert!(has_line(&class_union_text, 7), "{class_union_text}");
+
+    for caller in ["union_missing", "union_unavailable", "array_member"] {
+        let locator = format!("composite.ts::{caller}");
+        let output = fixture.run(&["show", &locator, "--exact", "--read-only"])?;
+        let text = String::from_utf8(output.stdout)?;
+        assert!(output.status.success(), "{caller}: {text}");
+        assert!(
+            !has_line(&text, 3),
+            "{caller} resolved a member from only one or an unrelated composite arm: {text}"
+        );
+    }
+
+    for caller in ["optional_union", "class_optional_union"] {
+        let locator = format!("composite.ts::{caller}");
+        let output = fixture.run(&["show", &locator, "--exact", "--read-only"])?;
+        let text = String::from_utf8(output.stdout)?;
+        assert!(output.status.success(), "{caller}: {text}");
+        assert!(
+            !has_line(&text, 2) && !has_line(&text, 7),
+            "{caller} resolved a possibly absent field: {text}"
+        );
+    }
+
+    let intersection = fixture.run(&[
+        "show",
+        "composite.ts::intersection_member",
+        "--exact",
+        "--read-only",
+    ])?;
+    let intersection_text = String::from_utf8(intersection.stdout)?;
+    assert!(intersection.status.success(), "{intersection_text}");
+    assert!(has_line(&intersection_text, 3), "{intersection_text}");
+    Ok(())
+}
