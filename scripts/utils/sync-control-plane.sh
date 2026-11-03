@@ -8,7 +8,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && /bin/pwd -P)"
 readonly REPO_ROOT
 readonly CONTROL="${REPO_ROOT}/.control.git"
-readonly FILES=(AGENTS.md CLAUDE.md docs/tasks.md docs/tasks docs/decisions.md
+readonly FILES=(AGENTS.md CLAUDE.md docs/goals.md docs/tasks.md docs/tasks docs/decisions.md
   scripts/audits/private-patterns.txt scripts/benchmarks/questions/private)
 (( $# <= 1 )) || { echo "usage: sync-control-plane.sh [MESSAGE]" >&2; exit 2; }
 [[ -d "${CONTROL}" && ! -L "${CONTROL}" ]] || { echo "sync-control-plane.sh: ${CONTROL} missing; see usage" >&2; exit 1; }
