@@ -162,6 +162,11 @@ with open(verdicts_path, "w") as verdicts:
             # Module and namespace symbols (`utils` -> file) say nothing about the member called.
             oracle = {symbol for symbol in references.get((source, int(line)), set())
                       if not symbol.endswith("/")}
+            if (kind in ("calls", "tests") and name not in {descriptor_name(symbol) for symbol in oracle}
+                    and not any(symbol.endswith((").", "#")) for symbol in oracle)):
+                # The compiler resolved no call on this line (only parameters or variables, e.g.
+                # untyped pytest fixtures): it cannot judge the call edge.
+                oracle = set()
             dispatch = {parent for symbol in expected for parent in implements.get(symbol, ())}
         names = {descriptor_name(symbol) for symbol in oracle}
         # Without any in-repo reference there, or without a compiler symbol for the target (local
