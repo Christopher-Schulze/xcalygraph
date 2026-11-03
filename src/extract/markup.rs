@@ -103,3 +103,27 @@ pub(super) fn raw_element_close<'a>(
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::raw_element_close;
+
+    #[test]
+    fn raw_elements_close_only_at_their_own_closing_tag() {
+        for name in [
+            "script", "style", "title", "textarea", "iframe", "noembed", "noframes", "noscript",
+            "xmp",
+        ] {
+            let text = format!("<{name}>a </{name}x> </div> b</{name} >tail");
+            let lowercase = text.to_ascii_lowercase();
+            let tag = raw_element_close(&text, &lowercase, 0, name);
+            assert!(
+                tag.is_some_and(|tag| tag.closing && tag.name.eq_ignore_ascii_case(name)),
+                "{name}"
+            );
+            let unclosed = format!("<{name}>a");
+            assert!(raw_element_close(&unclosed, &unclosed, 0, name).is_none());
+        }
+        assert!(raw_element_close("<div></div>", "<div></div>", 0, "div").is_none());
+    }
+}

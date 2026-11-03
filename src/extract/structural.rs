@@ -918,6 +918,20 @@ fn png_text(content: &[u8], keyword: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn c_comments_and_string_contents_are_blanked_with_line_structure_intact() {
+        let text = "a(); // b()\n/* c()\n d() */ e();\nf(\"// g() /* h */\");\n/* open";
+        let stripped = strip_c_comments(text);
+        assert_eq!(stripped.len(), text.len());
+        assert_eq!(stripped.lines().count(), text.lines().count());
+        for gone in ["b()", "c()", "d()", "g()", "h", "open"] {
+            assert!(!stripped.contains(gone), "{gone}: {stripped}");
+        }
+        for kept in ["a();", "e();", "f(\""] {
+            assert!(stripped.contains(kept), "{kept}: {stripped}");
+        }
+    }
+
     fn summary(facts: &Facts) -> (Vec<String>, Vec<String>) {
         let symbols = facts
             .symbols

@@ -317,3 +317,35 @@ fn unsupported_test_runners_emit_test_facts_without_fake_run_commands() -> TestR
     assert!(commands(&cpp)?.is_empty(), "{cpp_text}");
     Ok(())
 }
+
+#[test]
+fn nested_swift_packages_get_a_package_path_and_a_test_filter() -> TestResult {
+    let fixture = TempDir::new("impact-swift-package")?;
+    let root = fixture.0.join("root");
+    fixture.write(&root, "pkg/Package.swift", "// swift-tools-version:5.9\n")?;
+    fixture.write(
+        &root,
+        "pkg/Sources/Lib/Lib.swift",
+        "public func target() -> Int { 1 }\n",
+    )?;
+    fixture.write(
+        &root,
+        "pkg/Tests/LibTests/LibTests.swift",
+        "import XCTest\n@testable import Lib\nfinal class LibTests: XCTestCase {\n    func testTarget() { XCTAssertEqual(target(), 1) }\n}\n",
+    )?;
+    let output = impact(&root, &fixture.0.join("index"), &fixture.0, "target")?;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let found = commands(&output)?;
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0].starts_with("swift test --package-path pkg --filter "),
+        "{found:?}"
+    );
+    assert!(found[0].contains("LibTests"), "{found:?}");
+    Ok(())
+}

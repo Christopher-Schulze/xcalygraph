@@ -448,6 +448,20 @@ fn shell_variables(command: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn yaml_keys_may_be_quoted_and_unsafe_forms_are_rejected() {
+        use super::split_yaml_key;
+        assert_eq!(split_yaml_key("\"name\": 1"), Some(("name", " 1")));
+        assert_eq!(split_yaml_key("'name': x"), Some(("name", " x")));
+        assert_eq!(split_yaml_key("plain: y"), Some(("plain", " y")));
+        assert_eq!(split_yaml_key("plain:"), Some(("plain", "")));
+        assert_eq!(split_yaml_key("\"open"), None);
+        assert_eq!(split_yaml_key("'open"), None);
+        assert_eq!(split_yaml_key("\"name\" no colon"), None);
+        assert_eq!(split_yaml_key("two words: v"), None);
+        assert_eq!(split_yaml_key("{flow: map}"), None);
+    }
+
     use super::*;
 
     fn run(path: &str, file_type: FileType, text: &str) -> Facts {

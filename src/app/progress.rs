@@ -315,6 +315,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn paths_below_home_read_relative() {
+        let Ok(home) = std::env::var("HOME") else {
+            return;
+        };
+        assert_eq!(home_relative(&format!("{home}/.local/bin")), "~/.local/bin");
+        assert_eq!(home_relative("/elsewhere/bin"), "/elsewhere/bin");
+    }
+
+    #[test]
     fn bar_fills_in_eighths_and_keeps_its_width() {
         assert_eq!(bar(0, 100), format!("▕{}▏", " ".repeat(24)));
         assert_eq!(bar(100, 100), format!("▕{}▏", "█".repeat(24)));

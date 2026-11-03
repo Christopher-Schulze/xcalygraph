@@ -4478,3 +4478,60 @@ fn show_attributes_environment_reads_to_exact_symbol_or_file_in_text_and_json() 
     }
     Ok(())
 }
+
+#[test]
+fn map_lists_only_external_dependencies_of_filtered_modules() -> TestResult {
+    let dir = TempDir::new("map-external-filter")?;
+    dir.write("repo/.git/HEAD", "ref: refs/heads/main\n")?;
+    dir.write("repo/go.mod", "module example.com/app\n\ngo 1.23\n")?;
+    dir.write(
+        "repo/a/a.go",
+        "package a\n\nimport \"github.com/acme/left\"\n\nfunc A() { left.Run() }\n",
+    )?;
+    dir.write(
+        "repo/b/b.go",
+        "package b\n\nimport \"github.com/acme/right\"\n\nfunc B() { right.Run() }\n",
+    )?;
+    let map = |filter: &[&str]| -> Result<String, Box<dyn Error>> {
+        let output = support::command(BINARY, &dir.0)
+            .args(["map", "-C"])
+            .arg(dir.0.join("repo"))
+            .arg("--index-dir")
+            .arg(dir.0.join("index"))
+            .args(filter)
+            .output()?;
+        assert_eq!(output.status.code(), Some(0));
+        Ok(String::from_utf8(output.stdout)?)
+    };
+    let all = map(&[])?;
+    assert!(all.contains("left") && all.contains("right"), "{all}");
+    let filtered = map(&["-p", "a/"])?;
+    assert!(filtered.contains("left"), "{filtered}");
+    assert!(!filtered.contains("right"), "{filtered}");
+    Ok(())
+}
+
+#[test]
+fn install_warns_when_another_binary_shadows_the_target() -> TestResult {
+    let dir = TempDir::new("install-shadow")?;
+    dir.write("shadow/xcalygraph", "#!/bin/sh\nexit 0\n")?;
+    let bin = dir.0.join("bin");
+    let path = std::env::join_paths([dir.0.join("shadow"), bin.clone()])?;
+    let output = support::command(BINARY, &dir.0)
+        .args(["install", "--no-link"])
+        .env("HOME", dir.0.join("home"))
+        .env("XCALYGRAPH_INSTALL_DIR", &bin)
+        .env("PATH", path)
+        .output()?;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout).to_string()
+        + &String::from_utf8_lossy(&output.stderr);
+    assert!(text.contains("shadows"), "{text}");
+    assert!(text.contains("first on PATH"), "{text}");
+    Ok(())
+}

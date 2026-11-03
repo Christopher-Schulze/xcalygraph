@@ -328,3 +328,45 @@ fn line_offset(text: &str, byte_offset: usize) -> u32 {
     )
     .unwrap_or(u32::MAX)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::extract;
+    use crate::domain::corpus::FileRecord;
+    use crate::domain::filetype::FileType;
+    use crate::domain::role::Role;
+
+    #[test]
+    fn inline_script_facts_keep_document_lines() {
+        let content = concat!(
+            "<html>\n",
+            "<body>\n",
+            "<script>\n",
+            "function run() {\n",
+            "  const client = new Client();\n",
+            "  return process.env.API_KEY;\n",
+            "}\n",
+            "</script>\n",
+            "</body></html>\n",
+        );
+        let record = FileRecord {
+            path: "index.html".to_owned(),
+            size: content.len() as u64,
+            mtime_ns: 0,
+            identity: None,
+            hash: 0,
+            role: Role::Doc,
+            file_type: Some(FileType::Html),
+        };
+        let facts = extract(&record, content.as_bytes(), false).facts;
+        let run = facts.symbols.iter().find(|symbol| symbol.name == "run");
+        assert_eq!(run.map(|symbol| symbol.line), Some(4));
+        let binding = facts
+            .bindings
+            .iter()
+            .find(|binding| binding.name == "client");
+        assert_eq!(binding.map(|binding| binding.line), Some(5));
+        let env = facts.envs.iter().find(|env| env.name == "API_KEY");
+        assert_eq!(env.map(|env| env.line), Some(6));
+    }
+}

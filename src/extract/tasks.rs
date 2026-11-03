@@ -905,6 +905,37 @@ mod tests {
     }
 
     #[test]
+    fn yarn_scripts_and_go_run_name_their_targets() {
+        let mut facts = Facts::default();
+        yaml(
+            ".github/workflows/ci.yml",
+            concat!(
+                "jobs:\n",
+                "  ci:\n",
+                "    steps:\n",
+                "      - run: |\n",
+                "          yarn build\n",
+                "          yarn run lint\n",
+                "          yarn install\n",
+                "          yarn add left-pad\n",
+                "          yarn --frozen-lockfile\n",
+                "          go run ./cmd/tool\n",
+            ),
+            &mut facts,
+        );
+        let (_, mut runs) = summary(&facts);
+        runs.sort();
+        assert_eq!(
+            runs,
+            [
+                "4 ci -> ./cmd/tool",
+                "4 ci -> npm:build",
+                "4 ci -> npm:lint"
+            ]
+        );
+    }
+
+    #[test]
     fn workflow_copying_a_script_does_not_emit_a_run() {
         let mut facts = Facts::default();
         yaml(

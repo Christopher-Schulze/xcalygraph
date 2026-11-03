@@ -1,0 +1,6 @@
+hidden.local -implements?-> hidden.closer @8
+impl.Disk -implements?-> api.Reader @3
+impl.TestDisk -tests-> impl.Disk.Read @13
+impl.TestDisk -tests-> impl.fakeReader.Read @14
+impl.TestDisk -uses-> impl.Disk @11
+impl.TestDisk -uses-> impl.fakeReader @12
