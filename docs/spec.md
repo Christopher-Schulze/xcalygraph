@@ -413,6 +413,9 @@ Reference corpora: xcalygraph itself, the upstream Graphify clone at the pinned 
 
 - Tool comparisons share one verified source snapshot identified by paths, content hashes and executable bits. Upstream graph reuse additionally validates package source/version, extraction mode and graph checksum.
 - Every evaluation retains source, question and binary identities plus raw observations in an isolated run directory. Failed extraction or queries invalidate the run; existing evidence is preserved.
+- Edge-precision strata are `(corpus, source language, edge kind, confidence)`. Source language is the `FileType` of the `GraphFile` containing the edge source; missing types use `unknown`, and target language is recorded separately.
+- Precision manifests are JSON Lines. Each populated stratum records its full edge population and selects the 50 lowest SHA-256 ranks, or every edge when the population is smaller. The sample ID is that rank over ordered, length-prefixed fields for schema, corpus and revision, source snapshot, xcalygraph and sampler source/binary identities, edge classification, source and target graph-node IDs, and source and target locators/signatures. The complete source-line SHA-256 and byte length are recorded separately and do not affect the rank; source text previews contain at most 500 Unicode scalar values. Corpus paths are root-relative.
+- `scripts/benchmarks/sample-precision.sh` samples the 48 pinned public corpora, xcalygraph and the pinned Graphify source snapshot. It retains verified source and sampler identities, one pending adjudication row per sample, raw JSONL, and logs in a new local `.cache/task192-manifests/run.*/` with `.keep`; existing output paths are never overwritten. Graphify remains comparison material and is not source evidence.
 
 | metric | definition |
 |--------|------------|
@@ -420,7 +423,7 @@ Reference corpora: xcalygraph itself, the upstream Graphify clone at the pinned 
 | tokens per answer | output tokens of the command that answers the question |
 | rg baseline | tokens of `rg` output plus the file reads an agent needs to reach the expected location |
 | upstream baseline | hit@5 and tokens of `graphify query` on the same corpus |
-| edge precision | share of emitted edges confirmed by source inspection, 50 samples per edge kind |
+| edge precision | share of emitted edges confirmed by source inspection, sampled within each populated corpus/source-language/edge-kind/confidence stratum |
 | agent success | share of questions a headless Claude Code run (`claude -p`) answers with the expected location; arms: no tool (`rg` and reads), Graphify skill, xcalygraph skill; 3 runs per question and arm |
 | agent cost | total tokens, turns and wall time per agent run, from `--output-format json` |
 
