@@ -265,6 +265,17 @@ printf '%s\0' "$home"
         tools = sum(1 for line in path.read_text().splitlines() if "command_execution" in line)
         expected_tokens = "0" if status == "error" else "115"
         assert fields[0] == status and fields[1:5] == [expected_tokens, "1", str(tools), "1200"], (status, fields)
+    # Corpus snapshots are repositories of their own, so tools never climb to the benchmark checkout.
+    plain = work / "plain-corpus"
+    plain.mkdir()
+    (plain / "main.go").write_text("package main\n")
+    snapshot = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; snapshot_corpus "$2" "$3"',
+                               "snapshot", str(runner), str(plain), str(work / "snapshot")],
+                              env=environment, capture_output=True, text=True)
+    assert snapshot.returncode == 0, snapshot.stderr
+    top = subprocess.run(["git", "-C", str(work / "snapshot"), "rev-parse", "--show-toplevel"],
+                         env=environment, capture_output=True, text=True, check=True).stdout.strip()
+    assert Path(top).resolve() == (work / "snapshot").resolve(), top
     # PATH isolation: the no-tool arm cannot reach xcalygraph or graphify even when the caller can.
     tools = work / "tools"
     tools.mkdir()

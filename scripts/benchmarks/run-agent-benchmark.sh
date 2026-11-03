@@ -84,11 +84,18 @@ question_file() {
 snapshot_corpus() {
   local root="$1" destination="$2" prefix
   mkdir "${destination}" || return
-  if prefix="$(git -C "${root}" rev-parse --show-prefix 2>/dev/null)"; then
+  if prefix="$(git -C "${root}" rev-parse --show-prefix 2>/dev/null)" \
+      && git -C "${root}" rev-parse --verify -q "HEAD:${prefix}" >/dev/null; then
     git -C "${root}" archive --format=tar "HEAD:${prefix}" | tar -x -C "${destination}" || return
   else
     tar -C "${root}" --exclude .git -cf - . | tar -x -C "${destination}" || return
   fi
+  # A repository of its own, as agents normally see it; without it, tools that look for the
+  # nearest ancestor with .git would index the checkout this benchmark runs in.
+  git -C "${destination}" init -q && git -C "${destination}" add -A \
+    && GIT_AUTHOR_NAME=benchmark GIT_AUTHOR_EMAIL=benchmark@example.invalid \
+       GIT_COMMITTER_NAME=benchmark GIT_COMMITTER_EMAIL=benchmark@example.invalid \
+       git -C "${destination}" -c commit.gpgsign=false commit -q -m snapshot || return
 }
 
 validate_questions() {
@@ -292,6 +299,7 @@ evaluate_trace() {
   python3 -I - "$@" <<'PYTHON'
 import json
 import re
+import shlex
 import sys
 
 trace, arm, matched, expected, elapsed = sys.argv[1:6]
@@ -313,12 +321,31 @@ for line in open(trace, encoding="utf-8", errors="replace"):
         failed = True
 messages = [item.get("text") or "" for item in items if item.get("type") == "agent_message"]
 tools = [item for item in items if item.get("type") not in ("agent_message", "reasoning")]
-commands = [json.dumps(item, ensure_ascii=False) for item in tools]
 foreign = {"none": ("xcalygraph", "graphify"), "xcalygraph": ("graphify",), "graphify": ("xcalygraph",)}[arm]
-used = re.compile(r"(?<![\w./-])(" + "|".join(foreign) + r")(?=\s|\\n|\"|'|$)")
+
+def invokes_foreign(item):
+    # A leak runs another arm's tool: its name in command position, not a path or argument that
+    # merely contains it (the graphify corpus has a graphify/ directory).
+    command = item.get("command") if isinstance(item, dict) else None
+    if not isinstance(command, str):
+        return any(tool in json.dumps(item) for tool in foreign)
+    try:
+        wrapper = shlex.split(command)
+    except ValueError:
+        wrapper = []
+    if len(wrapper) == 3 and wrapper[0].rsplit("/", 1)[-1] in ("bash", "sh", "zsh") and wrapper[1] == "-lc":
+        command = wrapper[2]
+    for part in re.split(r"&&|\|\||[;|\n(){}`]|\$\(", command):
+        words = [word.strip("'\"") for word in part.split()]
+        while words and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]) or words[0] in
+                         ("exec", "env", "command", "time", "nohup", "sudo", "xargs", "then", "do", "if", "!")):
+            words.pop(0)
+        if words and words[0].rsplit("/", 1)[-1] in foreign:
+            return True
+    return False
 if failed or usage is None or not messages:
     status = "error"
-elif any(used.search(command) for command in commands):
+elif any(invokes_foreign(item) for item in tools):
     status = "leak"
 elif matched != "1":
     status = "miss"
