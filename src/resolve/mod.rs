@@ -31,7 +31,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 84;
+pub const RESOLVE_VERSION: u32 = 85;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -4574,7 +4574,8 @@ impl<'a> Index<'a> {
         // 5a. Receiver that is itself a call (`Service().run()`, `open(x).read()`): the result
         // type of the call, inferred.
         if let Some(callee) = call_receiver(qualifier) {
-            if self.call_result_is_external(file, imports, reference, callee) {
+            if self.call_result_is_external(file, imports, reference.scope, reference.line, callee)
+            {
                 return self
                     .extension(file, imports, reference.scope, name, None)
                     .unwrap_or(Outcome::External);
@@ -4747,13 +4748,14 @@ impl<'a> Index<'a> {
         }
     }
 
-    /// Whether the receiver call `callee(...)` leads outside the root: the callee itself is
-    /// external, or it resolves to a function whose declared result type is not in the root.
+    /// Whether `callee(...)` returns an external value: the callee itself is external, or it
+    /// resolves to a function whose declared result type is not in the root.
     fn call_result_is_external(
         &self,
         file: u32,
         imports: &Imports,
-        reference: &Ref,
+        scope: Option<u32>,
+        line: u32,
         callee: &str,
     ) -> bool {
         let callee_ref = match split_qualified(callee) {
@@ -4761,16 +4763,16 @@ impl<'a> Index<'a> {
                 kind: RefKind::Call,
                 name: name.to_owned(),
                 qualifier: Some(qualifier.to_owned()),
-                scope: reference.scope,
-                line: reference.line,
+                scope,
+                line,
                 arity: facts::NO_ARITY,
             },
             None => Ref {
                 kind: RefKind::Call,
                 name: callee.to_owned(),
                 qualifier: None,
-                scope: reference.scope,
-                line: reference.line,
+                scope,
+                line,
                 arity: facts::NO_ARITY,
             },
         };
@@ -4876,6 +4878,11 @@ impl<'a> Index<'a> {
         } else if let Some(binding) = self.binding(file, scope, head, line) {
             match self.binding_type(file, imports, scope, binding) {
                 Some(found) => Some(found),
+                None if let Some(callee) = binding.type_name.strip_suffix("()")
+                    && self.call_result_is_external(file, imports, scope, binding.line, callee) =>
+                {
+                    return Receiver::External;
+                }
                 None if binding.type_name.ends_with("()") => return Receiver::Unknown,
                 None => return Receiver::External,
             }
