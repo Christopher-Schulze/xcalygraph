@@ -384,8 +384,8 @@ Location: `<index-dir>/<root basename>-<XXH3-64 hex of the canonical root path>/
 | item | value |
 |------|-------|
 | source | `skills/xcalygraph/SKILL.md`, embedded in the binary |
-| content | purpose; when to use it and when `rg` or direct reads are better; command table; output markers; exit codes; rules (verify against source, `--read-only` in read-only tasks, budget) |
-| size | max 1500 tokens |
+| content | purpose; which command fits which question and when `rg` or direct reads are better; every command; NAME forms; useful flags; output markers; exit codes |
+| size | max 1000 tokens |
 | install | running binary -> `~/.local/bin/xcalygraph` (`$XCALYGRAPH_INSTALL_DIR`) by temp file plus rename unless it runs from there; skill -> `~/.agents/skills/xcalygraph/SKILL.md` plus `.version` stamp, written atomically; symlink `~/.claude/skills/xcalygraph` -> skill directory when `~/.claude` exists and the link is absent (`--no-link` skips it; foreign entries are reported, never replaced); `--skill-only` skips the binary; PATH problems (directory missing from PATH, another binary first) reported, shell files never edited |
 | update source | GitHub Releases of the project repository; assets `xcalygraph-<version>-<os>-<arch>.tar.gz` and `SHA256SUMS` |
 | release tag | exactly `v<Cargo package version>`; mismatches fail before the release gate and archive build |
@@ -412,7 +412,7 @@ Reference: Apple Silicon laptop, warm filesystem cache, corpus of 8,000 tracked 
 | index size | max 20 MB |
 | bytes written per single-file change | changed fact shard + file table + `derived`; max 15 MB |
 | peak RSS, full build | max 400 MB |
-| skill size | max 1500 tokens |
+| skill size | max 1000 tokens |
 
 ## 12. Evaluation
 

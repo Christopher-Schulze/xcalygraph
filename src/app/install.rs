@@ -331,8 +331,8 @@ mod tests {
 
     #[test]
     fn skill_stays_within_budget() {
-        // docs/spec.md section 10: max 1500 tokens at 3 bytes per token.
-        assert!(SKILL.len() <= 1500 * 3, "skill has {} bytes", SKILL.len());
+        // docs/spec.md section 10: max 1000 tokens at 3 bytes per token.
+        assert!(SKILL.len() <= 1000 * 3, "skill has {} bytes", SKILL.len());
         assert!(SKILL.starts_with("---\nname: xcalygraph\n"));
     }
 }
