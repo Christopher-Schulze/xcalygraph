@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix="agent-benchmark-safety.", dir=repo / ".
     home.mkdir()
     tmp.mkdir()
     environment = {key: value for key, value in os.environ.items()
-                   if not key.startswith(("GIT_", "XCALYGRAPH_", "CLAUDE_"))
+                   if not key.startswith(("GIT_", "XCALYGRAPH_", "CODEX_"))
                    and key not in ("BASH_ENV", "ENV", "CDPATH", "TAR_OPTIONS")}
     environment.update(HOME=str(home), TMPDIR=str(tmp), XDG_CONFIG_HOME=str(home / "config"))
 
@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix="agent-benchmark-safety.", dir=repo / ".
     root, runner = project("plan")
     plan = subprocess.run(["bash", str(runner), "--runs", "1", "xcalygraph"],
                           env=environment, capture_output=True, text=True)
-    assert plan.returncode == 0 and "claude -p" in plan.stdout, plan.stderr
+    assert plan.returncode == 0 and "codex exec" in plan.stdout, plan.stderr
     assert not (root / ".cache").exists(), "planning wrote a cache"
     selection = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; select_corpora missing',
                                 "selection", str(runner)], env=environment, capture_output=True, text=True)
@@ -78,7 +78,7 @@ printf '%s\0' "$first" "$second" "$home1" "$home2"
     first, second, home1, home2 = (Path(os.fsdecode(value)) for value in values[:-1])
     assert first != second and first.parent == second.parent == base
     assert home1 != home2 and home1.parent == home2.parent == first
-    assert (home1 / ".claude").is_dir() and (home2 / ".claude").is_dir()
+    assert (home1 / ".codex").is_dir() and (home2 / ".codex").is_dir()
     assert (first / "results.tsv").read_text().startswith("corpus\tarm\trun\t")
     assert (second / "results.tsv").read_text().startswith("corpus\tarm\trun\t")
     assert sentinel.read_text() == "keep prior home\n" and old_results.read_text() == "keep prior results\n"
@@ -124,11 +124,11 @@ verify_arm "$home" "$3" "$4" --content
 xcalygraph() { return 77; }
 export -f xcalygraph
 export BASH_ENV="$5"
-invoke_agent xcalygraph "$home" "$3" bash -c 'printf "%s\0" "$CLAUDE_CONFIG_DIR" "$(command -v xcalygraph)" "${GIT_DIR-}" "${GIT_WORK_TREE-}" "${GIT_INDEX_FILE-}" "${GIT_CONFIG_GLOBAL-}" "${GIT_CONFIG_NOSYSTEM-}" "${XCALYGRAPH_INDEX_DIR-}"; xcalygraph version >&2'
+invoke_agent xcalygraph "$home" "$3" bash -c 'printf "%s\0" "$CODEX_HOME" "$(command -v xcalygraph)" "${GIT_DIR-}" "${GIT_WORK_TREE-}" "${GIT_INDEX_FILE-}" "${GIT_CONFIG_GLOBAL-}" "${GIT_CONFIG_NOSYSTEM-}" "${XCALYGRAPH_INDEX_DIR-}"; xcalygraph version >&2'
 printf '%s\0' "$home"
 '''
     bound_env = dict(environment, PATH=str(foreign) + os.pathsep + environment["PATH"],
-                     CLAUDE_CONFIG_DIR=str(foreign_claude_config), GIT_DIR=str(foreign_git / ".git"),
+                     CODEX_HOME=str(foreign_claude_config), GIT_DIR=str(foreign_git / ".git"),
                      GIT_WORK_TREE=str(foreign_git), GIT_INDEX_FILE=str(foreign_index / "index"),
                      GIT_CONFIG_GLOBAL=str(foreign_git_config), GIT_CONFIG_NOSYSTEM="0",
                      XCALYGRAPH_INDEX_DIR=str(foreign_index))
@@ -140,7 +140,7 @@ printf '%s\0' "$home"
     config, selected = (Path(os.fsdecode(value)) for value in values[:2])
     installed_home = Path(os.fsdecode(values[8]))
     assert selected == captured and b"xcalygraph " in bound.stderr, bound.stderr
-    assert config == installed_home / ".claude"
+    assert config == installed_home / ".codex"
     assert values[2:5] == [b"", b"", b""] and values[5:7] == [b"/dev/null", b"1"] and values[7] == b"", bound.stdout
     assert (foreign_index / "sentinel").read_text() == "preserve\n"
     failed = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; invoke_agent xcalygraph "$2" "$3" false',
@@ -151,7 +151,7 @@ printf '%s\0' "$home"
                                "graphify", str(runner), str(run_dir)], env=bound_env, capture_output=True, text=True)
     assert graphify.returncode == 0, graphify.stderr
     graphify_home = Path(graphify.stdout.removesuffix("\n"))
-    assert (graphify_home / ".claude/skills/graphify/SKILL.md").is_file() and not list(foreign_claude_config.iterdir())
+    assert (graphify_home / ".codex/skills/graphify/SKILL.md").is_file() and not list(foreign_claude_config.iterdir())
     refused = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; invoke_agent xcalygraph "$2" "$3" true',
                               "refuse", str(runner), str(installed_home), str(work / "bad:path/xcalygraph")],
                              env=environment, capture_output=True, text=True)
@@ -235,16 +235,18 @@ printf '%s\0' "$home"
         assert rejected.returncode != 0 and "symlink" in rejected.stderr
         assert not list(foreign.iterdir())
 
-    # Outcome scoring from real stream-json shapes: every status is reachable and failable.
+    # Outcome scoring from real `codex exec --json` shapes: every status is reachable and failable.
     root, runner = project("scoring")
     def trace(name, answer, commands=(), error=False):
         path = work / (name + ".jsonl")
-        events = [{"type": "assistant", "message": {"content": [
-            {"type": "tool_use", "name": "Bash", "input": {"command": command}} for command in commands]}},
-            {"type": "result", "subtype": "success", "is_error": error, "result": answer, "num_turns": 3,
-             "duration_ms": 1200, "total_cost_usd": 0.01,
-             "usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 100,
-                       "cache_creation_input_tokens": 0}}]
+        events = [{"type": "thread.started", "thread_id": "t"}, {"type": "turn.started"}]
+        events += [{"type": "item.completed", "item": {"id": f"c{n}", "type": "command_execution",
+                    "command": "/bin/bash -lc " + json.dumps(command), "exit_code": 0, "status": "completed"}}
+                   for n, command in enumerate(commands)]
+        events.append({"type": "item.completed", "item": {"id": "m", "type": "agent_message", "text": answer}})
+        events.append({"type": "turn.failed", "error": {"message": answer}} if error else
+                      {"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tokens": 80,
+                                                           "output_tokens": 10, "reasoning_output_tokens": 5}})
         path.write_text("\n".join(json.dumps(event) for event in events) + "\n")
         return path
     cases = [("correct", "none", "1", trace("c", "src/app.ts::compose")),
@@ -255,12 +257,14 @@ printf '%s\0' "$home"
              ("leak", "xcalygraph", "1", trace("g", "src/app.ts::compose", ["graphify query compose"])),
              ("correct", "xcalygraph", "1", trace("x", "src/app.ts::compose", ["xcalygraph find compose"]))]
     for status, arm, matched, path in cases:
-        scored = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; evaluate_trace "$2" "$3" "$4" "$5"',
+        scored = subprocess.run(["bash", "-c", 'source "$1" xcalygraph >/dev/null; evaluate_trace "$2" "$3" "$4" "$5" 1200',
                                  "score", str(runner), str(path), arm, matched, "src/app.ts::compose"],
                                 env=environment, capture_output=True, text=True)
         assert scored.returncode == 0, scored.stderr
         fields = scored.stdout.rstrip("\n").split("\t")
-        assert fields[0] == status and fields[1:4] == ["115", "3", str(len(json.loads(path.read_text().splitlines()[0])["message"]["content"]))], (status, fields)
+        tools = sum(1 for line in path.read_text().splitlines() if "command_execution" in line)
+        expected_tokens = "0" if status == "error" else "115"
+        assert fields[0] == status and fields[1:5] == [expected_tokens, "1", str(tools), "1200"], (status, fields)
     # PATH isolation: the no-tool arm cannot reach xcalygraph or graphify even when the caller can.
     tools = work / "tools"
     tools.mkdir()

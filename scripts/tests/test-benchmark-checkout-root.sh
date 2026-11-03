@@ -57,7 +57,7 @@ with tempfile.TemporaryDirectory(prefix="benchmark-checkout-root.", dir=repo / "
                                   cwd=work, env=environment, capture_output=True, text=True)
 
         plan = invoke("run-agent-benchmark.sh", "--runs", "1", "graphify")
-        assert plan.returncode == 0 and "claude -p" in plan.stdout and str(graphify) in plan.stdout, plan.stderr
+        assert plan.returncode == 0 and "codex exec" in plan.stdout and str(graphify) in plan.stdout, plan.stderr
         missing = invoke("run-benchmarks.sh", "special")
         assert missing.returncode != 0 and "missing corpus special" in missing.stderr, missing.stderr
         query = invoke("measure-query-compute.sh", corpus, questions / "graphify.tsv", "1")

@@ -72,7 +72,7 @@ with tempfile.TemporaryDirectory(prefix="benchmark-input-paths.", dir=repo / ".c
         plan = invoke("run-agent-benchmark.sh", "--runs", "1", "xcalygraph")
         assert plan.returncode == 0 and ("(git archive of " + str(root) + "), arm none").encode() in plan.stdout, plan.stderr
         unknown = invoke("run-agent-benchmark.sh", "--runs", "1", "unknown-corpus")
-        assert unknown.returncode != 0 and b"claude -p" not in unknown.stdout
+        assert unknown.returncode != 0 and b"codex exec" not in unknown.stdout
         evaluation = invoke("run-evaluation.sh", "--no-upstream", "xcalygraph", trace=True)
         assert evaluation.returncode != 0 and b"evaluation cache must not be a symlink" in evaluation.stderr
         assert assignment("root", str(root)) in evaluation.stderr
@@ -147,7 +147,7 @@ with tempfile.TemporaryDirectory(prefix="benchmark-input-paths.", dir=repo / ".c
                      b"private-name\t" + valid + b"\nprivate-name\t" + valid + b"\n"):
             listing.write_bytes(data)
             invalid = invoke("run-agent-benchmark.sh", "--runs", "1", "private-name")
-            assert invalid.returncode != 0 and b"claude -p" not in invalid.stdout
+            assert invalid.returncode != 0 and b"codex exec" not in invalid.stdout
             invalid_eval = invoke("run-evaluation.sh", "--no-upstream", "private-name")
             assert invalid_eval.returncode != 0 and b"evaluation cache must not be a symlink" not in invalid_eval.stderr
         assert sentinel.read_text() == "preserve\n" and list(decoy.iterdir()) == [sentinel]

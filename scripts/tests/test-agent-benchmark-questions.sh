@@ -30,11 +30,11 @@ with tempfile.TemporaryDirectory(prefix="agent-benchmark-questions.", dir=repo /
         assert executable, name
         (tools / name).symlink_to(executable)
     canary = work / "agent-called"
-    agent_canary = tools / "claude"
+    agent_canary = tools / "codex"
     agent_canary.write_text('#!/bin/sh\nprintf called > "$AGENT_CANARY"\nexit 99\n')
     agent_canary.chmod(0o755)
     environment = {key: value for key, value in os.environ.items()
-                   if not key.startswith(("GIT_", "XCALYGRAPH_", "BASH_FUNC_", "CARGO_", "CLAUDE_"))
+                   if not key.startswith(("GIT_", "XCALYGRAPH_", "BASH_FUNC_", "CARGO_", "CODEX_"))
                    and key not in ("BASH_ENV", "ENV", "CDPATH", "TAR_OPTIONS")}
     environment.update(HOME=str(home), PATH=str(tools), AGENT_CANARY=str(canary), XDG_CONFIG_HOME=str(home / "config"))
     assert shutil.which("cargo", path=environment["PATH"]) is None
@@ -59,9 +59,9 @@ with tempfile.TemporaryDirectory(prefix="agent-benchmark-questions.", dir=repo /
 
     question_file.write_bytes(b"question\texpected\nFind Create\tmain.go::Create")
     plan = invoke("--runs", "1", "xcalygraph")
-    assert plan.returncode == 0 and plan.stdout.count(b"claude -p") == 3, plan.stderr
+    assert plan.returncode == 0 and plan.stdout.count(b"codex exec") == 3, plan.stderr
     repeated = invoke("--runs", "002", "xcalygraph")
-    assert repeated.returncode == 0 and repeated.stdout.count(b"claude -p") == 6, repeated.stderr
+    assert repeated.returncode == 0 and repeated.stdout.count(b"codex exec") == 6, repeated.stderr
     sequence, saved_sequence = tools / "seq", tools / "seq.saved"
     sequence.rename(saved_sequence)
     try:
