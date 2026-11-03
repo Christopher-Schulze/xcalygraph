@@ -72,6 +72,18 @@ pub(in crate::extract) fn file_scope(
     if root.has_error() || exceeded {
         return "incomplete";
     }
+    let mut walker = root.walk();
+    if root.named_children(&mut walker).any(|node| {
+        node.kind() == "comment"
+            && node.utf8_text(source).ok().is_some_and(|comment| {
+                comment
+                    .trim_start()
+                    .strip_prefix("///")
+                    .is_some_and(|directive| directive.trim_start().starts_with("<reference"))
+            })
+    }) {
+        return "incomplete";
+    }
     if !source
         .windows(6)
         .any(|window| window == b"module" || window == b"global")
@@ -1391,6 +1403,17 @@ pub(crate) fn imported_base_members_are_disjoint(base: &str, parts: &[&str]) -> 
         .all(|part| names(part).is_some_and(|part_names| base_names.is_disjoint(&part_names)))
 }
 
+/// Complete compatible interface facts for declarations with the same global header.
+#[cfg(feature = "lang-typescript")]
+pub(crate) fn compatible_global_interface_declarations(headers: &[&str], members: &[&str]) -> bool {
+    let Some(header) = headers.first() else {
+        return false;
+    };
+    headers.len() == members.len()
+        && headers.iter().all(|candidate| candidate == header)
+        && compatible_interface_members(members)
+}
+
 #[cfg(feature = "lang-typescript")]
 fn compatible_interface_members(parts: &[&str]) -> bool {
     use std::collections::{HashMap, HashSet};
@@ -1844,6 +1867,18 @@ mod tests {
                 "augmentation",
             ),
             (&b"export interface Broken { id:"[..], "incomplete"),
+            (
+                &b"/// <reference path=\"./types.d.ts\" />\ninterface Base { id: string }"[..],
+                "incomplete",
+            ),
+            (
+                &b"///<reference path=\"./types.d.ts\"/>\ninterface Base { id: string }"[..],
+                "incomplete",
+            ),
+            (
+                &b"///    <reference path=\"./types.d.ts\"/>\ninterface Base { id: string }"[..],
+                "incomplete",
+            ),
             (&b"const word = 'module';"[..], "clear"),
         ] {
             let facts = crate::extract::extract(&record, source);
@@ -2077,6 +2112,7 @@ mod tests {
             .filter(|identity| {
                 identity.kind == crate::domain::facts::SourceIdentityKind::InterfaceHeader
                     && facts.symbols[identity.index as usize].name == "Config"
+                    && facts.symbols[identity.index as usize].parent.is_none()
             })
             .collect();
         assert_eq!(headers.len(), 2, "{headers:?}");
@@ -2100,6 +2136,7 @@ mod tests {
             .filter(|identity| {
                 identity.kind == crate::domain::facts::SourceIdentityKind::InterfaceMembers
                     && facts.symbols[identity.index as usize].name == "Config"
+                    && facts.symbols[identity.index as usize].parent.is_none()
             })
             .collect();
         assert_eq!(members.len(), 2, "{members:?}");

@@ -8,6 +8,8 @@ mod js;
 mod jvm;
 pub mod modules;
 mod python;
+#[cfg(feature = "lang-typescript")]
+mod typescript;
 
 use std::collections::BTreeMap;
 
@@ -29,7 +31,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 81;
+pub const RESOLVE_VERSION: u32 = 82;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -142,6 +144,9 @@ pub fn build(input: &Input) -> Graph {
             index.rebuild_tables_and_imports();
         }
         if augmentations.is_some() && index.link_typescript_imported_groups() {
+            index.rebuild_tables_and_imports();
+        }
+        if index.link_typescript_global_interfaces() {
             index.rebuild_tables_and_imports();
         }
     }

@@ -799,36 +799,24 @@ fn assemble(assembly: Assembly) -> Parsed {
                 .get(&(namespace.clone(), def.name.as_str()))
                 .is_some_and(|&count| count > 1);
             let top_level = parent.is_none() && namespace.is_empty();
-            if top_level && (repeated || exported) {
-                if let Some(identity) = signature_identity(node, source)
-                    && let Ok(index) = u32::try_from(index)
-                {
-                    source_identities.push(SourceIdentity {
-                        kind: SourceIdentityKind::InterfaceHeader,
-                        index,
-                        identity,
-                    });
-                    if let Some(identity) =
-                        super::lang::typescript::interface_member_identity(node, source)
-                    {
-                        source_identities.push(SourceIdentity {
-                            kind: SourceIdentityKind::InterfaceMembers,
-                            index,
-                            identity,
-                        });
-                    }
-                }
-            } else if !namespace.is_empty()
-                && repeated
-                && let Some(identity) =
-                    super::lang::typescript::interface_member_identity(node, source)
+            if (top_level || exported || repeated)
+                && let Some(identity) = signature_identity(node, source)
                 && let Ok(index) = u32::try_from(index)
             {
                 source_identities.push(SourceIdentity {
-                    kind: SourceIdentityKind::InterfaceMembers,
+                    kind: SourceIdentityKind::InterfaceHeader,
                     index,
                     identity,
                 });
+                if let Some(identity) =
+                    super::lang::typescript::interface_member_identity(node, source)
+                {
+                    source_identities.push(SourceIdentity {
+                        kind: SourceIdentityKind::InterfaceMembers,
+                        index,
+                        identity,
+                    });
+                }
             }
         }
     }

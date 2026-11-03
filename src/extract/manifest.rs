@@ -131,6 +131,12 @@ fn tsconfig_project_scope(value: &Value) -> String {
     if !matches!(options, Value::Object(_)) {
         return "unproven".to_owned();
     }
+    if ["allowJs", "noResolve", "rootDirs"]
+        .iter()
+        .any(|key| has_option(options, key))
+    {
+        return "unproven".to_owned();
+    }
     if ["moduleDetection", "module", "jsx", "outDir"]
         .iter()
         .any(|key| has_duplicate_key(options, key))
@@ -819,6 +825,9 @@ mod tests {
             r#"{"compilerOptions":{"moduleDetection":"unknown"}}"#,
             r#"{"references":[{"path":"../lib"}]}"#,
             r#"{"compilerOptions":{"outDir":true}}"#,
+            r#"{"compilerOptions":{"allowJs":true}}"#,
+            r#"{"compilerOptions":{"noResolve":true}}"#,
+            r#"{"compilerOptions":{"rootDirs":["src","generated"]}}"#,
         ] {
             let parsed = parse_with_project_scope("tsconfig.json", source);
             assert!(

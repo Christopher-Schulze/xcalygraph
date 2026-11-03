@@ -166,6 +166,9 @@ pub struct FieldList {
     pub names: Vec<FieldName>,
 }
 
+/// Set on resolved symbols participating in a source-proven TypeScript global interface group.
+pub const FLAG_TYPESCRIPT_GLOBAL_INTERFACE: u8 = 32;
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Graph {
     pub files: Vec<GraphFile>,

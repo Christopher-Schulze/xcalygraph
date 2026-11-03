@@ -1770,3 +1770,264 @@ fn interface_second_part_diff_reaches_all_dependents() -> Result<(), Box<dyn Err
     }
     Ok(())
 }
+
+#[test]
+fn global_interfaces_merge_only_inside_proven_compatible_project_scope()
+-> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir_all(root.join("generated"))?;
+    fs::write(
+        root.join("tsconfig.json"),
+        r#"{"include":["**/*.ts"],"exclude":["generated"]}"#,
+    )?;
+    for (path, source) in [
+        (
+            "a.ts",
+            "interface Shared { left: string }\nfunction consumeShared(value: Shared): number { return value.right; }\n",
+        ),
+        ("b.ts", "interface Shared { right: number }\n"),
+        (
+            "generated/excluded.ts",
+            "interface Shared { hidden: boolean }\n",
+        ),
+        (
+            "space-a.ts",
+            "namespace Space { export interface Config { left: string } }\n",
+        ),
+        (
+            "space-b.ts",
+            "namespace Space { export interface Config { right: number } }\n",
+        ),
+        (
+            "alpha.ts",
+            "namespace Alpha { export interface Config { alpha: boolean } }\n",
+        ),
+        (
+            "beta.ts",
+            "namespace Beta { export interface Config { beta: boolean } }\n",
+        ),
+        (
+            "global-a.ts",
+            "export {}; declare global { interface WindowLike { left: string } }\n",
+        ),
+        (
+            "global-b.ts",
+            "export {}; declare global { interface WindowLike { right: number } }\n",
+        ),
+        (
+            "entry.ts",
+            "import './generated/imported';\nexport {};\ndeclare global { interface ImportedGlobal { entry: string } }\n",
+        ),
+        (
+            "generated/imported.ts",
+            "interface ImportedGlobal { imported: number }\n",
+        ),
+        (
+            "module-a.ts",
+            "export interface Isolated { left: string }\n",
+        ),
+        (
+            "module-b.ts",
+            "export interface Isolated { right: number }\n",
+        ),
+        ("conflict-a.ts", "interface Conflict { id: string }\n"),
+        ("conflict-b.ts", "interface Conflict { id: number }\n"),
+    ] {
+        fs::write(root.join(path), source)?;
+    }
+
+    let shared = fixture.run(&["show", "a.ts::Shared", "--exact"])?;
+    assert!(
+        shared.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&shared.stdout),
+        String::from_utf8_lossy(&shared.stderr)
+    );
+    let shared = String::from_utf8(shared.stdout)?;
+    assert!(
+        shared.contains("a.ts:1") && shared.contains("b.ts:1"),
+        "{shared}"
+    );
+    assert!(
+        shared.contains("left") && shared.contains("right"),
+        "{shared}"
+    );
+    assert!(!shared.contains("generated/excluded.ts"), "{shared}");
+    let filtered = fixture.run(&[
+        "show",
+        "b.ts::Shared",
+        "--path",
+        "b.ts",
+        "--exact",
+        "--read-only",
+    ])?;
+    assert!(filtered.status.success());
+    let filtered = String::from_utf8(filtered.stdout)?;
+    assert!(
+        filtered.contains("b.ts:1") && filtered.contains("right"),
+        "{filtered}"
+    );
+    assert!(
+        !filtered.contains("a.ts") && !filtered.contains("left"),
+        "{filtered}"
+    );
+
+    let consumer = fixture.run(&["show", "a.consumeShared", "--exact", "--read-only"])?;
+    assert!(consumer.status.success());
+    assert!(String::from_utf8(consumer.stdout)?.contains("a.Shared a.ts:1"));
+    let impact = fixture.run(&["impact", "a.ts::Shared", "--exact", "--read-only"])?;
+    assert!(impact.status.success());
+    assert!(String::from_utf8(impact.stdout)?.contains("consumeShared"));
+
+    let space = fixture.run(&["show", "space-a.ts::Config", "--exact", "--read-only"])?;
+    assert!(space.status.success());
+    let space = String::from_utf8(space.stdout)?;
+    assert!(
+        space.contains("space-a.ts:1") && space.contains("space-b.ts:1"),
+        "{space}"
+    );
+    assert!(space.contains("left") && space.contains("right"), "{space}");
+    let alpha = fixture.run(&["show", "alpha.ts::Config", "--exact", "--read-only"])?;
+    assert!(alpha.status.success());
+    let alpha = String::from_utf8(alpha.stdout)?;
+    assert!(
+        alpha.contains("alpha.ts:1") && alpha.contains("alpha"),
+        "{alpha}"
+    );
+    assert!(!alpha.contains("beta.ts"), "{alpha}");
+
+    let global = fixture.run(&["show", "global-a.ts::WindowLike", "--exact", "--read-only"])?;
+    assert!(global.status.success());
+    let global = String::from_utf8(global.stdout)?;
+    assert!(
+        global.contains("global-a.ts:1") && global.contains("global-b.ts:1"),
+        "{global}"
+    );
+    assert!(
+        global.contains("left") && global.contains("right"),
+        "{global}"
+    );
+    let imported = fixture.run(&["show", "entry.ts::ImportedGlobal", "--exact", "--read-only"])?;
+    assert!(imported.status.success());
+    let imported = String::from_utf8(imported.stdout)?;
+    assert!(
+        imported.contains("entry.ts:3") && imported.contains("generated/imported.ts:1"),
+        "{imported}"
+    );
+
+    assert_eq!(
+        fixture
+            .run(&["show", "Isolated", "--exact", "--read-only"])?
+            .status
+            .code(),
+        Some(3)
+    );
+    assert_eq!(
+        fixture
+            .run(&["show", "Conflict", "--exact", "--read-only"])?
+            .status
+            .code(),
+        Some(3)
+    );
+    Ok(())
+}
+
+#[test]
+fn global_interface_scope_follows_typescript_module_detection() -> Result<(), Box<dyn Error>> {
+    for (extension, compiler_options, package_type, merged) in [
+        (
+            "mts",
+            r#""module":"commonjs","moduleDetection":"legacy""#,
+            None,
+            true,
+        ),
+        (
+            "mts",
+            r#""module":"commonjs","moduleDetection":"auto""#,
+            None,
+            false,
+        ),
+        ("ts", r#""module":"node18""#, Some("module"), false),
+        ("ts", r#""module":"node18""#, Some("commonjs"), true),
+    ] {
+        let fixture = Fixture::new()?;
+        let root = fixture.0.join("repo");
+        fs::create_dir_all(&root)?;
+        fs::write(
+            root.join("tsconfig.json"),
+            format!(
+                r#"{{"files":["a.{extension}","b.{extension}"],"compilerOptions":{{{compiler_options}}}}}"#
+            ),
+        )?;
+        if let Some(package_type) = package_type {
+            fs::write(
+                root.join("package.json"),
+                format!(r#"{{"type":"{package_type}"}}"#),
+            )?;
+        }
+        fs::write(
+            root.join(format!("a.{extension}")),
+            "interface ScopeCheck { left: string }\n",
+        )?;
+        fs::write(
+            root.join(format!("b.{extension}")),
+            "interface ScopeCheck { right: number }\n",
+        )?;
+
+        let name = if merged { "a.ScopeCheck" } else { "ScopeCheck" };
+        let output = fixture.run(&["show", name, "--exact"])?;
+        if merged {
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            let output = String::from_utf8(output.stdout)?;
+            assert!(output.contains(&format!("b.{extension}:1")), "{output}");
+        } else {
+            assert_eq!(output.status.code(), Some(3));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn global_interfaces_stay_separate_when_triple_slash_scope_is_unproven()
+-> Result<(), Box<dyn Error>> {
+    for directive in [
+        "///<reference path=\"./types.d.ts\"/>",
+        "///    <reference path=\"./types.d.ts\"/>",
+    ] {
+        let fixture = Fixture::new()?;
+        let root = fixture.0.join("repo");
+        fs::create_dir_all(&root)?;
+        fs::write(root.join("tsconfig.json"), r#"{"files":["a.ts","b.ts"]}"#)?;
+        fs::write(
+            root.join("a.ts"),
+            format!("{directive}\ninterface Shared {{ left: string }}\n"),
+        )?;
+        fs::write(root.join("b.ts"), "interface Shared { right: number }\n")?;
+        fs::write(
+            root.join("types.d.ts"),
+            "interface Shared { referenced: boolean }\n",
+        )?;
+
+        let output = fixture.run(&["show", "a.ts::Shared", "--exact"])?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let output = String::from_utf8(output.stdout)?;
+        assert!(
+            output.contains("a.ts:2") && output.contains("left"),
+            "{output}"
+        );
+        assert!(
+            !output.contains("b.ts") && !output.contains("right"),
+            "{output}"
+        );
+    }
+    Ok(())
+}

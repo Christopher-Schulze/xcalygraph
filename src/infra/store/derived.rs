@@ -8,7 +8,7 @@ use super::codec::{Decoder, Encoder};
 use super::container::{self, Container, Kind};
 use crate::domain::facts::{FLAG_TYPESCRIPT_AUGMENTATION, SymKind};
 use crate::domain::filetype::FileType;
-use crate::domain::graph::{Confidence, EdgeKind, Graph};
+use crate::domain::graph::{Confidence, EdgeKind, FLAG_TYPESCRIPT_GLOBAL_INTERFACE, Graph};
 use crate::domain::hash::FastMap;
 use crate::domain::role::Role;
 use crate::domain::search::{self, FIELDS};
@@ -759,11 +759,24 @@ impl Derived {
                     && part_symbol.exported == canonical_symbol.exported
                     && self.same_typescript_namespace(part_symbol, canonical_symbol)
             } else {
-                part_symbol.flags & FLAG_TYPESCRIPT_AUGMENTATION != 0
-                    && canonical_symbol.flags & FLAG_TYPESCRIPT_AUGMENTATION == 0
-                    && canonical_symbol.exported == 1
-                    && part_symbol.parent == u32::MAX
-                    && canonical_symbol.parent == u32::MAX
+                let typescript_files = self
+                    .files()
+                    .get(part_symbol.file as usize)
+                    .is_some_and(|file| file.file_type == FileType::TypeScript as u8)
+                    && self
+                        .files()
+                        .get(canonical_symbol.file as usize)
+                        .is_some_and(|file| file.file_type == FileType::TypeScript as u8);
+                typescript_files
+                    && ((part_symbol.flags & FLAG_TYPESCRIPT_AUGMENTATION != 0
+                        && canonical_symbol.flags & FLAG_TYPESCRIPT_AUGMENTATION == 0
+                        && canonical_symbol.exported == 1
+                        && part_symbol.parent == u32::MAX
+                        && canonical_symbol.parent == u32::MAX)
+                        || (part_symbol.flags & FLAG_TYPESCRIPT_GLOBAL_INTERFACE != 0
+                            && canonical_symbol.flags & FLAG_TYPESCRIPT_GLOBAL_INTERFACE != 0
+                            && self
+                                .same_typescript_global_namespace(part_symbol, canonical_symbol)))
             };
             valid_origin
                 && part_symbol.kind == SymKind::Iface as u8
@@ -774,6 +787,41 @@ impl Derived {
                     .ok()
                     .is_some_and(|position| groups[position][1] == canonical)
         })
+    }
+
+    fn same_typescript_global_namespace(&self, left: &SymbolRecord, right: &SymbolRecord) -> bool {
+        self.typescript_global_namespace_path(left)
+            .zip(self.typescript_global_namespace_path(right))
+            .is_some_and(|(left, right)| left == right)
+    }
+
+    fn typescript_global_namespace_path(&self, symbol: &SymbolRecord) -> Option<Vec<String>> {
+        let symbols = self.symbols();
+        let mut scopes = Vec::new();
+        let mut parent = symbol.parent;
+        let mut remaining = symbols.len();
+        while parent != u32::MAX {
+            if remaining == 0 {
+                return None;
+            }
+            remaining -= 1;
+            let module = symbols.get(parent as usize)?;
+            if module.kind != SymKind::Mod as u8 {
+                return None;
+            }
+            let name = self.string(module.name);
+            if name.starts_with('"') || name.starts_with('\'') {
+                return None;
+            }
+            let parts: Vec<_> = name.split('.').map(|part| part.trim().to_owned()).collect();
+            if parts.iter().any(String::is_empty) {
+                return None;
+            }
+            scopes.push(parts);
+            parent = module.parent;
+        }
+        scopes.reverse();
+        Some(scopes.into_iter().flatten().collect())
     }
 
     pub fn tokens(&self) -> &[TokenRecord] {
