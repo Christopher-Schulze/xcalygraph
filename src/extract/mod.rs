@@ -31,7 +31,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 81;
+const EXTRACTION_VERSION: u32 = 83;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -290,7 +290,28 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
     facts.lines = count_lines(content);
     if record.role == Role::Manifest {
         let name = role::file_name(&record.path);
-        facts.manifest = manifest::parse(name, &String::from_utf8_lossy(content));
+        let text = String::from_utf8_lossy(content);
+        match manifest::parse_with_project_scope(name, &text) {
+            Some((manifest, scope_identity)) => {
+                facts.manifest = Some(manifest);
+                if let Some(identity) = scope_identity {
+                    push_identity(&mut facts, identity);
+                }
+            }
+            None if matches!(name, "tsconfig.json" | "package.json") => push_identity(
+                &mut facts,
+                crate::domain::facts::SourceIdentity {
+                    kind: if name == "tsconfig.json" {
+                        crate::domain::facts::SourceIdentityKind::TypeScriptProject
+                    } else {
+                        crate::domain::facts::SourceIdentityKind::TypeScriptPackageType
+                    },
+                    index: 0,
+                    identity: "unproven".to_owned(),
+                },
+            ),
+            None => {}
+        }
     }
     facts.entry |= content.starts_with(b"#!");
     if capture_identities {
@@ -302,6 +323,16 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
         identities,
         incomplete,
     }
+}
+
+fn push_identity(facts: &mut Facts, identity: crate::domain::facts::SourceIdentity) {
+    let mut identities = facts
+        .source_identities
+        .take()
+        .map_or_else(Vec::new, |items| items.into_vec());
+    identities.push(identity);
+    identities.sort_unstable_by_key(|identity| (identity.kind, identity.index));
+    facts.source_identities = Some(identities.into_boxed_slice());
 }
 
 fn without_identities(facts: Facts, capture_identities: bool) -> engine::Parsed {
@@ -432,6 +463,91 @@ mod tests {
         );
         let notes = extract(&record("docs/notes.txt", Role::Doc), b"First line.\n");
         assert_eq!(notes.doc, "First line.");
+    }
+
+    #[test]
+    fn typescript_project_scope_is_persisted_with_manifest_facts() {
+        let record = FileRecord {
+            path: "tsconfig.json".to_owned(),
+            size: 0,
+            mtime_ns: 0,
+            identity: None,
+            hash: 0,
+            role: Role::Manifest,
+            file_type: Some(FileType::Json),
+        };
+        let facts = extract(
+            &record,
+            br#"{"files":["a.ts","b.ts"],"include":["src/**/*.ts"],"exclude":["generated"],"compilerOptions":{"outDir":"dist","moduleDetection":"legacy"}}"#,
+        );
+        let identity = facts.source_identity(
+            crate::domain::facts::SourceIdentityKind::TypeScriptProject,
+            0,
+        );
+        let config = identity.and_then(crate::domain::facts::typescript_project_config);
+        assert_eq!(
+            config,
+            Some(crate::domain::facts::TypeScriptProjectConfig {
+                files: Some(vec!["a.ts".to_owned(), "b.ts".to_owned()]),
+                include: Some(vec!["src/**/*.ts".to_owned()]),
+                exclude: Some(vec!["generated".to_owned()]),
+                out_dir: Some("dist".to_owned()),
+                module_detection: Some("legacy".to_owned()),
+                module: None,
+                jsx: None,
+            })
+        );
+
+        let unsupported = extract(&record, br#"{"extends":"../base/tsconfig.json"}"#);
+        assert_eq!(
+            unsupported.source_identity(
+                crate::domain::facts::SourceIdentityKind::TypeScriptProject,
+                0
+            ),
+            Some("unproven")
+        );
+    }
+
+    #[test]
+    fn typescript_package_type_is_persisted_with_manifest_facts() {
+        let record = |source: &str| {
+            let record = FileRecord {
+                path: "package.json".to_owned(),
+                size: 0,
+                mtime_ns: 0,
+                identity: None,
+                hash: 0,
+                role: Role::Manifest,
+                file_type: Some(FileType::Json),
+            };
+            extract(&record, source.as_bytes())
+        };
+        let module = record(r#"{"type":"module"}"#);
+        assert_eq!(
+            module.source_identity(
+                crate::domain::facts::SourceIdentityKind::TypeScriptPackageType,
+                0
+            ),
+            Some("typescript_package:v1:module")
+        );
+
+        let absent = record(r#"{"name":"package"}"#);
+        assert_eq!(
+            absent.source_identity(
+                crate::domain::facts::SourceIdentityKind::TypeScriptPackageType,
+                0
+            ),
+            Some("typescript_package:v1:absent")
+        );
+
+        let invalid = record(r#"{"type":true}"#);
+        assert_eq!(
+            invalid.source_identity(
+                crate::domain::facts::SourceIdentityKind::TypeScriptPackageType,
+                0
+            ),
+            Some("unproven")
+        );
     }
 
     #[test]

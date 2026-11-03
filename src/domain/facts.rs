@@ -262,6 +262,16 @@ pub enum SourceIdentityKind {
     TypeScriptAugmentation,
     /// Export forms that do not directly mark the underlying declaration.
     TypeScriptComplexExports,
+    /// TypeScript source-level module syntax, indexed by file at zero.
+    TypeScriptModuleSyntax,
+    /// Parsed project scope options from a `tsconfig.json`, indexed by file at zero.
+    TypeScriptProject,
+    /// File-level completeness of source-proven `declare global` evidence.
+    TypeScriptGlobalAugmentationScope,
+    /// Interface declaration inside a source-proven `declare global` block.
+    TypeScriptGlobalAugmentation,
+    /// `package.json` type setting relevant to TypeScript's Node module detection.
+    TypeScriptPackageType,
 }
 
 impl SourceIdentityKind {
@@ -282,8 +292,191 @@ impl SourceIdentityKind {
             value if value == Self::TypeScriptComplexExports as u8 => {
                 Some(Self::TypeScriptComplexExports)
             }
+            value if value == Self::TypeScriptModuleSyntax as u8 => {
+                Some(Self::TypeScriptModuleSyntax)
+            }
+            value if value == Self::TypeScriptProject as u8 => Some(Self::TypeScriptProject),
+            value if value == Self::TypeScriptGlobalAugmentationScope as u8 => {
+                Some(Self::TypeScriptGlobalAugmentationScope)
+            }
+            value if value == Self::TypeScriptGlobalAugmentation as u8 => {
+                Some(Self::TypeScriptGlobalAugmentation)
+            }
+            value if value == Self::TypeScriptPackageType as u8 => {
+                Some(Self::TypeScriptPackageType)
+            }
             _ => None,
         }
+    }
+}
+
+/// Source-backed `tsconfig.json` options needed to prove script membership and module scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeScriptProjectConfig {
+    pub files: Option<Vec<String>>,
+    pub include: Option<Vec<String>>,
+    pub exclude: Option<Vec<String>>,
+    pub out_dir: Option<String>,
+    pub module_detection: Option<String>,
+    pub module: Option<String>,
+    pub jsx: Option<String>,
+}
+
+/// Stable identity for a supported TypeScript project configuration.
+pub fn typescript_project_identity(config: &TypeScriptProjectConfig) -> String {
+    let mut identity = String::from("typescript_project:v1:");
+    push_optional_strings(&mut identity, config.files.as_deref());
+    push_optional_strings(&mut identity, config.include.as_deref());
+    push_optional_strings(&mut identity, config.exclude.as_deref());
+    push_optional_string(&mut identity, config.out_dir.as_deref());
+    push_optional_string(&mut identity, config.module_detection.as_deref());
+    push_optional_string(&mut identity, config.module.as_deref());
+    push_optional_string(&mut identity, config.jsx.as_deref());
+    identity
+}
+
+/// Decodes a project identity, rejecting unsupported or malformed settings.
+pub fn typescript_project_config(identity: &str) -> Option<TypeScriptProjectConfig> {
+    if identity == "unproven" {
+        return None;
+    }
+    let mut rest = identity.strip_prefix("typescript_project:v1:")?;
+    let (files, next) = take_optional_strings(rest)?;
+    rest = next;
+    let (include, next) = take_optional_strings(rest)?;
+    rest = next;
+    let (exclude, next) = take_optional_strings(rest)?;
+    rest = next;
+    let (out_dir, next) = take_optional_string(rest)?;
+    rest = next;
+    let (module_detection, next) = take_optional_string(rest)?;
+    rest = next;
+    let (module, next) = take_optional_string(rest)?;
+    let (jsx, rest) = take_optional_string(next)?;
+    if !rest.is_empty()
+        || module_detection
+            .as_deref()
+            .is_some_and(|value| !matches!(value, "auto" | "legacy" | "force"))
+        || module.as_deref().is_some_and(|value| {
+            !matches!(
+                value,
+                "commonjs"
+                    | "es6"
+                    | "es2015"
+                    | "es2020"
+                    | "es2022"
+                    | "esnext"
+                    | "node16"
+                    | "node18"
+                    | "node20"
+                    | "nodenext"
+                    | "preserve"
+            )
+        })
+        || jsx.as_deref().is_some_and(|value| {
+            !matches!(
+                value,
+                "preserve" | "react-native" | "react-jsx" | "react-jsxdev" | "react"
+            )
+        })
+        || out_dir
+            .as_deref()
+            .is_some_and(|value| !valid_typescript_project_path(value))
+        || files
+            .iter()
+            .chain(include.iter())
+            .chain(exclude.iter())
+            .flatten()
+            .any(|value| !valid_typescript_project_path(value))
+    {
+        return None;
+    }
+    Some(TypeScriptProjectConfig {
+        files,
+        include,
+        exclude,
+        out_dir,
+        module_detection,
+        module,
+        jsx,
+    })
+}
+
+pub(crate) fn valid_typescript_project_path(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('/')
+        && !value.as_bytes().get(1).is_some_and(|byte| *byte == b':')
+        && !value.contains('\\')
+        && !value.chars().any(char::is_control)
+}
+
+/// Decodes a source-backed `package.json` type setting used by TypeScript module detection.
+pub fn typescript_package_type(identity: &str) -> Option<&str> {
+    match identity {
+        "typescript_package:v1:module" => Some("module"),
+        "typescript_package:v1:commonjs" => Some("commonjs"),
+        "typescript_package:v1:absent" => Some("absent"),
+        _ => None,
+    }
+}
+
+fn push_optional_strings(target: &mut String, values: Option<&[String]>) {
+    let Some(values) = values else {
+        target.push('0');
+        return;
+    };
+    target.push('1');
+    push_length_prefixed(target, &values.len().to_string());
+    for value in values {
+        push_length_prefixed(target, value);
+    }
+}
+
+fn take_optional_strings(source: &str) -> Option<(Option<Vec<String>>, &str)> {
+    match source.as_bytes().first().copied()? {
+        b'0' => Some((None, &source[1..])),
+        b'1' => {
+            let (count, mut rest) = take_length_prefixed(&source[1..])?;
+            let count = count.parse::<usize>().ok()?;
+            if count > rest.len() / 2 {
+                return None;
+            }
+            let mut values = Vec::with_capacity(count);
+            for _ in 0..count {
+                let (value, tail) = take_length_prefixed(rest)?;
+                if !valid_typescript_project_path(value) {
+                    return None;
+                }
+                values.push(value.to_owned());
+                rest = tail;
+            }
+            Some((Some(values), rest))
+        }
+        _ => None,
+    }
+}
+
+fn push_optional_string(target: &mut String, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            target.push('1');
+            push_length_prefixed(target, value);
+        }
+        None => target.push('0'),
+    }
+}
+
+fn take_optional_string(source: &str) -> Option<(Option<String>, &str)> {
+    match source.as_bytes().first().copied()? {
+        b'0' => Some((None, &source[1..])),
+        b'1' => {
+            let (value, rest) = take_length_prefixed(&source[1..])?;
+            if value.is_empty() || value.chars().any(char::is_control) {
+                return None;
+            }
+            Some((Some(value.to_owned()), rest))
+        }
+        _ => None,
     }
 }
 

@@ -102,6 +102,204 @@ pub(in crate::extract) fn file_scope(
     "clear"
 }
 
+/// Source-level TypeScript module indicator status, independent of project compiler options.
+pub(crate) fn module_syntax(
+    root: tree_sitter::Node,
+    source: &[u8],
+    path: &str,
+    exceeded: bool,
+) -> &'static str {
+    if root.has_error() || exceeded {
+        return "incomplete";
+    }
+    if is_typescript_declaration_path(path) {
+        return "declaration";
+    }
+    let mut walker = root.walk();
+    if root
+        .named_children(&mut walker)
+        .any(|node| matches!(node.kind(), "import_statement" | "export_statement"))
+    {
+        return "indicator";
+    }
+    let mut pending = vec![root];
+    let mut has_jsx = false;
+    while let Some(node) = pending.pop() {
+        if node.kind().starts_with("jsx_") {
+            has_jsx = true;
+        }
+        if node.kind() == "meta_property" && node.utf8_text(source).ok() == Some("import.meta") {
+            return "indicator";
+        }
+        let mut walker = node.walk();
+        pending.extend(node.named_children(&mut walker));
+    }
+    if has_jsx { "jsx" } else { "none" }
+}
+
+pub(crate) enum GlobalAugmentationEvidence {
+    Absent,
+    Complete(Vec<crate::domain::facts::SourceIdentity>),
+    Unproven,
+}
+
+/// Capture complete interface declarations inside every source-level `declare global` block.
+pub(crate) fn global_augmentation_evidence(
+    root: tree_sitter::Node,
+    source: &[u8],
+    path: &str,
+    exceeded: bool,
+    parsed: &crate::extract::engine::Parsed,
+) -> GlobalAugmentationEvidence {
+    let mut pending = vec![root];
+    let mut blocks = Vec::new();
+    while let Some(node) = pending.pop() {
+        if node.kind() == "ambient_declaration" {
+            let mut walker = node.walk();
+            if node
+                .children(&mut walker)
+                .any(|child| child.kind() == "global")
+            {
+                let mut walker = node.walk();
+                let Some(body) = node
+                    .named_children(&mut walker)
+                    .find(|child| child.kind() == "statement_block")
+                else {
+                    return GlobalAugmentationEvidence::Unproven;
+                };
+                blocks.push(body);
+                continue;
+            }
+        }
+        let mut walker = node.walk();
+        pending.extend(node.named_children(&mut walker));
+    }
+    if blocks.is_empty() {
+        return GlobalAugmentationEvidence::Absent;
+    }
+    if root.has_error() || exceeded || parsed.incomplete {
+        return GlobalAugmentationEvidence::Unproven;
+    }
+    if is_typescript_declaration_path(path) {
+        return GlobalAugmentationEvidence::Unproven;
+    }
+    let mut identities = Vec::new();
+    for body in blocks {
+        if collect_global_declarations(body, source, parsed, &mut identities).is_none() {
+            return GlobalAugmentationEvidence::Unproven;
+        }
+    }
+    identities.sort_unstable_by_key(|identity| (identity.kind, identity.index));
+    GlobalAugmentationEvidence::Complete(identities)
+}
+
+fn is_typescript_declaration_path(path: &str) -> bool {
+    [".d.ts", ".d.mts", ".d.cts", ".d.ets"]
+        .iter()
+        .any(|suffix| {
+            path.len() >= suffix.len()
+                && path[path.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+        })
+}
+
+fn collect_global_declarations(
+    body: tree_sitter::Node,
+    source: &[u8],
+    parsed: &crate::extract::engine::Parsed,
+    identities: &mut Vec<crate::domain::facts::SourceIdentity>,
+) -> Option<()> {
+    let mut walker = body.walk();
+    for child in body.named_children(&mut walker) {
+        if child.kind() == "comment" {
+            continue;
+        }
+        if child.kind() == "export_statement" {
+            let declaration = child.child_by_field_name("declaration")?;
+            collect_global_declaration(declaration, source, parsed, identities)?;
+        } else {
+            collect_global_declaration(child, source, parsed, identities)?;
+        }
+    }
+    Some(())
+}
+
+fn collect_global_declaration(
+    node: tree_sitter::Node,
+    source: &[u8],
+    parsed: &crate::extract::engine::Parsed,
+    identities: &mut Vec<crate::domain::facts::SourceIdentity>,
+) -> Option<()> {
+    use crate::domain::facts::{SourceIdentity, SourceIdentityKind, SymKind};
+
+    match node.kind() {
+        "interface_declaration" => {
+            let name = node.child_by_field_name("name")?.utf8_text(source).ok()?;
+            if name.contains('\\') {
+                return None;
+            }
+            let mut matches = parsed
+                .spans
+                .iter()
+                .enumerate()
+                .filter(|(_, span)| span.0 == node.start_byte() && span.1 == node.end_byte());
+            let (index, _) = matches.next()?;
+            if matches.next().is_some()
+                || parsed.facts.symbols.get(index)?.kind != Some(SymKind::Iface)
+            {
+                return None;
+            }
+            let index = u32::try_from(index).ok()?;
+            let header = crate::extract::engine::signature_identity(node, source)?;
+            let members = interface_member_identity(node, source)?;
+            for (kind, identity) in [
+                (SourceIdentityKind::InterfaceHeader, header),
+                (SourceIdentityKind::InterfaceMembers, members),
+            ] {
+                if let Some(existing) = parsed.facts.source_identity(kind, index) {
+                    if existing != identity {
+                        return None;
+                    }
+                } else {
+                    identities.push(SourceIdentity {
+                        kind,
+                        index,
+                        identity,
+                    });
+                }
+            }
+            identities.push(SourceIdentity {
+                kind: SourceIdentityKind::TypeScriptGlobalAugmentation,
+                index,
+                identity: "global".to_owned(),
+            });
+            Some(())
+        }
+        "internal_module" | "module" => {
+            let name = node.child_by_field_name("name")?;
+            if !matches!(name.kind(), "identifier" | "nested_identifier")
+                || name.utf8_text(source).ok()?.contains('\\')
+            {
+                return None;
+            }
+            let body = node.child_by_field_name("body")?;
+            if body.kind() != "statement_block" {
+                return None;
+            }
+            collect_global_declarations(body, source, parsed, identities)
+        }
+        "expression_statement" => {
+            let mut walker = node.walk();
+            let mut children = node.named_children(&mut walker);
+            let declaration = children.next()?;
+            if children.next().is_some() || declaration.kind() != "internal_module" {
+                return None;
+            }
+            collect_global_declaration(declaration, source, parsed, identities)
+        }
+        _ => None,
+    }
+}
+
 /// Capture every supported relative module augmentation, or leave the file unproven.
 #[cfg(feature = "lang-typescript")]
 pub(in crate::extract) fn augmentation_evidence(
@@ -1702,6 +1900,130 @@ mod tests {
         assert_eq!(
             exports.source_identity(SourceIdentityKind::TypeScriptComplexExports, 0),
             Some("complex")
+        );
+        let script = crate::extract::extract(&record, b"interface Config { width: number }");
+        assert_eq!(
+            script.source_identity(SourceIdentityKind::TypeScriptModuleSyntax, 0),
+            Some("none")
+        );
+        let module =
+            crate::extract::extract(&record, b"export {}; interface Config { width: number }");
+        assert_eq!(
+            module.source_identity(SourceIdentityKind::TypeScriptModuleSyntax, 0),
+            Some("indicator")
+        );
+        let jsx_record = FileRecord {
+            path: "component.tsx".to_owned(),
+            size: 0,
+            mtime_ns: 0,
+            identity: None,
+            hash: 0,
+            role: Role::Src,
+            file_type: Some(FileType::TypeScript),
+        };
+        let jsx = crate::extract::extract(&jsx_record, b"const view = <div />;");
+        assert_eq!(
+            jsx.source_identity(SourceIdentityKind::TypeScriptModuleSyntax, 0),
+            Some("jsx")
+        );
+        let declaration_record = FileRecord {
+            path: "types.d.ts".to_owned(),
+            size: 0,
+            mtime_ns: 0,
+            identity: None,
+            hash: 0,
+            role: Role::Src,
+            file_type: Some(FileType::TypeScript),
+        };
+        let declaration = crate::extract::extract(
+            &declaration_record,
+            b"export {}; declare global { interface Window { id: string } }",
+        );
+        assert_eq!(
+            declaration.source_identity(SourceIdentityKind::TypeScriptModuleSyntax, 0),
+            Some("declaration")
+        );
+        assert_eq!(
+            declaration.source_identity(SourceIdentityKind::TypeScriptGlobalAugmentationScope, 0),
+            Some("unproven")
+        );
+        assert!(
+            declaration
+                .source_identities
+                .as_deref()
+                .is_none_or(|identities| !identities.iter().any(|identity| {
+                    identity.kind == SourceIdentityKind::TypeScriptGlobalAugmentation
+                }))
+        );
+        let global = crate::extract::extract(
+            &record,
+            b"export {}; declare global { interface Window { id: string } }",
+        );
+        assert_eq!(
+            global.source_identity(SourceIdentityKind::TypeScriptGlobalAugmentationScope, 0),
+            Some("complete")
+        );
+        let global_parts: Vec<_> = global
+            .symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, symbol)| symbol.kind == Some(SymKind::Iface))
+            .map(|(index, _)| index as u32)
+            .collect();
+        assert_eq!(global_parts.len(), 1);
+        assert!(global_parts.iter().all(|&index| {
+            global.source_identity(SourceIdentityKind::TypeScriptGlobalAugmentation, index)
+                == Some("global")
+                && global
+                    .source_identity(SourceIdentityKind::InterfaceHeader, index)
+                    .is_some()
+                && global
+                    .source_identity(SourceIdentityKind::InterfaceMembers, index)
+                    .is_some()
+        }));
+        let nested_global = crate::extract::extract(
+            &record,
+            b"export {}; declare global { namespace Space { export interface Config { left: string } } }",
+        );
+        assert_eq!(
+            nested_global.source_identity(SourceIdentityKind::TypeScriptGlobalAugmentationScope, 0),
+            Some("complete")
+        );
+        let config_index = nested_global
+            .symbols
+            .iter()
+            .position(|symbol| symbol.name == "Config");
+        assert!(config_index.is_some_and(|index| {
+            nested_global.symbols[index]
+                .parent
+                .and_then(|parent| nested_global.symbols.get(parent as usize))
+                .is_some_and(|parent| parent.name == "Space")
+                && nested_global.source_identity(
+                    SourceIdentityKind::TypeScriptGlobalAugmentation,
+                    index as u32,
+                ) == Some("global")
+        }));
+        let unsupported_global = crate::extract::extract(
+            &record,
+            b"export {}; declare global { interface Window { id: string } type Extra = string }",
+        );
+        assert_eq!(
+            unsupported_global
+                .source_identity(SourceIdentityKind::TypeScriptGlobalAugmentationScope, 0),
+            Some("unproven")
+        );
+        let mixed_augmentation = crate::extract::extract(
+            &record,
+            b"import './base'; declare module './base' { interface Base { extra(): number } } declare global { interface Window { id: string } }",
+        );
+        assert_eq!(
+            mixed_augmentation.source_identity(SourceIdentityKind::TypeScriptScope, 0),
+            Some("augmentation")
+        );
+        assert_eq!(
+            mixed_augmentation
+                .source_identity(SourceIdentityKind::TypeScriptGlobalAugmentationScope, 0),
+            Some("complete")
         );
     }
 

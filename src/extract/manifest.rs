@@ -3,16 +3,52 @@
 
 use super::build_manifests;
 use super::json::{self, Value};
-use crate::domain::facts::{Manifest, RustTargetRoot};
+use crate::domain::facts::{
+    Manifest, RustTargetRoot, SourceIdentity, SourceIdentityKind, TypeScriptProjectConfig,
+};
 
 /// Parses a manifest by file name; `None` for manifests without a parser.
 pub fn parse(name: &str, text: &str) -> Option<Manifest> {
+    if matches!(name, "tsconfig.json" | "package.json") {
+        parse_with_project_scope(name, text).map(|(manifest, _)| manifest)
+    } else {
+        parse_other(name, text)
+    }
+}
+
+/// Parses a manifest and its source-backed TypeScript scope evidence in one JSONC pass.
+pub fn parse_with_project_scope(
+    name: &str,
+    text: &str,
+) -> Option<(Manifest, Option<SourceIdentity>)> {
+    if name == "tsconfig.json" {
+        let value = json::parse(text)?;
+        let identity = SourceIdentity {
+            kind: SourceIdentityKind::TypeScriptProject,
+            index: 0,
+            identity: tsconfig_project_scope(&value),
+        };
+        return Some((tsconfig(&value), Some(identity)));
+    }
+    if name == "package.json" {
+        let value = json::parse(text)?;
+        let identity = SourceIdentity {
+            kind: SourceIdentityKind::TypeScriptPackageType,
+            index: 0,
+            identity: typescript_package_scope(&value),
+        };
+        return Some((package_json(&value), Some(identity)));
+    }
+    parse(name, text).map(|manifest| (manifest, None))
+}
+
+fn parse_other(name: &str, text: &str) -> Option<Manifest> {
     match name {
         "go.mod" => Some(go_mod(text)),
         "go.work" => Some(go_work(text)),
         "Cargo.toml" => Some(cargo_toml(text)),
         "package.json" => Some(package_json(&json::parse(text)?)),
-        "tsconfig.json" | "jsconfig.json" => Some(tsconfig(&json::parse(text)?)),
+        "jsconfig.json" => Some(tsconfig(&json::parse(text)?)),
         "CMakeLists.txt" => Some(cmake(text)),
         "compile_commands.json" => Some(compile_commands(&json::parse(text)?)),
         "DESCRIPTION" => Some(r_description(text)),
@@ -38,6 +74,157 @@ pub fn parse(name: &str, text: &str) -> Option<Manifest> {
             Some(build_manifests::solution(text))
         }
         _ => None,
+    }
+}
+
+fn tsconfig_project_scope(value: &Value) -> String {
+    if !matches!(value, Value::Object(_)) {
+        return "unproven".to_owned();
+    }
+    if [
+        "extends",
+        "references",
+        "files",
+        "include",
+        "exclude",
+        "compilerOptions",
+    ]
+    .iter()
+    .any(|key| has_duplicate_key(value, key))
+        || value.get("extends").is_some()
+        || value.get("references").is_some_and(
+            |references| !matches!(references, Value::Array(items) if items.is_empty()),
+        )
+    {
+        return "unproven".to_owned();
+    }
+    let files = match string_array(value.get("files")) {
+        Some(values) => values,
+        None => return "unproven".to_owned(),
+    };
+    let include = match string_array(value.get("include")) {
+        Some(values) => values,
+        None => return "unproven".to_owned(),
+    };
+    let exclude = match string_array(value.get("exclude")) {
+        Some(values) => values,
+        None => return "unproven".to_owned(),
+    };
+    let Some(options) = value.get("compilerOptions") else {
+        if value
+            .entries()
+            .iter()
+            .any(|(key, _, _)| key == "compilerOptions")
+        {
+            return "unproven".to_owned();
+        }
+        return crate::domain::facts::typescript_project_identity(&TypeScriptProjectConfig {
+            files,
+            include,
+            exclude,
+            out_dir: None,
+            module_detection: None,
+            module: None,
+            jsx: None,
+        });
+    };
+    if !matches!(options, Value::Object(_)) {
+        return "unproven".to_owned();
+    }
+    if ["moduleDetection", "module", "jsx", "outDir"]
+        .iter()
+        .any(|key| has_duplicate_key(options, key))
+    {
+        return "unproven".to_owned();
+    }
+    let module_detection = match optional_option_string(options, "moduleDetection") {
+        Ok(value) => value,
+        Err(_) => return "unproven".to_owned(),
+    };
+    let module = match optional_option_string(options, "module") {
+        Ok(value) => value,
+        Err(_) => return "unproven".to_owned(),
+    };
+    let jsx = match optional_option_string(options, "jsx") {
+        Ok(value) => value,
+        Err(_) => return "unproven".to_owned(),
+    };
+    let out_dir = match option_string(options, "outDir") {
+        Some(value) if crate::domain::facts::valid_typescript_project_path(&value) => value,
+        Some(_) => return "unproven".to_owned(),
+        None if has_option(options, "outDir") => return "unproven".to_owned(),
+        None => String::new(),
+    };
+    let config = TypeScriptProjectConfig {
+        files,
+        include,
+        exclude,
+        out_dir: (!out_dir.is_empty()).then_some(out_dir),
+        module_detection,
+        module,
+        jsx,
+    };
+    let identity = crate::domain::facts::typescript_project_identity(&config);
+    if crate::domain::facts::typescript_project_config(&identity).is_some() {
+        identity
+    } else {
+        "unproven".to_owned()
+    }
+}
+
+fn typescript_package_scope(value: &Value) -> String {
+    if has_duplicate_key(value, "type") {
+        return "unproven".to_owned();
+    }
+    match value.get("type") {
+        None => "typescript_package:v1:absent".to_owned(),
+        Some(Value::Str(value)) if matches!(value.as_str(), "module" | "commonjs") => {
+            format!("typescript_package:v1:{value}")
+        }
+        Some(_) => "unproven".to_owned(),
+    }
+}
+
+fn string_array(value: Option<&Value>) -> Option<Option<Vec<String>>> {
+    match value {
+        None => Some(None),
+        Some(Value::Array(items)) => {
+            let mut values = Vec::with_capacity(items.len());
+            for item in items {
+                let value = item.as_str()?;
+                if !crate::domain::facts::valid_typescript_project_path(value) {
+                    return None;
+                }
+                values.push(value.to_owned());
+            }
+            Some(Some(values))
+        }
+        Some(_) => None,
+    }
+}
+
+fn has_option(options: &Value, key: &str) -> bool {
+    options.entries().iter().any(|(name, _, _)| name == key)
+}
+
+fn has_duplicate_key(value: &Value, key: &str) -> bool {
+    value
+        .entries()
+        .iter()
+        .filter(|(name, _, _)| *name == key)
+        .count()
+        > 1
+}
+
+fn option_string(options: &Value, key: &str) -> Option<String> {
+    options.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
+fn optional_option_string(options: &Value, key: &str) -> Result<Option<String>, &'static str> {
+    match option_string(options, key) {
+        Some(value) => Ok(Some(value)),
+        None if has_option(options, key) => Err("invalid TypeScript compiler option"),
+        None => Ok(None),
     }
 }
 
@@ -588,6 +775,84 @@ mod tests {
         .unwrap_or_default();
         assert_eq!(config.source_roots, ["."]);
         assert_eq!(config.include_dirs, ["@/*=src/*"]);
+    }
+
+    #[test]
+    fn typescript_project_scope_preserves_membership_and_module_settings() {
+        let parsed = parse_with_project_scope(
+            "tsconfig.json",
+            r#"{"files":["src/b.ts","src/a.ts"],"include":["src/**/*.ts"],"exclude":["dist"],"compilerOptions":{"outDir":"build","moduleDetection":"legacy","module":"commonjs","jsx":"react-jsx"}}"#,
+        );
+        assert!(
+            parsed
+                .as_ref()
+                .is_some_and(|(_, identity)| identity.is_some())
+        );
+        let Some((_, Some(identity))) = parsed else {
+            return;
+        };
+        assert_eq!(identity.kind, SourceIdentityKind::TypeScriptProject);
+        let config = crate::domain::facts::typescript_project_config(&identity.identity);
+        assert!(config.is_some());
+        let Some(config) = config else { return };
+        assert_eq!(
+            config.files,
+            Some(vec!["src/b.ts".to_owned(), "src/a.ts".to_owned()])
+        );
+        assert_eq!(config.include, Some(vec!["src/**/*.ts".to_owned()]));
+        assert_eq!(config.exclude, Some(vec!["dist".to_owned()]));
+        assert_eq!(config.out_dir.as_deref(), Some("build"));
+        assert_eq!(config.module_detection.as_deref(), Some("legacy"));
+        assert_eq!(config.module.as_deref(), Some("commonjs"));
+        assert_eq!(config.jsx.as_deref(), Some("react-jsx"));
+
+        let default = parse_with_project_scope("tsconfig.json", r#"{"exclude":["build"]}"#)
+            .and_then(|(_, identity)| identity)
+            .and_then(|identity| {
+                crate::domain::facts::typescript_project_config(&identity.identity)
+            });
+        assert!(default.is_some_and(|config| config.files.is_none() && config.include.is_none()));
+
+        for source in [
+            r#"{"extends":"../base/tsconfig.json"}"#,
+            r#"{"include":["src/**/*.ts", 1]}"#,
+            r#"{"compilerOptions":{"moduleDetection":"unknown"}}"#,
+            r#"{"references":[{"path":"../lib"}]}"#,
+            r#"{"compilerOptions":{"outDir":true}}"#,
+        ] {
+            let parsed = parse_with_project_scope("tsconfig.json", source);
+            assert!(
+                parsed
+                    .as_ref()
+                    .is_some_and(|(_, identity)| identity.is_some())
+            );
+            let Some((_, Some(identity))) = parsed else {
+                continue;
+            };
+            assert_eq!(identity.identity, "unproven");
+        }
+    }
+
+    #[test]
+    fn package_json_type_is_captured_or_fails_closed() {
+        for (source, expected) in [
+            (r#"{"type":"module"}"#, "typescript_package:v1:module"),
+            (r#"{"type":"commonjs"}"#, "typescript_package:v1:commonjs"),
+            (r#"{"name":"package"}"#, "typescript_package:v1:absent"),
+            (r#"{"type":1}"#, "unproven"),
+        ] {
+            let parsed = parse_with_project_scope("package.json", source);
+            assert!(
+                parsed
+                    .as_ref()
+                    .is_some_and(|(_, identity)| identity.is_some())
+            );
+            let Some((_, Some(identity))) = parsed else {
+                continue;
+            };
+            assert_eq!(identity.kind, SourceIdentityKind::TypeScriptPackageType);
+            assert_eq!(identity.identity, expected);
+        }
     }
 
     #[test]

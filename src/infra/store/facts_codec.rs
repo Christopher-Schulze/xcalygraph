@@ -452,7 +452,13 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             | SourceIdentityKind::InterfaceGenericFields
             | SourceIdentityKind::TypeScriptAugmentation => facts.symbols.len(),
             SourceIdentityKind::Reference => facts.refs.len(),
-            SourceIdentityKind::TypeScriptScope | SourceIdentityKind::TypeScriptComplexExports => 1,
+            SourceIdentityKind::TypeScriptScope
+            | SourceIdentityKind::TypeScriptComplexExports
+            | SourceIdentityKind::TypeScriptModuleSyntax
+            | SourceIdentityKind::TypeScriptProject
+            | SourceIdentityKind::TypeScriptGlobalAugmentationScope
+            | SourceIdentityKind::TypeScriptPackageType => 1,
+            SourceIdentityKind::TypeScriptGlobalAugmentation => facts.symbols.len(),
         };
         if usize::try_from(index).map_or(true, |index| index >= limit)
             || previous.is_some_and(|previous| previous >= key)
@@ -463,6 +469,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
                     | SourceIdentityKind::InterfaceGroup
                     | SourceIdentityKind::InterfaceGenericFields
                     | SourceIdentityKind::TypeScriptAugmentation
+                    | SourceIdentityKind::TypeScriptGlobalAugmentation
             ) && facts
                 .symbols
                 .get(index as usize)
@@ -492,6 +499,34 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
         }
         if kind == SourceIdentityKind::TypeScriptComplexExports && identity != "complex" {
             return Err(DecodeError("TypeScript exports"));
+        }
+        if kind == SourceIdentityKind::TypeScriptModuleSyntax
+            && !matches!(
+                identity.as_str(),
+                "none" | "indicator" | "jsx" | "incomplete" | "declaration"
+            )
+        {
+            return Err(DecodeError("TypeScript module syntax"));
+        }
+        if kind == SourceIdentityKind::TypeScriptProject
+            && identity != "unproven"
+            && crate::domain::facts::typescript_project_config(&identity).is_none()
+        {
+            return Err(DecodeError("TypeScript project"));
+        }
+        if kind == SourceIdentityKind::TypeScriptPackageType
+            && identity != "unproven"
+            && crate::domain::facts::typescript_package_type(&identity).is_none()
+        {
+            return Err(DecodeError("TypeScript package type"));
+        }
+        if kind == SourceIdentityKind::TypeScriptGlobalAugmentationScope
+            && !matches!(identity.as_str(), "complete" | "unproven")
+        {
+            return Err(DecodeError("TypeScript global augmentation scope"));
+        }
+        if kind == SourceIdentityKind::TypeScriptGlobalAugmentation && identity != "global" {
+            return Err(DecodeError("TypeScript global augmentation"));
         }
         if kind == SourceIdentityKind::InterfaceGroup {
             let canonical = identity
@@ -571,6 +606,39 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
         })
     {
         return Err(DecodeError("TypeScript augmentation evidence"));
+    }
+    let global_scope = identities
+        .iter()
+        .find(|entry| entry.kind == SourceIdentityKind::TypeScriptGlobalAugmentationScope);
+    let global_parts: Vec<_> = identities
+        .iter()
+        .filter(|entry| entry.kind == SourceIdentityKind::TypeScriptGlobalAugmentation)
+        .collect();
+    let module_syntax = identities
+        .iter()
+        .find(|entry| entry.kind == SourceIdentityKind::TypeScriptModuleSyntax);
+    let invalid_global_scope = match global_scope.map(|scope| scope.identity.as_str()) {
+        Some("complete") => module_syntax
+            .is_none_or(|syntax| matches!(syntax.identity.as_str(), "incomplete" | "declaration")),
+        Some("unproven") => !global_parts.is_empty(),
+        None => !global_parts.is_empty(),
+        Some(_) => true,
+    };
+    if invalid_global_scope
+        || global_parts.iter().any(|part| {
+            ![
+                SourceIdentityKind::InterfaceHeader,
+                SourceIdentityKind::InterfaceMembers,
+            ]
+            .iter()
+            .all(|kind| {
+                identities
+                    .iter()
+                    .any(|entry| entry.kind == *kind && entry.index == part.index)
+            })
+        })
+    {
+        return Err(DecodeError("TypeScript global augmentation evidence"));
     }
     if !identities.is_empty() {
         facts.source_identities = Some(identities.into_boxed_slice());
@@ -810,6 +878,121 @@ mod tests {
             .first_mut()
             .ok_or(DecodeError("identity"))?;
         marker.identity = "unknown".to_owned();
+        let mut invalid = Encoder::default();
+        encode(&mut invalid, &facts);
+        assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn typescript_project_and_global_scope_evidence_round_trip_and_reject_corruption()
+    -> DecodeResult<()> {
+        let project = crate::domain::facts::TypeScriptProjectConfig {
+            files: Some(vec!["a.ts".to_owned()]),
+            include: Some(vec!["src/**/*.ts".to_owned()]),
+            exclude: Some(vec!["build".to_owned()]),
+            out_dir: Some("build".to_owned()),
+            module_detection: Some("legacy".to_owned()),
+            module: Some("commonjs".to_owned()),
+            jsx: None,
+        };
+        let mut facts = Facts {
+            symbols: vec![Symbol {
+                kind: Some(SymKind::Iface),
+                name: "Window".to_owned(),
+                ..Symbol::default()
+            }],
+            source_identities: Some(
+                vec![
+                    SourceIdentity {
+                        kind: SourceIdentityKind::InterfaceHeader,
+                        index: 0,
+                        identity: "header".to_owned(),
+                    },
+                    SourceIdentity {
+                        kind: SourceIdentityKind::InterfaceMembers,
+                        index: 0,
+                        identity: "members".to_owned(),
+                    },
+                    SourceIdentity {
+                        kind: SourceIdentityKind::TypeScriptModuleSyntax,
+                        index: 0,
+                        identity: "indicator".to_owned(),
+                    },
+                    SourceIdentity {
+                        kind: SourceIdentityKind::TypeScriptProject,
+                        index: 0,
+                        identity: crate::domain::facts::typescript_project_identity(&project),
+                    },
+                    SourceIdentity {
+                        kind: SourceIdentityKind::TypeScriptGlobalAugmentationScope,
+                        index: 0,
+                        identity: "complete".to_owned(),
+                    },
+                    SourceIdentity {
+                        kind: SourceIdentityKind::TypeScriptGlobalAugmentation,
+                        index: 0,
+                        identity: "global".to_owned(),
+                    },
+                    SourceIdentity {
+                        kind: SourceIdentityKind::TypeScriptPackageType,
+                        index: 0,
+                        identity: "typescript_package:v1:module".to_owned(),
+                    },
+                ]
+                .into_boxed_slice(),
+            ),
+            ..Facts::default()
+        };
+        let mut encoder = Encoder::default();
+        encode(&mut encoder, &facts);
+        assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
+
+        {
+            let identities = facts
+                .source_identities
+                .as_mut()
+                .ok_or(DecodeError("identities"))?;
+            identities
+                .get_mut(5)
+                .ok_or(DecodeError("global identity"))?
+                .identity = "external".to_owned();
+        }
+        let mut invalid = Encoder::default();
+        encode(&mut invalid, &facts);
+        assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
+
+        {
+            let identities = facts
+                .source_identities
+                .as_mut()
+                .ok_or(DecodeError("identities"))?;
+            identities
+                .get_mut(5)
+                .ok_or(DecodeError("global identity"))?
+                .identity = "global".to_owned();
+            identities
+                .get_mut(3)
+                .ok_or(DecodeError("project identity"))?
+                .identity = "typescript_project:v1:invalid".to_owned();
+        }
+        let mut invalid = Encoder::default();
+        encode(&mut invalid, &facts);
+        assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
+        {
+            let identities = facts
+                .source_identities
+                .as_mut()
+                .ok_or(DecodeError("identities"))?;
+            identities
+                .get_mut(3)
+                .ok_or(DecodeError("project identity"))?
+                .identity = crate::domain::facts::typescript_project_identity(&project);
+            identities
+                .get_mut(6)
+                .ok_or(DecodeError("package identity"))?
+                .identity = "typescript_package:v1:invalid".to_owned();
+        }
         let mut invalid = Encoder::default();
         encode(&mut invalid, &facts);
         assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());

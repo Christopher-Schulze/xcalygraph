@@ -530,6 +530,12 @@ fn collect(
     }
     #[cfg(feature = "lang-typescript")]
     if super::lang::typescript::is_typescript_path(path) {
+        let module_syntax = super::lang::typescript::module_syntax(
+            root,
+            source,
+            path,
+            cursor.did_exceed_match_limit(),
+        );
         let mut scope =
             super::lang::typescript::file_scope(root, source, cursor.did_exceed_match_limit());
         let augmentations = if scope == "augmentation" {
@@ -537,6 +543,13 @@ fn collect(
         } else {
             None
         };
+        let global_augmentations = super::lang::typescript::global_augmentation_evidence(
+            root,
+            source,
+            path,
+            cursor.did_exceed_match_limit(),
+            &parsed,
+        );
         if augmentations.is_some() {
             scope = "augmentations";
         }
@@ -554,11 +567,31 @@ fn collect(
             .take()
             .map_or_else(Vec::new, |items| items.into_vec());
         identities.extend(augmentations.into_iter().flatten());
+        let global_scope = match global_augmentations {
+            super::lang::typescript::GlobalAugmentationEvidence::Absent => None,
+            super::lang::typescript::GlobalAugmentationEvidence::Complete(entries) => {
+                identities.extend(entries);
+                Some("complete")
+            }
+            super::lang::typescript::GlobalAugmentationEvidence::Unproven => Some("unproven"),
+        };
+        identities.push(SourceIdentity {
+            kind: SourceIdentityKind::TypeScriptModuleSyntax,
+            index: 0,
+            identity: module_syntax.to_owned(),
+        });
         identities.push(SourceIdentity {
             kind: SourceIdentityKind::TypeScriptScope,
             index: 0,
             identity: scope.to_owned(),
         });
+        if let Some(global_scope) = global_scope {
+            identities.push(SourceIdentity {
+                kind: SourceIdentityKind::TypeScriptGlobalAugmentationScope,
+                index: 0,
+                identity: global_scope.to_owned(),
+            });
+        }
         let mut walker = root.walk();
         if root.named_children(&mut walker).any(|node| {
             node.kind() == "export_statement" && node.child_by_field_name("declaration").is_none()
