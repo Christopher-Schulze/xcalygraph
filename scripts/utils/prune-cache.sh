@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Remove aged, explicitly marked completed runs in known cache categories; report total size.
+# Remove aged, explicitly marked completed runs in known cache categories, compact older evidence
+# runs and report total size.
 # Usage: scripts/utils/prune-cache.sh [AGE_HOURS]  (default 24; 0 selects all marked runs)
 # Unknown entries, candidate symlinks, incomplete runs, snapshots and .keep-protected runs stay.
+# Compaction: in evaluation/, task192-manifests/ and edge-oracle/, runs beyond the newest
+# KEEP_RUNS lose every file except top-level regular files up to 8 MiB (reports, identities,
+# summaries, ledgers); a run containing .keep-full is never compacted.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
@@ -11,6 +15,8 @@ readonly CACHE="${REPO_ROOT}/.cache"
 readonly AGE_HOURS="${1:-24}"
 readonly WARN_KIB=$((3 * 1024 * 1024))
 readonly MARKER=".xcalygraph-disposable"
+readonly KEEP_RUNS=2
+readonly SMALL_KIB=$((8 * 1024))
 
 (( $# <= 1 )) || { echo "usage: prune-cache.sh [AGE_HOURS]" >&2; exit 2; }
 [[ "${AGE_HOURS}" =~ ^[0-9]{1,8}$ ]] || { echo "usage: prune-cache.sh [AGE_HOURS]" >&2; exit 2; }
@@ -24,6 +30,7 @@ fi
 [[ -d "${CACHE}" ]] || { echo "prune-cache.sh: ${CACHE} is not a directory" >&2; exit 1; }
 
 removed=0
+compacted=0
 age_filter=()
 (( age_hours > 0 )) && age_filter=(-mmin "+$((age_hours * 60 - 1))")
 
@@ -64,11 +71,43 @@ if [[ ! -e "${CACHE}/.keep" && ! -L "${CACHE}/.keep" ]]; then
   prune_children "${CACHE}/evaluation" 'run.*' 'sealed.*'
 fi
 
+# Keep reports of older evidence runs, drop their bulky corpora, indexes and builds.
+compact_runs() {
+  local dir="$1" entry file
+  [[ -d "${dir}" && ! -L "${dir}" ]] || return 0
+  local runs=()
+  while IFS= read -r -d '' entry; do runs+=("${entry}"); done < <(python3 -I -c '
+import os, sys
+base = sys.argv[1]
+names = [name for name in os.listdir(base)
+         if name.startswith(("run.", "sealed.")) and os.path.isdir(os.path.join(base, name))
+         and not os.path.islink(os.path.join(base, name))]
+for name in sorted(names, key=lambda name: os.stat(os.path.join(base, name)).st_mtime, reverse=True):
+    sys.stdout.write(os.path.join(base, name) + "\0")
+' "${dir}")
+  local index
+  for (( index = KEEP_RUNS; index < ${#runs[@]}; index++ )); do
+    entry="${runs[index]}"
+    [[ -d "${entry}" && ! -L "${entry}" && ! -e "${entry}/.keep-full" && ! -e "${entry}/.compacted" ]] || continue
+    while IFS= read -r -d '' file; do
+      if [[ -f "${file}" && ! -L "${file}" && "$(du -sk "${file}" | awk '{ print $1 }')" -le SMALL_KIB ]]; then
+        continue
+      fi
+      rm -rf -- "${file}"
+    done < <(find "${entry}" -mindepth 1 -maxdepth 1 -print0)
+    : > "${entry}/.compacted"
+    compacted=$((compacted + 1))
+  done
+}
+compact_runs "${CACHE}/evaluation"
+compact_runs "${CACHE}/task192-manifests"
+compact_runs "${CACHE}/edge-oracle"
+
 if ! size_kib="$(du -sk "${CACHE}" | awk 'NR == 1 { print $1 }')"; then
   echo "prune-cache.sh: cannot measure cache size" >&2
   exit 1
 fi
-echo "prune-cache.sh: removed ${removed} entries, .cache is $((size_kib / 1024)) MiB"
+echo "prune-cache.sh: removed ${removed} entries, compacted ${compacted} runs, .cache is $((size_kib / 1024)) MiB"
 if (( size_kib > WARN_KIB )); then
   echo "prune-cache.sh: .cache exceeds 3 GiB; largest entries:" >&2
   du -sk "${CACHE}"/* "${CACHE}"/*/* 2>/dev/null | sort -rn \

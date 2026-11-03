@@ -156,5 +156,30 @@ with tempfile.TemporaryDirectory(prefix="prune-regression.", dir=base) as tempor
     result = subprocess.run(["bash", str(linked_script), "0"], env=environment, text=True, capture_output=True)
     assert result.returncode != 0 and "not a directory" in result.stderr
     assert (linked_project / ".cache").read_text() == "foreign cache file"
-    print("PASS: age bounds, marked ownership, protected evidence, links, foreign data and size reporting")
+
+    # Compaction keeps the newest two runs whole and only small top-level files of older ones.
+    compact_project = work / "compact"
+    compact_script = compact_project / "scripts/utils/prune-cache.sh"
+    compact_script.parent.mkdir(parents=True)
+    shutil.copyfile(repo / "scripts/utils/prune-cache.sh", compact_script)
+    runs = compact_project / ".cache/evaluation"
+    for age, name in enumerate(("sealed.new", "sealed.mid", "sealed.old", "sealed.pinned")):
+        run = runs / name
+        (run / "corpus").mkdir(parents=True)
+        (run / "corpus/source.txt").write_text("bulk")
+        (run / "report.json").write_text("{}")
+        (run / "index.bin").write_bytes(b"0" * (9 * 1024 * 1024))
+        (run / ".keep").write_text("")
+        stamp = time.time() - 3600 * (age + 1)
+        os.utime(run, (stamp, stamp))
+    (runs / "sealed.pinned/.keep-full").write_text("")
+    os.utime(runs / "sealed.pinned", (time.time() - 3600 * 9, time.time() - 3600 * 9))
+    result = subprocess.run(["bash", str(compact_script)], env=environment, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    for name in ("sealed.new", "sealed.mid", "sealed.pinned"):
+        assert (runs / name / "index.bin").is_file() and (runs / name / "corpus").is_dir(), name
+    old = runs / "sealed.old"
+    assert (old / "report.json").read_text() == "{}" and (old / ".keep").exists() and (old / ".compacted").exists()
+    assert not (old / "index.bin").exists() and not (old / "corpus").exists()
+    print("PASS: age bounds, marked ownership, protected evidence, links, foreign data, size reporting and run compaction")
 PYTHON
