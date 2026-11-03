@@ -14,6 +14,9 @@ Considered and deliberately not in `docs/spec.md`. Each entry names the evidence
 | Live database schema introspection | an owner workflow where schema files in the tree are insufficient |
 | Google Workspace and MCP server ingest | an owner workflow that needs them |
 | Framework entrypoints (HTTP routes, CLI frameworks, job handlers) | evaluation questions about service entrypoints that `map` and `find` miss |
+| Go `//go:embed` pattern resolution to files (directive facts are extracted) | agent questions about embedded assets that `show` on the directive's variable misses |
+| Rust source files declared under several `#[path]` module names | a reference corpus where this pattern produces wrong or missing answers |
+| TypeScript type-system depth beyond declared types (declaration merging across scripts and namespaces, generic substitution, literal key canonicalization) | inferred-edge precision below 85 % or agent-benchmark misses traced to it |
 | Typo-tolerant search | evaluation misses caused by misspelled terms |
 | Search text for text-format documents (Markdown, text, reStructuredText, Org, AsciiDoc, LaTeX, HTML) | evaluation questions about documentation content that `rg` answers worse; indexing it exceeded the index size target and slowed single-file refresh with no gain on code questions |
 | Media durations of WebM, Matroska, MP3 and Ogg | agent questions that need these durations (format is reported) |

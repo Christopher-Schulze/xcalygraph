@@ -33,21 +33,17 @@ Use `exact symbol NAME` in `find`/`ctx`; misses return no match; `ctx` may add r
 
 NAME: `pkg.Type.Method`, `crate::mod::fn`, qualified suffix (`Store.Get`), `path:line`, `path::name`, file path or unique bare name. Paths incl. `./` aliases win collisions; check spelling before trim.
 
-Flags: `-p GLOB` (repeatable, gitignore); `-l go,rust`; `-k fn,method,struct,option`; `--no-tests`; `--exact` (drop inferred); `-d N`; `--all`; `-b N` (hard token cap); `--json`; `--read-only` (no writes; exit 5 if stale); `-C DIR` (root).
+Flags: `-p GLOB` (repeatable, gitignore); `-l go,rust`; `-k fn,method,struct,option`; `--no-tests`; `--exact` (drop inferred); `-d N`; `--all`; `-b N` (hard token cap); `--json` (for programs; text answers more per token); `--read-only` (no writes; exit 5 if stale); `-C DIR` (root).
 
 ## Reading the output
 
 - `<line> <signature>` lines group under file paths.
 - Decode escaped paths/commands before use.
-- Rust: exact `#[path]`; aliases unresolved; members need receiver/trait evidence; opposing `cfg(unix)`/`cfg(not(unix))` gates filter targets.
-- Map JSON: counts, task runs, API sig/handlers, cycle/layer members, env path/line; audit: name/path/line, drift kind/status.
 - Card: `m`=member, `f`=fields, `^`=supertype, `v`=implementation, `<`=caller, `>`=definition, `t`=test, `t2`=test via caller, `e`=env, `!`=notice.
 - `option -x`: `arg=none|required;case=<line|*:line|none|ambiguous>`.
-- Merged interfaces: `show` lists each declaration and members.
-- TS `.d.ts` functions pair with a unique same-module exported `.ts`/`.tsx` function matching full header tokens except final `;`; both searchable; unproven overloads separate.
-- Fields: after transport decoding, split on commas outside JSON-quoted names; `\u` preserves unpaired surrogates.
-- `?`=inferred edges/impact; Python Protocols, Julia typed args, Rust bounds; `--exact` omits them.
-- `impact` runs: Go module/package, Cargo manifest, pytest node ID, quoted args; unsupported runners: `t`, no `r`.
+- A symbol declared in several places lists each location.
+- `?`=inferred (heuristic) edge or impact; `--exact` omits them.
+- `impact`: `t`=test reaching the change, `r`=command that runs it; no `r` = no supported runner.
 - `impact --diff`: removals cite REV path:line; `moved?`=locations; `sig?`=inferred signature change; `uncertain?`=ambiguous/missing identity. Sensitive/oversized/nonregular sides are path-only; missing REV blobs error; inspect beyond filters.
 - Truncation: `+N more`, `+N`, `+` or JSON `{}`; narrow with filters or raise `-b`.
 - Shared-index failure: use local `.xcalygraph/`; ignore it in git.
