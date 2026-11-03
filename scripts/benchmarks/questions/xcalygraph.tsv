@@ -21,7 +21,7 @@ verify the checksum of an index container	src/infra/store/container.rs::validate
 dispatch extraction to the language pack of a file	src/extract/lang/mod.rs::lookup
 attach doc comments to definitions	src/extract/engine.rs::doc_comment
 cut a definition signature before its body	src/extract/engine.rs::signature
-go types satisfying interfaces by method set	src/resolve/mod.rs::go_structural_implementations
+go types satisfying interfaces by method set	src/resolve/go.rs::go_structural_implementations
 compute layers of the module dependency graph	src/resolve/derive.rs::layers
 shortest dependency path between two symbols	src/app/query/path.rs::shortest
 resolve a name given as path and line	src/app/query/names.rs::at_line
