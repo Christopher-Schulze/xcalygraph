@@ -62,10 +62,11 @@ curl -fsSL -o "${work}/SHA256SUMS" "${base}/SHA256SUMS" || die "download failed:
 
 say "verifying SHA-256"
 expected="$(awk -v file="${name}.tar.gz" '$2 == file || $2 == "*" file { print $1 }' "${work}/SHA256SUMS")"
+# Hash from stdin: GNU sha256sum escapes the output line when the path holds `\` or a newline.
 if command -v sha256sum >/dev/null; then
-  actual="$(sha256sum "${work}/${name}.tar.gz" | awk '{ print $1 }')"
+  actual="$(sha256sum < "${work}/${name}.tar.gz" | awk '{ print $1 }')"
 else
-  actual="$(shasum -a 256 "${work}/${name}.tar.gz" | awk '{ print $1 }')"
+  actual="$(shasum -a 256 < "${work}/${name}.tar.gz" | awk '{ print $1 }')"
 fi
 [[ -n "${expected}" ]] || die "SHA256SUMS lists no ${name}.tar.gz"
 [[ "${expected}" == "${actual}" ]] || die "checksum mismatch for ${name}.tar.gz"
