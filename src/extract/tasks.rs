@@ -10,6 +10,48 @@ use crate::domain::facts::{self, Facts, NO_ARITY, Ref, RefKind, SymKind, Symbol}
 const SCRIPT_EXTENSIONS: [&str; 11] = [
     ".sh", ".bash", ".py", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl", ".ps1", ".go",
 ];
+const SCRIPT_INTERPRETERS: [&str; 20] = [
+    "sh",
+    "bash",
+    "dash",
+    "zsh",
+    "ksh",
+    "python",
+    "python2",
+    "python3",
+    "node",
+    "deno",
+    "bun",
+    "tsx",
+    "vite-node",
+    "ts-node",
+    "ruby",
+    "perl",
+    "pwsh",
+    "powershell",
+    "pwsh.exe",
+    "powershell.exe",
+];
+const COMMAND_WRAPPERS: [&str; 9] = [
+    "command",
+    "cross-env",
+    "env",
+    "exec",
+    "nohup",
+    "npx",
+    "sudo",
+    "time",
+    "bunx",
+];
+const NYC_OPTIONS_WITH_VALUE: [&str; 7] = [
+    "--exclude",
+    "--include",
+    "--extension",
+    "--reporter",
+    "--reporter-options",
+    "--temp-dir",
+    "--cache-dir",
+];
 
 fn push_symbol(
     facts: &mut Facts,
@@ -55,63 +97,299 @@ fn push_run(facts: &mut Facts, scope: Option<u32>, name: &str, qualifier: Option
     }
 }
 
+fn is_script_path(path: &str) -> bool {
+    let path = path.trim_matches(|ch| ch == '"' || ch == '\'');
+    !path.starts_with('-')
+        && !path.contains("://")
+        && SCRIPT_EXTENSIONS
+            .iter()
+            .any(|extension| path.ends_with(extension))
+}
+
+fn is_shell_assignment(word: &str) -> bool {
+    let Some((name, _)) = word.split_once('=') else {
+        return false;
+    };
+    let mut bytes = name.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn command_index(words: &[&str]) -> usize {
+    let mut index = 0;
+    while let Some(word) = words.get(index) {
+        if is_shell_assignment(word)
+            || matches!(*word, "do" | "if" | "then" | "!" | "{" | "(")
+            || COMMAND_WRAPPERS.contains(word)
+        {
+            index += 1;
+        } else if *word == "nyc" {
+            index += 1;
+            while let Some(argument) = words.get(index) {
+                if is_shell_assignment(argument) {
+                    index += 1;
+                    continue;
+                }
+                if argument.starts_with('-') {
+                    let consumes_value =
+                        NYC_OPTIONS_WITH_VALUE.contains(argument) && !argument.contains('=');
+                    index += 1;
+                    if consumes_value && index < words.len() {
+                        index += 1;
+                    }
+                    continue;
+                }
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    index
+}
+
+fn command_program(command: &str) -> &str {
+    command
+        .trim_matches(|ch| ch == '"' || ch == '\'')
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default()
+}
+
+fn interpreter_script<'a>(program: &str, args: &'a [&'a str]) -> Option<&'a str> {
+    let mut index = 0;
+    while let Some(option) = args.get(index).copied() {
+        if !option.starts_with('-') {
+            break;
+        }
+        if matches!(
+            (program, option),
+            ("sh" | "bash" | "dash" | "zsh" | "ksh", "-c" | "--command")
+                | ("python" | "python2" | "python3", "-c" | "-m")
+                | ("node", "-e" | "--eval" | "-p" | "--print")
+                | ("ruby" | "perl", "-e")
+                | (
+                    "pwsh" | "pwsh.exe" | "powershell" | "powershell.exe",
+                    "-Command" | "-c"
+                )
+        ) {
+            return None;
+        }
+        if matches!(
+            (program, option),
+            (
+                "node",
+                "--require"
+                    | "-r"
+                    | "--import"
+                    | "--loader"
+                    | "--experimental-loader"
+                    | "--test-reporter"
+                    | "--test-name-pattern"
+                    | "--conditions"
+                    | "--input-type"
+                    | "--env-file"
+            ) | ("python" | "python2" | "python3", "-W" | "-X")
+                | (
+                    "sh" | "bash" | "dash" | "zsh" | "ksh",
+                    "-o" | "-O" | "--rcfile" | "--init-file"
+                )
+                | ("tsx" | "ts-node" | "vite-node", "--tsconfig" | "--config")
+        ) {
+            index += 2;
+            continue;
+        }
+        let boolean_option = match program {
+            "sh" | "bash" | "dash" | "zsh" | "ksh" => {
+                option.strip_prefix('-').is_some_and(|flags| {
+                    !flags.is_empty()
+                        && flags.chars().all(|flag| {
+                            matches!(
+                                flag,
+                                'a' | 'b'
+                                    | 'e'
+                                    | 'f'
+                                    | 'h'
+                                    | 'k'
+                                    | 'm'
+                                    | 'n'
+                                    | 'p'
+                                    | 't'
+                                    | 'u'
+                                    | 'v'
+                                    | 'x'
+                                    | 'B'
+                                    | 'C'
+                                    | 'E'
+                                    | 'H'
+                                    | 'P'
+                                    | 'T'
+                            )
+                        })
+                })
+            }
+            "python" | "python2" | "python3" => matches!(
+                option,
+                "-B" | "-d"
+                    | "-E"
+                    | "-I"
+                    | "-O"
+                    | "-OO"
+                    | "-P"
+                    | "-q"
+                    | "-s"
+                    | "-S"
+                    | "-u"
+                    | "-v"
+                    | "-V"
+                    | "-VV"
+                    | "-i"
+            ),
+            "node" => matches!(
+                option,
+                "--test"
+                    | "--watch"
+                    | "--no-warnings"
+                    | "--trace-warnings"
+                    | "--experimental-strip-types"
+            ),
+            _ => false,
+        };
+        if boolean_option || option.contains('=') {
+            index += 1;
+            continue;
+        }
+        return None;
+    }
+    args.get(index).copied().filter(|path| is_script_path(path))
+}
+
+fn invoked_script<'a>(program: &str, command: &'a str, args: &'a [&'a str]) -> Option<&'a str> {
+    match program {
+        "." | "source" => args.first().copied().filter(|path| is_script_path(path)),
+        "bun" if args.first() == Some(&"test") => {
+            args.get(1).copied().filter(|path| is_script_path(path))
+        }
+        "npm" if args.first() == Some(&"test") && args.get(1) == Some(&"--") => {
+            args.get(2).copied().filter(|path| is_script_path(path))
+        }
+        "deno" if args.first() == Some(&"run") => interpreter_script(program, &args[1..]),
+        _ if is_script_path(command) => Some(command),
+        _ if SCRIPT_INTERPRETERS.contains(&program) => interpreter_script(program, args),
+        _ => None,
+    }
+}
+
+fn task_runner_refs(facts: &mut Facts, scope: Option<u32>, words: &[&str], line: u32) {
+    let index = command_index(words);
+    let Some(program) = words.get(index).copied() else {
+        return;
+    };
+    let args = &words[index + 1..];
+    let next = args.first().copied().unwrap_or_default();
+    match program {
+        "make" | "$(MAKE)" | "${MAKE}" | "gmake" => {
+            for target in args
+                .iter()
+                .take_while(|word| !word.starts_with('-') && !word.contains('='))
+            {
+                push_run(facts, scope, target, Some("make"), line);
+            }
+        }
+        "npm" | "pnpm" | "bun" if matches!(next, "run" | "run-script") => {
+            if let Some(script) = args.get(1) {
+                if program == "bun" && is_script_path(script) {
+                    push_run(facts, scope, script, None, line);
+                } else {
+                    push_run(facts, scope, script, Some("npm"), line);
+                }
+            }
+        }
+        "npm" if next == "test" => {
+            push_run(facts, scope, "test", Some("npm"), line);
+            if args.get(1) == Some(&"--")
+                && let Some(script) = args.get(2).filter(|path| is_script_path(path))
+            {
+                push_run(facts, scope, script, None, line);
+            }
+        }
+        "bun" if next == "test" => {
+            if let Some(script) = args.get(1).filter(|path| is_script_path(path)) {
+                push_run(facts, scope, script, None, line);
+            }
+        }
+        "yarn"
+            if !next.is_empty()
+                && !next.starts_with('-')
+                && !matches!(next, "install" | "add" | "remove") =>
+        {
+            let script = if next == "run" {
+                args.get(1).copied().unwrap_or_default()
+            } else {
+                next
+            };
+            push_run(facts, scope, script, Some("npm"), line);
+        }
+        "go" if next == "run" => {
+            if let Some(target) = args[1..].iter().find(|word| !word.starts_with('-')) {
+                push_run(facts, scope, target, None, line);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn bundle_pipeline_script<'a>(pipeline: &'a [&'a str]) -> Option<&'a str> {
+    let consumer = pipeline.last()?;
+    let consumer_words: Vec<&str> = consumer.split_whitespace().collect();
+    let consumer_index = command_index(&consumer_words);
+    let consumer_program = command_program(consumer_words.get(consumer_index)?);
+    if !matches!(consumer_program, "node" | "bun")
+        || consumer_words[consumer_index + 1..]
+            .iter()
+            .any(|word| is_script_path(word))
+    {
+        return None;
+    }
+    let producer = pipeline.first()?;
+    let producer_words: Vec<&str> = producer.split_whitespace().collect();
+    let producer_index = command_index(&producer_words);
+    if command_program(producer_words.get(producer_index)?) != "esbuild"
+        || !producer_words[producer_index + 1..].contains(&"--bundle")
+    {
+        return None;
+    }
+    producer_words[producer_index + 1..]
+        .iter()
+        .copied()
+        .find(|word| is_script_path(word))
+}
+
 /// Scripts, directories run with `go run`, Makefile targets (`make t`) and package scripts
 /// (`npm run t`, `yarn t`, `pnpm t`) named in a shell command.
 pub(super) fn command_runs(facts: &mut Facts, scope: Option<u32>, command: &str, line: u32) {
-    for part in command.split(['&', ';', '|', '\n']) {
-        let words: Vec<&str> = part.split_whitespace().collect();
-        for (index, word) in words.iter().enumerate() {
-            let next = words.get(index + 1).copied().unwrap_or_default();
-            match *word {
-                "make" | "$(MAKE)" | "${MAKE}" | "gmake" => {
-                    for target in words[index + 1..]
-                        .iter()
-                        .take_while(|word| !word.starts_with('-') && !word.contains('='))
-                    {
-                        push_run(facts, scope, target, Some("make"), line);
-                    }
-                }
-                "npm" | "pnpm" | "bun" if matches!(next, "run" | "run-script") => {
-                    if let Some(script) = words.get(index + 2) {
-                        push_run(facts, scope, script, Some("npm"), line);
-                    }
-                }
-                "npm" if next == "test" => push_run(facts, scope, "test", Some("npm"), line),
-                "yarn"
-                    if !next.is_empty()
-                        && !next.starts_with('-')
-                        && !matches!(next, "install" | "add" | "remove") =>
-                {
-                    let script = if next == "run" {
-                        words.get(index + 2).copied().unwrap_or_default()
-                    } else {
-                        next
-                    };
-                    push_run(facts, scope, script, Some("npm"), line);
-                }
-                "go" if next == "run" => {
-                    if let Some(target) = words[index + 2..]
-                        .iter()
-                        .find(|word| !word.starts_with('-'))
-                    {
-                        push_run(facts, scope, target, None, line);
-                    }
-                }
-                _ => {
-                    let path = word.trim_matches(|ch| ch == '"' || ch == '\'');
-                    let script = SCRIPT_EXTENSIONS
-                        .iter()
-                        .any(|extension| path.ends_with(extension));
-                    let relative = path.starts_with("./") || path.contains('/');
-                    if script
-                        && (relative || index > 0)
-                        && !path.starts_with('-')
-                        && !path.contains("://")
-                    {
-                        push_run(facts, scope, path, None, line);
-                    }
-                }
+    for part in command.split(['&', ';', '\n']) {
+        let pipeline: Vec<&str> = part.split('|').collect();
+        for segment in &pipeline {
+            let words: Vec<&str> = segment.split_whitespace().collect();
+            if words.is_empty() {
+                continue;
             }
+            task_runner_refs(facts, scope, &words, line);
+            let index = command_index(&words);
+            let Some(command) = words.get(index).copied() else {
+                continue;
+            };
+            let program = command_program(command);
+            if let Some(script) = invoked_script(program, command, &words[index + 1..]) {
+                push_run(facts, scope, script, None, line);
+            }
+        }
+        if let Some(script) = bundle_pipeline_script(&pipeline) {
+            push_run(facts, scope, script, None, line);
         }
     }
 }
@@ -624,5 +902,64 @@ mod tests {
                 "6 api -> db"
             ]
         );
+    }
+
+    #[test]
+    fn workflow_copying_a_script_does_not_emit_a_run() {
+        let mut facts = Facts::default();
+        yaml(
+            ".github/workflows/release.yml",
+            concat!(
+                "jobs:\n",
+                "  release:\n",
+                "    steps:\n",
+                "      - run: |\n",
+                "          cp ../scripts/utils/install.sh install.sh\n",
+                "          echo nvm.sh sourced\n",
+                "          echo npm test\n",
+                "          echo make lint\n",
+                "          echo go run ./cmd/main.go\n",
+                "          bash -e scripts/tests/test.sh\n",
+                "          source scripts/utils/environment.sh\n",
+                "          . ./nvm.sh\n",
+                "          sudo ./install.sh /usr/ lib64\n",
+                "          nohup npm run server >/dev/null 2>&1 &\n",
+                "          if ! ./.github/workflows/check_pr_label.sh 1 no; then echo no; fi\n",
+                "          GRAPHIFY_TEST_CLI=graphify bun test tests/pi.test.ts\n",
+                "          bun run src/benchmark.ts\n",
+                "          node --test test/browser.ts\n",
+                "          npm test -- test/browser.ts\n",
+                "          tsx ./mock-server.ts\n",
+                "          vite-node ./server.ts\n",
+                "          node --require ./preload.js scripts/app.js\n",
+                "          vitest run --config vitest.config.js --project module\n",
+                "          nyc --reporter=text npm test\n",
+                "          esbuild --bundle src/main.ts | node\n",
+            ),
+            &mut facts,
+        );
+
+        let (_, mut runs) = summary(&facts);
+        runs.sort();
+        let mut expected = [
+            "4 release -> scripts/tests/test.sh",
+            "4 release -> scripts/utils/environment.sh",
+            "4 release -> ./nvm.sh",
+            "4 release -> ./install.sh",
+            "4 release -> npm:server",
+            "4 release -> ./.github/workflows/check_pr_label.sh",
+            "4 release -> tests/pi.test.ts",
+            "4 release -> src/benchmark.ts",
+            "4 release -> test/browser.ts",
+            "4 release -> npm:test",
+            "4 release -> ./mock-server.ts",
+            "4 release -> ./server.ts",
+            "4 release -> scripts/app.js",
+            "4 release -> src/main.ts",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        expected.sort();
+        assert_eq!(runs, expected);
     }
 }

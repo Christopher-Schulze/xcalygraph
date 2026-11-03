@@ -16,7 +16,8 @@ pub struct ModuleInfo {
     pub name: String,
     /// Separator of qualified names (`.` or `::`).
     pub separator: &'static str,
-    /// Scope of method lookup by owner type: the crate for Rust, else the module itself.
+    /// Scope of method lookup by owner type: the Cargo target for Rust when identified, else the
+    /// crate; for other languages, the module itself.
     pub method_scope: String,
     pub file_type: Option<FileType>,
 }
@@ -107,28 +108,32 @@ pub fn assign(files: &[FileRecord], facts: &[Option<Facts>]) -> ModuleMap {
         rust_path_modules: HashMap::new(),
     };
     let rust_path_refs = rust_module_path_refs(facts);
-    if rust_path_refs.is_empty() {
-        for (record, file_facts) in files.iter().zip(facts) {
-            let info = module_of(&map, record, file_facts.as_ref());
-            let id = insert_module(&mut map, info);
-            map.file_module.push(id);
-        }
-        return map;
-    }
+    let (root_scopes, target_scopes) = rust_target_method_scopes(files, &map);
     let base_infos: Vec<ModuleInfo> = files
         .iter()
         .zip(facts)
         .map(|(record, facts)| module_of(&map, record, facts.as_ref()))
         .collect();
+    if rust_path_refs.is_empty() {
+        for (record, mut info) in files.iter().zip(base_infos) {
+            apply_rust_target_method_scope(record, &map, &root_scopes, &target_scopes, &mut info);
+            let id = insert_module(&mut map, info);
+            map.file_module.push(id);
+        }
+        return map;
+    }
     map.rust_path_targets =
         resolve_rust_path_targets(files, facts, &map, &base_infos, &rust_path_refs);
-    let (infos, valid_modules) = rust_module_overrides(
+    let (mut infos, valid_modules) = rust_module_overrides(
         files,
         &map,
         &base_infos,
         &rust_path_refs,
         &map.rust_path_targets,
     );
+    for (record, info) in files.iter().zip(&mut infos) {
+        apply_rust_target_method_scope(record, &map, &root_scopes, &target_scopes, info);
+    }
     for info in infos {
         let id = insert_module(&mut map, info);
         map.file_module.push(id);
@@ -155,6 +160,127 @@ pub fn assign(files: &[FileRecord], facts: &[Option<Facts>]) -> ModuleMap {
         }
     }
     map
+}
+
+/// Finds independent Cargo target scopes without treating the library and default binary roots as
+/// separate aliases of a shared physical module tree.
+fn rust_target_method_scopes(
+    files: &[FileRecord],
+    map: &ModuleMap,
+) -> (
+    HashMap<String, Option<String>>,
+    HashMap<String, Option<String>>,
+) {
+    let mut roots = HashMap::new();
+    let mut targets = HashMap::new();
+    for (path, kind) in &map.rust_target_roots {
+        if *kind == CargoRootKind::Target {
+            record_rust_target_scope(map, path, &mut roots, &mut targets);
+        }
+    }
+    for record in files {
+        if record.file_type != Some(FileType::Rust)
+            || map.rust_target_roots.contains_key(&record.path)
+        {
+            continue;
+        }
+        let (crate_dir, _) = rust_crate(map, &record.path);
+        if !map.crates.iter().any(|(dir, _)| dir == &crate_dir) {
+            continue;
+        }
+        let relative = record
+            .path
+            .strip_prefix(crate_dir.as_str())
+            .unwrap_or(&record.path)
+            .trim_start_matches('/');
+        if rust_is_crate_root(relative) && !matches!(relative, "lib.rs" | "main.rs") {
+            record_rust_target_scope(map, &record.path, &mut roots, &mut targets);
+        }
+    }
+    (roots, targets)
+}
+
+fn record_rust_target_scope(
+    map: &ModuleMap,
+    path: &str,
+    roots: &mut HashMap<String, Option<String>>,
+    targets: &mut HashMap<String, Option<String>>,
+) {
+    let (crate_dir, crate_name) = rust_crate(map, path);
+    if !map.crates.iter().any(|(dir, _)| dir == &crate_dir) {
+        return;
+    }
+    let relative = path
+        .strip_prefix(crate_dir.as_str())
+        .unwrap_or(path)
+        .trim_start_matches('/');
+    let target = rust_target(relative);
+    if target.is_empty() {
+        return;
+    }
+    let scope = format!("{crate_name}::target:{path}");
+    record_unique_scope(roots, path.to_owned(), scope.clone());
+    record_unique_scope(targets, format!("{crate_dir}\0{target}"), scope);
+}
+
+fn record_unique_scope(scopes: &mut HashMap<String, Option<String>>, key: String, scope: String) {
+    if let Some(existing) = scopes.get_mut(&key) {
+        if existing.as_deref() != Some(scope.as_str()) {
+            *existing = None;
+        }
+    } else {
+        scopes.insert(key, Some(scope));
+    }
+}
+
+fn apply_rust_target_method_scope(
+    record: &FileRecord,
+    map: &ModuleMap,
+    roots: &HashMap<String, Option<String>>,
+    targets: &HashMap<String, Option<String>>,
+    info: &mut ModuleInfo,
+) {
+    if record.file_type != Some(FileType::Rust) || info.method_scope.starts_with("file:") {
+        return;
+    }
+    match roots.get(&record.path) {
+        Some(Some(scope)) => {
+            info.method_scope.clone_from(scope);
+            return;
+        }
+        Some(None) => return,
+        None => {}
+    }
+    let (crate_dir, _) = rust_crate(map, &record.path);
+    if !map.crates.iter().any(|(dir, _)| dir == &crate_dir) {
+        return;
+    }
+    let relative = record
+        .path
+        .strip_prefix(crate_dir.as_str())
+        .unwrap_or(&record.path)
+        .trim_start_matches('/');
+    let mut prefix = rust_target(relative);
+    let mut found = None;
+    loop {
+        let key = format!("{crate_dir}\0{prefix}");
+        if let Some(scope) = targets.get(&key) {
+            let Some(scope) = scope else {
+                return;
+            };
+            if found.is_some() {
+                return;
+            }
+            found = Some(scope);
+        }
+        let Some((parent, _)) = prefix.rsplit_once("::") else {
+            break;
+        };
+        prefix = parent.to_owned();
+    }
+    if let Some(scope) = found {
+        info.method_scope.clone_from(scope);
+    }
 }
 
 fn insert_module(map: &mut ModuleMap, info: ModuleInfo) -> u32 {

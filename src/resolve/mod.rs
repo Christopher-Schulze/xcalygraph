@@ -31,7 +31,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 85;
+pub const RESOLVE_VERSION: u32 = 97;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -2502,6 +2502,55 @@ impl<'a> Index<'a> {
             .collect()
     }
 
+    fn python_stub_implementations(
+        &self,
+        base: u32,
+        name: &str,
+        arity: u8,
+        caller_is_test: bool,
+    ) -> Option<Vec<u32>> {
+        let mut pending = vec![base];
+        let mut visited = HashSet::default();
+        visited.insert(base);
+        let mut targets = Vec::new();
+        let mut target_set = HashSet::default();
+        let mut cursor = 0;
+        while cursor < pending.len() {
+            let current = pending[cursor];
+            cursor += 1;
+            for &implementation in self.implementations.get(&current).into_iter().flatten() {
+                if !visited.insert(implementation)
+                    || self.file_type(self.symbols[implementation as usize].file)
+                        != Some(FileType::Python)
+                    || self.symbols[implementation as usize].kind != SymKind::Class
+                    || (!caller_is_test && self.is_test(implementation))
+                {
+                    continue;
+                }
+                pending.push(implementation);
+                let concrete: Vec<u32> = self
+                    .members_direct(implementation, name)
+                    .into_iter()
+                    .filter(|&method| self.symbols[method as usize].parent == implementation)
+                    .filter(|&method| {
+                        self.symbols[method as usize].flags & facts::FLAG_PYTHON_ABSTRACT_STUB == 0
+                    })
+                    .collect();
+                let (selected, _) = self.overloads(&concrete, arity);
+                for method in selected {
+                    if target_set.insert(method) {
+                        targets.push(method);
+                        if targets.len() > MAX_DISPATCH {
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+        targets.sort_unstable();
+        Some(targets)
+    }
+
     /// Members `name` declared in the body of `type_symbol`: JVM types of one package may share a
     /// simple name (nested `Builder` classes), so the owner name alone is ambiguous.
     fn declared_members(&self, type_symbol: u32, name: &str) -> Vec<u32> {
@@ -3093,6 +3142,14 @@ impl<'a> Index<'a> {
         for (reference_index, reference) in facts.refs.iter().enumerate() {
             let local_reference = u32::try_from(reference_index).ok();
             let source = reference.scope.map_or(file_node, |scope| base + scope);
+            let source_rust_cfg = if self.file_type(file) == Some(FileType::Rust)
+                && source < self.symbols.len() as u32
+            {
+                self.symbols[source as usize].flags
+                    & (facts::FLAG_RUST_CFG_UNIX | facts::FLAG_RUST_CFG_NOT_UNIX)
+            } else {
+                0
+            };
             let source_identity = local_reference
                 .and_then(|index| facts.source_identity(SourceIdentityKind::Reference, index));
             let julia_builtin = local_reference.filter(|&index| {
@@ -3147,7 +3204,13 @@ impl<'a> Index<'a> {
             match outcome {
                 Outcome::Targets(targets, confidence) => {
                     let source_is_test =
-                        file_is_test || (source < file_node && self.is_test(source));
+                        if self.file_type(file) == Some(FileType::Rust) && source < file_node {
+                            let flags = self.symbols[source as usize].flags;
+                            flags & (facts::FLAG_TEST | facts::FLAG_ENTRY)
+                                == facts::FLAG_TEST | facts::FLAG_ENTRY
+                        } else {
+                            file_is_test || (source < file_node && self.is_test(source))
+                        };
                     let mut kind = match reference.kind {
                         RefKind::Call => EdgeKind::Calls,
                         RefKind::Value => EdgeKind::Uses,
@@ -3170,8 +3233,36 @@ impl<'a> Index<'a> {
                                 target_confidence,
                             )
                         })
+                        .filter(|(target, _)| {
+                            let Some(target_symbol) = self.symbols.get(*target as usize) else {
+                                return true;
+                            };
+                            if source_rust_cfg == 0
+                                || self.file_type(target_symbol.file) != Some(FileType::Rust)
+                            {
+                                return true;
+                            }
+                            let target_rust_cfg = target_symbol.flags
+                                & (facts::FLAG_RUST_CFG_UNIX | facts::FLAG_RUST_CFG_NOT_UNIX);
+                            !((source_rust_cfg & facts::FLAG_RUST_CFG_UNIX != 0
+                                && target_rust_cfg & facts::FLAG_RUST_CFG_NOT_UNIX != 0)
+                                || (source_rust_cfg & facts::FLAG_RUST_CFG_NOT_UNIX != 0
+                                    && target_rust_cfg & facts::FLAG_RUST_CFG_UNIX != 0))
+                        })
                         .collect();
                     for (target, target_confidence) in targets {
+                        // Go T(x) converts a value when T resolves to a type; it does not call T.
+                        let kind = if reference.kind == RefKind::Call
+                            && self.file_type(file) == Some(FileType::Go)
+                            && self
+                                .symbols
+                                .get(target as usize)
+                                .is_some_and(|s| s.kind.is_type())
+                        {
+                            EdgeKind::Uses
+                        } else {
+                            kind
+                        };
                         if target == source || self.is_trivial(source, target, kind) {
                             continue;
                         }
@@ -4202,6 +4293,17 @@ impl<'a> Index<'a> {
         wants_type: bool,
     ) -> Outcome {
         let name = reference.name.as_str();
+        if !wants_type
+            && reference.kind == RefKind::Call
+            && self.file_type(file) == Some(FileType::Rust)
+            && self
+                .binding(file, reference.scope, name, reference.line)
+                .is_some()
+        {
+            // A Rust local value shadows items in the call namespace even when its type is
+            // unknown; do not bind a closure call to a same-named function elsewhere.
+            return Outcome::External;
+        }
         if let Some(outcome) = self.global_name(file, imports, reference) {
             return outcome;
         }
@@ -4352,6 +4454,33 @@ impl<'a> Index<'a> {
             .filter(|&s| kind_ok(s))
             .collect();
         if !same.is_empty() {
+            if self.file_type(file) == Some(FileType::Python)
+                && reference.kind == RefKind::Call
+                && same.len() > 1
+            {
+                // Function bodies look up module globals at call time, so the last definition
+                // wins. Module and class bodies execute immediately and see only definitions so
+                // far.
+                let function_body = reference
+                    .scope
+                    .is_some_and(|scope| self.symbols[scope as usize].kind.is_callable());
+                let latest = same
+                    .iter()
+                    .copied()
+                    .filter(|&symbol| {
+                        function_body || self.symbols[symbol as usize].line <= reference.line
+                    })
+                    .max_by_key(|&symbol| (self.symbols[symbol as usize].line, symbol));
+                let Some(latest) = latest else {
+                    return Outcome::Unresolved;
+                };
+                let confidence = if function_body {
+                    Confidence::Inferred
+                } else {
+                    Confidence::Exact
+                };
+                return Outcome::Targets(vec![(latest, confidence)], confidence);
+            }
             if same.len() > 1
                 && self.file_type(file) == Some(FileType::Go)
                 && self.build_variants(&same)
@@ -4481,6 +4610,16 @@ impl<'a> Index<'a> {
     ) -> Outcome {
         let name = reference.name.as_str();
         let rust = self.file_type(file) == Some(FileType::Rust);
+        let is_static_method = |member: u32| {
+            let symbol = &self.symbols[member as usize];
+            symbol.kind == SymKind::Method
+                && symbol
+                    .signature
+                    .split_once(&symbol.name)
+                    .is_some_and(|(prefix, _)| {
+                        prefix.split_whitespace().any(|part| part == "static")
+                    })
+        };
         if reference.kind == RefKind::Type && jvm::is_class_based(self.file_type(file)) {
             // `Outer.Inner`, `pkg.Type`, `Map.Entry`: a type or nothing, never a member.
             return match self.resolve_type(
@@ -4530,6 +4669,24 @@ impl<'a> Index<'a> {
                 .binding(file, reference.scope, head, reference.line)
                 .is_some();
         let plain_head = chain.len() == 1 && is_identifier(head) && !shadowed;
+        // `this` resolves to its owner type for member lookup, but is an instance value.
+        if plain_head
+            && head != "this"
+            && reference.kind == RefKind::Call
+            && matches!(
+                self.file_type(file),
+                Some(FileType::JavaScript | FileType::TypeScript)
+            )
+            && let Some((types, confidence)) =
+                self.resolve_type(file, Some(imports), reference.scope, head)
+        {
+            let static_methods: Vec<u32> = types
+                .iter()
+                .flat_map(|&type_symbol| self.members(type_symbol, name))
+                .filter(|&member| is_static_method(member))
+                .collect();
+            return pick_members(self, static_methods, confidence, reference.arity);
+        }
         if (plain_head || (rust && qualifier.contains("::")))
             && let Some(found) = self.qualified_symbols(file, Some(imports), qualifier, name)
         {
@@ -4585,6 +4742,7 @@ impl<'a> Index<'a> {
                 name: String::new(),
                 type_name: format!("{callee}()"),
                 line: reference.line,
+                scope_end_line: None,
                 declared: false,
             };
             if let Some((types, _)) = self.binding_type(file, imports, reference.scope, &binding) {
@@ -4633,9 +4791,46 @@ impl<'a> Index<'a> {
             if let Receiver::Known(types, confidence) = receiver {
                 let mut targets = Vec::new();
                 for &type_symbol in &types {
-                    let (direct, overload) =
-                        self.overloads(&self.members(type_symbol, name), reference.arity);
-                    targets.extend(direct.iter().map(|&member| (member, overload)));
+                    let members = self.members(type_symbol, name);
+                    let members = if matches!(
+                        self.file_type(file),
+                        Some(FileType::JavaScript | FileType::TypeScript)
+                    ) {
+                        members
+                            .into_iter()
+                            .filter(|&member| !is_static_method(member))
+                            .collect()
+                    } else {
+                        members
+                    };
+                    let (direct, overload) = self.overloads(&members, reference.arity);
+                    let python_contract_stub = self.file_type(file) == Some(FileType::Python)
+                        && !direct.is_empty()
+                        && direct.iter().all(|&member| {
+                            self.symbols[member as usize].flags & facts::FLAG_PYTHON_ABSTRACT_STUB
+                                != 0
+                        });
+                    if python_contract_stub {
+                        let caller_is_test = self.input.files[file as usize].role == Role::Test
+                            || reference.scope.is_some_and(|scope| {
+                                self.is_test(self.base[file as usize] + scope)
+                            });
+                        let Some(implementations) = self.python_stub_implementations(
+                            type_symbol,
+                            name,
+                            reference.arity,
+                            caller_is_test,
+                        ) else {
+                            return Outcome::Ambiguous;
+                        };
+                        targets.extend(
+                            implementations
+                                .into_iter()
+                                .map(|method| (method, Confidence::Inferred)),
+                        );
+                    } else {
+                        targets.extend(direct.iter().map(|&member| (member, overload)));
+                    }
                     // 6. Abstract receiver or C++ virtual member: every implementation, inferred.
                     let virtual_member = self.file_type(self.symbols[type_symbol as usize].file)
                         == Some(FileType::Cpp)
@@ -4694,17 +4889,22 @@ impl<'a> Index<'a> {
         {
             return extension;
         }
-        // 7. Unique method name in the root, unless the name is too common to trust.
-        if is_common_member(name) {
+        // Rust member resolution needs receiver, trait-bound or explicit-path evidence.
+        // A unique method elsewhere in the crate cannot prove an unknown receiver implements it.
+        if rust {
             return Outcome::Unresolved;
         }
-        // Go method sets come from the types of imported packages; other languages may reach
-        // methods of any type in the root.
-        // Methods come from types of the own and imported modules; Rust trait methods may live
-        // anywhere in the crate, languages without module rules anywhere in the root.
-        let reach = if has_module_rules(self.file_type(file))
-            && self.file_type(file) != Some(FileType::Rust)
+        // 7. Unique method name in the root, unless the name is too common to trust.
+        // JavaScript frameworks share `render`; without receiver evidence, a unique local method
+        // can belong to an unrelated view engine.
+        if is_common_member(name)
+            || (self.file_type(file) == Some(FileType::JavaScript) && name == "render")
         {
+            return Outcome::Unresolved;
+        }
+        // Go method sets come from the types of imported packages; languages with module rules
+        // search the visible modules and languages without them may reach the root.
+        let reach = if has_module_rules(self.file_type(file)) {
             Reach::Imported(self.module_of(file))
         } else {
             Reach::Root
@@ -5160,7 +5360,7 @@ impl<'a> Index<'a> {
         Some(traits)
     }
 
-    /// Closest binding of `name` visible from `scope` at or before `line`.
+    /// Closest binding of `name` visible from `scope` at `line`.
     fn binding(&self, file: u32, scope: Option<u32>, name: &str, line: u32) -> Option<&'a Binding> {
         let facts = self.facts(file)?;
         let chain = scope_chain(facts, scope);
@@ -5168,6 +5368,11 @@ impl<'a> Index<'a> {
             .bindings
             .iter()
             .filter(|binding| binding.name == name && binding.line <= line)
+            .filter(|binding| {
+                binding
+                    .scope_end_line
+                    .is_none_or(|end_line| line <= end_line)
+            })
             .filter(|binding| match binding.scope {
                 None => true,
                 Some(binding_scope) => chain.contains(&binding_scope),
@@ -6509,6 +6714,7 @@ fn is_common_member(name: &str) -> bool {
             | "open"
             | "next"
             | "find"
+            | "match"
             | "lock"
             | "run"
             | "start"

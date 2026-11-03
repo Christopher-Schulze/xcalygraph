@@ -1,0 +1,6 @@
+typed.AbstractNamed -implements-> typed.Marker @7
+typed.AbstractNamed -inherits-> typed.Base @7
+typed.Named -implements-> typed.Marker @6
+typed.Named -inherits-> typed.Base @6
+typed.build -uses-> typed.Marker @4
+untyped.Named -inherits-> untyped.Base @5

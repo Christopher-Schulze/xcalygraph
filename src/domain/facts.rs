@@ -106,6 +106,12 @@ pub const FLAG_GENERATED: u8 = 4;
 pub const FLAG_DECLARATION: u8 = 8;
 /// A TypeScript interface whose complete relative module-augmentation evidence was captured.
 pub const FLAG_TYPESCRIPT_AUGMENTATION: u8 = 16;
+/// A Python method whose body consists only of an optional docstring and `raise NotImplementedError`.
+pub const FLAG_PYTHON_ABSTRACT_STUB: u8 = 32;
+/// A Rust item directly gated by `#[cfg(unix)]`.
+pub const FLAG_RUST_CFG_UNIX: u8 = 64;
+/// A Rust item directly gated by `#[cfg(not(unix))]`.
+pub const FLAG_RUST_CFG_NOT_UNIX: u8 = 128;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Symbol {
@@ -537,12 +543,15 @@ pub struct SourceIdentity {
 }
 
 /// Declared or constructed type of a name in a scope, for receiver typing (resolution step 5).
+/// The type is empty when Rust retains only the local name for lexical call shadowing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
     pub scope: Option<u32>,
     pub name: String,
     pub type_name: String,
     pub line: u32,
+    /// Last line in the lexical block, when the extractor records one.
+    pub scope_end_line: Option<u32>,
     /// True for declared types; false for factory or constructor results.
     pub declared: bool,
 }

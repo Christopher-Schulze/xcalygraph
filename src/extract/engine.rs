@@ -11,7 +11,7 @@
 //!   `@import.reexport`.
 //! - `@binding` with `@binding.name` and one of `@binding.type` (declared), `@binding.ctor`
 //!   (constructed type), `@binding.call` (result of a call), `@binding.range` (element of the
-//!   named collection).
+//!   named collection), or only a name for Rust local shadowing.
 //! - `@return` with `@return.type` inside a definition: its declared result type.
 //! - `@field` with `@field.name` and `@field.type` inside a type definition.
 //! - `@env` with `@env.name`; `@package` for the declared package or namespace.
@@ -169,6 +169,7 @@ struct RawBinding {
     call: bool,
     position: usize,
     line: u32,
+    scope_end_line: Option<u32>,
 }
 
 #[derive(Default)]
@@ -372,6 +373,17 @@ fn collect(
             }
             // Rust macro token trees: `.method(...)` after anything but a plain receiver name
             // (`a.b().len()`) has an unknown receiver; query anchors skip the anonymous `.`.
+            // The anchor also skips anonymous `::` and keywords such as `default`, so a type
+            // before `::default()` must not be mistaken for the called identifier.
+            if path.ends_with(".rs")
+                && primary_node.kind() == "token_tree"
+                && get("qualifier").is_none()
+                && name
+                    .next_sibling()
+                    .is_none_or(|next| next.id() != primary_node.id())
+            {
+                continue;
+            }
             if primary_node.kind() == "token_tree"
                 && get("qualifier").is_none()
                 && name
@@ -492,6 +504,16 @@ fn collect(
                     let entry = bindings.entry(key).or_default();
                     entry.position = primary_node.start_byte();
                     entry.line = line;
+                    if path.ends_with(".rs") && primary_node.kind() == "let_declaration" {
+                        let mut ancestor = primary_node.parent();
+                        while let Some(node) = ancestor {
+                            if node.kind() == "block" {
+                                entry.scope_end_line = Some(node.end_position().row as u32 + 1);
+                                break;
+                            }
+                            ancestor = node.parent();
+                        }
+                    }
                     if let Some(node) = get("binding.name") {
                         entry.name = Some(text(node).to_owned());
                     }
@@ -825,7 +847,27 @@ fn assemble(assembly: Assembly) -> Parsed {
                 .any(|ancestor| ancestor.kind() == "export_statement"),
         };
         let exported = (hooks.exported)(&definition);
-        let flags = (hooks.flags)(&definition, &context) | inherited;
+        #[cfg(feature = "lang-python")]
+        let python_stub =
+            kind == SymKind::Method && super::lang::python::is_abstract_stub(node, source);
+        #[cfg(not(feature = "lang-python"))]
+        let python_stub = false;
+        #[cfg(feature = "lang-rust")]
+        let rust_cfg_flags = if path.ends_with(".rs") {
+            super::lang::rust::platform_cfg_flags(node, source)
+        } else {
+            0
+        };
+        #[cfg(not(feature = "lang-rust"))]
+        let rust_cfg_flags = 0;
+        let flags = (hooks.flags)(&definition, &context)
+            | inherited
+            | rust_cfg_flags
+            | if python_stub {
+                facts::FLAG_PYTHON_ABSTRACT_STUB
+            } else {
+                0
+            };
         let prefix = (hooks.signature_prefix)(kind, node_text);
         let signature = facts::clip(
             &compact_parameters(
@@ -1094,16 +1136,22 @@ fn assemble(assembly: Assembly) -> Parsed {
     let mut facts_bindings: Vec<Binding> = bindings
         .into_values()
         .filter_map(|raw| {
-            let type_name = raw.type_name.filter(|name| !name.is_empty())?;
+            let name = raw.name?;
+            let type_name = match raw.type_name.filter(|name| !name.is_empty()) {
+                Some(type_name) => type_name,
+                None if path.ends_with(".rs") => String::new(),
+                None => return None,
+            };
             Some(Binding {
                 scope: scope_of(raw.position),
-                name: raw.name?,
+                name,
                 type_name: if raw.call {
                     format!("{type_name}()")
                 } else {
                     type_name
                 },
                 line: raw.line,
+                scope_end_line: raw.scope_end_line,
                 declared: raw.declared,
             })
         })
@@ -1115,18 +1163,28 @@ fn assemble(assembly: Assembly) -> Parsed {
                 name: String::new(),
                 type_name,
                 line: symbols[scope as usize].line,
+                scope_end_line: None,
                 declared: true,
             });
         }
     }
     facts_bindings.sort_by(|a, b| {
-        (a.line, &a.name, &a.type_name, a.scope, a.declared).cmp(&(
-            b.line,
-            &b.name,
-            &b.type_name,
-            b.scope,
-            b.declared,
-        ))
+        (
+            a.line,
+            &a.name,
+            &a.type_name,
+            a.scope,
+            a.scope_end_line,
+            a.declared,
+        )
+            .cmp(&(
+                b.line,
+                &b.name,
+                &b.type_name,
+                b.scope,
+                b.scope_end_line,
+                b.declared,
+            ))
     });
     facts_bindings.dedup();
     let mut grouped: Vec<Fields> = Vec::new();
@@ -2259,7 +2317,7 @@ fn first_brace(node: Node, source: &[u8]) -> Option<usize> {
 
 /// The node whose preceding siblings carry doc comments and decorations: a wrapper that starts
 /// on the same line (Go `type_declaration` around `type_spec`) is used instead.
-fn anchor(node: Node) -> Node {
+pub(super) fn anchor(node: Node) -> Node {
     let mut anchor = node;
     while let Some(parent) = anchor.parent() {
         let wrapper = parent.start_position().row == node.start_position().row

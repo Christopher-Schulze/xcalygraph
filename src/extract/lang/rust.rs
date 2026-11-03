@@ -1,9 +1,12 @@
 //! Rust: `pub` visibility, `#[test]` and `#[cfg(test)]` tests, `main` of bin targets, use trees.
 
 use super::Pack;
-use crate::domain::facts::{FLAG_ENTRY, FLAG_TEST, Import, SymKind};
+use crate::domain::facts::{
+    FLAG_ENTRY, FLAG_RUST_CFG_NOT_UNIX, FLAG_RUST_CFG_UNIX, FLAG_TEST, Import, SymKind,
+};
 use crate::domain::filetype::FileType;
 use crate::extract::engine::{Definition, FileContext, Hooks};
+use tree_sitter::Node;
 
 pub static PACK: Pack = Pack {
     suffixes: &[],
@@ -107,12 +110,14 @@ fn exported(definition: &Definition) -> bool {
 fn flags(definition: &Definition, context: &FileContext) -> u8 {
     let mut flags = 0;
     let attributes = definition.decorations;
-    if attributes.contains("#[test]")
+    let test_entry = attributes.contains("#[test]")
         || attributes.contains("::test]")
-        || attributes.contains("#[rstest")
-        || attributes.contains("#[cfg(test)]")
-    {
+        || attributes.contains("#[rstest");
+    if test_entry || attributes.contains("#[cfg(test)]") {
         flags |= FLAG_TEST;
+    }
+    if test_entry && definition.kind == SymKind::Fn {
+        flags |= FLAG_ENTRY;
     }
     let bin = context.path.ends_with("src/main.rs")
         || context.path == "main.rs"
@@ -126,6 +131,34 @@ fn flags(definition: &Definition, context: &FileContext) -> u8 {
         flags |= FLAG_ENTRY;
     }
     flags
+}
+
+pub(in crate::extract) fn platform_cfg_flags(node: Node, source: &[u8]) -> u8 {
+    let mut flags = 0;
+    let mut current = crate::extract::engine::anchor(node).prev_named_sibling();
+    while let Some(sibling) = current {
+        let kind = sibling.kind();
+        if kind.contains("attribute") {
+            if let Ok(attribute) = sibling.utf8_text(source) {
+                if compact_attribute_is(attribute, "#[cfg(unix)]") {
+                    flags |= FLAG_RUST_CFG_UNIX;
+                } else if compact_attribute_is(attribute, "#[cfg(not(unix))]") {
+                    flags |= FLAG_RUST_CFG_NOT_UNIX;
+                }
+            }
+        } else if !kind.contains("comment") {
+            break;
+        }
+        current = sibling.prev_named_sibling();
+    }
+    flags
+}
+
+fn compact_attribute_is(attribute: &str, expected: &str) -> bool {
+    attribute
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .eq(expected.bytes())
 }
 
 /// Expands a use tree (`crate::a::{b::C, d as E, f::*}`) into one import per leaf: `spec` is

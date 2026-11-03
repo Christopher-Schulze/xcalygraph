@@ -722,7 +722,7 @@ fn sample_environment(name: &str) -> io::Result<String> {
 
 /// Development-only precision manifest sampler. The corpus is already a verified immutable
 /// snapshot; output is JSONL, stratified by the actual source file type, and created exclusively.
-/// `scripts/benchmarks/sample-precision.sh` builds its release test binary once and supplies all
+/// `scripts/benchmarks/sample-precision.sh` builds its debug test binary once and supplies all
 /// source identities. Its sampler schema and selection contract are in `docs/spec.md` section 12.
 #[test]
 #[ignore = "development tool; use scripts/benchmarks/sample-precision.sh"]
@@ -915,6 +915,256 @@ fn precision_manifest_is_language_stratified_stable_and_identity_bound() -> io::
     let retained = fs::read(&output)?;
     assert!(write_precision_manifest(&output, &records).is_err());
     assert_eq!(fs::read(output)?, retained);
+    Ok(())
+}
+
+#[test]
+fn javascript_unknown_receiver_does_not_fall_back_to_imported_render_method() -> io::Result<()> {
+    let root = crate::infra::testdir::TestDir::new("javascript-unknown-render")?;
+    fs::write(
+        root.path().join("index.js"),
+        "var GithubView = require('./github-view');\n\
+         var app = {};\n\
+         app.get('/', function (req, res) {\n\
+           res.render('page.md');\n\
+         });\n",
+    )?;
+    fs::write(
+        root.path().join("github-view.js"),
+        "function GithubView(name) {}\n\
+         GithubView.prototype.render = function render(options, callback) {};\n\
+         module.exports = GithubView;\n",
+    )?;
+    let graph = graph_of(root.path())?;
+    let false_edge = graph.edges.iter().any(|edge| {
+        edge.kind == EdgeKind::Calls
+            && node_location(&graph, edge.source).is_some_and(|source| source.path == "index.js")
+            && node_location(&graph, edge.target).is_some_and(|target| {
+                target.path == "github-view.js" && target.name.ends_with(".GithubView.render")
+            })
+    });
+    assert!(
+        !false_edge,
+        "unexpected edge in fixture:\n{}",
+        render(&graph)
+    );
+    Ok(())
+}
+
+#[test]
+fn javascript_and_typescript_class_calls_select_static_methods() -> io::Result<()> {
+    let root = crate::infra::testdir::TestDir::new("javascript-static-instance-methods")?;
+    fs::write(
+        root.path().join("index.js"),
+        "import { HeaderBag } from './headers.js';\n\
+         HeaderBag.concat({}, {});\n",
+    )?;
+    fs::write(
+        root.path().join("headers.js"),
+        "export class HeaderBag {\n\
+           static concat(first, ...targets) { return first; }\n\
+           concat(...targets) { return this.constructor.concat(this, ...targets); }\n\
+           callInstance() { this.concat({}); }\n\
+         }\n",
+    )?;
+    fs::write(
+        root.path().join("index.ts"),
+        "import { TypedHeaderBag } from './typed-headers';\n\
+         TypedHeaderBag.concat({}, {});\n\
+         function useInstance(headerBag: TypedHeaderBag) {\n\
+           headerBag.concat({});\n\
+         }\n",
+    )?;
+    fs::write(
+        root.path().join("typed-headers.ts"),
+        "export class TypedHeaderBag {\n\
+           static concat(first: object, ...targets: object[]) { return first; }\n\
+           concat(...targets: object[]) { return this.constructor.concat(this, ...targets); }\n\
+           callInstance() { this.concat({}); }\n\
+         }\n",
+    )?;
+    let graph = graph_of(root.path())?;
+    let target_lines = |source_path: &str, target_path: &str, source_line: u32| {
+        let mut targets: Vec<u32> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Calls && edge.line == source_line)
+            .filter_map(|edge| {
+                let source = node_location(&graph, edge.source)?;
+                let target = node_location(&graph, edge.target)?;
+                (source.path == source_path && target.path == target_path).then_some(target.line)
+            })
+            .collect();
+        targets.sort_unstable();
+        targets
+    };
+    assert_eq!(
+        target_lines("index.js", "headers.js", 2),
+        vec![2],
+        "JavaScript class call must select only the static method:\n{}",
+        render(&graph)
+    );
+    assert_eq!(
+        target_lines("index.ts", "typed-headers.ts", 2),
+        vec![2],
+        "TypeScript class call must select only the static method:\n{}",
+        render(&graph)
+    );
+    assert_eq!(
+        target_lines("headers.js", "headers.js", 4),
+        vec![3],
+        "JavaScript instance call must keep its instance method target:\n{}",
+        render(&graph)
+    );
+    assert_eq!(
+        target_lines("typed-headers.ts", "typed-headers.ts", 4),
+        vec![3],
+        "TypeScript instance call must keep its instance method target:\n{}",
+        render(&graph)
+    );
+    assert_eq!(
+        target_lines("index.ts", "typed-headers.ts", 4),
+        vec![3],
+        "TypeScript typed receiver must select only its instance method:\n{}",
+        render(&graph)
+    );
+    Ok(())
+}
+
+#[test]
+fn typescript_string_match_does_not_fall_back_to_router_match() -> io::Result<()> {
+    let root = crate::infra::testdir::TestDir::new("typescript-string-match")?;
+    fs::write(
+        root.path().join("index.ts"),
+        "import type { Router } from './router';\n\
+         import { METHOD_NAME_ALL } from './router';\n\
+         declare const router: Router;\n\
+         router.match(METHOD_NAME_ALL, '/');\n\
+         class Node {\n\
+           search(restPathString: string): void {\n\
+             const matcher = /x/;\n\
+             const m = matcher.exec(restPathString);\n\
+             if (m) m[0].match(/\\//g);\n\
+           }\n\
+         }\n",
+    )?;
+    fs::write(
+        root.path().join("router.ts"),
+        "export const METHOD_NAME_ALL = 'ALL' as const;\n\
+         export interface Router {\n\
+           match(method: string, path: string): boolean;\n\
+         }\n",
+    )?;
+    let graph = graph_of(root.path())?;
+    let targets_at = |line| {
+        let mut targets: Vec<u32> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Calls && edge.line == line)
+            .filter_map(|edge| {
+                let source = node_location(&graph, edge.source)?;
+                let target = node_location(&graph, edge.target)?;
+                (source.path == "index.ts" && target.path == "router.ts").then_some(target.line)
+            })
+            .collect();
+        targets.sort_unstable();
+        targets
+    };
+    assert_eq!(
+        targets_at(4),
+        vec![3],
+        "typed router call must keep its imported interface target:\n{}",
+        render(&graph)
+    );
+    assert_eq!(
+        targets_at(9),
+        Vec::<u32>::new(),
+        "String.match must not target the unrelated Router method:\n{}",
+        render(&graph)
+    );
+    Ok(())
+}
+
+#[test]
+fn python_calls_resolve_to_last_same_module_definition() -> io::Result<()> {
+    let root = crate::infra::testdir::TestDir::new("python-module-redefinition")?;
+    fs::write(
+        root.path().join("index.py"),
+        concat!(
+            "def normalize(value):\n",
+            "    return value\n",
+            "normalize('before')\n",
+            "def caller(value):\n",
+            "    return normalize(value)\n",
+            "class ImportTime:\n",
+            "    value = normalize('class')\n",
+            "def normalize(value):\n",
+            "    return value\n",
+        ),
+    )?;
+    let graph = graph_of(root.path())?;
+    let mut caller_targets: Vec<(u32, Confidence)> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == EdgeKind::Calls && edge.line == 5)
+        .filter_map(|edge| {
+            let source = node_location(&graph, edge.source)?;
+            let target = node_location(&graph, edge.target)?;
+            (source.path == "index.py"
+                && source.name.ends_with(".caller")
+                && target.path == "index.py"
+                && target.name.ends_with(".normalize"))
+            .then_some((target.line, edge.confidence))
+        })
+        .collect();
+    caller_targets.sort_unstable();
+    assert_eq!(
+        caller_targets,
+        vec![(8, Confidence::Inferred)],
+        "function-body calls must select the final runtime binding as inferred:\n{}",
+        render(&graph)
+    );
+    let mut module_targets: Vec<(u32, Confidence)> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == EdgeKind::Calls && edge.line == 3)
+        .filter_map(|edge| {
+            let source = node_location(&graph, edge.source)?;
+            let target = node_location(&graph, edge.target)?;
+            (source.path == "index.py"
+                && target.path == "index.py"
+                && target.name.ends_with(".normalize"))
+            .then_some((target.line, edge.confidence))
+        })
+        .collect();
+    module_targets.sort_unstable();
+    assert_eq!(
+        module_targets,
+        vec![(1, Confidence::Exact)],
+        "top-level calls must use the latest definition already executed:\n{}",
+        render(&graph)
+    );
+    let line = 7;
+    let mut targets: Vec<(u32, Confidence)> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == EdgeKind::Calls && edge.line == line)
+        .filter_map(|edge| {
+            let source = node_location(&graph, edge.source)?;
+            let target = node_location(&graph, edge.target)?;
+            (source.path == "index.py"
+                && target.path == "index.py"
+                && target.name.ends_with(".normalize"))
+            .then_some((target.line, edge.confidence))
+        })
+        .collect();
+    targets.sort_unstable();
+    assert_eq!(
+        targets,
+        vec![(1, Confidence::Exact)],
+        "definition-time call at line {line} must use the latest prior binding:\n{}",
+        render(&graph)
+    );
     Ok(())
 }
 
@@ -1450,6 +1700,231 @@ fn rust_closure_calls_follow_generic_trait_bounds_and_shadowing() -> std::io::Re
     assert!(
         unbounded.is_empty(),
         "unbounded closure target: {unbounded:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn python_not_implemented_bases_dispatch_to_local_overrides() -> std::io::Result<()> {
+    let root = crate::infra::testdir::TestDir::new("python-not-implemented-dispatch")?;
+    fs::write(
+        root.path().join("contracts.py"),
+        concat!(
+            "class Decoder:\n",
+            "    def decode(self, data):\n",
+            "        raise NotImplementedError()\n",
+            "    def flush(self):\n",
+            "        raise NotImplementedError\n",
+            "class TextDecoder(Decoder):\n",
+            "    def decode(self, data):\n",
+            "        return data.decode()\n",
+            "class PassthroughDecoder(Decoder):\n",
+            "    def decode(self, data):\n",
+            "        return data\n",
+            "    def flush(self):\n",
+            "        return b''\n",
+            "class InheritedDecoder(PassthroughDecoder):\n",
+            "    pass\n",
+        ),
+    )?;
+    fs::write(
+        root.path().join("consumer.py"),
+        concat!(
+            "from contracts import Decoder\n",
+            "def decode(decoder: Decoder, data: bytes):\n",
+            "    return decoder.decode(data)\n",
+            "def flush(decoder: Decoder):\n",
+            "    return decoder.flush()\n",
+        ),
+    )?;
+    let graph = graph_of(root.path())?;
+    let target_lines = |caller: &str, line: u32| {
+        let mut targets: Vec<(u32, Confidence)> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Calls && edge.line == line)
+            .filter_map(|edge| {
+                let source = graph.symbols.get(edge.source as usize)?;
+                let target = graph.symbols.get(edge.target as usize)?;
+                (graph.files.get(source.file as usize)?.path == "consumer.py"
+                    && source.qualified.ends_with(caller)
+                    && graph.files.get(target.file as usize)?.path == "contracts.py")
+                    .then_some((target.line, edge.confidence))
+            })
+            .collect();
+        targets.sort_unstable();
+        targets
+    };
+    assert_eq!(
+        target_lines(".decode", 3),
+        vec![(7, Confidence::Inferred), (10, Confidence::Inferred)],
+        "Python contract stubs must dispatch to each local override, not the raising base:\n{}",
+        render(&graph)
+    );
+    assert_eq!(
+        target_lines(".flush", 5),
+        vec![(12, Confidence::Inferred)],
+        "Python contract stubs must dispatch through inherited overrides:\n{}",
+        render(&graph)
+    );
+    Ok(())
+}
+
+#[test]
+fn rust_methods_do_not_cross_cargo_target_roots() -> std::io::Result<()> {
+    let root = crate::infra::testdir::TestDir::new("rust-cargo-target-method-scope")?;
+    fs::create_dir_all(root.path().join("src"))?;
+    fs::create_dir_all(root.path().join("examples"))?;
+    fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname = \"target-scope\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )?;
+    fs::write(
+        root.path().join("src/lib.rs"),
+        concat!(
+            "pub struct DirEntry;\n",
+            "impl DirEntry {\n",
+            "    pub fn path(&self) {}\n",
+            "}\n",
+            "pub struct ChildEntry;\n",
+            "impl ChildEntry {\n",
+            "    pub fn value(&self) {}\n",
+            "}\n",
+            "pub fn library_call(entry: &DirEntry) {\n",
+            "    entry.path();\n",
+            "}\n",
+            "pub fn library_child_call(entry: &ChildEntry) {\n",
+            "    entry.value();\n",
+            "}\n",
+        ),
+    )?;
+    fs::write(
+        root.path().join("examples/walk.rs"),
+        concat!(
+            "mod inner;\n",
+            "struct DirEntry;\n",
+            "impl DirEntry {\n",
+            "    fn path(&self) {}\n",
+            "}\n",
+            "fn example_call(entry: &DirEntry) {\n",
+            "    entry.path();\n",
+            "}\n",
+            "fn child_call(entry: &inner::ChildEntry) {\n",
+            "    entry.value();\n",
+            "}\n",
+        ),
+    )?;
+    fs::create_dir_all(root.path().join("examples/walk"))?;
+    fs::write(
+        root.path().join("examples/walk/inner.rs"),
+        concat!(
+            "pub struct ChildEntry;\n",
+            "impl ChildEntry {\n",
+            "    pub fn value(&self) {}\n",
+            "}\n",
+        ),
+    )?;
+
+    let graph = graph_of(root.path())?;
+    let targets = |caller: &str, line: u32| {
+        let mut found: Vec<(String, u32)> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Calls && edge.line == line)
+            .filter_map(|edge| {
+                let source = graph.symbols.get(edge.source as usize)?;
+                let target = graph.symbols.get(edge.target as usize)?;
+                source
+                    .qualified
+                    .ends_with(caller)
+                    .then(|| (graph.files[target.file as usize].path.clone(), target.line))
+            })
+            .collect();
+        found.sort_by(|left, right| (left.0.as_str(), left.1).cmp(&(right.0.as_str(), right.1)));
+        found
+    };
+
+    assert_eq!(
+        targets("library_call", 10),
+        vec![("src/lib.rs".to_owned(), 3)],
+        "library calls must not bind to example target methods:\n{}",
+        render(&graph)
+    );
+    assert_eq!(
+        targets("example_call", 7),
+        vec![("examples/walk.rs".to_owned(), 4)],
+        "example calls must stay within their own Cargo target:\n{}",
+        render(&graph)
+    );
+    assert_eq!(
+        targets("library_child_call", 13),
+        vec![("src/lib.rs".to_owned(), 7)],
+        "library submodule candidates must not leak into example modules:\n{}",
+        render(&graph)
+    );
+    assert_eq!(
+        targets("child_call", 10),
+        vec![("examples/walk/inner.rs".to_owned(), 3)],
+        "target module files must inherit their Cargo root method scope:\n{}",
+        render(&graph)
+    );
+    Ok(())
+}
+
+#[test]
+fn rust_calls_respect_mutually_exclusive_unix_cfg_gates() -> std::io::Result<()> {
+    let root = crate::infra::testdir::TestDir::new("rust-cfg-platform-calls")?;
+    fs::create_dir_all(root.path().join("src"))?;
+    fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname = \"cfg-platform\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )?;
+    fs::write(
+        root.path().join("src/lib.rs"),
+        concat!(
+            "mod api {\n",
+            "    #[cfg(unix)]\n",
+            "    pub fn open_existing_regular() {}\n",
+            "    #[cfg(not(unix))]\n",
+            "    pub fn open_existing_regular() {}\n",
+            "}\n",
+            "#[cfg(unix)]\n",
+            "fn touch_stamp() {\n",
+            "    api::open_existing_regular();\n",
+            "}\n",
+            "fn acquire() {\n",
+            "    api::open_existing_regular();\n",
+            "}\n",
+        ),
+    )?;
+    let graph = graph_of(root.path())?;
+    let targets = |caller: &str, line: u32| {
+        let mut lines: Vec<u32> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Calls && edge.line == line)
+            .filter_map(|edge| {
+                let source = graph.symbols.get(edge.source as usize)?;
+                let target = graph.symbols.get(edge.target as usize)?;
+                (source.qualified.ends_with(caller)
+                    && target.qualified.ends_with("api::open_existing_regular"))
+                .then_some(target.line)
+            })
+            .collect();
+        lines.sort_unstable();
+        lines
+    };
+    assert_eq!(
+        targets("touch_stamp", 9),
+        vec![3],
+        "a Unix-only caller must exclude the not(unix) implementation:\n{}",
+        render(&graph)
+    );
+    assert_eq!(
+        targets("acquire", 12),
+        vec![3, 5],
+        "an unguarded caller must retain both platform alternatives:\n{}",
+        render(&graph)
     );
     Ok(())
 }

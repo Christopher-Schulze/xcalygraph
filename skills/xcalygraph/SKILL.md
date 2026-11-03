@@ -1,6 +1,6 @@
 ---
 name: xcalygraph
-description: Code graph CLI for locating definitions, handlers, callers, implementations, impact and repository structure. Use before source reads for code navigation; use rg or direct reads for exact text, known files, logs and non-code content.
+description: Code graph CLI for repository structure, definitions, callers, implementations and impact. Use before source reads; use rg or direct reads for exact text, known files, logs and non-code content.
 ---
 
 # xcalygraph
@@ -39,14 +39,14 @@ Flags: `-p GLOB` (repeatable, gitignore); `-l go,rust`; `-k fn,method,struct,opt
 
 - `<line> <signature>` lines group under file paths.
 - Decode escaped paths/commands before use.
-- Rust `#[path]`: exact file; shared-file aliases unresolved, no same-name fallback.
+- Rust: exact `#[path]`; aliases unresolved; members need receiver/trait evidence; opposing `cfg(unix)`/`cfg(not(unix))` gates filter targets.
 - Map JSON: counts, task runs, API sig/handlers, cycle/layer members, env path/line; audit: name/path/line, drift kind/status.
 - Card: `m`=member, `f`=fields, `^`=supertype, `v`=implementation, `<`=caller, `>`=definition, `t`=test, `t2`=test via caller, `e`=env, `!`=notice.
 - `option -x`: `arg=none|required;case=<line|*:line|none|ambiguous>`.
 - Merged interfaces: `show` lists each declaration and members.
 - TS `.d.ts` functions pair with a unique same-module exported `.ts`/`.tsx` function matching full header tokens except final `;`; both searchable; unproven overloads separate.
 - Fields: after transport decoding, split on commas outside JSON-quoted names; `\u` preserves unpaired surrogates.
-- `?`=inferred edges/impact; Python Protocols, Julia Base typed args, Rust generic bounds; `--exact` drops inferred edges/runs.
+- `?`=inferred edges/impact; Python Protocols, Julia typed args, Rust bounds; `--exact` omits them.
 - `impact` runs: Go module/package, Cargo manifest, pytest node ID, quoted args; unsupported runners: `t`, no `r`.
 - `impact --diff`: removals cite REV path:line; `moved?`=locations; `sig?`=inferred signature change; `uncertain?`=ambiguous/missing identity. Sensitive/oversized/nonregular sides are path-only; missing REV blobs error; inspect beyond filters.
 - Truncation: `+N more`, `+N`, `+` or JSON `{}`; narrow with filters or raise `-b`.

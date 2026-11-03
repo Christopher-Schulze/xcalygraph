@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use super::output::{OutputFact, Value, Writer, json_object};
 use super::{Filter, Index};
 use crate::domain::facts::{EnvSource, FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST, SymKind};
+use crate::domain::filetype::FileType;
 use crate::domain::graph::{EdgeKind, ModuleEdge};
 use crate::domain::role::Role;
 
@@ -516,7 +517,9 @@ fn entrypoints(index: &Index, filter: &Filter) -> Vec<MapFact> {
     let mut lines: Vec<MapFact> = Vec::new();
     for (id, symbol) in index.derived.symbols().iter().enumerate() {
         let task = matches!(symbol.kind(), SymKind::Task | SymKind::Svc);
-        if symbol.flags & FLAG_ENTRY != 0 && !task && filter.symbol(index, symbol) {
+        let rust_test = index.file_of(id as u32).file_type() == Some(FileType::Rust)
+            && symbol.flags & FLAG_TEST != 0;
+        if symbol.flags & FLAG_ENTRY != 0 && !task && !rust_test && filter.symbol(index, symbol) {
             lines.push(MapFact::Symbol(symbol_line(index, id as u32, "entry")));
         }
     }

@@ -154,10 +154,10 @@ Freshness:
 
 | fact | fields |
 |------|--------|
-| symbol | kind, name, parent symbol, line start, line end, signature (one line, whitespace-normalized, body removed, max 160 chars), doc (first sentence of the attached doc comment, max 120 chars; leading shebang directives are excluded), visibility (exported or private), flags (test, entry, generated) |
+| symbol | kind, name, parent symbol, line start, line end, signature (one line, whitespace-normalized, body removed, max 160 chars), doc (first sentence of the attached doc comment, max 120 chars; leading shebang directives are excluded), visibility (exported or private), flags (test, entry, generated, Python `NotImplementedError` contract stub) |
 | import | module specifier, alias, imported names, line |
 | ref | name (identifier or last two segments of a member chain), kind (call, type, inherit, implement), enclosing symbol, line, call arity; Rust records function and impl generic parameters and their source-backed trait bounds; Julia also stores sparse positional direct-variable arguments and marks retained unqualified builtins |
-| binding | variable name, declared type as written, enclosing symbol, line; Julia typed parameters retain their full annotation |
+| binding | variable name, declared type as written, enclosing symbol, declaration line and optional lexical-block end line; Rust untyped local names may be retained with an empty type for lexical call shadowing; Julia typed parameters retain their full annotation |
 | env | variable name, enclosing symbol, line |
 | fields | owning type, field names (card content only, no graph nodes) |
 | mention | doc heading, backticked identifier or relative path, line |
@@ -172,6 +172,7 @@ Freshness:
 
 - Symbol kinds: `mod`, `struct`, `class`, `enum`, `iface`, `trait`, `alias`, `fn`, `method`, `const`, `var`, `macro`, `heading`, `table`, `view`, `task` (Makefile target, package script, CI job), `svc` (compose service, Kubernetes workload), `op` (OpenAPI operation; framework route `<kind> <route>` from Next.js App and Pages Router, SvelteKit route files, Next.js middleware, SvelteKit hooks and `"use server"` actions, calling its handler), `option` (Bash short option declared by `getopts`). Protobuf and GraphQL map to `struct`, `enum`, `iface` (service) and `method` (rpc, field resolver).
 - Never emitted: locals, parameters, generic type parameters, anonymous functions (their calls count for the enclosing symbol), fields as nodes, symbols without source location.
+- JavaScript and TypeScript class expressions do not produce class nodes or heritage edges attributed to an enclosing symbol; named class declarations retain their heritage edges.
 - Bash: a literal `getopts` command in a `while` condition emits one `option` symbol per unique ASCII graphic character except `:` and `?`; a single following `:` marks a required argument, and an initial `:` only selects silent error handling. Dynamic or malformed specifications are omitted. The symbol is named `-x`, uses the `getopts` line, and has signature `arg=none|required;case=<line|*:line|none|ambiguous>`; a case line is recorded only for the same option variable, unsupported patterns that may shadow it and multiple matching case statements yield `ambiguous`, and no matching case yields `none`. A literal `trap` action that is one simple name becomes a `calls` reference at the action line; compound action strings are omitted, and signal operands are never references.
 - Env reads: Go `os.Getenv`, `os.LookupEnv`; Rust `std::env::var`, `std::env::var_os`, `env!`, `option_env!`; TypeScript/JavaScript `process.env.X`, `process.env["X"]`, `import.meta.env.X`; Python `os.environ[...]`, `os.environ.get`, `os.getenv`; Java, Kotlin, Scala, Groovy `System.getenv`; C#, VB.NET `Environment.GetEnvironmentVariable`; C, C++, Objective-C `getenv`; Swift `ProcessInfo.processInfo.environment[...]`; Ruby `ENV[...]`, `ENV.fetch`; PHP `getenv`, `$_ENV[...]`; Lua `os.getenv`; Zig `std.process.getEnvVarOwned`, `std.posix.getenv`; Elixir `System.get_env`, `System.fetch_env`; Erlang `os:getenv`; Dart `Platform.environment[...]`; Julia `ENV[...]`; R `Sys.getenv`; PowerShell `$env:X`; Bash `$X` and `${X}` of variables never assigned in the file.
 
@@ -183,7 +184,7 @@ Freshness:
 | Rust | module tree from `mod` declarations and file layout; `#[path]` binds a declaration to the exact in-root source file and declared logical module path; crate per `Cargo.toml` target | `use` paths with `crate::`, `super::`, `self::`, workspace crates, `pub use` re-exports |
 | TypeScript, JavaScript, Vue, Svelte, Astro | file | relative specifiers with extension and index probing; `tsconfig.json` and `jsconfig.json` `paths` and `baseUrl`; `package.json` `exports` and workspaces; CommonJS `require` |
 | Python | module file or package; source roots: root, `src/`, pyproject package directories | absolute and relative imports, namespace packages, `__init__.py` re-exports |
-| Java, Kotlin, Scala, Groovy | package declaration; source roots `src/{main,test}/<language>/` or the path suffix matching the package | single-type, wildcard and static imports; same package without import |
+| Java, Kotlin, Scala, Groovy | package declaration; source roots `src/{main,test}/<language>/` or the path suffix matching the package | single-type, wildcard and static imports; nested imports are restricted to the named outer type; same package without import |
 | C#, Visual Basic .NET | namespace; project from `.csproj`, `.vbproj` and `.sln` | `using` and `Imports`, global usings, enclosing and same namespace; partial types merged |
 | C, C++, Objective-C | file; header and implementation paired by stem | `#include` and `#import`: relative to the file, then manifest include directories, then `include/` and `src/` probing; C++ namespaces and `using` |
 | Swift | SwiftPM target directory from `Package.swift`, else top-level directory | `import` module; whole-module visibility; extensions merged into the extended type |
@@ -212,14 +213,16 @@ Freshness:
 
 Resolution order for a reference, first hit wins:
 
-1. Lexical scope of the file: enclosing and nested definitions -> exact.
+1. Lexical scope of the file: enclosing and nested definitions -> exact; Rust local bindings shadow item names through the end of their containing block.
 2. Name bound by an import, use, include or require -> exported symbol of the resolved module -> exact.
-3. Qualified name (`pkg.Name`, `Type::name`, `Namespace.Type`, `Module:fun`) through the module map -> exact.
-4. Same module unit visible without import (Go package, Java package, C# namespace, Swift module, Ruby and PHP autoload roots) -> exact.
-5. Member call `x.m()`: receiver type from `self`, `this`, `super`; declared types of parameters, fields and variables; constructor and factory expressions (`new T`, `T(...)`, `T::new`, `T.init`, functions with a declared return type) -> method of the type or its supertypes; exact for declared types, inferred for factory return types. A receiver call or binding whose result is proven external cannot fall through to same-name method matching. Rust function and impl type parameters use source-backed inline or `where` trait bounds for receiver lookup, including calls inside closures; an unbounded or unresolved generic does not fall back to a same-named nominal type.
-6. Method of an interface, trait, protocol or abstract type -> edges to every implementation, inferred, max 10 targets, else one ambiguity notice.
-7. Unique name among the modules the file imports, then unique name in the root (non-test preferred) -> inferred.
+3. Qualified name (`pkg.Name`, `Type::name`, `Namespace.Type`, `Module:fun`) through the module map -> exact; JavaScript and TypeScript calls through a resolved class name consider only static methods on that class or its supertypes.
+4. Same module unit visible without import (Go package, Java package, C# namespace, Swift module, Ruby and PHP autoload roots) -> exact; for Python calls, repeated module-level definitions use the final runtime binding in function bodies (inferred) and the latest prior definition in module- or class-body code (exact).
+5. Member call `x.m()`: receiver type from `self`, `this`, `super`; declared types of parameters, fields and variables; constructor and factory expressions (`new T`, `T(...)`, `T::new`, `T.init`, functions with a declared return type) -> method of the type or its supertypes; exact for declared types, inferred for factory return types. JavaScript and TypeScript instance receivers exclude static methods. A receiver call or binding whose result is proven external cannot fall through to same-name method matching. Rust member calls resolve only through explicit paths, source-backed receiver members or trait bounds; unresolved and unbounded receivers do not fall back to a crate-wide same-name method.
+6. Method of an interface, trait, protocol or abstract type -> edges to every implementation, inferred, max 10 targets, else one ambiguity notice. A Python method whose complete executable body is an optional docstring plus `raise NotImplementedError` is a contract stub: dispatch to known local concrete overrides, inferred, max 10; no known override stays unresolved and more than 10 is ambiguous.
+7. Unique name among the modules the file imports, then unique name in the root (non-test preferred) -> inferred; calls with unresolved receivers stay unresolved when the member name is common across standard libraries (including `match`), as do JavaScript `render` calls. Rust member calls do not use crate-wide name-only fallback.
 8. Otherwise no edge; counted per file as ambiguous.
+
+- Rust symbols retain directly attached `#[cfg(unix)]` and `#[cfg(not(unix))]` gates; a Rust relation excludes a target with the opposite known gate, while unguarded or otherwise unsupported conditions remain candidates.
 
 - Julia Base dispatch: an unqualified builtin call can target source-defined `Base.name` methods when a declared concrete nominal argument type equals the method annotation at the same position or is its subtype through declared supertype edges; any known type mismatch rejects that candidate. At least one known position must match. When all direct call argument types and each matching candidate's formal types are known, retain only non-dominated, most-specific signatures; otherwise retain compatible partial matches as inferred. Unsupported types cannot establish a match; untyped calls emit no edge.
 - TypeScript interface identity: source-proven compatible declarations in one file or in the same proven project-wide global scope and namespace path form one logical type; complete headers and supported members establish compatibility, physical declaration locations remain accessible, unproven declarations stay distinct.
@@ -228,7 +231,7 @@ Resolution order for a reference, first hit wins:
 - Implementation edges: `impl Trait for Type`, `implements`, `extends`, base and conformance lists, categories and extensions: exact; Go: type method set contains every interface method name with equal parameter count: inferred.
 - Overload identity: Swift calls compare external argument labels in source order and may omit only parameters with defaults; calls with trailing closures retain argument-count matching. Objective-C messages compare the complete selector, including every keyword and colon; `@selector(...)` resolves matching methods as inferred references because it has no receiver type.
 - Contract edges: OpenAPI `operationId`, Protobuf rpc and GraphQL field -> handler whose name matches within the implementing type or module: `implements`, inferred.
-- Edge kinds: `calls`, `uses` (type reference), `inherits`, `implements`, `imports` (file -> file or module), `mentions` (doc -> symbol or file), `tests` (test symbol -> symbol it calls), `references` (code, doc, template or config -> file or asset), `runs` (task -> script, entrypoint or task), `queries` (symbol -> SQL object named in a string literal with an SQL keyword).
+- Edge kinds: `calls`, `uses` (value or type reference, including resolved Go `T(x)` conversions), `inherits`, `implements`, `imports` (file -> file or module), `mentions` (doc -> symbol or file), `tests` (test symbol -> symbol it calls), `references` (code, doc, template or config -> file or asset), `runs` (task -> script, entrypoint or task), `queries` (symbol -> SQL object named in a string literal with an SQL keyword).
 - Docs: backticked identifier with a unique symbol name: inferred; relative path mention or link: exact.
 - Confidence: `exact` or `inferred`. Targets outside the root: external dependency per module (name, use count), no node.
 - Edges are unique per (source, target, kind); exact wins over inferred.
@@ -319,7 +322,7 @@ Text:
 | marker | meaning |
 |--------|---------|
 | `<` | incoming: caller, user, importer |
-| `>` | outgoing: callee, used type, import |
+| `>` | outgoing: callee, used value or type, import |
 | `^` | supertype or implemented interface or trait |
 | `v` | subtype or implementation |
 | `t` | test |
@@ -367,10 +370,10 @@ Location: `<index-dir>/<root basename>-<XXH3-64 hex of the canonical root path>/
 | `git` | churn, co-change, hotspots keyed by HEAD and analysis version | key changes and git data is requested |
 | `lock` | writer lock | never |
 
-- Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum; format 13 fact records include the source XXH3-128 hash and sparse source identities; derived records include validated sparse TypeScript interface groups; fact shard sections deflated; search postings as delta-varint (node, term frequencies) pairs.
+- Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum; format 15 fact records include the source XXH3-128 hash, sparse source identities, optional binding block-end lines and Rust Unix/non-Unix gate flags; derived records include validated sparse TypeScript interface groups; fact shard sections deflated; search postings as delta-varint (node, term frequencies) pairs.
 - Writes: new exclusively created temp file in the same directory (`O_CREAT|O_EXCL`; an existing entry or symlink is skipped, never opened) -> rename; no fsync; unchanged files untouched; install and update use the same primitive. A checksum mismatch or truncation on open rebuilds that file.
 - Reads: memory-mapped, zero-copy.
-- Listing and safe cleanup also recognize format-8 through format-12 containers; queries require the current format and writable queries rebuild older indexes.
+- Listing and safe cleanup also recognize format-8 through format-14 containers; queries require the current format and writable queries rebuild older indexes.
 
 ## 10. Skill, install, update
 

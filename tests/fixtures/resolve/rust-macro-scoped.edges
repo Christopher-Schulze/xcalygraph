@@ -1,0 +1,3 @@
+rust_macro_scoped::good -uses-> rust_macro_scoped::Widget @4
+rust_macro_scoped::trigger -calls-> rust_macro_scoped::Widget::make @6
+rust_macro_scoped::trigger -calls-> rust_macro_scoped::good @6

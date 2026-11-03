@@ -7,7 +7,7 @@ use super::output::{Value, Writer};
 use super::{Filter, Index, Node};
 use crate::app::error::AppError;
 use crate::domain::corpus::FileRecord as CorpusRecord;
-use crate::domain::facts::{FLAG_TEST, Facts, RefKind, SourceIdentityKind, SymKind};
+use crate::domain::facts::{FLAG_ENTRY, FLAG_TEST, Facts, RefKind, SourceIdentityKind, SymKind};
 use crate::domain::filetype::FileType;
 use crate::domain::graph::EdgeKind;
 use crate::extract;
@@ -1677,7 +1677,14 @@ fn more(writer: &mut Writer, count: usize, what: &str) {
 
 fn is_test(index: &Index, node: u32) -> bool {
     match index.node(node) {
-        Node::Symbol(symbol) => symbol.flags & FLAG_TEST != 0,
+        Node::Symbol(symbol) => {
+            let flags = symbol.flags;
+            if index.file_of(node).file_type() == Some(FileType::Rust) {
+                flags & (FLAG_TEST | FLAG_ENTRY) == FLAG_TEST | FLAG_ENTRY
+            } else {
+                flags & FLAG_TEST != 0
+            }
+        }
         Node::File(file) => file.role() == crate::domain::role::Role::Test,
     }
 }

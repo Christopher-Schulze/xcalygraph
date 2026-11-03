@@ -74,6 +74,19 @@ fn read_opt_index(decoder: &mut Decoder) -> DecodeResult<Option<u32>> {
     Ok(raw.checked_sub(1))
 }
 
+fn opt_u32(encoder: &mut Encoder, value: Option<u32>) {
+    encoder.var(value.map_or(0, |line| u64::from(line) + 1));
+}
+
+fn read_opt_u32(decoder: &mut Decoder) -> DecodeResult<Option<u32>> {
+    match decoder.var()? {
+        0 => Ok(None),
+        value => u32::try_from(value - 1)
+            .map(Some)
+            .map_err(|_| DecodeError("u32 overflow")),
+    }
+}
+
 pub fn encode(encoder: &mut Encoder, facts: &Facts) {
     encoder.opt_str(facts.package.as_deref());
     encoder.var_u32(facts.lines);
@@ -91,7 +104,7 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
         encoder.str(&symbol.signature);
         encoder.str(&symbol.doc);
         terms(encoder, &symbol.terms);
-        encoder.u8(u8::from(symbol.exported) | symbol.flags << 1);
+        encoder.var_u32(u32::from(u8::from(symbol.exported)) | (u32::from(symbol.flags) << 1));
     }
     encoder.var_usize(facts.imports.len());
     for import in &facts.imports {
@@ -135,6 +148,7 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
         encoder.str(&binding.name);
         encoder.str(&binding.type_name);
         encoder.var_u32(binding.line);
+        opt_u32(encoder, binding.scope_end_line);
         encoder.u8(u8::from(binding.declared));
     }
     encoder.var_usize(facts.envs.len());
@@ -241,7 +255,8 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
         let signature = decoder.string()?;
         let doc = decoder.string()?;
         let terms = read_terms(decoder)?;
-        let bits = decoder.u8()?;
+        let bits = decoder.var_u32()?;
+        let flags = u8::try_from(bits >> 1).map_err(|_| DecodeError("symbol flags overflow"))?;
         facts.symbols.push(Symbol {
             kind: Some(kind),
             name,
@@ -253,7 +268,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             doc,
             terms,
             exported: bits & 1 != 0,
-            flags: bits >> 1,
+            flags,
         });
     }
     for _ in 0..decoder.len()? {
@@ -340,6 +355,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             name: decoder.string()?,
             type_name: decoder.string()?,
             line: decoder.var_u32()?,
+            scope_end_line: read_opt_u32(decoder)?,
             declared: decoder.u8()? != 0,
         });
     }
@@ -649,7 +665,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::facts::FLAG_TEST;
+    use crate::domain::facts::{FLAG_RUST_CFG_NOT_UNIX, FLAG_RUST_CFG_UNIX, FLAG_TEST};
 
     pub fn sample() -> Facts {
         Facts {
@@ -738,6 +754,7 @@ mod tests {
                 name: "s".to_owned(),
                 type_name: "Store".to_owned(),
                 line: 11,
+                scope_end_line: None,
                 declared: true,
             }],
             envs: vec![EnvRead {
@@ -796,6 +813,41 @@ mod tests {
         assert_eq!(decode(&mut decoder)?, facts);
         assert_eq!(decode(&mut decoder)?, Facts::default());
         assert!(decoder.is_done());
+        Ok(())
+    }
+
+    #[test]
+    fn rust_platform_cfg_flags_round_trip() -> DecodeResult<()> {
+        let facts = Facts {
+            symbols: vec![Symbol {
+                kind: Some(SymKind::Fn),
+                name: "platform_call".to_owned(),
+                exported: true,
+                flags: FLAG_TEST | FLAG_RUST_CFG_UNIX | FLAG_RUST_CFG_NOT_UNIX,
+                ..Symbol::default()
+            }],
+            ..Facts::default()
+        };
+        let mut encoder = Encoder::default();
+        encode(&mut encoder, &facts);
+        assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
+        Ok(())
+    }
+
+    #[test]
+    fn untyped_local_binding_round_trips_for_shadowing() -> DecodeResult<()> {
+        let mut facts = sample();
+        facts.bindings.push(Binding {
+            scope: Some(1),
+            name: "parse".to_owned(),
+            type_name: String::new(),
+            line: 14,
+            scope_end_line: Some(20),
+            declared: false,
+        });
+        let mut encoder = Encoder::default();
+        encode(&mut encoder, &facts);
+        assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
         Ok(())
     }
 

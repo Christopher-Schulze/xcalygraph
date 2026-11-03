@@ -14,7 +14,7 @@ sym 57-59 method get parent=- owner=Store pub flags=0 sig="fn get(&self, id: Id)
 sym 61-63 method len parent=- owner=Store pub flags=0 sig="fn len(&self) -> usize" doc=""
 sym 66-72 fn load parent=- owner= priv flags=0 sig="pub(crate) fn load(reader: &dyn Reader) -> usize" doc=""
 sym 75-83 mod tests parent=- owner= priv flags=1 sig="mod tests" doc=""
-sym 79-82 fn opens parent=tests owner= priv flags=1 sig="fn opens()" doc=""
+sym 79-82 fn opens parent=tests owner= priv flags=3 sig="fn opens()" doc=""
 import 3 "std::collections" names=HashMap alias=- reexport=false
 import 4 "std" names=env alias=- reexport=false
 import 6 "crate::model" names=Row alias=- reexport=true
@@ -73,13 +73,17 @@ bind 18 "": usize declared scope=len
 bind 43 "": Self declared scope=open
 bind 43 "path": str declared scope=open
 bind 44 "client": Client declared scope=open
+bind 45 "url":  inferred scope=open
+bind 46 "fallback":  inferred scope=open
 bind 50 "row": Row declared scope=insert
 bind 57 "": Row declared scope=get
 bind 57 "id": Id declared scope=get
 bind 61 "": usize declared scope=len
 bind 66 "": usize declared scope=load
 bind 66 "reader": Reader declared scope=load
+bind 67 "store":  inferred scope=load
 bind 68 "other": Store declared scope=load
+bind 69 "row":  inferred scope=load
 bind 80 "store": Store declared scope=opens
 fields Store rows:HashMap client:Client
 env 45 DB_URL scope=open

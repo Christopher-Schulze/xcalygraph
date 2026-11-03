@@ -84,6 +84,59 @@ pub(in crate::extract) fn structural_identity(node: Node, source: &[u8]) -> Opti
     Some(format!("python:method:{identity}"))
 }
 
+/// Detects a Python contract method whose complete executable body raises `NotImplementedError`.
+pub(in crate::extract) fn is_abstract_stub(node: Node, source: &[u8]) -> bool {
+    if node.kind() != "function_definition" || node.has_error() || node.is_missing() {
+        return false;
+    }
+    let Some(body) = node.child_by_field_name("body") else {
+        return false;
+    };
+    let mut cursor = body.walk();
+    let mut found_raise = false;
+    for child in body.named_children(&mut cursor) {
+        match child.kind() {
+            "comment" => {}
+            "expression_statement" if !found_raise && is_docstring(child) => {}
+            "raise_statement" if !found_raise && raises_not_implemented(child, source) => {
+                found_raise = true;
+            }
+            _ => return false,
+        }
+    }
+    found_raise
+}
+
+fn is_docstring(statement: Node) -> bool {
+    statement.kind() == "expression_statement"
+        && statement.named_child_count() == 1
+        && statement
+            .named_child(0)
+            .is_some_and(|child| matches!(child.kind(), "string" | "concatenated_string"))
+}
+
+fn raises_not_implemented(statement: Node, source: &[u8]) -> bool {
+    let mut cursor = statement.walk();
+    let mut expressions = statement.named_children(&mut cursor);
+    let Some(exception) = expressions.next() else {
+        return false;
+    };
+    if expressions.next().is_some() {
+        return false;
+    }
+    let exception_name = match exception.kind() {
+        "identifier" => Some(exception),
+        "call" => exception.child_by_field_name("function"),
+        _ => None,
+    };
+    exception_name.is_some_and(|name| {
+        name.kind() == "identifier"
+            && name
+                .utf8_text(source)
+                .is_ok_and(|text| text == "NotImplementedError")
+    })
+}
+
 fn flags(definition: &Definition, context: &FileContext) -> u8 {
     // A registering decorator (`@app.route`, `@pytest.fixture`, `@click.command`) means the
     // framework calls the function: an entrypoint, never dead.

@@ -23,10 +23,14 @@
 (internal_module name: (identifier) @name) @definition.module
 (internal_module name: (nested_identifier) @name) @definition.module
 
-(class_heritage (extends_clause value: (identifier) @name) @reference.inherit)
-(class_heritage (extends_clause value: (member_expression object: (_) @qualifier property: (property_identifier) @name)) @reference.inherit)
-(implements_clause (type_identifier) @name @reference.implementation)
-(implements_clause (generic_type name: (type_identifier) @name) @reference.implementation)
+(class_declaration (class_heritage (extends_clause value: (identifier) @name) @reference.inherit))
+(class_declaration (class_heritage (extends_clause value: (member_expression object: (_) @qualifier property: (property_identifier) @name)) @reference.inherit))
+(abstract_class_declaration (class_heritage (extends_clause value: (identifier) @name) @reference.inherit))
+(abstract_class_declaration (class_heritage (extends_clause value: (member_expression object: (_) @qualifier property: (property_identifier) @name)) @reference.inherit))
+(class_declaration (class_heritage (implements_clause (type_identifier) @name @reference.implementation)))
+(class_declaration (class_heritage (implements_clause (generic_type name: (type_identifier) @name) @reference.implementation)))
+(abstract_class_declaration (class_heritage (implements_clause (type_identifier) @name @reference.implementation)))
+(abstract_class_declaration (class_heritage (implements_clause (generic_type name: (type_identifier) @name) @reference.implementation)))
 (extends_type_clause (type_identifier) @name @reference.inherit)
 (extends_type_clause (generic_type name: (type_identifier) @name) @reference.inherit)
 

@@ -1,0 +1,4 @@
+file:plain/untyped.js -imports-> file:plain/defs.js @1
+file:typed.ts -imports-> file:defs.ts @1
+plain/untyped.Named -inherits-> plain/defs.Base @2
+typed.Named -inherits-> defs.Base @2

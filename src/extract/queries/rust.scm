@@ -84,6 +84,7 @@
 (scoped_type_identifier path: (_) @qualifier name: (type_identifier) @name) @reference.type
 
 (parameter pattern: (identifier) @binding.name type: (_) @binding.type) @binding
+(let_declaration pattern: (identifier) @binding.name) @binding
 (let_declaration pattern: (identifier) @binding.name type: (_) @binding.type) @binding
 (let_declaration
   pattern: (identifier) @binding.name
@@ -122,9 +123,12 @@
 ; the token tree is unparsed, so an identifier directly followed by a parenthesized group is a
 ; call (the group is the call node, so its size is the argument count), `recv.method(...)` and
 ; `Path::name(...)` qualified calls.
-(token_tree (identifier) @name . (token_tree) @reference.call)
-(token_tree (identifier) @qualifier . "." . (identifier) @name . (token_tree) @reference.call)
-(token_tree (identifier) @qualifier . "::" . [(identifier) (primitive_type)] @name . (token_tree) @reference.call)
+((token_tree (identifier) @name . (token_tree) @reference.call)
+ (#match? @reference.call "^\\("))
+((token_tree (identifier) @qualifier . "." . (identifier) @name . (token_tree) @reference.call)
+ (#match? @reference.call "^\\("))
+((token_tree (identifier) @qualifier . "::" . [(identifier) (primitive_type)] @name . (token_tree) @reference.call)
+ (#match? @reference.call "^\\("))
 (shorthand_field_initializer (identifier) @name @reference.value)
 ; `Enum::Variant` in expressions and patterns names the enum.
 (scoped_identifier path: (identifier) @name) @reference.type

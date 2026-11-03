@@ -36,8 +36,8 @@
 ; ECMAScript private methods `#clone()` and their calls `this.#clone()`.
 (method_definition name: (private_property_identifier) @name) @definition.method
 
-(class_heritage (identifier) @name @reference.inherit)
-(class_heritage (member_expression object: (_) @qualifier property: (property_identifier) @name) @reference.inherit)
+(class_declaration (class_heritage (identifier) @name @reference.inherit))
+(class_declaration (class_heritage (member_expression object: (_) @qualifier property: (property_identifier) @name) @reference.inherit))
 
 (import_statement) @import.tree @import
 (export_statement source: (string)) @import.tree @import

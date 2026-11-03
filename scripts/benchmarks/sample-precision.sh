@@ -155,7 +155,7 @@ with Path(sys.argv[2]).open("xb") as destination:
 PYTHON
 
 bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
-cargo test --locked --release --no-run --bin xcalygraph --message-format=json \
+cargo test --locked --no-run --bin xcalygraph --message-format=json \
   > "${WORK}/cargo-build.jsonl"
 sampler_binary="$(python3 -I - "${WORK}/cargo-build.jsonl" <<'PYTHON'
 import json

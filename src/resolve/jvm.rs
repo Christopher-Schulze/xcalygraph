@@ -90,8 +90,18 @@ impl Index<'_> {
                     match nested {
                         Some((module, outers)) if name != "*" => {
                             imports.modules.push(module);
-                            if let Some(types) = self.types.get(&(module, name.as_str())) {
-                                self.push_symbols(file, types.clone(), local, imports);
+                            let types: Vec<u32> = self
+                                .types
+                                .get(&(module, name.as_str()))
+                                .into_iter()
+                                .flatten()
+                                .copied()
+                                .filter(|&symbol| {
+                                    outers.contains(&self.symbols[symbol as usize].parent)
+                                })
+                                .collect();
+                            if !types.is_empty() {
+                                self.push_symbols(file, types, local, imports);
                             } else {
                                 // Scala `import a.b.Util.{f, g}`: members of the object.
                                 let members: Vec<u32> = outers
