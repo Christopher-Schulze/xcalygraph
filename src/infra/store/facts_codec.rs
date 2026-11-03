@@ -2,8 +2,8 @@
 
 use super::codec::{DecodeError, DecodeResult, Decoder, Encoder};
 use crate::domain::facts::{
-    AssetMeta, Binding, ConfigKey, EnvDef, EnvRead, EnvSource, Facts, FieldName, Fields, GoEmbed,
-    Import, JuliaCallArgument, Manifest, Ref, RefKind, RustTargetRoot, SourceIdentity,
+    AssetMeta, Binding, ConfigKey, Coverage, EnvDef, EnvRead, EnvSource, Facts, FieldName, Fields,
+    GoEmbed, Import, JuliaCallArgument, Manifest, Ref, RefKind, RustTargetRoot, SourceIdentity,
     SourceIdentityKind, SymKind, Symbol, TextSegment, ValueKind,
 };
 
@@ -93,6 +93,7 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
     encoder.str(&facts.doc);
     terms(encoder, &facts.terms);
     encoder.u8(u8::from(facts.entry));
+    encoder.u8(facts.coverage as u8);
     encoder.var_usize(facts.symbols.len());
     for symbol in &facts.symbols {
         encoder.u8(symbol.kind() as u8);
@@ -243,6 +244,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
         doc: decoder.string()?,
         terms: read_terms(decoder)?,
         entry: decoder.u8()? != 0,
+        coverage: Coverage::from_u8(decoder.u8()?).ok_or(DecodeError("coverage"))?,
         ..Facts::default()
     };
     for _ in 0..decoder.len()? {
@@ -674,6 +676,7 @@ mod tests {
             doc: "Package store keeps rows.".to_owned(),
             terms: "main serve".to_owned(),
             entry: true,
+            coverage: Coverage::ParseErrors,
             symbols: vec![
                 Symbol {
                     kind: Some(SymKind::Struct),
@@ -813,6 +816,46 @@ mod tests {
         assert_eq!(decode(&mut decoder)?, facts);
         assert_eq!(decode(&mut decoder)?, Facts::default());
         assert!(decoder.is_done());
+        Ok(())
+    }
+
+    #[test]
+    fn coverage_round_trips_and_unknown_values_are_rejected() -> DecodeResult<()> {
+        for coverage in [
+            Coverage::Complete,
+            Coverage::ParseErrors,
+            Coverage::MatchLimit,
+            Coverage::NoGrammar,
+            Coverage::Failed,
+            Coverage::Unreadable,
+        ] {
+            let facts = Facts {
+                coverage,
+                ..Facts::default()
+            };
+            let mut encoder = Encoder::default();
+            encode(&mut encoder, &facts);
+            assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
+        }
+        let facts = Facts::default();
+        let mut encoder = Encoder::default();
+        encode(&mut encoder, &facts);
+        let complete = encoder.bytes.clone();
+        let unknown = Facts {
+            coverage: Coverage::Unreadable,
+            ..Facts::default()
+        };
+        let mut encoder = Encoder::default();
+        encode(&mut encoder, &unknown);
+        let offset = encoder
+            .bytes
+            .iter()
+            .zip(&complete)
+            .position(|(a, b)| a != b)
+            .ok_or(DecodeError("coverage byte"))?;
+        let mut corrupt = encoder.bytes.clone();
+        corrupt[offset] = 200;
+        assert!(decode(&mut Decoder::new(&corrupt)).is_err());
         Ok(())
     }
 

@@ -23,8 +23,8 @@ use std::collections::{HashMap, HashSet};
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator};
 
 use crate::domain::facts::{
-    self, Binding, EnvRead, Facts, FieldName, Fields, Import, JuliaCallArgument, Ref, RefKind,
-    SourceIdentity, SourceIdentityKind, SymKind, Symbol,
+    self, Binding, Coverage, EnvRead, Facts, FieldName, Fields, Import, JuliaCallArgument, Ref,
+    RefKind, SourceIdentity, SourceIdentityKind, SymKind, Symbol,
 };
 
 /// Language-specific behavior the query cannot express.
@@ -226,10 +226,7 @@ pub fn extract_with_post_parse(
     PARSER.with(|parser| {
         let mut parser = parser.borrow_mut();
         if parser.set_language(language).is_err() {
-            return Parsed {
-                incomplete: capture_identities,
-                ..Parsed::default()
-            };
+            return failed_parse(capture_identities);
         }
         // A NUL-only suffix cannot contain a declaration. Ignore it for strict diff parsing so
         // an otherwise complete source prefix remains usable, while other parse errors fail.
@@ -251,12 +248,20 @@ pub fn extract_with_post_parse(
                 }
                 parsed
             }
-            None => Parsed {
-                incomplete: capture_identities,
-                ..Parsed::default()
-            },
+            None => failed_parse(capture_identities),
         }
     })
+}
+
+fn failed_parse(capture_identities: bool) -> Parsed {
+    Parsed {
+        facts: Facts {
+            coverage: Coverage::Failed,
+            ..Facts::default()
+        },
+        incomplete: capture_identities,
+        ..Parsed::default()
+    }
 }
 
 fn collect(
@@ -601,6 +606,13 @@ fn collect(
     }
     drop(matches);
     let incomplete = capture_identities && (root.has_error() || cursor.did_exceed_match_limit());
+    let coverage = if cursor.did_exceed_match_limit() {
+        Coverage::MatchLimit
+    } else if root.has_error() {
+        Coverage::ParseErrors
+    } else {
+        Coverage::Complete
+    };
     envs.retain(|_, (name, _, _)| !assigned.contains(name));
     let doc = file_doc(root, source);
     let mut parsed = assemble(Assembly {
@@ -702,6 +714,7 @@ fn collect(
     }
     parsed.facts.doc = doc;
     parsed.facts.entry |= entry;
+    parsed.facts.coverage = coverage;
     parsed.incomplete = incomplete;
     if incomplete {
         parsed.identities.fill(None);

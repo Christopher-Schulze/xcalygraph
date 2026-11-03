@@ -80,10 +80,17 @@ pub fn scan(
 /// Reads, hashes and classifies one file; sensitive and large files are never read.
 fn inspect(root: &Path, stat: &Stat, cpp_sibling: bool) -> io::Result<FileRecord> {
     let (hash, content) = if role::needs_content(&stat.path, stat.size) {
-        let content = std::fs::read(root.join(&stat.path)).map_err(|error| {
-            io::Error::new(error.kind(), format!("read source {}: {error}", stat.path))
-        })?;
-        (xxh3_128(&content), Some(content))
+        match std::fs::read(root.join(&stat.path)) {
+            Ok(content) => (xxh3_128(&content), Some(content)),
+            // Classified by path as empty content; extraction records the file as unreadable.
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => (0, Some(Vec::new())),
+            Err(error) => {
+                return Err(io::Error::new(
+                    error.kind(),
+                    format!("read source {}: {error}", stat.path),
+                ));
+            }
+        }
     } else {
         (0, None)
     };

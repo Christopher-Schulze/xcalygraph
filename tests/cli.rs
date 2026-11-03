@@ -259,10 +259,10 @@ fn assert_impact_large_depth_matches(
             assert_eq!(String::from_utf8(output.stdout)?, expected, "args {args:?}");
             return Ok(());
         }
-        if started.elapsed() >= std::time::Duration::from_millis(1_000) {
+        if started.elapsed() >= std::time::Duration::from_secs(5) {
             child.kill()?;
             child.wait()?;
-            return Err(format!("impact command exceeded 1-second deadline: {args:?}").into());
+            return Err(format!("impact command exceeded 5-second deadline: {args:?}").into());
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }

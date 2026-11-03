@@ -281,6 +281,7 @@ fn merge_script(
 }
 
 fn merge_facts(document: &mut Facts, script: &mut Facts, line_offset: u32) {
+    document.coverage = document.coverage.max(script.coverage);
     let symbol_offset = u32::try_from(document.symbols.len()).unwrap_or(u32::MAX);
     for symbol in &mut script.symbols {
         symbol.line = symbol.line.saturating_add(line_offset);

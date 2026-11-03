@@ -9,7 +9,7 @@ use rayon::prelude::*;
 use super::error::AppError;
 use super::workspace::Workspace;
 use crate::domain::corpus::{ChangeSet, FileRecord};
-use crate::domain::facts::Facts;
+use crate::domain::facts::{Coverage, Facts};
 use crate::domain::hash::FastMap;
 use crate::extract;
 use crate::infra::lock::{self, WriterLock};
@@ -357,8 +357,17 @@ fn write_shards(
 }
 
 fn extract_file(workspace: &Workspace, record: &FileRecord) -> Result<Facts, AppError> {
-    let content = std::fs::read(workspace.root.join(&record.path))
-        .map_err(AppError::io(format!("read source {}", record.path)))?;
+    let content = match std::fs::read(workspace.root.join(&record.path)) {
+        Ok(content) => content,
+        // Other files stay answerable; the coverage note names this one.
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Ok(Facts {
+                coverage: Coverage::Unreadable,
+                ..Facts::default()
+            });
+        }
+        Err(error) => return Err(AppError::io(format!("read source {}", record.path))(error)),
+    };
     if xxhash_rust::xxh3::xxh3_128(&content) != record.hash {
         return Err(AppError::Invalid(format!(
             "source changed while indexing {}; retry",
@@ -368,7 +377,7 @@ fn extract_file(workspace: &Workspace, record: &FileRecord) -> Result<Facts, App
     // A parser fault on one malformed file costs that file's facts, never the index.
     Ok(
         std::panic::catch_unwind(|| extract::extract(record, &content)).unwrap_or_else(|_| Facts {
-            doc: "! extraction failed".to_owned(),
+            coverage: Coverage::Failed,
             ..Facts::default()
         }),
     )

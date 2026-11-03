@@ -8,7 +8,7 @@
 
 use super::lang;
 use crate::domain::corpus::FileRecord;
-use crate::domain::facts::{Ref, RefKind, SymKind, Symbol};
+use crate::domain::facts::{Coverage, Facts, Ref, RefKind, SymKind, Symbol};
 use crate::domain::filetype::FileType;
 use crate::extract::engine;
 
@@ -49,6 +49,10 @@ pub fn extract(record: &FileRecord, content: &[u8], capture_identities: bool) ->
             )
         })
         .unwrap_or_else(|| engine::Parsed {
+            facts: Facts {
+                coverage: Coverage::NoGrammar,
+                ..Facts::default()
+            },
             incomplete: capture_identities,
             ..engine::Parsed::default()
         });

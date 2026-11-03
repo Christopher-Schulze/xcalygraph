@@ -310,6 +310,10 @@ Shortest path by layered BFS over forward `calls`, `uses`, `inherits`, `implemen
 
 Sections: dead candidates -> unused exports -> cycles -> stale doc references -> env drift -> unreferenced assets -> hidden coupling -> hotspots; each max 15 lines.
 
+### 7.8 Analysis coverage
+
+Each file has a coverage status: complete, parse errors (facts outside error regions stand), match limit (query matches cut short), no grammar (deep language without grammar or query in this build), failed (parser failure or panic) or unreadable (permission denied; other read errors abort the refresh). A coverage line `! coverage: N of T files incomplete (classes): p1 p2 p3 +M; absence unproven` lists severest classes first, at most three paths, deterministic, after the path, language and test filters: `audit` always when any file is incomplete; `show` when the symbol has no incoming edge and `impact` when it has no dependent, counting only files of the target's language family; `map` only for match limit and worse. Complete repositories produce no line; JSON carries it as a `note` record.
+
 ## 8. Output format
 
 Text:
@@ -329,7 +333,7 @@ Text:
 | `e` | environment variable read |
 | `r` | run command |
 | `~` | changed symbol |
-| `!` | notice: ambiguity, stale reference, unavailable data |
+| `!` | notice: ambiguity, stale reference, unavailable data, incomplete analysis |
 | trailing `?` | inferred fact |
 | `+<n> more`, `+<n>`, `+` | truncated remainder; count omitted only when it cannot fit |
 
@@ -370,10 +374,10 @@ Location: `<index-dir>/<root basename>-<XXH3-64 hex of the canonical root path>/
 | `git` | churn, co-change, hotspots keyed by HEAD and analysis version | key changes and git data is requested |
 | `lock` | writer lock | never |
 
-- Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum; format 15 fact records include the source XXH3-128 hash, sparse source identities, optional binding block-end lines and Rust Unix/non-Unix gate flags; derived records include validated sparse TypeScript interface groups; fact shard sections deflated; search postings as delta-varint (node, term frequencies) pairs.
+- Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum; format 16 fact records include a per-file coverage status, the source XXH3-128 hash, sparse source identities, optional binding block-end lines and Rust Unix/non-Unix gate flags; derived records include validated sparse TypeScript interface groups; fact shard sections deflated; search postings as delta-varint (node, term frequencies) pairs.
 - Writes: new exclusively created temp file in the same directory (`O_CREAT|O_EXCL`; an existing entry or symlink is skipped, never opened) -> rename; no fsync; unchanged files untouched; install and update use the same primitive. A checksum mismatch or truncation on open rebuilds that file.
 - Reads: memory-mapped, zero-copy.
-- Listing and safe cleanup also recognize format-8 through format-14 containers; queries require the current format and writable queries rebuild older indexes.
+- Listing and safe cleanup also recognize format-8 through format-15 containers; queries require the current format and writable queries rebuild older indexes.
 
 ## 10. Skill, install, update
 

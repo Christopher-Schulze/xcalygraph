@@ -763,6 +763,49 @@ pub struct GoEmbed {
 }
 
 /// Everything extracted from one file.
+/// How completely a file was analyzed; ordered by how much of the file's facts may be missing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
+pub enum Coverage {
+    #[default]
+    Complete = 0,
+    /// The parser recovered from syntax errors; facts outside the error regions stand.
+    ParseErrors = 1,
+    /// The query match limit cut extraction short; later matches are missing.
+    MatchLimit = 2,
+    /// A deep language without an available grammar or query in this build.
+    NoGrammar = 3,
+    /// The parser failed or panicked; the file contributes no facts.
+    Failed = 4,
+    /// The source could not be read; the file contributes no facts.
+    Unreadable = 5,
+}
+
+impl Coverage {
+    pub const fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Complete),
+            1 => Some(Self::ParseErrors),
+            2 => Some(Self::MatchLimit),
+            3 => Some(Self::NoGrammar),
+            4 => Some(Self::Failed),
+            5 => Some(Self::Unreadable),
+            _ => None,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::ParseErrors => "parse errors",
+            Self::MatchLimit => "match limit",
+            Self::NoGrammar => "no grammar",
+            Self::Failed => "failed",
+            Self::Unreadable => "unreadable",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Facts {
     /// Declared package, namespace or module name (Go package, Java package, C# namespace).
@@ -794,6 +837,7 @@ pub struct Facts {
     pub terms: String,
     /// The file is an executable entrypoint (shebang, `__main__` block).
     pub entry: bool,
+    pub coverage: Coverage,
 }
 
 impl Facts {

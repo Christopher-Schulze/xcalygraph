@@ -19,7 +19,7 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
 use crate::app::error::AppError;
 use crate::cli::Options;
-use crate::domain::facts::{FLAG_GENERATED, FLAG_TEST, SymKind};
+use crate::domain::facts::{Coverage, FLAG_GENERATED, FLAG_TEST, SymKind};
 use crate::domain::filetype::FileType;
 use crate::domain::role::Role;
 
@@ -33,6 +33,80 @@ pub struct Filter {
     kinds: Vec<SymKind>,
     pub exact: bool,
     no_tests: bool,
+}
+
+/// Languages that can reference each other's symbols, for scoping a coverage note.
+fn same_language_family(a: FileType, b: FileType) -> bool {
+    use FileType::*;
+    let family = |file_type| match file_type {
+        JavaScript | TypeScript | Vue | Svelte | Astro => 1,
+        C | Cpp | ObjC => 2,
+        Java | Kotlin | Scala | Groovy => 3,
+        _ => 0,
+    };
+    a == b || (family(a) != 0 && family(a) == family(b))
+}
+
+/// One bounded line naming the files, among those passing `filter` and at least `minimum` severe,
+/// that were not fully analyzed: most severe first, deterministic. With `language`, only files
+/// that could reference symbols of that language count. `None` when no such file exists, so
+/// healthy outputs do not grow.
+pub(super) fn coverage_note(
+    index: &Index,
+    filter: &Filter,
+    minimum: Coverage,
+    language: Option<FileType>,
+) -> Option<String> {
+    const SHOWN_PATHS: usize = 3;
+    let mut total = 0usize;
+    let mut incomplete: Vec<(Coverage, &str)> = Vec::new();
+    for file in index.derived.files() {
+        if !filter.file(index, file)
+            || language.is_some_and(|language| {
+                !file
+                    .file_type()
+                    .is_some_and(|file_type| same_language_family(file_type, language))
+            })
+        {
+            continue;
+        }
+        total += 1;
+        if file.coverage() >= minimum.max(Coverage::ParseErrors) {
+            incomplete.push((file.coverage(), index.string(file.path)));
+        }
+    }
+    if incomplete.is_empty() {
+        return None;
+    }
+    incomplete.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
+    let mut classes: Vec<(Coverage, usize)> = Vec::new();
+    for (coverage, _) in &incomplete {
+        match classes.last_mut() {
+            Some((class, count)) if class == coverage => *count += 1,
+            _ => classes.push((*coverage, 1)),
+        }
+    }
+    let classes = classes
+        .iter()
+        .map(|(class, count)| format!("{count} {}", class.label()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let paths = incomplete
+        .iter()
+        .take(SHOWN_PATHS)
+        .map(|(_, path)| *path)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let more = incomplete.len().saturating_sub(SHOWN_PATHS);
+    let more = if more > 0 {
+        format!(" +{more}")
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "! coverage: {} of {total} files incomplete ({classes}): {paths}{more}; absence unproven",
+        incomplete.len()
+    ))
 }
 
 impl Filter {

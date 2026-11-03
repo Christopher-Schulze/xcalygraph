@@ -5,6 +5,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::output::{OutputFact, Value, Writer, json_object};
 use super::{Filter, Index, Node};
+use crate::domain::facts::Coverage;
 use crate::domain::facts::{
     EnvSource, FLAG_DECLARATION, FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST, SymKind,
 };
@@ -249,6 +250,13 @@ pub fn render(
     budget: usize,
 ) -> String {
     let mut writer = Writer::new(json, budget);
+    // Dead and unused rest on absent references: state an incomplete analysis first.
+    if let Some(note) = super::coverage_note(index, filter, Coverage::ParseErrors, None) {
+        writer.line(
+            &note,
+            &[("t", Value::Str("note")), ("name", Value::Str(&note))],
+        );
+    }
     let owners = member_owners(index);
     let (dead, unused) = unreferenced(index, filter, &owners);
     section(

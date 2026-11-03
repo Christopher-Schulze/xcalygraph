@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::output::{OutputFact, Value, Writer, json_object};
 use super::{Filter, Index};
+use crate::domain::facts::Coverage;
 use crate::domain::facts::{EnvSource, FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST, SymKind};
 use crate::domain::filetype::FileType;
 use crate::domain::graph::{EdgeKind, ModuleEdge};
@@ -43,6 +44,7 @@ struct SymbolFact {
 
 enum MapFact {
     Section(String),
+    Notice(String),
     Root {
         name: String,
         files: u64,
@@ -89,7 +91,7 @@ enum MapFact {
 impl OutputFact for MapFact {
     fn text(&self) -> String {
         match self {
-            Self::Section(name) => name.clone(),
+            Self::Section(name) | Self::Notice(name) => name.clone(),
             Self::Root {
                 name,
                 files,
@@ -163,6 +165,9 @@ impl OutputFact for MapFact {
         match self {
             Self::Section(name) => {
                 fields.extend([("t", Value::Str("sec")), ("name", Value::Str(name))])
+            }
+            Self::Notice(name) => {
+                fields.extend([("t", Value::Str("note")), ("name", Value::Str(name))])
             }
             Self::Root {
                 name,
@@ -289,12 +294,17 @@ pub fn render(
     budget: usize,
 ) -> String {
     let included = included_modules(index, filter);
+    let mut head = vec![RenderedFact::from_fact(&root_line(
+        index, filter, root_name,
+    ))];
+    // Orientation claims no absence: only files that contribute few or no facts are worth a line.
+    if let Some(note) = super::coverage_note(index, filter, Coverage::MatchLimit, None) {
+        head.push(RenderedFact::from_fact(&MapFact::Notice(note)));
+    }
     let mut sections = vec![
         Section {
             keyword: "",
-            lines: vec![RenderedFact::from_fact(&root_line(
-                index, filter, root_name,
-            ))],
+            lines: head,
             cut: 0,
         },
         section("modules", modules(index, filter), MODULE_LINES),

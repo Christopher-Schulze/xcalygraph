@@ -7,6 +7,7 @@ use super::output::{Value, Writer};
 use super::{Filter, Index, Node};
 use crate::app::error::AppError;
 use crate::domain::corpus::FileRecord as CorpusRecord;
+use crate::domain::facts::Coverage;
 use crate::domain::facts::{FLAG_ENTRY, FLAG_TEST, Facts, RefKind, SourceIdentityKind, SymKind};
 use crate::domain::filetype::FileType;
 use crate::domain::graph::EdgeKind;
@@ -1447,6 +1448,21 @@ fn render(
                 / 2,
         ),
     );
+    // No dependent is only proven when the analysis saw everything.
+    if affected.is_empty()
+        && let Some(target) = targets.first()
+        && let Some(note) = super::coverage_note(
+            index,
+            filter,
+            Coverage::ParseErrors,
+            index.file_of(target.node).file_type(),
+        )
+    {
+        writer.line(
+            &note,
+            &[("t", Value::Str("note")), ("name", Value::Str(&note))],
+        );
+    }
     write_changes(
         index,
         &mut writer,

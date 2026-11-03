@@ -87,6 +87,7 @@ pub struct GraphFile {
     /// Unresolved references counted as ambiguous (resolution step 8).
     pub ambiguous: u32,
     pub entry: bool,
+    pub coverage: crate::domain::facts::Coverage,
     /// Leading file comment (module documentation).
     pub doc: String,
     /// Config key paths and env definition names, for the search index only.

@@ -26,12 +26,12 @@ mod tasks;
 mod terms;
 
 use crate::domain::corpus::FileRecord;
-use crate::domain::facts::Facts;
-use crate::domain::filetype::FileType;
+use crate::domain::facts::{Coverage, Facts};
+use crate::domain::filetype::{Class, FileType};
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 96;
+const EXTRACTION_VERSION: u32 = 97;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -176,7 +176,19 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
                 post_parse,
             )
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|| {
+            let mut parsed = engine::Parsed::default();
+            if !toc
+                && record.file_type.is_some_and(|file_type| {
+                    // SQL and Terraform have their own extractors below, no grammar.
+                    file_type.class() == Class::Deep
+                        && !matches!(file_type, FileType::Sql | FileType::Terraform)
+                })
+            {
+                parsed.facts.coverage = Coverage::NoGrammar;
+            }
+            parsed
+        });
     let engine::Parsed {
         mut facts,
         spans,
@@ -367,6 +379,40 @@ pub fn count_lines(content: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn coverage_of(path: &str, file_type: FileType, content: &str) -> Coverage {
+        let record = FileRecord {
+            path: path.to_owned(),
+            size: content.len() as u64,
+            mtime_ns: 0,
+            identity: None,
+            hash: 0,
+            role: Role::Src,
+            file_type: Some(file_type),
+        };
+        extract(&record, content.as_bytes()).coverage
+    }
+
+    #[test]
+    fn coverage_records_parse_errors_and_spares_own_extractors() {
+        assert_eq!(
+            coverage_of("a.go", FileType::Go, "package a\nfunc A() {}\n"),
+            Coverage::Complete
+        );
+        assert_eq!(
+            coverage_of("a.go", FileType::Go, "package a\nfunc A( {\n"),
+            Coverage::ParseErrors
+        );
+        // SQL and Terraform have their own extractors, so no grammar is missing.
+        assert_eq!(
+            coverage_of("a.sql", FileType::Sql, "create table t (id int);\n"),
+            Coverage::Complete
+        );
+        assert_eq!(
+            coverage_of("a.tf", FileType::Terraform, "resource \"a\" \"b\" {}\n"),
+            Coverage::Complete
+        );
+    }
 
     /// Grammar exploration for query work: prints the syntax tree of the file in
     /// `XCALYGRAPH_TREE_FILE` (type from its name). Development only:

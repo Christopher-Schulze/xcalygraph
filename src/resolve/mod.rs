@@ -26,7 +26,7 @@ use rayon::prelude::*;
 
 use crate::domain::corpus::FileRecord;
 use crate::domain::facts::{
-    self, Binding, FLAG_DECLARATION, Facts, Ref, RefKind, SourceIdentityKind, SymKind,
+    self, Binding, Coverage, FLAG_DECLARATION, Facts, Ref, RefKind, SourceIdentityKind, SymKind,
 };
 use crate::domain::filetype::FileType;
 use crate::domain::graph::{
@@ -3983,6 +3983,7 @@ impl<'a> Index<'a> {
                 ambiguous: 0,
                 entry: facts.is_some_and(|facts| facts.entry)
                     || manifest_entries.contains(record.path.as_str()),
+                coverage: facts.map_or(Coverage::Complete, |facts| facts.coverage),
                 doc: facts.map(|facts| facts.doc.clone()).unwrap_or_default(),
                 terms: facts.map(|facts| facts.terms.clone()).unwrap_or_default(),
                 keys: facts

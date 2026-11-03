@@ -6,7 +6,7 @@ use rayon::prelude::*;
 
 use super::codec::{Decoder, Encoder};
 use super::container::{self, Container, Kind};
-use crate::domain::facts::{FLAG_TYPESCRIPT_AUGMENTATION, SymKind};
+use crate::domain::facts::{Coverage, FLAG_TYPESCRIPT_AUGMENTATION, SymKind};
 use crate::domain::filetype::FileType;
 use crate::domain::graph::{Confidence, EdgeKind, FLAG_TYPESCRIPT_GLOBAL_INTERFACE, Graph};
 use crate::domain::hash::FastMap;
@@ -46,7 +46,7 @@ pub struct FileRecord {
     pub role: u8,
     pub file_type: u8,
     pub entry: u8,
-    pub pad: u8,
+    pub coverage: u8,
 }
 
 /// One adjacency entry: `node` is the target in the forward list, the source in the reverse.
@@ -224,7 +224,7 @@ pub fn build(graph: &Graph) -> Vec<u8> {
             role: file.role as u8,
             file_type: file.file_type.map_or(0, |file_type| file_type as u8),
             entry: u8::from(file.entry),
-            pad: 0,
+            coverage: file.coverage as u8,
         })
         .collect();
     let symbols: Vec<SymbolRecord> = graph
@@ -905,6 +905,10 @@ impl FileRecord {
 
     pub fn file_type(&self) -> Option<FileType> {
         FileType::from_u8(self.file_type)
+    }
+
+    pub fn coverage(&self) -> Coverage {
+        Coverage::from_u8(self.coverage).unwrap_or(Coverage::Failed)
     }
 }
 
