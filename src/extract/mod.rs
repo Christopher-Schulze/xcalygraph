@@ -31,7 +31,7 @@ use crate::domain::filetype::FileType;
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 86;
+const EXTRACTION_VERSION: u32 = 87;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -161,13 +161,19 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
         .filter(|_| !toc)
         .and_then(|file_type| lang::lookup(file_type, &record.path))
         .map(|(pack, language, query)| {
-            engine::extract(
+            #[cfg(feature = "lang-bash")]
+            let post_parse = (pack.file_type == FileType::Bash)
+                .then_some(lang::bash::post_parse as engine::PostParse);
+            #[cfg(not(feature = "lang-bash"))]
+            let post_parse: Option<engine::PostParse> = None;
+            engine::extract_with_post_parse(
                 &language,
                 query,
                 &pack.hooks,
                 &record.path,
                 content,
                 capture_identities,
+                post_parse,
             )
         })
         .unwrap_or_default();
@@ -195,10 +201,6 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
             None,
             &mut facts,
         );
-    }
-    #[cfg(feature = "lang-bash")]
-    if record.file_type == Some(FileType::Bash) {
-        lang::bash::recover_functions(&String::from_utf8_lossy(content), &mut facts);
     }
     #[cfg(feature = "lang-lua")]
     if toc {
@@ -692,5 +694,93 @@ mod tests {
         let facts = extract(&record, source.as_bytes());
         assert_eq!(facts.symbols, parsed.facts.symbols);
         assert_eq!(facts.refs, parsed.facts.refs);
+    }
+
+    #[cfg(feature = "lang-bash")]
+    #[test]
+    fn bash_getopts_options_have_stable_diff_identities_and_exact_trap_calls()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::domain::facts::{RefKind, SymKind};
+
+        let source = include_bytes!("../../tests/fixtures/languages/bash/scripts/options.sh");
+        let record = FileRecord {
+            path: "src/options.sh".to_owned(),
+            size: source.len() as u64,
+            mtime_ns: 0,
+            identity: None,
+            hash: 0,
+            role: Role::Src,
+            file_type: Some(FileType::Bash),
+        };
+        let parsed = extract_with_identities(&record, source);
+        assert!(!parsed.incomplete);
+        assert_eq!(parsed.identities.len(), parsed.facts.symbols.len());
+
+        let options: Vec<_> = parsed
+            .facts
+            .symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, symbol)| symbol.kind() == SymKind::Option)
+            .map(|(index, symbol)| {
+                let identity = parsed
+                    .identities
+                    .get(index)
+                    .and_then(Option::as_deref)
+                    .ok_or("Bash option has no diff identity")?;
+                Ok((symbol.name.as_str(), symbol.signature.as_str(), identity))
+            })
+            .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+        assert_eq!(
+            options,
+            [
+                ("-a", "arg=none;case=16", "arg=none;handler=explicit"),
+                (
+                    "-b",
+                    "arg=required;case=17",
+                    "arg=required;handler=explicit"
+                ),
+                ("-c", "arg=none;case=18", "arg=none;handler=explicit"),
+                ("-d", "arg=none;case=*:21", "arg=none;handler=fallback"),
+                ("-z", "arg=none;case=none", "arg=none;handler=none"),
+                ("-x", "arg=none;case=*:36", "arg=none;handler=fallback"),
+                ("-y", "arg=none;case=*:36", "arg=none;handler=fallback"),
+                (
+                    "-m",
+                    "arg=none;case=ambiguous",
+                    "arg=none;handler=ambiguous"
+                ),
+                (
+                    "-n",
+                    "arg=none;case=ambiguous",
+                    "arg=none;handler=ambiguous"
+                ),
+            ]
+        );
+        let trap_calls: Vec<_> = parsed
+            .facts
+            .refs
+            .iter()
+            .filter(|reference| reference.kind == RefKind::Call && reference.name == "cleanup")
+            .map(|reference| reference.line)
+            .collect();
+        assert_eq!(trap_calls, [8, 9, 10]);
+        assert!(!parsed.facts.refs.iter().any(|reference| {
+            reference.kind == RefKind::Call
+                && ["EXIT", "INT", "TERM", "HUP"].contains(&reference.name.as_str())
+        }));
+        assert!(
+            !parsed
+                .facts
+                .refs
+                .iter()
+                .any(|reference| reference.kind == RefKind::Call && reference.name == "getopts")
+        );
+        assert!(!parsed.facts.refs.iter().any(|reference| {
+            reference.kind == RefKind::Call
+                && reference.name == "on_verbose"
+                && reference.line == 11
+        }));
+        Ok(())
     }
 }

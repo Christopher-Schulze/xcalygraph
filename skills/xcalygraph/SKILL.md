@@ -31,9 +31,9 @@ Local repository index: symbols, relationships, tests and env reads. Queries ref
 
 Use `exact symbol NAME` in `find`/`ctx`; misses return no match; `ctx` may add related context.
 
-NAME: `pkg.Type.Method`, `crate::mod::fn`, qualified suffix (`Store.Get`), `path:line`, `path::name`, file path or unique bare name. Paths (even `./` aliases) win collisions; check spelling before trimming.
+NAME: `pkg.Type.Method`, `crate::mod::fn`, qualified suffix (`Store.Get`), `path:line`, `path::name`, file path or unique bare name. Paths incl. `./` aliases win collisions; check spelling before trim.
 
-Flags: `-p GLOB` (repeatable, gitignore); `-l go,rust`; `-k fn,method,struct`; `--no-tests`; `--exact` (drop inferred); `-d N`; `--all`; `-b N` (hard token cap); `--json`; `--read-only` (no writes; exit 5 if stale); `-C DIR` (root).
+Flags: `-p GLOB` (repeatable, gitignore); `-l go,rust`; `-k fn,method,struct,option`; `--no-tests`; `--exact` (drop inferred); `-d N`; `--all`; `-b N` (hard token cap); `--json`; `--read-only` (no writes; exit 5 if stale); `-C DIR` (root).
 
 ## Reading the output
 
@@ -42,14 +42,15 @@ Flags: `-p GLOB` (repeatable, gitignore); `-l go,rust`; `-k fn,method,struct`; `
 - Rust `#[path]`: exact file; shared-file aliases unresolved, no same-name fallback.
 - Map JSON: counts, task runs, API sig/handlers, cycle/layer members, env path/line; audit: name/path/line, drift kind/status.
 - Card: `m`=member, `f`=fields, `^`=supertype, `v`=implementation, `<`=caller, `>`=definition, `t`=test, `t2`=test via caller, `e`=env, `!`=notice.
+- `option -x`: `arg=none|required;case=<line|*:line|none|ambiguous>`.
 - Merged interfaces: `show` lists each declaration and members.
-- TS `.d.ts` functions pair only with a unique same-module exported `.ts`/`.tsx` function whose full header tokens match (ignore final `;` only); both stay searchable; unproven overloads stay separate.
+- TS `.d.ts` functions pair with a unique same-module exported `.ts`/`.tsx` function matching full header tokens except final `;`; both searchable; unproven overloads separate.
 - Fields: after transport decoding, split on commas outside JSON-quoted names; `\u` preserves unpaired surrogates.
 - `?`=inferred edges/impact; Python Protocols, Julia Base typed args, Rust generic bounds; `--exact` drops inferred edges/runs.
-- `impact` runs retain Go module/package, Cargo manifest and pytest node-ID; args are quoted. Unsupported runners emit `t`, no `r`.
-- `impact --diff`: removals cite REV path:line; `moved?`=both locations; `sig?`=inferred signature change; `uncertain?`=ambiguous/missing identity. Sensitive, oversized, nonregular sides are path-only; missing REV blobs error; inspect beyond filters.
+- `impact` runs: Go module/package, Cargo manifest, pytest node ID, quoted args; unsupported runners: `t`, no `r`.
+- `impact --diff`: removals cite REV path:line; `moved?`=locations; `sig?`=inferred signature change; `uncertain?`=ambiguous/missing identity. Sensitive/oversized/nonregular sides are path-only; missing REV blobs error; inspect beyond filters.
 - Truncation: `+N more`, `+N`, `+` or JSON `{}`; narrow with filters or raise `-b`.
-- On shared-index failure, use local `.xcalygraph/`; stderr asks to ignore it in git.
+- Shared-index failure: use local `.xcalygraph/`; ignore it in git.
 
 ## Exit codes
 

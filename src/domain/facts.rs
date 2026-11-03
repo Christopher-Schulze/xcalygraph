@@ -22,9 +22,10 @@ pub enum SymKind {
     Task,
     Svc,
     Op,
+    Option,
 }
 
-pub const SYM_KINDS: [SymKind; 18] = [
+pub const SYM_KINDS: [SymKind; 19] = [
     SymKind::Mod,
     SymKind::Struct,
     SymKind::Class,
@@ -43,6 +44,7 @@ pub const SYM_KINDS: [SymKind; 18] = [
     SymKind::Task,
     SymKind::Svc,
     SymKind::Op,
+    SymKind::Option,
 ];
 
 impl SymKind {
@@ -74,6 +76,7 @@ impl SymKind {
             Self::Task => "task",
             Self::Svc => "svc",
             Self::Op => "op",
+            Self::Option => "option",
         }
     }
 

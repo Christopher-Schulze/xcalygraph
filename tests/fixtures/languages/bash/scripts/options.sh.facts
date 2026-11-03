@@ -1,0 +1,33 @@
+sym 2-2 fn cleanup parent=- owner= pub flags=0 sig="cleanup()" doc=""
+sym 3-3 fn on_verbose parent=- owner= pub flags=0 sig="on_verbose()" doc=""
+sym 4-4 fn on_output parent=- owner= pub flags=0 sig="on_output()" doc=""
+sym 5-5 fn on_invalid parent=- owner= pub flags=0 sig="on_invalid()" doc=""
+sym 6-6 fn on_fallback parent=- owner= pub flags=0 sig="on_fallback()" doc=""
+sym 7-7 fn on_missing parent=- owner= pub flags=0 sig="on_missing()" doc=""
+sym 14-14 option -a parent=- owner= priv flags=0 sig="arg=none;case=16" doc=""
+sym 14-14 option -b parent=- owner= priv flags=0 sig="arg=required;case=17" doc=""
+sym 14-14 option -c parent=- owner= priv flags=0 sig="arg=none;case=18" doc=""
+sym 14-14 option -d parent=- owner= priv flags=0 sig="arg=none;case=*:21" doc=""
+sym 24-24 option -z parent=- owner= priv flags=0 sig="arg=none;case=none" doc=""
+sym 34-34 option -x parent=- owner= priv flags=0 sig="arg=none;case=*:36" doc=""
+sym 34-34 option -y parent=- owner= priv flags=0 sig="arg=none;case=*:36" doc=""
+sym 40-40 option -m parent=- owner= priv flags=0 sig="arg=none;case=ambiguous" doc=""
+sym 40-40 option -n parent=- owner= priv flags=0 sig="arg=none;case=ambiguous" doc=""
+ref 16 Call on_verbose qualifier=- scope=-
+ref 17 Call on_output qualifier=- scope=-
+ref 18 Call on_verbose qualifier=- scope=-
+ref 19 Call on_invalid qualifier=- scope=-
+ref 20 Call on_missing qualifier=- scope=-
+ref 21 Call on_fallback qualifier=- scope=-
+ref 26 Call on_invalid qualifier=- scope=-
+ref 31 Call on_output qualifier=- scope=-
+ref 36 Call on_fallback qualifier=- scope=-
+ref 37 Call on_invalid qualifier=- scope=-
+ref 42 Call on_fallback qualifier=- scope=-
+ref 43 Call on_invalid qualifier=- scope=-
+ref 44 Call on_output qualifier=- scope=-
+ref 8 Call cleanup qualifier=- scope=-
+ref 9 Call cleanup qualifier=- scope=-
+ref 10 Call cleanup qualifier=- scope=-
+env 17 OPTARG scope=-
+env 29 DYNAMIC_OPTIONS scope=-

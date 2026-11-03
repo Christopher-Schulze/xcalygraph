@@ -202,7 +202,7 @@ About 60 languages and formats, each resolved by its own module rules rather tha
 | Solidity, Verilog and SystemVerilog | Solidity contracts, remappings, modifiers, events, Foundry tests; Verilog module instantiations resolved across the design |
 | PowerShell, Robot Framework, DM | PowerShell modules and dot-sourcing; Robot keywords resolved to resources and Python libraries; DM type paths with inheritance |
 | Apex, Razor, Blade, EJS, Jinja, COBOL, XAML, DM resources | structural depth: classes, methods, triggers, components, views, template includes and blocks, COBOL paragraphs and copybooks, XAML handlers to code-behind |
-| Bash | functions, commands as calls, sourced files, env reads |
+| Bash | functions, commands as calls, sourced files, env reads, literal `trap` handlers and `getopts` short options with argument and `case` facts |
 | OpenAPI, Protobuf, GraphQL | operations, rpcs and fields matched to the code handlers that implement them |
 | Terraform | resources, data sources, variables, locals, outputs and modules by address, with references and local module imports |
 | SQL | tables, views and functions from DDL; `queries` edges from code that names them in SQL strings |

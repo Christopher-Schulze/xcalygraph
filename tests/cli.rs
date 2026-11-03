@@ -574,7 +574,7 @@ fn clean_preserves_symlinked_shards_and_their_target() -> TestResult {
 }
 
 fn verified_previous_format_cleanup() -> TestResult {
-    for legacy_format in [8_u32, 7] {
+    for legacy_format in [8_u32] {
         let dir = TempDir::new(&format!("clean-previous-format-{legacy_format}"))?;
         dir.write("repo/main.go", "package main\n")?;
         let root = dir.0.join("repo");
@@ -610,6 +610,40 @@ fn verified_previous_format_cleanup() -> TestResult {
         assert!(String::from_utf8(removed.stdout)?.starts_with("deleted "));
         assert!(!store.exists());
     }
+    Ok(())
+}
+
+#[test]
+fn unsupported_previous_format_is_not_listed_or_cleaned() -> TestResult {
+    let dir = TempDir::new("clean-unsupported-format")?;
+    dir.write("repo/main.go", "package main\n")?;
+    let root = dir.0.join("repo");
+    let base = dir.0.join("index");
+    assert!(run_in(&root, &base, &["index"])?.status.success());
+    let store = index_for(&base, "repo")?;
+    let mut converted = 0;
+    for (path, mut content, _) in index_snapshot(&store)? {
+        if content.starts_with(b"XCALYGR\0") {
+            content[8..12].copy_from_slice(&7_u32.to_le_bytes());
+            fs::write(path, content)?;
+            converted += 1;
+        }
+    }
+    assert!(converted > 2);
+    let before = index_snapshot(&store)?;
+    let listed = support::command(BINARY, &dir.0)
+        .arg("ls")
+        .arg("--index-dir")
+        .arg(&base)
+        .env("HOME", dir.0.join("home"))
+        .output()?;
+    assert!(listed.status.success());
+    assert!(
+        !String::from_utf8(listed.stdout)?.contains(&root.canonicalize()?.display().to_string())
+    );
+    let cleaned = clean_in(&dir, &base, &["repo"])?;
+    assert!(String::from_utf8(cleaned.stdout)?.contains("skipped "));
+    assert_eq!(index_snapshot(&store)?, before);
     Ok(())
 }
 

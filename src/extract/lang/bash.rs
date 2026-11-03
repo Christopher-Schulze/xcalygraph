@@ -1,6 +1,10 @@
 //! Bash: functions, commands as calls, `source` and `.` imports with literal paths, reads of
 //! variables the file never assigns as environment reads.
 
+use std::collections::{HashMap, HashSet};
+
+use tree_sitter::Node;
+
 use super::Pack;
 use crate::domain::filetype::FileType;
 use crate::extract::engine::{self, Definition, FileContext, Hooks};
@@ -18,6 +22,389 @@ pub static PACK: Pack = Pack {
         builtin,
     },
 };
+
+/// Adds Bash facts that need the parse tree: literal trap actions and `getopts` case branches.
+pub fn post_parse(
+    source: &[u8],
+    root: Node<'_>,
+    parsed: &mut engine::Parsed,
+    capture_identities: bool,
+) {
+    recover_functions(&String::from_utf8_lossy(source), &mut parsed.facts);
+    if capture_identities {
+        parsed.identities.resize(parsed.facts.symbols.len(), None);
+    }
+    let identities = capture_identities.then_some(&mut parsed.identities);
+    extract_constructs(source, root, &mut parsed.facts, identities);
+}
+
+#[derive(Clone, Copy)]
+struct OptionSpec {
+    character: char,
+    requires_argument: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CaseHandler {
+    Explicit(u32),
+    Fallback(u32),
+    None,
+    Ambiguous,
+}
+
+fn extract_constructs(
+    source: &[u8],
+    root: Node<'_>,
+    facts: &mut crate::domain::facts::Facts,
+    mut identities: Option<&mut Vec<Option<String>>>,
+) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "command" && command_named(node, "trap", source) {
+            if let Some(reference) = trap_reference(node, source, facts) {
+                facts.refs.push(reference);
+            }
+        } else if node.kind() == "while_statement" {
+            extract_getopts(node, source, facts, &mut identities);
+        }
+        for index in (0..node.child_count()).rev() {
+            if let Some(child) = node.child(index) {
+                stack.push(child);
+            }
+        }
+    }
+}
+
+fn extract_getopts(
+    statement: Node<'_>,
+    source: &[u8],
+    facts: &mut crate::domain::facts::Facts,
+    identities: &mut Option<&mut Vec<Option<String>>>,
+) {
+    let Some(condition) = statement.child_by_field_name("condition") else {
+        return;
+    };
+    let commands = condition_getopts_commands(condition, source);
+    let [command] = commands.as_slice() else {
+        return;
+    };
+    let arguments = field_nodes(*command, "argument");
+    let (Some(specification), Some(variable)) = (arguments.first(), arguments.get(1)) else {
+        return;
+    };
+    let (Some(specification), Some(variable)) = (
+        literal_value(*specification, source),
+        literal_value(*variable, source),
+    ) else {
+        return;
+    };
+    if !shell_variable(variable) {
+        return;
+    }
+    let Some(options) = parse_option_spec(specification) else {
+        return;
+    };
+    let Some(body) = statement.child_by_field_name("body") else {
+        return;
+    };
+    let handlers = case_handlers(body, variable, &options, source);
+    let specification_line = source_line(*command);
+    for option in options {
+        let (case, handler_kind) = match handlers
+            .get(&option.character)
+            .copied()
+            .unwrap_or(CaseHandler::None)
+        {
+            CaseHandler::Explicit(line) => (line.to_string(), "explicit"),
+            CaseHandler::Fallback(line) => (format!("*:{line}"), "fallback"),
+            CaseHandler::None => ("none".to_owned(), "none"),
+            CaseHandler::Ambiguous => ("ambiguous".to_owned(), "ambiguous"),
+        };
+        let argument = if option.requires_argument {
+            "required"
+        } else {
+            "none"
+        };
+        let signature = format!("arg={argument};case={case}");
+        facts.symbols.push(crate::domain::facts::Symbol {
+            kind: Some(crate::domain::facts::SymKind::Option),
+            name: format!("-{}", option.character),
+            parent: None,
+            owner: String::new(),
+            line: specification_line,
+            end_line: specification_line,
+            signature,
+            doc: String::new(),
+            terms: String::new(),
+            exported: false,
+            flags: 0,
+        });
+        if let Some(identities) = identities.as_deref_mut() {
+            identities.push(Some(format!("arg={argument};handler={handler_kind}")));
+        }
+    }
+}
+
+fn trap_reference(
+    command: Node<'_>,
+    source: &[u8],
+    facts: &crate::domain::facts::Facts,
+) -> Option<crate::domain::facts::Ref> {
+    use crate::domain::facts::{NO_ARITY, Ref, RefKind, SymKind};
+
+    let action = *field_nodes(command, "argument").first()?;
+    let name = literal_value(action, source)?;
+    if name.starts_with('-') || !function_name(name) || builtin(name) {
+        return None;
+    }
+    let line = source_line(action);
+    let scope = facts
+        .symbols
+        .iter()
+        .enumerate()
+        .filter(|(_, symbol)| {
+            symbol.kind() == SymKind::Fn && symbol.line <= line && line <= symbol.end_line
+        })
+        .min_by_key(|(_, symbol)| symbol.end_line.saturating_sub(symbol.line))
+        .and_then(|(index, _)| u32::try_from(index).ok());
+    Some(Ref {
+        kind: RefKind::Call,
+        name: name.to_owned(),
+        qualifier: None,
+        scope,
+        line,
+        arity: NO_ARITY,
+    })
+}
+
+fn case_handlers(
+    body: Node<'_>,
+    variable: &str,
+    options: &[OptionSpec],
+    source: &[u8],
+) -> HashMap<char, CaseHandler> {
+    let mut handlers: HashMap<char, CaseHandler> = options
+        .iter()
+        .map(|option| (option.character, CaseHandler::None))
+        .collect();
+    let cases: Vec<Node<'_>> = loop_cases(body)
+        .into_iter()
+        .filter(|case| case_variable(*case, source).as_deref() == Some(variable))
+        .collect();
+    let [case] = cases.as_slice() else {
+        if cases.len() > 1 {
+            handlers
+                .values_mut()
+                .for_each(|handler| *handler = CaseHandler::Ambiguous);
+        }
+        return handlers;
+    };
+    for item in (0..case.child_count()).filter_map(|index| case.child(index)) {
+        if item.kind() != "case_item" {
+            continue;
+        }
+        let line = source_line(item);
+        let mut explicit = HashSet::new();
+        let mut fallback = false;
+        let mut unsupported = false;
+        for value in field_nodes(item, "value") {
+            if wildcard(value, source) {
+                fallback = true;
+            } else if let Some(character) = case_option(value, source) {
+                explicit.insert(character);
+            } else {
+                unsupported = true;
+            }
+        }
+        for option in options {
+            let Some(handler) = handlers.get_mut(&option.character) else {
+                continue;
+            };
+            if *handler != CaseHandler::None {
+                continue;
+            }
+            *handler = if explicit.contains(&option.character) {
+                CaseHandler::Explicit(line)
+            } else if fallback {
+                CaseHandler::Fallback(line)
+            } else if unsupported {
+                CaseHandler::Ambiguous
+            } else {
+                CaseHandler::None
+            };
+        }
+    }
+    handlers
+}
+
+fn condition_getopts_commands<'tree>(condition: Node<'tree>, source: &[u8]) -> Vec<Node<'tree>> {
+    let mut stack = vec![condition];
+    let mut commands = Vec::new();
+    while let Some(node) = stack.pop() {
+        if node.kind() == "command" {
+            if command_named(node, "getopts", source) {
+                commands.push(node);
+            }
+            continue;
+        }
+        if matches!(
+            node.kind(),
+            "command_substitution" | "process_substitution" | "subshell" | "function_definition"
+        ) {
+            continue;
+        }
+        for index in (0..node.child_count()).rev() {
+            if let Some(child) = node.child(index) {
+                stack.push(child);
+            }
+        }
+    }
+    commands
+}
+
+fn loop_cases(body: Node<'_>) -> Vec<Node<'_>> {
+    let mut stack = vec![body];
+    let mut cases = Vec::new();
+    while let Some(node) = stack.pop() {
+        if node.kind() == "case_statement" {
+            cases.push(node);
+        }
+        if matches!(node.kind(), "while_statement" | "function_definition") {
+            continue;
+        }
+        for index in (0..node.child_count()).rev() {
+            if let Some(child) = node.child(index) {
+                stack.push(child);
+            }
+        }
+    }
+    cases
+}
+
+fn case_variable(case: Node<'_>, source: &[u8]) -> Option<String> {
+    let value = case
+        .child_by_field_name("value")?
+        .utf8_text(source)
+        .ok()?
+        .trim();
+    let value = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(value);
+    let name = value
+        .strip_prefix("${")
+        .and_then(|value| value.strip_suffix('}'))
+        .or_else(|| value.strip_prefix('$'))?;
+    shell_variable(name).then(|| name.to_owned())
+}
+
+fn case_option(value: Node<'_>, source: &[u8]) -> Option<char> {
+    if value.kind() == "word"
+        && let Some(text) = value.utf8_text(source).ok()?.strip_prefix('\\')
+    {
+        let mut characters = text.chars();
+        let character = characters.next()?;
+        if character.is_ascii_graphic() && characters.next().is_none() {
+            return Some(character);
+        }
+    }
+    let text = literal_value(value, source)?;
+    if value.kind() == "word" && text.chars().any(|ch| matches!(ch, '*' | '?' | '[' | '\\')) {
+        return None;
+    }
+    let mut characters = text.chars();
+    let character = characters.next()?;
+    characters.next().is_none().then_some(character)
+}
+
+fn wildcard(value: Node<'_>, source: &[u8]) -> bool {
+    value.kind() == "extglob_pattern"
+        && value.utf8_text(source).is_ok_and(|text| text.trim() == "*")
+}
+
+fn parse_option_spec(specification: &str) -> Option<Vec<OptionSpec>> {
+    let mut characters = specification.chars().peekable();
+    if characters.peek() == Some(&':') {
+        characters.next();
+    }
+    let mut seen = HashSet::new();
+    let mut options = Vec::new();
+    while let Some(character) = characters.next() {
+        if !character.is_ascii_graphic()
+            || matches!(character, ':' | '?')
+            || !seen.insert(character)
+        {
+            return None;
+        }
+        let requires_argument = characters.peek() == Some(&':');
+        if requires_argument {
+            characters.next();
+            if characters.peek() == Some(&':') {
+                return None;
+            }
+        }
+        options.push(OptionSpec {
+            character,
+            requires_argument,
+        });
+    }
+    (!options.is_empty()).then_some(options)
+}
+
+fn command_named(command: Node<'_>, name: &str, source: &[u8]) -> bool {
+    command
+        .child_by_field_name("name")
+        .and_then(|node| node.utf8_text(source).ok())
+        == Some(name)
+}
+
+fn field_nodes<'tree>(node: Node<'tree>, field: &str) -> Vec<Node<'tree>> {
+    (0..node.child_count())
+        .filter(|&index| node.field_name_for_child(index) == Some(field))
+        .filter_map(|index| node.child(index))
+        .collect()
+}
+
+fn literal_value<'source>(node: Node<'_>, source: &'source [u8]) -> Option<&'source str> {
+    let text = node.utf8_text(source).ok()?;
+    match node.kind() {
+        "word" => (!text
+            .bytes()
+            .any(|byte| matches!(byte, b'$' | b'`' | b'\\' | b'"' | b'\'')))
+        .then_some(text),
+        "raw_string" => text.strip_prefix('\'')?.strip_suffix('\''),
+        "string" => {
+            let value = text.strip_prefix('"')?.strip_suffix('"')?;
+            (!value
+                .bytes()
+                .any(|byte| matches!(byte, b'$' | b'`' | b'\\')))
+            .then_some(value)
+        }
+        _ => None,
+    }
+}
+
+fn shell_variable(name: &str) -> bool {
+    let mut characters = name.chars();
+    characters
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+fn function_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    characters
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && characters.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | ':' | '.')
+        })
+}
+
+fn source_line(node: Node<'_>) -> u32 {
+    u32::try_from(node.start_position().row.saturating_add(1)).unwrap_or(u32::MAX)
+}
 
 /// Recovers functions the grammar lost to an error region (tree-sitter-bash gives up on some
 /// `case` patterns such as `--*' '*)` and swallows what follows): column-0 headers `name() {`
@@ -192,6 +579,7 @@ fn builtin(name: &str) -> bool {
             | "eval"
             | "exec"
             | "trap"
+            | "getopts"
             | "source"
             | "\\."
             | "."

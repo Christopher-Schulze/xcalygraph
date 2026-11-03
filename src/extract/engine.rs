@@ -190,6 +190,8 @@ pub struct Parsed {
     pub incomplete: bool,
 }
 
+pub type PostParse = for<'tree> fn(&[u8], Node<'tree>, &mut Parsed, bool);
+
 /// Extracts facts from `source` with the given grammar, compiled query and hooks, plus the
 /// syntax-tree byte range of every symbol (for body-word ownership; not stored).
 pub fn extract(
@@ -199,6 +201,26 @@ pub fn extract(
     path: &str,
     source: &[u8],
     capture_identities: bool,
+) -> Parsed {
+    extract_with_post_parse(
+        language,
+        query,
+        hooks,
+        path,
+        source,
+        capture_identities,
+        None,
+    )
+}
+
+pub fn extract_with_post_parse(
+    language: &Language,
+    query: &Query,
+    hooks: &Hooks,
+    path: &str,
+    source: &[u8],
+    capture_identities: bool,
+    post_parse: Option<PostParse>,
 ) -> Parsed {
     PARSER.with(|parser| {
         let mut parser = parser.borrow_mut();
@@ -220,14 +242,14 @@ pub fn extract(
             source
         };
         match parser.parse(parse_source, None) {
-            Some(tree) => collect(
-                query,
-                hooks,
-                path,
-                source,
-                tree.root_node(),
-                capture_identities,
-            ),
+            Some(tree) => {
+                let root = tree.root_node();
+                let mut parsed = collect(query, hooks, path, source, root, capture_identities);
+                if let Some(post_parse) = post_parse {
+                    post_parse(source, root, &mut parsed, capture_identities);
+                }
+                parsed
+            }
             None => Parsed {
                 incomplete: capture_identities,
                 ..Parsed::default()

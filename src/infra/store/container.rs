@@ -12,7 +12,7 @@ use xxhash_rust::xxh3::xxh3_64;
 
 pub const MAGIC: [u8; 8] = *b"XCALYGR\x00";
 /// Bumped on every incompatible change of any index file layout.
-pub const FORMAT_VERSION: u32 = 12;
+pub const FORMAT_VERSION: u32 = 13;
 const HEADER_LEN: usize = 64;
 const ALIGN: usize = 64;
 
