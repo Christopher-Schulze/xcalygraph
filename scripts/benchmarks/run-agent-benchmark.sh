@@ -444,6 +444,9 @@ if (( run )); then
   if [[ -n "${last_xcalygraph_home}" ]]; then
     verify_arm "${last_xcalygraph_home}" "${BINARY}" "${IDENTITY}" --content
   fi
+  # Evidence is results.tsv, traces/ and the identities; corpus copies, agent homes (tool caches,
+  # indexes) and the binary copy are gigabytes and reproducible.
+  rm -rf -- "${WORK:?}/corpora" "${WORK:?}/bin" "${WORK:?}"/home-*
   python3 -I - "${results}" <<'PYTHON'
 import collections
 import csv

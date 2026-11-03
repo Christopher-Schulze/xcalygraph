@@ -279,7 +279,7 @@ xcalygraph is a clean-room Rust rewrite of a selected subset of [Graphify](https
 
 ## Status
 
-Early development: `main` is 0.2.0, the latest release is 0.1.1. Commands, output format and index format may still change between minor versions; `update` keeps binary and skill in step, and indexes rebuild themselves when their format changes.
+Early development: `main` is 0.3.0, the latest release is 0.1.1. Commands, output format and index format may still change between minor versions; `update` keeps binary and skill in step, and indexes rebuild themselves when their format changes.
 
 ## License
 
