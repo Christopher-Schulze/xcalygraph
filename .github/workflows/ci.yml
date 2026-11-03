@@ -1,6 +1,5 @@
 # Runs the product gate (format, feature subsets, clippy, tests, debug build) on every push to
 # main and every pull request; script regressions run in the release workflow (test.sh --all).
-# On Windows a release build answers real queries, refreshes after an edit and installs itself.
 name: ci
 
 on:
@@ -37,21 +36,3 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Gate
         run: scripts/tests/test.sh
-
-  windows:
-    runs-on: windows-2025
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: windows-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
-          restore-keys: windows-
-      - name: Build
-        run: cargo build --release --locked --bin xcalygraph
-      - name: Queries, refresh and installer
-        shell: pwsh
-        run: scripts/tests/test-windows-smoke.ps1

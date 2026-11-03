@@ -16,7 +16,6 @@ platform() {
   case "$1" in
     *apple-darwin) os=darwin ;;
     *linux*) os=linux ;;
-    *windows*) os=windows ;;
     *) echo "build-release.sh: unsupported target $1" >&2; return 1 ;;
   esac
   case "$1" in
@@ -119,7 +118,7 @@ check_requirements() {
 package_release() {
   local stage="$1" name="$2" binary="$3"
   mkdir "${stage}/${name}" || return 1
-  cp "${binary}" "${stage}/${name}/${binary##*/}" || return 1
+  cp "${binary}" "${stage}/${name}/xcalygraph" || return 1
   cp "${REPO_ROOT}/LICENSE" "${stage}/THIRD-PARTY-LICENSES.txt" "${stage}/${name}/" || return 1
   tar -C "${stage}" -czf "${stage}/${name}.tar.gz" "${name}"
 }

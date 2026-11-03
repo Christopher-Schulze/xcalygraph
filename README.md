@@ -16,16 +16,8 @@ Coding agents spend most of their tokens finding things: grepping, opening whole
 
 ## Install
 
-**macOS & Linux**
-
 ```bash
 curl -fsSL https://github.com/Christopher-Schulze/xcalygraph/releases/latest/download/install.sh | bash
-```
-
-**Windows (PowerShell)**
-
-```powershell
-irm https://github.com/Christopher-Schulze/xcalygraph/releases/latest/download/install.ps1 | iex
 ```
 
 **Build from source**
@@ -35,7 +27,7 @@ git clone https://github.com/Christopher-Schulze/xcalygraph && cd xcalygraph
 cargo build --release && target/release/xcalygraph install
 ```
 
-All three install the binary to `~/.local/bin`, the agent skill to `~/.agents/skills/xcalygraph/`, and link it for Claude Code when `~/.claude` exists. Your agent then uses xcalygraph on its own; the first query builds the index. Update with `xcalygraph update`. Pinned versions, uninstalling and the installer's checks: [documentation](docs/documentation.md#installation-and-releases).
+Both install the binary to `~/.local/bin`, the agent skill to `~/.agents/skills/xcalygraph/`, and link it for Claude Code when `~/.claude` exists. Your agent then uses xcalygraph on its own; the first query builds the index. Update with `xcalygraph update`. Pinned versions, uninstalling and the installer's checks: [documentation](docs/documentation.md#installation-and-releases).
 
 ## Why
 

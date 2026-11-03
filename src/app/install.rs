@@ -20,16 +20,10 @@ pub fn claude_link(home: &Path) -> PathBuf {
 }
 
 pub fn home() -> Result<PathBuf, AppError> {
-    ["HOME", "USERPROFILE"]
-        .iter()
-        .find_map(|name| std::env::var_os(name).filter(|home| !home.is_empty()))
+    std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
         .map(PathBuf::from)
         .ok_or_else(|| AppError::Invalid("HOME is not set".to_owned()))
-}
-
-/// File name of the binary on this platform (`xcalygraph.exe` on Windows).
-pub fn binary_name() -> String {
-    format!("xcalygraph{}", std::env::consts::EXE_SUFFIX)
 }
 
 /// Version of the installed skill, if any.
@@ -130,7 +124,7 @@ pub fn install_skill(home: &Path) -> Result<String, AppError> {
 /// already runs from there or the installed bytes are equal.
 fn install_binary(home: &Path) -> Result<String, AppError> {
     let dir = install_dir(home);
-    let target = dir.join(binary_name());
+    let target = dir.join("xcalygraph");
     let exe = std::env::current_exe()
         .and_then(|path| path.canonicalize())
         .map_err(AppError::io("locate the running binary"))?;
@@ -144,7 +138,6 @@ fn install_binary(home: &Path) -> Result<String, AppError> {
     fs::create_dir_all(&dir).map_err(AppError::io(format!("create {}", dir.display())))?;
     let changed = write_if_changed(&target, &bytes, 0o755)
         .map_err(AppError::io(format!("write {}", target.display())))?;
-    #[cfg(unix)]
     if !changed {
         use std::os::unix::fs::PermissionsExt;
         let existing = fs::symlink_metadata(&target)
@@ -167,10 +160,10 @@ fn install_binary(home: &Path) -> Result<String, AppError> {
 fn path_notice(dir: &Path) -> String {
     let path = std::env::var_os("PATH").unwrap_or_default();
     let entries: Vec<PathBuf> = std::env::split_paths(&path).collect();
-    let target = dir.join(binary_name());
+    let target = dir.join("xcalygraph");
     if let Some(first) = entries
         .iter()
-        .map(|entry| entry.join(binary_name()))
+        .map(|entry| entry.join("xcalygraph"))
         .find(|candidate| candidate.is_file())
         && first.canonicalize().ok() != target.canonicalize().ok()
     {
@@ -231,14 +224,8 @@ fn link(link: &Path, target: &Path) -> Result<String, AppError> {
     }
 }
 
-#[cfg(unix)]
 fn symlink(target: &Path, link: &Path) -> io::Result<()> {
     std::os::unix::fs::symlink(target, link)
-}
-
-#[cfg(not(unix))]
-fn symlink(target: &Path, link: &Path) -> io::Result<()> {
-    std::os::windows::fs::symlink_dir(target, link)
 }
 
 /// Replaces the file by a new exclusive temp file plus rename unless its content is already equal.

@@ -281,13 +281,6 @@ pub fn replace_binary(
         let _ = fs::remove_file(&temp);
         return Err(AppError::Io(format!("write {}", temp.display()), error));
     }
-    // Windows only starts executables by extension.
-    #[cfg(windows)]
-    let temp = {
-        let runnable = temp.with_extension("exe");
-        fs::rename(&temp, &runnable).map_err(AppError::io("name the new binary"))?;
-        runnable
-    };
     progress.start("Smoke test");
     if let Err(error) = smoke_test(&temp, &release.version) {
         let _ = fs::remove_file(&temp);
@@ -296,13 +289,6 @@ pub fn replace_binary(
     }
     progress.pass(&format!("xcalygraph {} runs", release.version));
     progress.start("Publish");
-    // Windows cannot replace a running executable but can rename it out of the way.
-    #[cfg(windows)]
-    {
-        let previous = exe.with_extension("old.exe");
-        let _ = fs::remove_file(&previous);
-        fs::rename(exe, &previous).map_err(AppError::io(format!("move {}", exe.display())))?;
-    }
     fs::rename(&temp, exe).map_err(|error| {
         let _ = fs::remove_file(&temp);
         progress.fail("old binary kept");
@@ -342,10 +328,7 @@ fn extract_binary(archive: &[u8]) -> Result<Vec<u8>, AppError> {
         let is_binary = entry
             .path()
             .ok()
-            .and_then(|path| {
-                path.file_name()
-                    .map(|name| name == super::install::binary_name().as_str())
-            })
+            .and_then(|path| path.file_name().map(|name| name == "xcalygraph"))
             .unwrap_or(false);
         if is_binary {
             let mut bytes = Vec::new();

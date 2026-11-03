@@ -183,11 +183,6 @@ fn identity(metadata: &Metadata) -> Option<FileIdentity> {
             },
         )
     }
-    #[cfg(not(unix))]
-    {
-        let _ = metadata;
-        None
-    }
 }
 
 pub fn mtime_ns(metadata: &Metadata) -> i64 {
@@ -198,16 +193,6 @@ pub fn mtime_ns(metadata: &Metadata) -> i64 {
             .mtime()
             .saturating_mul(1_000_000_000)
             .saturating_add(metadata.mtime_nsec())
-    }
-    #[cfg(not(unix))]
-    {
-        metadata
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |duration| {
-                i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX)
-            })
     }
 }
 

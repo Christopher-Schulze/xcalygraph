@@ -127,20 +127,20 @@ Resolution order for all of them is `docs/spec.md` section 6: lexical scope, imp
 - Install script: `scripts/utils/install.sh`, attached to every release as `install.sh`, resolves the latest release (or `--version X.Y.Z`), downloads the platform archive and `SHA256SUMS`, verifies the checksum, smoke-tests the binary and lets it run `install` (binary, skill, Claude Code link); `--no-skill` installs only the binary through an exclusively created temporary file beside the destination, preserves existing temporary entries and rejects directory targets; `XCALYGRAPH_INSTALL_DIR` and `XCALYGRAPH_RELEASE_BASE` (also `file://`) override target and source.
 - Progress: `install` and `update` draw their phases on stderr when it is a terminal (`src/app/progress.rs`: spinner with elapsed time, download bar in eighth blocks with bytes, smoothed speed and remaining time, one line per finished phase with paths below HOME shown as `~`); otherwise nothing is drawn and the stdout result lines carry the facts.
 - Release archives: `scripts/build/build-release.sh [TARGET...]` builds `dist/xcalygraph-<version>-<os>-<arch>.tar.gz` (binary, `LICENSE`, `THIRD-PARTY-LICENSES.txt` with top-level regular `LICENSE*`, `COPYING*` and `NOTICE*` files and Cargo-declared license files from dependencies) and `dist/SHA256SUMS`. License paths retain control characters; discovered symlink files are skipped, declared paths containing symlinks are rejected, and missing or unreadable files abort staging. A declared file already found by discovery is included once. Builds and staging in a temporary directory under `dist` use the checkout-owned Cargo target under the source guard; final archive and checksum names are installed only after its final source check succeeds. The version is rechecked inside the guard. The script preserves unrelated entries, rejects an occupied archive or checksum path and includes only this build's archives in the checksum file. Before touching `dist`, it checks for Bash, Cargo, Git, jq, Python 3, rustc, awk, tar and either `sha256sum` or `shasum`. If local publication fails partway, already published outputs remain and the failure is reported. `scripts/tests/test-release-provenance.sh` exercises the same staging and local-output path with debug fixtures, including missing-tool preflight, source changes, interruptions and concurrent builds; `scripts/tests/test-release-licenses.sh` verifies unusual and declared license paths in a debug archive.
-- `.github/workflows/release.yml` builds darwin-arm64, darwin-amd64, linux-amd64, linux-arm64 (static musl) and windows-amd64 on a `v*` tag and publishes them with `SHA256SUMS` and `install.sh` as the release of that tag. Before the gate, the workflow uses `scripts/utils/validate-release-tag.sh TAG CARGO_VERSION` to require `GITHUB_REF_NAME` to equal `v` plus the Cargo package version; `scripts/build/build-release.sh` repeats the check before creating `dist`. This makes Cargo-version archive names match installer and updater names derived from the release tag. Both Linux build runners install Ubuntu's `hyperfine`, `jq`, `musl-tools`, `pipx`, Python 3, `rsync`, ShellCheck and `tar` packages; the x86_64 Linux gate additionally installs upstream-pinned `graphifyy==0.9.97` in an isolated pipx environment. The gate checks the Graphify CLI version against the local upstream reference; no hosted workflow run is implied by local checks.
-- `.github/workflows/ci.yml` runs the product gate (`scripts/tests/test.sh`) on Ubuntu for every push to `main` and every pull request, with the tools the gate's own `--all` fixture test needs. A Windows job builds the release binary and runs `scripts/tests/test-windows-smoke.ps1` (queries, refresh after an edit, clean, `install.ps1` against a local release).
+- `.github/workflows/release.yml` builds darwin-arm64, darwin-amd64, linux-amd64, linux-arm64 (static musl) on a `v*` tag and publishes them with `SHA256SUMS` and `install.sh` as the release of that tag. Before the gate, the workflow uses `scripts/utils/validate-release-tag.sh TAG CARGO_VERSION` to require `GITHUB_REF_NAME` to equal `v` plus the Cargo package version; `scripts/build/build-release.sh` repeats the check before creating `dist`. This makes Cargo-version archive names match installer and updater names derived from the release tag. Both Linux build runners install Ubuntu's `hyperfine`, `jq`, `musl-tools`, `pipx`, Python 3, `rsync`, ShellCheck and `tar` packages; the x86_64 Linux gate additionally installs upstream-pinned `graphifyy==0.9.97` in an isolated pipx environment. The gate checks the Graphify CLI version against the local upstream reference; no hosted workflow run is implied by local checks.
+- `.github/workflows/ci.yml` runs the product gate (`scripts/tests/test.sh`) on Ubuntu for every push to `main` and every pull request, with the tools the gate's own `--all` fixture test needs.
 - Update trust: `install.sh` and `update` verify the archive against `SHA256SUMS` from the same release. This detects transfer corruption and mismatched assets, not a compromised release or account; the archives carry no publisher signature.
 - Versioning: every index-format or skill change raises the minor version in `Cargo.toml` (the skill version equals the binary version), so `version` and `update` identify the state.
 
 ### Release installer
 
-The one-line installers fetch `install.sh` (macOS, Linux) or `install.ps1` (Windows) from the latest [release](https://github.com/Christopher-Schulze/xcalygraph/releases), never from `main`. They:
+The one-line installer fetches `install.sh` from the latest [release](https://github.com/Christopher-Schulze/xcalygraph/releases), never from `main`. It:
 
-- pick the archive for the platform (macOS and Linux arm64 and x86-64, Windows x86-64);
-- verify it against the release's `SHA256SUMS`;
-- smoke-test the new binary before it replaces an existing one;
-- let the binary install itself, the skill and the Claude Code link;
-- report a missing PATH entry with the exact `export` line instead of editing your shell profile.
+- picks the archive for your platform (macOS and Linux, arm64 and x86-64);
+- verifies it against the release's `SHA256SUMS`;
+- smoke-tests the new binary before it replaces an existing one;
+- lets the binary install itself, the skill and the Claude Code link;
+- reports a missing PATH entry with the exact `export` line instead of editing your shell profile.
 
 ```bash
 # a specific version, or the binary without the skill
@@ -148,7 +148,7 @@ curl -fsSL https://github.com/Christopher-Schulze/xcalygraph/releases/latest/dow
 curl -fsSL https://github.com/Christopher-Schulze/xcalygraph/releases/latest/download/install.sh | bash -s -- --no-skill
 ```
 
-On Windows set `XCALYGRAPH_VERSION` to pin a version. `XCALYGRAPH_INSTALL_DIR` changes the target directory (default `~/.local/bin`).
+`XCALYGRAPH_INSTALL_DIR` changes the target directory (default `~/.local/bin`).
 
 ### What `xcalygraph install` does
 

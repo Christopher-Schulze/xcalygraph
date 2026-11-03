@@ -20,10 +20,7 @@ pub fn create_beside(target: &Path, tag: &str, mode: u32) -> io::Result<(PathBuf
         let temp = target.with_file_name(format!(".{name}.{tag}.{pid}.{attempt}"));
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true);
-        #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
-        #[cfg(not(unix))]
-        let _ = mode;
         match options.open(&temp) {
             Ok(file) => return Ok((temp, file)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -54,17 +51,11 @@ pub fn is_unshared_regular(metadata: &Metadata) -> bool {
     if !metadata.file_type().is_file() {
         return false;
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        metadata.nlink() == 1
-    }
-    #[cfg(not(unix))]
-    true
+    use std::os::unix::fs::MetadataExt;
+    metadata.nlink() == 1
 }
 
 /// Opens only an existing regular file, without creation or truncation.
-#[cfg(unix)]
 pub fn open_existing_regular(path: &Path, writable: bool) -> io::Result<File> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
@@ -90,19 +81,6 @@ pub fn open_existing_regular(path: &Path, writable: bool) -> io::Result<File> {
         ));
     }
     Ok(file)
-}
-
-/// Windows has no O_NOFOLLOW or link-count check here: a regular file that is no symlink suffices.
-#[cfg(not(unix))]
-pub fn open_existing_regular(path: &Path, writable: bool) -> io::Result<File> {
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.file_type().is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "not a regular file",
-        ));
-    }
-    fs::OpenOptions::new().read(true).write(writable).open(path)
 }
 
 // O_NOFOLLOW | O_NONBLOCK from each platform's fcntl headers. Linux architectures differ in
