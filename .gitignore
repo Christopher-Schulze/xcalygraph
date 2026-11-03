@@ -29,3 +29,6 @@
 
 # Release archives (scripts/build/build-release.sh)
 /dist/
+
+# Private control-plane history (scripts/utils/sync-control-plane.sh)
+/.control.git/
