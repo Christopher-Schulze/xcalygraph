@@ -953,11 +953,19 @@ fn gate_propagates_real_shellcheck_findings() -> TestResult {
     )?;
     let output = support::command("bash", &fixture.0)
         .arg(root.join("scripts/tests/test.sh"))
+        .arg("--all")
         .output()?;
     assert!(!output.status.success());
     let diagnostics = String::from_utf8_lossy(&output.stdout).to_string()
         + &String::from_utf8_lossy(&output.stderr);
     assert!(diagnostics.contains("SC2086"), "{diagnostics}");
+    // The product gate leaves script checks to --all.
+    let product = support::command("bash", &fixture.0)
+        .arg(root.join("scripts/tests/test.sh"))
+        .output()?;
+    let diagnostics = String::from_utf8_lossy(&product.stdout).to_string()
+        + &String::from_utf8_lossy(&product.stderr);
+    assert!(!diagnostics.contains("SC2086"), "{diagnostics}");
     Ok(())
 }
 

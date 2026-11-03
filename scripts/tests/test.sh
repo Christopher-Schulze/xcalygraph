@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
-# Run the full gate: safe cache pruning, shell and Rust checks, and real-tool regressions.
-# Usage: scripts/tests/test.sh
+# Run the gate: safe cache pruning and Rust checks; --all adds ShellCheck and the script regressions.
+# Usage: scripts/tests/test.sh [--all]
+# Run --all when scripts/ changed and before a release.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
-REPO_ROOT="${REPO_ROOT%.}"
+mode=product
+case "${1-}" in
+  "") ;;
+  --all) mode=all ;;
+  *) echo "usage: test.sh [--all]" >&2; exit 2 ;;
+esac
+(( $# <= 1 )) || { echo "usage: test.sh [--all]" >&2; exit 2; }
+readonly mode
+# macOS paths are case-insensitive; Cargo reports the physical spelling, so use it too.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && /bin/pwd -P)"
 readonly REPO_ROOT
 
 if [[ -n "${XCALYGRAPH_BLESS+x}" ]]; then
@@ -27,19 +36,23 @@ export HOME="${work}/home" TMPDIR="${work}/temporary" XDG_CONFIG_HOME="${work}/h
 export RUSTUP_HOME="${TOOLCHAIN_HOME}" CARGO_HOME="${PACKAGE_HOME}"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 RUSTFLAGS="-Dwarnings"
 
-for tool in cargo git python3 graphify shellcheck hyperfine jq rsync; do
+required_tools=(cargo git python3)
+[[ "${mode}" == product ]] || required_tools+=(graphify shellcheck hyperfine jq rsync)
+for tool in "${required_tools[@]}"; do
   command -v "${tool}" >/dev/null || { echo "test.sh: ${tool} is required" >&2; exit 1; }
 done
-readonly expected_graphify_version="graphify 0.9.97"
-graphify_version="$(graphify --version)" || { echo "test.sh: could not read Graphify version" >&2; exit 1; }
-[[ "${graphify_version}" == "${expected_graphify_version}" ]] || {
-  echo "test.sh: expected ${expected_graphify_version}, got ${graphify_version}" >&2
-  exit 1
-}
-find "${REPO_ROOT}/scripts" -type f -name '*.sh' -print0 | xargs -0 shellcheck
+if [[ "${mode}" == all ]]; then
+  readonly expected_graphify_version="graphify 0.9.97"
+  graphify_version="$(graphify --version)" || { echo "test.sh: could not read Graphify version" >&2; exit 1; }
+  [[ "${graphify_version}" == "${expected_graphify_version}" ]] || {
+    echo "test.sh: expected ${expected_graphify_version}, got ${graphify_version}" >&2
+    exit 1
+  }
+  find "${REPO_ROOT}/scripts" -type f -name '*.sh' -print0 | xargs -0 shellcheck
+fi
 
 CARGO_TARGET_DIR="$(bash "${REPO_ROOT}/scripts/utils/verification-target.sh")"
 CARGO_BUILD_BUILD_DIR="${CARGO_TARGET_DIR}"
 export CARGO_TARGET_DIR CARGO_BUILD_BUILD_DIR
 bash "${REPO_ROOT}/scripts/utils/verification-source.sh" \
-  bash "${REPO_ROOT}/scripts/tests/test-execution.sh" "${work}"
+  bash "${REPO_ROOT}/scripts/tests/test-execution.sh" "${work}" "${mode}"
