@@ -426,7 +426,8 @@ Reference corpora: xcalygraph itself, the upstream Graphify clone at the pinned 
 | tokens per answer | output tokens of the command that answers the question |
 | rg baseline | tokens of `rg` output plus the file reads an agent needs to reach the expected location |
 | upstream baseline | hit@5 and tokens of `graphify query` on the same corpus |
-| edge precision | share of emitted edges confirmed by source inspection, sampled within each populated corpus/source-language/edge-kind/confidence stratum |
+| edge precision | share of judged emitted edges a compiler index confirms (`scripts/benchmarks/measure-edge-oracle.sh`, per corpus, language, edge kind and confidence); kinds without a compiler oracle use source inspection of sampled strata |
+| edge recall | share of compiler-resolved in-repo references (distinct source file and callable or type target) that have an edge |
 | agent success | share of questions a headless Claude Code run (`claude -p`) answers with the expected location; arms: no tool (`rg` and reads), Graphify skill, xcalygraph skill; 3 runs per question and arm |
 | agent cost | total tokens, turns and wall time per agent run, from `--output-format json` |
 
