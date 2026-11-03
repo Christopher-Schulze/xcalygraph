@@ -1829,6 +1829,49 @@ mod tests {
 
     #[test]
     #[cfg(feature = "lang-typescript")]
+    fn generated_function_declarations_share_complete_source_header_identity() {
+        use crate::domain::corpus::FileRecord;
+        use crate::domain::facts::{SourceIdentityKind, TYPESCRIPT_CALLABLE_IDENTITY_PREFIX};
+        use crate::domain::role::Role;
+
+        fn identity(path: &str, source: &[u8]) -> Option<String> {
+            let record = FileRecord {
+                path: path.to_owned(),
+                size: source.len() as u64,
+                mtime_ns: 0,
+                identity: None,
+                hash: 0,
+                role: Role::Src,
+                file_type: Some(FileType::TypeScript),
+            };
+            let facts = crate::extract::extract(&record, source);
+            let local = facts
+                .symbols
+                .iter()
+                .position(|symbol| symbol.name == "make")?;
+            facts
+                .source_identity(SourceIdentityKind::Symbol, u32::try_from(local).ok()?)
+                .map(str::to_owned)
+        }
+
+        let source = identity(
+            "widget.ts",
+            b"export function make(id: string): string { return id; }",
+        );
+        let declaration = identity(
+            "widget.d.ts",
+            b"export declare function make(id: string): string;",
+        );
+        assert!(
+            source
+                .as_deref()
+                .is_some_and(|identity| identity.starts_with(TYPESCRIPT_CALLABLE_IDENTITY_PREFIX))
+        );
+        assert_eq!(source, declaration);
+    }
+
+    #[test]
+    #[cfg(feature = "lang-typescript")]
     fn typescript_scope_and_exported_base_evidence_are_source_backed() {
         use crate::domain::corpus::FileRecord;
         use crate::domain::facts::SourceIdentityKind;

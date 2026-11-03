@@ -242,6 +242,9 @@ fn take_length_prefixed(source: &str) -> Option<(&str, &str)> {
     Some(payload.split_at(length))
 }
 
+/// Prefix of a complete TypeScript callable header identity stored on a symbol fact.
+pub const TYPESCRIPT_CALLABLE_IDENTITY_PREFIX: &str = "typescript_callable:v1:";
+
 /// Kind of local fact with a complete source-backed identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u8)]

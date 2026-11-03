@@ -791,6 +791,21 @@ fn assemble(assembly: Assembly) -> Parsed {
             });
         }
         #[cfg(feature = "lang-typescript")]
+        if super::lang::typescript::is_typescript_path(path)
+            && kind == SymKind::Fn
+            && parent.is_none()
+            && exported
+            && matches!(node.kind(), "function_declaration" | "function_signature")
+            && let Some(identity) = typescript_callable_identity(node, source)
+            && let Ok(index) = u32::try_from(index)
+        {
+            source_identities.push(SourceIdentity {
+                kind: SourceIdentityKind::Symbol,
+                index,
+                identity,
+            });
+        }
+        #[cfg(feature = "lang-typescript")]
         if kind == SymKind::Iface
             && super::lang::typescript::is_typescript_path(path)
             && let Some(namespace) = super::lang::typescript::interface_namespace_path(node, source)
@@ -1415,6 +1430,25 @@ fn source_definition_identity(path: &str, node: Node, name: &str, source: &[u8])
         return objective_c_definition_identity(node, source);
     }
     None
+}
+
+#[cfg(feature = "lang-typescript")]
+fn typescript_callable_identity(node: Node, source: &[u8]) -> Option<String> {
+    let identity = signature_identity(node, source)?;
+    let prefix = match node.kind() {
+        "function_declaration" => "function_declaration:",
+        "function_signature" => "function_signature:",
+        _ => return None,
+    };
+    let mut signature = identity.strip_prefix(prefix)?;
+    if node.kind() == "function_signature" {
+        signature = signature.strip_suffix(":1:;").unwrap_or(signature);
+    }
+    Some(format!(
+        "{}{}",
+        crate::domain::facts::TYPESCRIPT_CALLABLE_IDENTITY_PREFIX,
+        signature
+    ))
 }
 
 fn swift_definition_identity(node: Node, name: &str, source: &[u8]) -> Option<String> {

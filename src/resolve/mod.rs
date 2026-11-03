@@ -31,7 +31,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 82;
+pub const RESOLVE_VERSION: u32 = 83;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -52,6 +52,9 @@ struct Index<'a> {
     symbols: Vec<GraphSymbol>,
     /// Physical interface declaration to the first declaration of its verified group.
     interface_canonical: HashMap<u32, u32>,
+    /// `.d.ts` function declaration to its unique, source-identity-matched implementation.
+    #[cfg(feature = "lang-typescript")]
+    typescript_declaration_pairs: HashMap<u32, u32>,
     /// Top-level, non-method symbols per (module, name).
     by_module: HashMap<(u32, &'a str), Vec<u32>>,
     /// Methods per (method scope, owner type name, method name).
@@ -341,6 +344,8 @@ impl<'a> Index<'a> {
             base,
             symbols,
             interface_canonical,
+            #[cfg(feature = "lang-typescript")]
+            typescript_declaration_pairs: HashMap::default(),
             scope_ids,
             package_names,
             go_requires,
@@ -381,6 +386,11 @@ impl<'a> Index<'a> {
             tables: HashMap::default(),
         };
         index.build_tables();
+        #[cfg(feature = "lang-typescript")]
+        {
+            let pairs = index.pair_typescript_declarations();
+            index.typescript_declaration_pairs = pairs;
+        }
         index.includes = (0..input.files.len() as u32)
             .map(|file| match index.facts(file) {
                 Some(facts) if cfamily::is_cfamily(index.file_type(file)) => facts
@@ -392,6 +402,85 @@ impl<'a> Index<'a> {
             })
             .collect();
         index
+    }
+
+    #[cfg(feature = "lang-typescript")]
+    fn pair_typescript_declarations(&self) -> HashMap<u32, u32> {
+        let mut pairs = HashMap::default();
+        for (file, record) in self.input.files.iter().enumerate() {
+            if record.file_type != Some(FileType::TypeScript) || !record.path.ends_with(".d.ts") {
+                continue;
+            }
+            let Some(facts) = self.facts(file as u32) else {
+                continue;
+            };
+            let module = self.module_of(file as u32);
+            for (local, symbol) in facts.symbols.iter().enumerate() {
+                if symbol.kind() != SymKind::Fn
+                    || symbol.parent.is_some()
+                    || !symbol.owner.is_empty()
+                    || !symbol.exported
+                    || symbol.flags & FLAG_DECLARATION == 0
+                {
+                    continue;
+                }
+                let Ok(local) = u32::try_from(local) else {
+                    continue;
+                };
+                let Some(id) = self.base[file].checked_add(local) else {
+                    continue;
+                };
+                let Some(identity) = self.source_identity_of_symbol(id) else {
+                    continue;
+                };
+                if !identity.starts_with(crate::domain::facts::TYPESCRIPT_CALLABLE_IDENTITY_PREFIX)
+                {
+                    continue;
+                }
+                let candidates = self.module_symbol(module, &symbol.name, None);
+                let declarations: Vec<u32> = candidates
+                    .iter()
+                    .copied()
+                    .filter(|&candidate| {
+                        let other = &self.symbols[candidate as usize];
+                        other.kind == SymKind::Fn
+                            && other.parent == NONE
+                            && other.exported
+                            && other.flags & FLAG_DECLARATION != 0
+                            && self.is_typescript_declaration_file(other.file)
+                            && self.source_identity_of_symbol(candidate) == Some(identity)
+                    })
+                    .collect();
+                if !matches!(declarations.as_slice(), [only] if *only == id) {
+                    continue;
+                }
+                let definitions: Vec<u32> = candidates
+                    .into_iter()
+                    .filter(|&candidate| {
+                        let other = &self.symbols[candidate as usize];
+                        let path = &self.input.files[other.file as usize].path;
+                        other.kind == SymKind::Fn
+                            && other.parent == NONE
+                            && other.exported
+                            && other.flags & FLAG_DECLARATION == 0
+                            && (path.ends_with(".ts") || path.ends_with(".tsx"))
+                            && self.source_identity_of_symbol(candidate) == Some(identity)
+                    })
+                    .collect();
+                if let [definition] = definitions.as_slice() {
+                    pairs.insert(id, *definition);
+                }
+            }
+        }
+        pairs
+    }
+
+    #[cfg(feature = "lang-typescript")]
+    fn is_typescript_declaration_file(&self, file: u32) -> bool {
+        self.file_type(file) == Some(FileType::TypeScript)
+            && [".d.ts", ".d.mts", ".d.cts", ".d.ets"]
+                .iter()
+                .any(|suffix| self.input.files[file as usize].path.ends_with(suffix))
     }
 
     /// Link only complete, uniquely targeted relative module augmentations.
@@ -4612,20 +4701,10 @@ impl<'a> Index<'a> {
     /// otherwise the accepting candidates (all when none accepts) are inferred, since argument
     /// types decide, which names alone cannot.
     fn overloads(&self, candidates: &[u32], arity: u8) -> (Vec<u32>, Confidence) {
-        // C-family declarations next to their definitions: the definitions count.
-        let declaration = |s: &u32| self.symbols[*s as usize].flags & FLAG_DECLARATION != 0;
-        let defined: Vec<u32>;
-        let candidates =
-            if candidates.iter().any(declaration) && !candidates.iter().all(declaration) {
-                defined = candidates
-                    .iter()
-                    .copied()
-                    .filter(|s| !declaration(s))
-                    .collect();
-                defined.as_slice()
-            } else {
-                candidates
-            };
+        // C-family declarations and verified TypeScript declaration pairs defer to definitions;
+        // unpaired TypeScript declaration files stay distinct.
+        let preferred = prefer_definitions(self, candidates);
+        let candidates = preferred.as_deref().unwrap_or(candidates);
         if candidates.len() <= 1 {
             return (candidates.to_vec(), Confidence::Exact);
         }
@@ -5648,16 +5727,53 @@ fn has_declarations(file_type: Option<FileType>) -> bool {
     )
 }
 
+fn prefer_definitions(index: &Index<'_>, candidates: &[u32]) -> Option<Vec<u32>> {
+    if candidates.len() < 2 {
+        return None;
+    }
+    let mut retained: Vec<u32> = candidates
+        .iter()
+        .copied()
+        .filter(|candidate| {
+            #[cfg(feature = "lang-typescript")]
+            if index
+                .typescript_declaration_pairs
+                .get(candidate)
+                .is_some_and(|definition| candidates.contains(definition))
+            {
+                return false;
+            }
+            true
+        })
+        .collect();
+    let has_declaration = retained
+        .iter()
+        .any(|symbol| index.symbols[*symbol as usize].flags & FLAG_DECLARATION != 0);
+    let has_definition = retained
+        .iter()
+        .any(|symbol| index.symbols[*symbol as usize].flags & FLAG_DECLARATION == 0);
+    if has_declaration && has_definition {
+        retained.retain(|symbol| {
+            let graph_symbol = &index.symbols[*symbol as usize];
+            if graph_symbol.flags & FLAG_DECLARATION == 0 {
+                return true;
+            }
+            #[cfg(feature = "lang-typescript")]
+            if index.is_typescript_declaration_file(graph_symbol.file) {
+                return true;
+            }
+            false
+        });
+    }
+    (retained.len() != candidates.len()).then_some(retained)
+}
+
 fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence, arity: u8) -> Outcome {
     let mut found = found;
     found.sort_unstable();
     found.dedup();
-    // C-family: a declaration next to its definition (in-class prototype and out-of-line body).
-    if found.len() > 1 {
-        let declaration = |s: &u32| index.symbols[*s as usize].flags & FLAG_DECLARATION != 0;
-        if found.iter().any(declaration) && !found.iter().all(declaration) {
-            found.retain(|s| !declaration(s));
-        }
+    if let Some(preferred) = prefer_definitions(index, &found) {
+        found = preferred;
     }
     // .NET partial types: the parts of one type collapse to its first part.
     if found.len() > 1 {

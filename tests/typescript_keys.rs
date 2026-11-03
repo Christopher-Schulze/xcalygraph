@@ -2031,3 +2031,101 @@ fn global_interfaces_stay_separate_when_triple_slash_scope_is_unproven()
     }
     Ok(())
 }
+
+#[test]
+fn typescript_declarations_pair_only_with_unique_same_module_header_identity()
+-> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let root = fixture.0.join("repo");
+    fs::create_dir_all(root.join("implementation"))?;
+    fs::create_dir_all(root.join("types"))?;
+    fs::write(
+        root.join("paired.ts"),
+        include_bytes!("fixtures/typescript-declarations/paired.ts"),
+    )?;
+    fs::write(
+        root.join("paired.d.ts"),
+        include_bytes!("fixtures/typescript-declarations/paired.d.ts"),
+    )?;
+    fs::write(
+        root.join("consumer.ts"),
+        "import { make, normalize } from './paired';\n\
+         export const makeCall = make('x');\n\
+         export const normalizeCall = normalize(1);\n",
+    )?;
+    fs::write(
+        root.join("mismatch.ts"),
+        "export function convert(value: string): string { return value; }\n",
+    )?;
+    fs::write(
+        root.join("mismatch.d.ts"),
+        "export declare function convert(value: number): string;\n",
+    )?;
+    fs::write(
+        root.join("mismatch-consumer.ts"),
+        "import { convert } from './mismatch';\n\
+         export const convertCall = convert('x');\n",
+    )?;
+    fs::write(
+        root.join("implementation/lookup.ts"),
+        "export function lookup(id: string): string { return id; }\n",
+    )?;
+    fs::write(
+        root.join("types/lookup.d.ts"),
+        "export declare function lookup(id: string): string;\n",
+    )?;
+    fs::write(
+        root.join("lookup-consumer.ts"),
+        "import { lookup } from './types/lookup';\n\
+         export const lookupCall = lookup('x');\n",
+    )?;
+
+    let paired = fixture.run(&["show", "consumer.ts::makeCall", "--exact"])?;
+    let paired_text = String::from_utf8(paired.stdout)?;
+    assert!(paired.status.success(), "{paired_text}");
+    assert!(paired_text.contains("paired.ts:1"), "{paired_text}");
+    assert!(!paired_text.contains("paired.d.ts:1"), "{paired_text}");
+
+    let declarations = fixture.run(&["find", "make", "--exact", "--read-only"])?;
+    let declarations_text = String::from_utf8(declarations.stdout)?;
+    assert!(declarations.status.success(), "{declarations_text}");
+    assert!(
+        declarations_text.contains("paired.ts"),
+        "{declarations_text}"
+    );
+    assert!(
+        declarations_text.contains("paired.d.ts"),
+        "{declarations_text}"
+    );
+
+    let unproven = fixture.run(&["show", "mismatch-consumer.ts::convertCall", "--read-only"])?;
+    let unproven_text = String::from_utf8(unproven.stdout)?;
+    assert!(unproven.status.success(), "{unproven_text}");
+    assert!(unproven_text.contains("mismatch.ts:1"), "{unproven_text}");
+    assert!(unproven_text.contains("mismatch.d.ts:1"), "{unproven_text}");
+
+    let overloads = fixture.run(&["show", "consumer.ts::normalizeCall", "--read-only"])?;
+    let overloads_text = String::from_utf8(overloads.stdout)?;
+    assert!(overloads.status.success(), "{overloads_text}");
+    assert!(overloads_text.contains("paired.d.ts:2"), "{overloads_text}");
+    assert!(overloads_text.contains("paired.d.ts:3"), "{overloads_text}");
+    assert!(overloads_text.contains("paired.ts:4"), "{overloads_text}");
+
+    let other_module = fixture.run(&[
+        "show",
+        "lookup-consumer.ts::lookupCall",
+        "--exact",
+        "--read-only",
+    ])?;
+    let other_module_text = String::from_utf8(other_module.stdout)?;
+    assert!(other_module.status.success(), "{other_module_text}");
+    assert!(
+        other_module_text.contains("types/lookup.d.ts:1"),
+        "{other_module_text}"
+    );
+    assert!(
+        !other_module_text.contains("implementation/lookup.ts"),
+        "{other_module_text}"
+    );
+    Ok(())
+}
