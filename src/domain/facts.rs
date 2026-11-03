@@ -108,9 +108,9 @@ pub const FLAG_DECLARATION: u8 = 8;
 pub const FLAG_TYPESCRIPT_AUGMENTATION: u8 = 16;
 /// A Python method whose body consists only of an optional docstring and `raise NotImplementedError`.
 pub const FLAG_PYTHON_ABSTRACT_STUB: u8 = 32;
-/// A Rust item directly gated by `#[cfg(unix)]`.
+/// A Rust item directly gated to the Unix target family (`unix`, a Unix `target_os`).
 pub const FLAG_RUST_CFG_UNIX: u8 = 64;
-/// A Rust item directly gated by `#[cfg(not(unix))]`.
+/// A Rust item directly gated outside the Unix family (`not(unix)`, `windows`, wasm).
 pub const FLAG_RUST_CFG_NOT_UNIX: u8 = 128;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

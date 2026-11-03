@@ -31,7 +31,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 97;
+pub const RESOLVE_VERSION: u32 = 98;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -4889,17 +4889,9 @@ impl<'a> Index<'a> {
         {
             return extension;
         }
-        // Rust member resolution needs receiver, trait-bound or explicit-path evidence.
-        // A unique method elsewhere in the crate cannot prove an unknown receiver implements it.
-        if rust {
-            return Outcome::Unresolved;
-        }
-        // 7. Unique method name in the root, unless the name is too common to trust.
-        // JavaScript frameworks share `render`; without receiver evidence, a unique local method
-        // can belong to an unrelated view engine.
-        if is_common_member(name)
-            || (self.file_type(file) == Some(FileType::JavaScript) && name == "render")
-        {
+        // 7. Unique method name among the modules the file can see, inferred, unless the name is
+        // common on builtin types. One rule for every language; receiver evidence above wins.
+        if is_common_member(name) {
             return Outcome::Unresolved;
         }
         // Go method sets come from the types of imported packages; languages with module rules

@@ -140,11 +140,7 @@ pub(in crate::extract) fn platform_cfg_flags(node: Node, source: &[u8]) -> u8 {
         let kind = sibling.kind();
         if kind.contains("attribute") {
             if let Ok(attribute) = sibling.utf8_text(source) {
-                if compact_attribute_is(attribute, "#[cfg(unix)]") {
-                    flags |= FLAG_RUST_CFG_UNIX;
-                } else if compact_attribute_is(attribute, "#[cfg(not(unix))]") {
-                    flags |= FLAG_RUST_CFG_NOT_UNIX;
-                }
+                flags |= platform_family_flag(attribute);
             }
         } else if !kind.contains("comment") {
             break;
@@ -154,11 +150,48 @@ pub(in crate::extract) fn platform_cfg_flags(node: Node, source: &[u8]) -> u8 {
     flags
 }
 
-fn compact_attribute_is(attribute: &str, expected: &str) -> bool {
-    attribute
-        .bytes()
-        .filter(|byte| !byte.is_ascii_whitespace())
-        .eq(expected.bytes())
+/// Operating systems of the Unix target family.
+const UNIX_TARGET_OS: [&str; 10] = [
+    "linux",
+    "macos",
+    "ios",
+    "android",
+    "freebsd",
+    "netbsd",
+    "openbsd",
+    "dragonfly",
+    "solaris",
+    "illumos",
+];
+
+/// Classifies a `#[cfg(...)]` attribute by target family: Unix (`unix`, a Unix `target_os`,
+/// `target_family = "unix"`) or outside it (`not(unix)`, `windows`, `target_os = "windows"`,
+/// `target_family = "windows"` or `"wasm"`). The two families are disjoint, so a relation between
+/// opposite gates cannot exist in one build; anything else stays unclassified.
+fn platform_family_flag(attribute: &str) -> u8 {
+    let compact: String = attribute.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let Some(predicate) = compact
+        .strip_prefix("#[cfg(")
+        .and_then(|rest| rest.strip_suffix(")]"))
+    else {
+        return 0;
+    };
+    let value = |key: &str| {
+        predicate
+            .strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix("=\""))
+            .and_then(|rest| rest.strip_suffix('"'))
+    };
+    match predicate {
+        "unix" => FLAG_RUST_CFG_UNIX,
+        "not(unix)" | "windows" => FLAG_RUST_CFG_NOT_UNIX,
+        _ => match (value("target_os"), value("target_family")) {
+            (Some(os), _) if UNIX_TARGET_OS.contains(&os) => FLAG_RUST_CFG_UNIX,
+            (Some("windows"), _) | (_, Some("windows" | "wasm")) => FLAG_RUST_CFG_NOT_UNIX,
+            (_, Some("unix")) => FLAG_RUST_CFG_UNIX,
+            _ => 0,
+        },
+    }
 }
 
 /// Expands a use tree (`crate::a::{b::C, d as E, f::*}`) into one import per leaf: `spec` is
@@ -243,6 +276,40 @@ mod tests {
 
     fn row(spec: &str, name: &str, alias: Option<&str>) -> (String, String, Option<String>) {
         (spec.to_owned(), name.to_owned(), alias.map(str::to_owned))
+    }
+
+    #[test]
+    fn platform_gates_classify_by_target_family() {
+        for unix in [
+            "#[cfg(unix)]",
+            "#[cfg( unix )]",
+            "#[cfg(target_os = \"macos\")]",
+            "#[cfg(target_os=\"linux\")]",
+            "#[cfg(target_family = \"unix\")]",
+        ] {
+            assert_eq!(platform_family_flag(unix), FLAG_RUST_CFG_UNIX, "{unix}");
+        }
+        for other in [
+            "#[cfg(not(unix))]",
+            "#[cfg(windows)]",
+            "#[cfg(target_os = \"windows\")]",
+            "#[cfg(target_family = \"wasm\")]",
+        ] {
+            assert_eq!(
+                platform_family_flag(other),
+                FLAG_RUST_CFG_NOT_UNIX,
+                "{other}"
+            );
+        }
+        for unknown in [
+            "#[cfg(not(windows))]",
+            "#[cfg(test)]",
+            "#[cfg(any(unix, windows))]",
+            "#[cfg(target_os = \"none\")]",
+            "#[derive(Debug)]",
+        ] {
+            assert_eq!(platform_family_flag(unknown), 0, "{unknown}");
+        }
     }
 
     #[test]

@@ -919,7 +919,7 @@ fn precision_manifest_is_language_stratified_stable_and_identity_bound() -> io::
 }
 
 #[test]
-fn javascript_unknown_receiver_does_not_fall_back_to_imported_render_method() -> io::Result<()> {
+fn javascript_unknown_receiver_reaches_imported_methods_only_as_inferred() -> io::Result<()> {
     let root = crate::infra::testdir::TestDir::new("javascript-unknown-render")?;
     fs::write(
         root.path().join("index.js"),
@@ -936,16 +936,25 @@ fn javascript_unknown_receiver_does_not_fall_back_to_imported_render_method() ->
          module.exports = GithubView;\n",
     )?;
     let graph = graph_of(root.path())?;
-    let false_edge = graph.edges.iter().any(|edge| {
-        edge.kind == EdgeKind::Calls
-            && node_location(&graph, edge.source).is_some_and(|source| source.path == "index.js")
-            && node_location(&graph, edge.target).is_some_and(|target| {
-                target.path == "github-view.js" && target.name.ends_with(".GithubView.render")
-            })
-    });
-    assert!(
-        !false_edge,
-        "unexpected edge in fixture:\n{}",
+    // `res` has no receiver evidence: the unique method among imported modules is a candidate
+    // (inferred, `?`), never exact, so `--exact` drops it.
+    let render_edges: Vec<Confidence> = graph
+        .edges
+        .iter()
+        .filter(|edge| {
+            edge.kind == EdgeKind::Calls
+                && node_location(&graph, edge.source)
+                    .is_some_and(|source| source.path == "index.js")
+                && node_location(&graph, edge.target).is_some_and(|target| {
+                    target.path == "github-view.js" && target.name.ends_with(".GithubView.render")
+                })
+        })
+        .map(|edge| edge.confidence)
+        .collect();
+    assert_eq!(
+        render_edges,
+        [Confidence::Inferred],
+        "expected one inferred candidate edge in fixture:\n{}",
         render(&graph)
     );
     Ok(())
