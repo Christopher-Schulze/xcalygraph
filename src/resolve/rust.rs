@@ -1,0 +1,305 @@
+//! Rust module paths, imports, inline modules, generic bounds and member lookup.
+
+use super::*;
+
+impl<'a> Index<'a> {
+    pub(super) fn rust_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        for import in &facts.imports {
+            let segments: Vec<&str> = import.spec.split("::").filter(|s| !s.is_empty()).collect();
+            let Some(name) = import.names.first() else {
+                continue;
+            };
+            let base = if segments.is_empty() {
+                self.rust_root_segment(file, name)
+                    .map(|target| (target, true))
+            } else {
+                self.rust_path(file, &segments)
+                    .map(|target| (target, false))
+            };
+            let Some((base, is_leaf)) = base else {
+                continue;
+            };
+            let target = if is_leaf {
+                Some(base)
+            } else if name == "*" {
+                if let Target::Module(module) = base {
+                    imports.globs.push(module);
+                    imports.modules.push(module);
+                }
+                None
+            } else {
+                self.rust_member(file, &base, name)
+            };
+            let Some(target) = target else { continue };
+            let local = import.alias.clone().unwrap_or_else(|| name.clone());
+            match &target {
+                Target::Module(module) => imports.modules.push(*module),
+                Target::External(external) => imports.externals.push(external.clone()),
+                Target::Symbols(symbols) => {
+                    if let Some(&symbol) = symbols.first() {
+                        imports
+                            .modules
+                            .push(self.module_of(self.symbols[symbol as usize].file));
+                    }
+                }
+            }
+            imports.names.insert(local, target);
+        }
+        // `mod child;` declarations make child modules visible by name.
+        let module = self.module_of(file);
+        let key = self.modules.modules[module as usize].key.clone();
+        for (symbol_index, symbol) in facts.symbols.iter().enumerate() {
+            if symbol.kind() == SymKind::Mod && symbol.end_line == symbol.line {
+                if let Some(reference) = Self::rust_path_reference_index(facts, symbol_index) {
+                    if let Some(target) = self.modules.rust_path_target(file, reference)
+                        && target != file
+                        && !imports.files.contains(&(file, target))
+                    {
+                        imports.files.push((file, target));
+                    }
+                    if symbol.parent.is_none()
+                        && let Some(child) = self.modules.rust_path_module(file, reference)
+                    {
+                        imports
+                            .names
+                            .entry(symbol.name.clone())
+                            .or_insert(Target::Module(child));
+                    }
+                    continue;
+                }
+                if symbol.parent.is_some() {
+                    continue;
+                }
+                let Some(child) = self.rust_child(&key, &symbol.name) else {
+                    continue;
+                };
+                imports
+                    .names
+                    .entry(symbol.name.clone())
+                    .or_insert(Target::Module(child));
+                for (other, &other_module) in self.modules.file_module.iter().enumerate() {
+                    if other_module == child {
+                        imports.files.push((file, other as u32));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Resolves a Rust path prefix (`crate::a::b`, `super::x`, `other_crate::y`).
+    pub(super) fn rust_path(&self, file: u32, segments: &[&str]) -> Option<Target> {
+        let module = self.module_of(file);
+        let key = self.modules.modules[module as usize].key.as_str();
+        let (crate_name, current) = key.split_once("::").unwrap_or((key, ""));
+        let current_path: Vec<&str> = if current.contains('/') || current.starts_with("tests::") {
+            Vec::new()
+        } else {
+            current.split("::").filter(|s| !s.is_empty()).collect()
+        };
+        let mut path: Vec<&str>;
+        let mut rest = segments;
+        let mut crate_name = crate_name.to_owned();
+        match segments.first().copied()? {
+            "crate" => {
+                path = Vec::new();
+                rest = &segments[1..];
+            }
+            "self" => {
+                path = current_path.clone();
+                rest = &segments[1..];
+            }
+            "super" => {
+                path = current_path.clone();
+                while rest.first() == Some(&"super") {
+                    path.pop();
+                    rest = &rest[1..];
+                }
+            }
+            first => {
+                if self.rust_crate_root(first).is_some() && first != crate_name {
+                    crate_name = first.to_owned();
+                    path = Vec::new();
+                    rest = &segments[1..];
+                } else {
+                    let mut child = current_path.clone();
+                    child.push(first);
+                    if self
+                        .modules
+                        .get(&format!("{crate_name}::{}", child.join("::")))
+                        .is_some()
+                    {
+                        path = current_path.clone();
+                    } else if self
+                        .modules
+                        .get(&format!("{crate_name}::{first}"))
+                        .is_some()
+                    {
+                        path = Vec::new();
+                    } else if let Some((types, _)) = self.resolve_type(file, None, None, first) {
+                        let mut target = Target::Symbols(types);
+                        for segment in &segments[1..] {
+                            target = self.rust_member(file, &target, segment)?;
+                        }
+                        return Some(target);
+                    } else {
+                        return Some(Target::External(first.to_owned()));
+                    }
+                }
+            }
+        }
+        let mut target = Target::Module(
+            self.modules
+                .get(&format!("{crate_name}::{}", path.join("::")))?,
+        );
+        for segment in rest {
+            let mut next_path = path.clone();
+            next_path.push(segment);
+            if let Some(module) = self
+                .modules
+                .get(&format!("{crate_name}::{}", next_path.join("::")))
+            {
+                path = next_path;
+                target = Target::Module(module);
+            } else {
+                target = self.rust_member(file, &target, segment)?;
+            }
+        }
+        Some(target)
+    }
+
+    /// Member `name` of a target: a symbol of a module, or an associated item of a type.
+    pub(super) fn rust_member(&self, file: u32, base: &Target, name: &str) -> Option<Target> {
+        match base {
+            Target::Module(module) => {
+                // A child module wins over its `mod name;` declaration symbol.
+                let key = &self.modules.modules[*module as usize].key;
+                if let Some(child) = self.rust_child(key, name) {
+                    return Some(Target::Module(child));
+                }
+                let found: Vec<u32> = self
+                    .module_symbol(*module, name, None)
+                    .into_iter()
+                    .filter(|&symbol| self.symbols[symbol as usize].kind != SymKind::Mod)
+                    .collect();
+                (!found.is_empty()).then_some(Target::Symbols(found))
+            }
+            Target::Symbols(symbols) => {
+                let found: Vec<u32> = symbols
+                    .iter()
+                    .flat_map(|&symbol| self.members(symbol, name))
+                    .collect();
+                (!found.is_empty()).then_some(Target::Symbols(found))
+            }
+            Target::External(external) => {
+                let _ = file;
+                Some(Target::External(external.clone()))
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- lookups
+
+    /// Members `name` of the inline module path `qualifier` declared in `file`.
+    pub(super) fn rust_inline_module(
+        &self,
+        file: u32,
+        qualifier: &str,
+        name: &str,
+    ) -> Option<Vec<u32>> {
+        let facts = self.facts(file)?;
+        let base = self.base[file as usize];
+        let mut parent: Option<u32> = None;
+        let mut external_target = None;
+        for segment in qualifier.split("::") {
+            if let Some(target) = external_target.as_ref() {
+                external_target = self.rust_member(file, target, segment);
+                if external_target.is_none() {
+                    return Some(Vec::new());
+                }
+                continue;
+            }
+            let found = facts.symbols.iter().position(|symbol| {
+                symbol.kind() == SymKind::Mod
+                    && symbol.name == segment
+                    && (parent.is_none() || symbol.parent == parent)
+            })?;
+            parent = Some(found as u32);
+            if let Some(reference) = Self::rust_path_reference_index(facts, found) {
+                let Some(module) = self.modules.rust_path_module(file, reference) else {
+                    return Some(Vec::new());
+                };
+                external_target = Some(Target::Module(module));
+            }
+        }
+        if let Some(target) = external_target {
+            return match self.rust_member(file, &target, name) {
+                Some(Target::Symbols(symbols)) => Some(symbols),
+                Some(Target::Module(_) | Target::External(_)) => Some(Vec::new()),
+                None => Some(Vec::new()),
+            };
+        }
+        let module = parent?;
+        let members: Vec<u32> = facts
+            .symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, symbol)| symbol.parent == Some(module) && symbol.name == name)
+            .map(|(local, _)| base + local as u32)
+            .collect();
+        (!members.is_empty()).then_some(members)
+    }
+
+    pub(super) fn rust_path_reference_index(facts: &Facts, symbol_index: usize) -> Option<u32> {
+        let symbol = u32::try_from(symbol_index).ok()?;
+        facts
+            .refs
+            .iter()
+            .enumerate()
+            .find(|(_, reference)| {
+                reference.kind == RefKind::Path
+                    && reference.scope == Some(symbol)
+                    && reference
+                        .qualifier
+                        .as_deref()
+                        .and_then(facts::rust_module_path_ref_context)
+                        .is_some()
+            })
+            .and_then(|(index, _)| u32::try_from(index).ok())
+    }
+
+    /// Resolves a Rust function type parameter only through its source-backed trait bounds.
+    /// `Some(empty)` means the binding is generic but no local trait target is provable, which
+    /// prevents a same-named concrete type elsewhere in the crate from becoming a false target.
+    pub(super) fn rust_generic_bound_types(
+        &self,
+        file: u32,
+        imports: &Imports,
+        scope: Option<u32>,
+        parameter: &str,
+    ) -> Option<Vec<u32>> {
+        if self.file_type(file) != Some(FileType::Rust) {
+            return None;
+        }
+        let scope = scope?;
+        let key = (file, scope, parameter);
+        if !self.rust_generic_parameters.contains(&key) {
+            return None;
+        }
+        let mut traits = Vec::new();
+        for bound in self.rust_generic_bounds.get(&key).into_iter().flatten() {
+            let Some((types, Confidence::Exact)) =
+                self.resolve_type(file, Some(imports), Some(scope), bound)
+            else {
+                continue;
+            };
+            for trait_symbol in types {
+                if self.symbols[trait_symbol as usize].kind == SymKind::Trait
+                    && !traits.contains(&trait_symbol)
+                {
+                    traits.push(trait_symbol);
+                }
+            }
+        }
+        Some(traits)
+    }
+}

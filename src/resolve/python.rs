@@ -1,10 +1,12 @@
 //! Python module rules (`docs/spec.md` section 6): absolute and relative imports, package
 //! `__init__` modules, dotted qualifiers through the package tree.
 
-use super::{Imports, Index, Pair, Target};
+use super::{Imports, Index, MAX_DISPATCH, Pair, Target};
+use crate::domain::facts;
 use crate::domain::facts::{Facts, SourceIdentityKind, SymKind};
 use crate::domain::filetype::FileType;
 use crate::domain::graph::Confidence;
+use crate::domain::hash::FastSet as HashSet;
 
 /// Modules a re-exported name is followed through (`pkg/__init__` -> `pkg/api` -> `pkg/impl`).
 const MAX_REEXPORT_DEPTH: usize = 3;
@@ -316,6 +318,57 @@ fn join(base: &str, name: &str) -> String {
         name.to_owned()
     } else {
         format!("{base}.{name}")
+    }
+}
+
+impl<'a> Index<'a> {
+    pub(super) fn python_stub_implementations(
+        &self,
+        base: u32,
+        name: &str,
+        arity: u8,
+        caller_is_test: bool,
+    ) -> Option<Vec<u32>> {
+        let mut pending = vec![base];
+        let mut visited = HashSet::default();
+        visited.insert(base);
+        let mut targets = Vec::new();
+        let mut target_set = HashSet::default();
+        let mut cursor = 0;
+        while cursor < pending.len() {
+            let current = pending[cursor];
+            cursor += 1;
+            for &implementation in self.implementations.get(&current).into_iter().flatten() {
+                if !visited.insert(implementation)
+                    || self.file_type(self.symbols[implementation as usize].file)
+                        != Some(FileType::Python)
+                    || self.symbols[implementation as usize].kind != SymKind::Class
+                    || (!caller_is_test && self.is_test(implementation))
+                {
+                    continue;
+                }
+                pending.push(implementation);
+                let concrete: Vec<u32> = self
+                    .members_direct(implementation, name)
+                    .into_iter()
+                    .filter(|&method| self.symbols[method as usize].parent == implementation)
+                    .filter(|&method| {
+                        self.symbols[method as usize].flags & facts::FLAG_PYTHON_ABSTRACT_STUB == 0
+                    })
+                    .collect();
+                let (selected, _) = self.overloads(&concrete, arity);
+                for method in selected {
+                    if target_set.insert(method) {
+                        targets.push(method);
+                        if targets.len() > MAX_DISPATCH {
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+        targets.sort_unstable();
+        Some(targets)
     }
 }
 

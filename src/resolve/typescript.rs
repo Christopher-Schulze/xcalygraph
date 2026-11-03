@@ -6,6 +6,7 @@ use crate::domain::facts::{self, SourceIdentityKind, SymKind, TypeScriptProjectC
 use crate::domain::filetype::FileType;
 use crate::domain::graph::FLAG_TYPESCRIPT_GLOBAL_INTERFACE;
 
+#[allow(unused_imports)]
 use super::{Index, modules};
 
 struct Project {
