@@ -60,7 +60,7 @@ pub fn is_unshared_regular(metadata: &Metadata) -> bool {
         metadata.nlink() == 1
     }
     #[cfg(not(unix))]
-    false
+    true
 }
 
 /// Opens only an existing regular file, without creation or truncation.
@@ -92,12 +92,17 @@ pub fn open_existing_regular(path: &Path, writable: bool) -> io::Result<File> {
     Ok(file)
 }
 
+/// Windows has no O_NOFOLLOW or link-count check here: a regular file that is no symlink suffices.
 #[cfg(not(unix))]
-pub fn open_existing_regular(_path: &Path, _writable: bool) -> io::Result<File> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "secure index control files require Unix",
-    ))
+pub fn open_existing_regular(path: &Path, writable: bool) -> io::Result<File> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "not a regular file",
+        ));
+    }
+    fs::OpenOptions::new().read(true).write(writable).open(path)
 }
 
 // O_NOFOLLOW | O_NONBLOCK from each platform's fcntl headers. Linux architectures differ in

@@ -6,6 +6,8 @@
 - [Agent skill](#agent-skill)
 - [Installation and releases](#installation-and-releases)
 - [Output format](#output-format)
+- [What an agent sees](#what-an-agent-sees)
+- [Measured results](#measured-results)
 - [Architecture](#architecture)
 - [Build and test](#build-and-test)
 - [Upstream reference](#upstream-reference)
@@ -125,10 +127,57 @@ Resolution order for all of them is `docs/spec.md` section 6: lexical scope, imp
 - Install script: `scripts/utils/install.sh`, attached to every release as `install.sh`, resolves the latest release (or `--version X.Y.Z`), downloads the platform archive and `SHA256SUMS`, verifies the checksum, smoke-tests the binary and lets it run `install` (binary, skill, Claude Code link); `--no-skill` installs only the binary through an exclusively created temporary file beside the destination, preserves existing temporary entries and rejects directory targets; `XCALYGRAPH_INSTALL_DIR` and `XCALYGRAPH_RELEASE_BASE` (also `file://`) override target and source.
 - Progress: `install` and `update` draw their phases on stderr when it is a terminal (`src/app/progress.rs`: spinner with elapsed time, download bar in eighth blocks with bytes, smoothed speed and remaining time, one line per finished phase with paths below HOME shown as `~`); otherwise nothing is drawn and the stdout result lines carry the facts.
 - Release archives: `scripts/build/build-release.sh [TARGET...]` builds `dist/xcalygraph-<version>-<os>-<arch>.tar.gz` (binary, `LICENSE`, `THIRD-PARTY-LICENSES.txt` with top-level regular `LICENSE*`, `COPYING*` and `NOTICE*` files and Cargo-declared license files from dependencies) and `dist/SHA256SUMS`. License paths retain control characters; discovered symlink files are skipped, declared paths containing symlinks are rejected, and missing or unreadable files abort staging. A declared file already found by discovery is included once. Builds and staging in a temporary directory under `dist` use the checkout-owned Cargo target under the source guard; final archive and checksum names are installed only after its final source check succeeds. The version is rechecked inside the guard. The script preserves unrelated entries, rejects an occupied archive or checksum path and includes only this build's archives in the checksum file. Before touching `dist`, it checks for Bash, Cargo, Git, jq, Python 3, rustc, awk, tar and either `sha256sum` or `shasum`. If local publication fails partway, already published outputs remain and the failure is reported. `scripts/tests/test-release-provenance.sh` exercises the same staging and local-output path with debug fixtures, including missing-tool preflight, source changes, interruptions and concurrent builds; `scripts/tests/test-release-licenses.sh` verifies unusual and declared license paths in a debug archive.
-- `.github/workflows/release.yml` builds darwin-arm64, darwin-amd64, linux-amd64 and linux-arm64 (static musl) on a `v*` tag and publishes them with `SHA256SUMS` and `install.sh` as the release of that tag. Before the gate, the workflow uses `scripts/utils/validate-release-tag.sh TAG CARGO_VERSION` to require `GITHUB_REF_NAME` to equal `v` plus the Cargo package version; `scripts/build/build-release.sh` repeats the check before creating `dist`. This makes Cargo-version archive names match installer and updater names derived from the release tag. Both Linux build runners install Ubuntu's `hyperfine`, `jq`, `musl-tools`, `pipx`, Python 3, `rsync`, ShellCheck and `tar` packages; the x86_64 Linux gate additionally installs upstream-pinned `graphifyy==0.9.97` in an isolated pipx environment. The gate checks the Graphify CLI version against the local upstream reference; no hosted workflow run is implied by local checks.
-- `.github/workflows/ci.yml` runs the product gate (`scripts/tests/test.sh`) on Ubuntu for every push to `main` and every pull request, with the tools the gate's own `--all` fixture test needs.
+- `.github/workflows/release.yml` builds darwin-arm64, darwin-amd64, linux-amd64, linux-arm64 (static musl) and windows-amd64 on a `v*` tag and publishes them with `SHA256SUMS` and `install.sh` as the release of that tag. Before the gate, the workflow uses `scripts/utils/validate-release-tag.sh TAG CARGO_VERSION` to require `GITHUB_REF_NAME` to equal `v` plus the Cargo package version; `scripts/build/build-release.sh` repeats the check before creating `dist`. This makes Cargo-version archive names match installer and updater names derived from the release tag. Both Linux build runners install Ubuntu's `hyperfine`, `jq`, `musl-tools`, `pipx`, Python 3, `rsync`, ShellCheck and `tar` packages; the x86_64 Linux gate additionally installs upstream-pinned `graphifyy==0.9.97` in an isolated pipx environment. The gate checks the Graphify CLI version against the local upstream reference; no hosted workflow run is implied by local checks.
+- `.github/workflows/ci.yml` runs the product gate (`scripts/tests/test.sh`) on Ubuntu for every push to `main` and every pull request, with the tools the gate's own `--all` fixture test needs. A Windows job builds the release binary and runs `scripts/tests/test-windows-smoke.ps1` (queries, refresh after an edit, clean, `install.ps1` against a local release).
 - Update trust: `install.sh` and `update` verify the archive against `SHA256SUMS` from the same release. This detects transfer corruption and mismatched assets, not a compromised release or account; the archives carry no publisher signature.
 - Versioning: every index-format or skill change raises the minor version in `Cargo.toml` (the skill version equals the binary version), so `version` and `update` identify the state.
+
+### Release installer
+
+The one-line installers fetch `install.sh` (macOS, Linux) or `install.ps1` (Windows) from the latest [release](https://github.com/Christopher-Schulze/xcalygraph/releases), never from `main`. They:
+
+- pick the archive for the platform (macOS and Linux arm64 and x86-64, Windows x86-64);
+- verify it against the release's `SHA256SUMS`;
+- smoke-test the new binary before it replaces an existing one;
+- let the binary install itself, the skill and the Claude Code link;
+- report a missing PATH entry with the exact `export` line instead of editing your shell profile.
+
+```bash
+# a specific version, or the binary without the skill
+curl -fsSL https://github.com/Christopher-Schulze/xcalygraph/releases/latest/download/install.sh | bash -s -- --version X.Y.Z
+curl -fsSL https://github.com/Christopher-Schulze/xcalygraph/releases/latest/download/install.sh | bash -s -- --no-skill
+```
+
+On Windows set `XCALYGRAPH_VERSION` to pin a version. `XCALYGRAPH_INSTALL_DIR` changes the target directory (default `~/.local/bin`).
+
+### What `xcalygraph install` does
+
+```bash
+xcalygraph install               # binary, skill, Claude Code link
+xcalygraph install --skill-only  # skill (and link) only
+xcalygraph install --no-link     # no Claude Code link
+```
+
+- **Binary**: copies the running executable to `~/.local/bin/xcalygraph` unless it already runs from there.
+- **Skill**: writes the embedded skill to `~/.agents/skills/xcalygraph/SKILL.md`, the shared location agent hosts read. The skill always matches the binary's version.
+- **Claude Code**: when `~/.claude` exists, links `~/.claude/skills/xcalygraph` to that directory. A foreign file or link there is reported and never replaced.
+
+### Update
+
+```bash
+xcalygraph update           # newest release, then a fresh skill
+xcalygraph update --check   # only report whether one is available
+```
+
+`update` downloads the release for your platform, verifies the checksum, smoke-tests the new binary, replaces the old one atomically and installs the matching skill. When the binary is already current, it still rewrites a skill that is out of date. On a terminal every step shows live progress (download bar with speed and remaining time); in scripts and agent runs only the result lines appear.
+
+### Uninstall
+
+```bash
+xcalygraph clean                # every index
+rm ~/.local/bin/xcalygraph
+rm -r ~/.agents/skills/xcalygraph ~/.claude/skills/xcalygraph
+```
 
 ## Output format
 
@@ -141,6 +190,121 @@ Resolution order for all of them is `docs/spec.md` section 6: lexical scope, imp
 - Budget: stdout never exceeds `3 x -b` bytes, including truncation, ambiguity candidate lists (at most 600 tokens) and `impact` run commands (reserved before notices and changes, package-level form when the precise one does not fit). Truncation ends with `+<n> more` or JSON `{"t":"more","n":<n>}`; if that cannot fit, text uses `+<n>` or `+`, JSON uses `{"t":"more"}` or `{}`. An empty JSON object always means truncation. Grouping never lets a lower-ranked hit displace a higher-ranked one: the best hits that fit are chosen first, then grouped.
 - `--json` writes JSON Lines with the fields of `docs/spec.md` section 8; empty fields are omitted.
 - Map JSON keeps file/symbol counts, task targets, API signatures and handlers, cycle/layer members, and environment read locations in typed fields. Audit JSON keeps finding names, source paths and lines separate; drift records also expose direction and status.
+
+## What an agent sees
+
+`xcalygraph show refresh::refresh -b 180` returns a symbol card with its signature, callers (`<`, at the call site), callees (`>`, at the definition) and tests (`t`):
+
+```
+src/app/refresh.rs:40-112 fn app::refresh::refresh
+pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError>
+< app::prepare_index src/app/mod.rs:144
+> app::error::AppError::io src/app/error.rs:27
+> app::error::AppError::index_io src/app/error.rs:32
+> infra::lock::WriterLock::acquire src/infra/lock.rs:20
+> app::refresh::derive_version src/app/refresh.rs:115
+> extract::extraction_version src/extract/mod.rs:38
+> infra::scan::scan src/infra/scan.rs:18
+> app::refresh::invalidate_meta src/app/refresh.rs:150
++23 more
+```
+
+`xcalygraph impact derived::build -b 180` returns the dependents by depth, the tests reaching them and the exact command to run:
+
+```
+~ infra::store::derived::build src/infra/store/derived.rs:211
+< 1 app::refresh::write_derived src/app/refresh.rs:161
+< 2 app::refresh::rederive src/app/refresh.rs:135
+< 2 app::refresh::refresh src/app/refresh.rs:40
+< 3 app::open_index src/app/mod.rs:151
+< 3 app::prepare_index src/app/mod.rs:137
+< 3 app::run_query src/app/mod.rs:163
+t app::refresh::tests::first_refresh_builds_then_quiet_refresh_writes_nothing src/app/refresh.rs:409
+r cargo test --manifest-path Cargo.toml
++9 more
+```
+
+`xcalygraph impact --diff` does the same for the uncommitted changes in the work tree (or against any revision) and flags exported signature changes.
+
+`xcalygraph find "where are changed file shards written" -p src/app/refresh.rs -b 180` returns ranked hits grouped by file:
+
+```
+src/app/refresh.rs
+  264 fn write_shards(workspace: &Workspace, changes: &ChangeSet, rebuilt: bool) -> Result<u64, AppError>
+  32 pub struct Report
+  161 fn write_derived(workspace: &Workspace, records: &[FileRecord]) -> Result<u64, AppError>
+  150 fn invalidate_meta(workspace: &Workspace, meta: &Meta) -> Result<u64, AppError>
+  126 fn derived_is_valid(workspace: &Workspace) -> bool
+  409 fn first_refresh_builds_then_quiet_refresh_writes_nothing() -> Result<(), Box<dyn std::error::Error>>
++7 more
+```
+
+## Measured results
+
+Agent benchmark 2026-11-03, headless Codex `gpt-6-luna` at reasoning effort `max`, 90 questions (hono, Graphify source, xcalygraph source), one answer per question and arm:
+
+| arm | run 1 correct, tokens, seconds | run 2 (skill rewritten) correct, tokens, seconds |
+|---|---|---|
+| no tool (`rg`, reads) | 85 %, 71,900, 13.7 | 85 %, 71,300, 17.6 |
+| xcalygraph | 87 %, 78,100, 16.3 | 83 %, 70,000, 20.9 |
+| Graphify | 89 %, 119,200, 21.5 | 87 %, 150,500, 48.0 |
+
+The unchanged no-tool arm moved up to 9 points per corpus between runs; tokens and failed-call counts are the reliable signal (skill rewrite: failed xcalygraph calls 17 % to 5 %). Per corpus, run 1: Graphify source 88 % / 73k with xcalygraph versus 88 % / 128k without; hono 94 % / 78k versus 88 % / 53k; xcalygraph source 78 % / 82k versus 81 % / 44k.
+
+Edge oracle 2026-11-03 (`scripts/benchmarks/measure-edge-oracle.sh`, ten corpora, about 60,000 edges): exact precision per corpus and kind 96.2 to 100 %, inferred 97.7 to 100 % except hono TypeScript inferred `uses` 0/4 (DOM globals such as `Response` bound to same-named repository types). Call recall: cobra 98.6, ky 97.3, Graphify 94.7, xcalygraph 94.0, sqlc 93.4, ripgrep 67.8, express 62.5, hono 50.8, httpx 48.3 %.
+
+The sections below keep the earlier development comparisons. The absent-symbol result of the later run is outdated: current builds return no false hits on all 24 probes.
+
+The development comparisons below use three public corpora:
+
+| corpus | language | files | why |
+|---|---|---|---|
+| [hono](https://github.com/honojs/hono) @17ad0e2 | TypeScript | 577 | home ground for neither tool |
+| [Graphify](https://github.com/Graphify-Labs/graphify) source | Python | 1,111 | Graphify's home ground |
+| xcalygraph source | Rust | 575 | xcalygraph's home ground |
+
+Graphify 0.9.97, warm filesystem cache. Reproduce with `scripts/benchmarks/run-evaluation.sh` and `scripts/benchmarks/run-benchmarks.sh --upstream`. Both tools read byte-identical source snapshots verified by content hashes and executable bits. Graph reuse also verifies the installed Graphify code, extraction settings and graph checksum. Raw answers, source/question/binary identities and timing artifacts remain in separate `.cache/` run directories.
+
+### Finding code from a question
+
+Each question describes code in plain words ("compare two secrets in constant time"). An xcalygraph hit means the expected file is among the first five results; a Graphify hit counts anywhere in its answer. Tokens are estimated as output bytes divided by three. The scripted `rg` arm greps the two longest question words and reads the entire expected file if matched. This uses the expected answer and is not a competent agent's bounded search strategy; its token count is not a general rg efficiency claim.
+
+| corpus | questions | xcalygraph `find` | Graphify `query` | `rg` + read |
+|---|---|---|---|---|
+| hono | 32 | 84 %, 588 tokens | 75 %, 2,178 tokens | 75 %, 34,696 tokens |
+| Graphify source | 26 | 100 %, 585 tokens | 88 %, 2,230 tokens | 100 %, 175,310 tokens |
+| xcalygraph source | 32 | 96 %, 590 tokens | 75 %, 2,573 tokens | 100 %, 20,283 tokens |
+
+On these development questions, xcalygraph uses 23 to 27 % of Graphify's output tokens. Counted anywhere in its 600-token answer, xcalygraph reaches 87 %, 100 % and 96 %. These questions have been used for tuning and do not establish generalization or real-agent token savings. Earlier comparisons using a stale xcalygraph source copy are superseded by these same-snapshot results; their held-out superiority claims are withdrawn. `impact` finds all 10 expected dependents and tests on the xcalygraph impact set, at 343 tokens per answer.
+
+### Frozen source-locator evaluation
+
+A separate [frozen suite](scripts/benchmarks/questions/sealed/manifest.json) covers eight public corpora with 240 source-verified questions, including 216 positive questions and 24 absent-symbol probes. Source and question identities were fixed before this evaluation. The same agent authored the questions; this is a deliberately selected, correlated sample, not a blinded or random generalization proof. [Full aggregate observations](scripts/benchmarks/questions/sealed/observations.json) retain paired outcomes, descriptive intervals and requested-budget curves.
+
+In the first recorded run, before later tuning, `find` text at a requested 600 tokens returned every required definition for 151/216 positive questions, averaging 572 estimated tokens; Graphify at its legacy 2000 setting reached 121/216 at 2833 tokens. For the 48 questions in the explicit multi-location family, `find` completed 18, `ctx` at 600 completed 26, and Graphify at 2000 completed 21. Including relationship questions, 72 questions required multiple locations; the respective counts were 28, 46 and 32. These measure emitted source locators, not an agent's final answer or total work.
+
+A later [development run](scripts/benchmarks/questions/sealed/observations-025.json) selects `find` for single-location questions and `ctx` for multi-location questions using their known labels. At 600 requested tokens, text completed 180/216 positive questions and 52/72 requiring multiple locations, against 121/216 and 32/72 for the reused Graphify 2000-setting observations; average estimated output was 572 versus 2833 tokens. In paired cases, xcalygraph alone completed 66, Graphify alone 7, both 114, and neither 29. JSON completed 154/216 and 32/72. Both xcalygraph forms returned irrelevant locations on all 24 absent-symbol probes, versus 12 for Graphify; the text and JSON workflows exceeded the requested budget on 25 and 33 of 240 cases respectively. Label-based routing does not show that an agent would choose those commands, and these are inspected development questions, not a blinded test or real-agent cost measurement.
+
+Universal superiority was not established in the first run: on React the legacy file hit was 25/27 against Graphify's 27/27, on Svelte 20/27 against 23/27, and on httpx both reached 27/27. At 600 the observed maximum budget excess was 3 estimated tokens for `find` text and 7 for JSON. Reruns cannot be called unseen final evaluations.
+
+### Building and updating the index
+
+Same files for both tools; Graphify runs `graphify update .`. Full builds are single observations, refresh times are 15-run means for xcalygraph and single observations for Graphify. The edit repeatedly appends the same valid comment, so derived facts can remain unchanged after warmup; it does not measure a behavior-changing edit. These observations do not prove the reference latency targets.
+
+| corpus | tool | full build | peak memory | index on disk | update after editing one file |
+|---|---|---|---|---|---|
+| hono | xcalygraph | **0.32 s** | **51 MB** | **1.44 MiB** | **94 ms** |
+| | Graphify | 4.55 s | 202 MB | 7.46 MiB | 3.85 s |
+| Graphify source | xcalygraph | **0.56 s** | **102 MB** | **7.20 MiB** | **145 ms** |
+| | Graphify | 18.70 s | 918 MB | 59.66 MiB | 12.65 s |
+| xcalygraph source | xcalygraph | **0.90 s** | **34 MB** | **1.31 MiB** | **34 ms** |
+| | Graphify | 2.49 s | 111 MB | 9.73 MiB | 1.96 s |
+
+The retained timing artifacts and exact source identities are required when comparing another run; these small corpora do not replace the larger reference-corpus resource gate.
+
+### Language depth
+
+`scripts/benchmarks/compare-depth.sh` checks, for each language corpus, which of Graphify's relations between files of the corpus xcalygraph also finds. Across the 26 public corpora with at least 50 such calls (pinned in `scripts/benchmarks/corpora.tsv`), the median match is 95 % for calls (lowest 74 %) and 97 % for inheritance and implementation. Spot checks of the misses against the source show they are mostly Graphify errors (library methods bound to same-named local functions), recursion (xcalygraph drops self-loops) or generated files left out on purpose.
 
 ## Architecture
 

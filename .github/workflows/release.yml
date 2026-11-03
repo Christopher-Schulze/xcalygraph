@@ -18,6 +18,7 @@ jobs:
           - { runner: macos-15, target: x86_64-apple-darwin }
           - { runner: ubuntu-24.04, target: x86_64-unknown-linux-musl }
           - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+          - { runner: windows-2025, target: x86_64-pc-windows-msvc }
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
@@ -41,8 +42,10 @@ jobs:
           test "$(graphify --version)" = "graphify 0.9.97"
           graphify --version
       - name: Toolchain
+        shell: bash
         run: rustup target add ${{ matrix.target }}
       - name: Validate release tag
+        shell: bash
         run: |
           version="$(cargo metadata --locked --no-deps --format-version 1 | python3 -c '
           import json
@@ -59,7 +62,8 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: scripts/tests/test.sh --all
       - name: Build
-        run: scripts/build/build-release.sh ${{ matrix.target }}
+        shell: bash
+        run: bash scripts/build/build-release.sh ${{ matrix.target }}
       - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.target }}
@@ -78,6 +82,7 @@ jobs:
         run: |
           cd dist && sha256sum -- *.tar.gz > SHA256SUMS
           cp ../scripts/utils/install.sh install.sh
+          cp ../scripts/utils/install.ps1 install.ps1
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
