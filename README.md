@@ -84,7 +84,7 @@ Building and updating the index, same files for both tools:
 | [Graphify](https://github.com/Graphify-Labs/graphify) source (Python, 1,111 files) | xcalygraph | **0.56 s** | **102 MB** | **7.20 MiB** | **145 ms** |
 | | Graphify | 18.70 s | 918 MB | 59.66 MiB | 12.65 s |
 
-Fact precision is measured against compiler indexes over about 60,000 edges in ten corpora: exact facts 96 to 100 %, inferred 98 to 100 % (one small exception is documented). On a frozen suite of 240 source-verified questions in eight corpora, `find` returns every required definition for 91 % of the questions at 600 tokens (Graphify at 2,000 tokens: 56 %) and no false hits on absent symbols (Graphify: 12 of 24). Method, limitations and reproduction: [documentation](docs/documentation.md#measured-results).
+Compiler-index comparisons report source-located target agreement, recall and unknown cases separately across ten corpora. On a frozen suite of 240 source-verified questions in eight corpora, a retained development run of `find` returned every required definition for 91 % of the positive questions at 600 tokens (Graphify at 2,000 tokens: 56 %) and no false hits on absent symbols (Graphify: 12 of 24). Method, limitations and reproduction: [documentation](docs/documentation.md#measured-results).
 
 ## Languages
 

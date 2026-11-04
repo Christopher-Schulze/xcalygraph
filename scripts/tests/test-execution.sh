@@ -42,6 +42,7 @@ PYTHON
 )"
 [[ "${mode}" == all ]] || exit 0
 bash "${REPO_ROOT}/scripts/tests/test-prune-cache.sh"
+bash "${REPO_ROOT}/scripts/tests/test-edge-oracle.sh"
 bash "${REPO_ROOT}/scripts/tests/test-agent-benchmark-safety.sh" "${binary}"
 bash "${REPO_ROOT}/scripts/tests/test-agent-benchmark-questions.sh"
 bash "${REPO_ROOT}/scripts/tests/test-benchmark-inputs.sh"

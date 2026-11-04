@@ -1,0 +1,824 @@
+{
+  "provenance": {
+    "generator": "rust-analyzer 1.99.1 (58cf8f9c 2026-10-13)",
+    "source_sha256": {
+      "Cargo.toml": "72d201dea7683df59e37fffc4914d8ff66fa0cf996ee7b56074e3884269d78ca",
+      "src/lib.rs": "213ecf426447425ce484598f9290e9f44c9fb9845f1012b8224029172f50936e",
+      "src/unrelated.rs": "3b9e87bb5a42f5e79bac213357402b234fc3dac3f33f28422ef88667a782d046"
+    }
+  },
+  "documents": [
+    {
+      "language": "rust",
+      "relative_path": "src/lib.rs",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            18,
+            0
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 crate/",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            18,
+            0
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            0,
+            7,
+            14
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Wrapper#",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            15
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            1,
+            7,
+            12
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Value#",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            1,
+            0,
+            13
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            5,
+            12
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Wrapper#",
+          "enclosing_range": [
+            0,
+            0,
+            15
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            3,
+            7,
+            10
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Wrapper]new().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            3,
+            4,
+            35
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            3,
+            16,
+            23
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Wrapper#",
+          "enclosing_range": [
+            0,
+            0,
+            15
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            3,
+            26,
+            33
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Wrapper#",
+          "enclosing_range": [
+            0,
+            0,
+            15
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            4,
+            7,
+            13
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Wrapper]unwrap().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            4,
+            4,
+            38
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            4,
+            14,
+            18
+          ],
+          "TypedRange": null,
+          "symbol": "local 0",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            4,
+            14,
+            18
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            4,
+            23,
+            28
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Value#",
+          "enclosing_range": [
+            1,
+            0,
+            13
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            4,
+            31,
+            36
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Value#",
+          "enclosing_range": [
+            1,
+            0,
+            13
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            5,
+            7,
+            13
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Wrapper]finish().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            5,
+            4,
+            22
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            5,
+            14,
+            18
+          ],
+          "TypedRange": null,
+          "symbol": "local 1",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            5,
+            14,
+            18
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            7,
+            5,
+            10
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Value#",
+          "enclosing_range": [
+            1,
+            0,
+            13
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            8,
+            7,
+            13
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Value]finish().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            8,
+            4,
+            22
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            8,
+            14,
+            18
+          ],
+          "TypedRange": null,
+          "symbol": "local 2",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            8,
+            14,
+            18
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            10,
+            3,
+            8
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 entry().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            10,
+            0,
+            48
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            10,
+            13,
+            20
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Wrapper#",
+          "enclosing_range": [
+            0,
+            0,
+            15
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            10,
+            22,
+            25
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Wrapper]new().",
+          "enclosing_range": [
+            3,
+            4,
+            35
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            10,
+            28,
+            34
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Wrapper]unwrap().",
+          "enclosing_range": [
+            4,
+            4,
+            38
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            10,
+            37,
+            43
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Value]finish().",
+          "enclosing_range": [
+            8,
+            4,
+            22
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            12,
+            7,
+            11
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Left#",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            12,
+            0,
+            12
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            13,
+            7,
+            12
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Right#",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            13,
+            0,
+            13
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            14,
+            5,
+            9
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Left#",
+          "enclosing_range": [
+            12,
+            0,
+            12
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            14,
+            15,
+            20
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Left]clash().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            14,
+            12,
+            29
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            14,
+            21,
+            25
+          ],
+          "TypedRange": null,
+          "symbol": "local 3",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            14,
+            21,
+            25
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            14,
+            37,
+            42
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Right#",
+          "enclosing_range": [
+            13,
+            0,
+            13
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            14,
+            48,
+            53
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Right]clash().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            14,
+            45,
+            62
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            14,
+            54,
+            58
+          ],
+          "TypedRange": null,
+          "symbol": "local 4",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            14,
+            54,
+            58
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            15,
+            3,
+            17
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 ambiguous_line().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            15,
+            0,
+            38
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            15,
+            22,
+            27
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Right#",
+          "enclosing_range": [
+            13,
+            0,
+            13
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            15,
+            28,
+            33
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Right]clash().",
+          "enclosing_range": [
+            14,
+            45,
+            62
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            17,
+            4,
+            13
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 unrelated/",
+          "TypedEnclosingRange": null
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 crate/",
+          "kind": 29,
+          "signature_documentation": {
+            "language": "rust",
+            "text": "extern crate oracle_receiver_identities"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Wrapper#",
+          "kind": 49,
+          "display_name": "Wrapper",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "struct Wrapper"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Value#",
+          "kind": 49,
+          "display_name": "Value",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "struct Value"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Wrapper]new().",
+          "kind": 80,
+          "display_name": "new",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "fn new() -> Wrapper"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Wrapper]unwrap().",
+          "kind": 26,
+          "display_name": "unwrap",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "fn unwrap(self) -> Value"
+          }
+        },
+        {
+          "symbol": "local 0",
+          "kind": 44,
+          "display_name": "self",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "self: Wrapper"
+          },
+          "enclosing_symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Wrapper]unwrap()."
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Wrapper]finish().",
+          "kind": 26,
+          "display_name": "finish",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "fn finish(self)"
+          }
+        },
+        {
+          "symbol": "local 1",
+          "kind": 44,
+          "display_name": "self",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "self: Wrapper"
+          },
+          "enclosing_symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Wrapper]finish()."
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Value]finish().",
+          "kind": 26,
+          "display_name": "finish",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "fn finish(self)"
+          }
+        },
+        {
+          "symbol": "local 2",
+          "kind": 44,
+          "display_name": "self",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "self: Value"
+          },
+          "enclosing_symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Value]finish()."
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 entry().",
+          "kind": 17,
+          "display_name": "entry",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "fn entry()"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Left#",
+          "kind": 49,
+          "display_name": "Left",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "struct Left"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 Right#",
+          "kind": 49,
+          "display_name": "Right",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "struct Right"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Left]clash().",
+          "kind": 26,
+          "display_name": "clash",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "fn clash(self)"
+          }
+        },
+        {
+          "symbol": "local 3",
+          "kind": 44,
+          "display_name": "self",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "self: Left"
+          },
+          "enclosing_symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Left]clash()."
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Right]clash().",
+          "kind": 26,
+          "display_name": "clash",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "fn clash(self)"
+          }
+        },
+        {
+          "symbol": "local 4",
+          "kind": 44,
+          "display_name": "self",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "self: Right"
+          },
+          "enclosing_symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 impl#[Right]clash()."
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 ambiguous_line().",
+          "kind": 17,
+          "display_name": "ambiguous_line",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "fn ambiguous_line()"
+          }
+        }
+      ],
+      "position_encoding": 1
+    },
+    {
+      "language": "rust",
+      "relative_path": "src/unrelated.rs",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            4,
+            0
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 unrelated/",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            4,
+            0
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            0,
+            7,
+            16
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 unrelated/Unrelated#",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            17
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            1,
+            5,
+            14
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 unrelated/Unrelated#",
+          "enclosing_range": [
+            0,
+            0,
+            17
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            7,
+            13
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 unrelated/impl#[Unrelated]finish().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            2,
+            4,
+            22
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            14,
+            18
+          ],
+          "TypedRange": null,
+          "symbol": "local 0",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            2,
+            14,
+            18
+          ],
+          "TypedEnclosingRange": null
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 unrelated/",
+          "kind": 29,
+          "display_name": "unrelated",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "mod unrelated"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 unrelated/Unrelated#",
+          "kind": 49,
+          "display_name": "Unrelated",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "struct Unrelated"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 unrelated/impl#[Unrelated]finish().",
+          "kind": 26,
+          "display_name": "finish",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "fn finish(self)"
+          }
+        },
+        {
+          "symbol": "local 0",
+          "kind": 44,
+          "display_name": "self",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "self: Unrelated"
+          },
+          "enclosing_symbol": "rust-analyzer cargo oracle_receiver_identities 0.0.0 unrelated/impl#[Unrelated]finish()."
+        }
+      ],
+      "position_encoding": 1
+    }
+  ]
+}

@@ -14,7 +14,8 @@
 #   so recall is measured per file and target rather than per line).
 # Verdict per edge: unknown when the compiler has no symbol for the target; correct when the
 # compiler resolves a reference on the edge line to the edge
-# target (same file, same name, definition within 5 lines) or to a method the target implements;
+# target (same file, name and definition line, identifying one compiler symbol) or to a method
+# the target implements; ambiguous locations and unsupported name-only dispatch stay unknown;
 # for inherits/implements, when the source type declared there has that relationship; incorrect
 # when the compiler resolves in-repo references (or relationships) there but none is the target;
 # unknown when the compiler reports nothing in-repo there.
@@ -139,7 +140,8 @@ for symbol, locations in definitions.items():
         by_location[(path, descriptor_name(symbol))].add((symbol, line))
 
 def targets_of(path, name, line):
-    return {symbol for symbol, defined in by_location.get((path, name), ()) if abs(defined - line) <= 5}
+    candidates = {symbol for symbol, defined in by_location.get((path, name), ()) if defined == line}
+    return candidates if len(candidates) == 1 else set()
 
 indexed = {document["relative_path"] for document in index["documents"]}
 stats = collections.Counter()
@@ -154,9 +156,9 @@ with open(verdicts_path, "w") as verdicts:
         if kind in ("inherits", "implements"):
             # The relationship belongs to the source type declared at the edge line.
             declared = {symbol for symbol, locations in definitions.items()
-                        if any(path == source and abs(defined - int(line)) <= 2 for path, defined in locations)}
-            oracle = {parent for symbol in declared for parent in implements.get(symbol, ())
-                      if parent in definitions}
+                        if (source, int(line)) in locations}
+            oracle = ({parent for symbol in declared for parent in implements.get(symbol, ())
+                       if parent in definitions} if len(declared) == 1 else set())
             dispatch = set()
         else:
             # Module and namespace symbols (`utils` -> file, scip-python's `pkg/__init__:` for a name
@@ -180,9 +182,8 @@ with open(verdicts_path, "w") as verdicts:
         elif oracle & expected or oracle & dispatch:
             verdict = "correct"
         elif confidence == "inferred" and name in names:
-            # Inferred dispatch: the compiler names the declared (trait/interface) method, the edge
-            # names a same-named candidate implementation.
-            verdict = "correct"
+            # A matching method name alone does not prove a relationship to this candidate.
+            verdict = "unknown"
         elif name in names and any(symbol.endswith(name + ".") and not symbol.endswith(")." )
                                    for symbol in oracle):
             # Field shorthand (`Struct { name }`): the compiler reports only the field.

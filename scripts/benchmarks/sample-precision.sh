@@ -105,11 +105,6 @@ while IFS=$'\t' read -r name url commit languages; do
   add_root "${name}" "${REPO_ROOT}/research/corpora/${name}" "${commit}" 0
 done < "${REPO_ROOT}/scripts/benchmarks/corpora.tsv"
 
-(( ${#CORPUS_NAMES[@]} == 50 )) || {
-  echo "sample-precision.sh: expected 50 configured roots, found ${#CORPUS_NAMES[@]}" >&2
-  exit 1
-}
-
 sampler_source_sha256="$(python3 -I - "${REPO_ROOT}" <<'PYTHON'
 import hashlib
 import os
@@ -214,6 +209,10 @@ import sys
 
 work = Path(sys.argv[1])
 roots = list(csv.reader(open(work / "roots.tsv", encoding="utf-8"), delimiter="\t"))
+configured = list(csv.DictReader(open(work / "corpora.tsv", encoding="utf-8"), delimiter="\t"))
+expected_names = ["xcalygraph", "graphify"] + [row["name"] for row in configured]
+if [row[0] for row in roots] != expected_names:
+    raise SystemExit("sample-precision.sh: roots differ from the configured corpus cohort")
 manifest_path = work / "manifest.jsonl"
 adjudication_path = work / "adjudication.tsv"
 sample_ids = set()
@@ -362,8 +361,8 @@ with manifest_path.open("xb") as manifest, adjudication_path.open("x", encoding=
     adjudication.flush()
     os.fsync(adjudication.fileno())
 
-if len(roots) != 50 or not sample_ids:
-    raise SystemExit("sample-precision.sh: incomplete 50-root run")
+if not sample_ids:
+    raise SystemExit("sample-precision.sh: configured roots produced no samples")
 print(f"roots={len(roots)} strata={stratum_count} samples={sample_count}")
 PYTHON
 
