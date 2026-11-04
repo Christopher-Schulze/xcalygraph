@@ -241,7 +241,7 @@ def evaluate(repo, work, corpus, cases, source, binary, environment, budgets, ba
         directory = work / slug / case["id"]
         write_new(directory / "case.json", json_bytes(case))
         for budget in budgets:
-            for verb in ("find", "ctx"):
+            for verb in ("find",):
                 for form in ("text", "json"):
                     arm = verb + "-" + form
                     command = [str(binary), verb, case["question"], "-b", str(budget)] + common
@@ -357,25 +357,11 @@ def main():
         aggregates = {arm + "-" + str(budget): aggregate(rows) for (arm, budget), rows in outcomes.items()}
         paired = {}
         for budget in budgets:
-            for arm in ("find-text", "find-json", "ctx-text", "ctx-json"):
+            for arm in ("find-text", "find-json"):
                 counts = collections.Counter((a["complete"], b["complete"])
                                              for a, b in zip(outcomes[(arm, budget)], outcomes[("graphify", budget)])
                                              if a["required"])
                 paired[arm + "-" + str(budget)] = {str(a) + "/" + str(b): count for (a, b), count in sorted(counts.items())}
-            for form in ("text", "json"):
-                finds = outcomes[("find-" + form, budget)]
-                contexts = outcomes[("ctx-" + form, budget)]
-                workflow = [context if find["required"] > 1 else find
-                            for find, context in zip(finds, contexts)]
-                name = "workflow-" + form + "-" + str(budget)
-                aggregates[name] = aggregate(workflow)
-                counts = collections.Counter((a["complete"], b["complete"])
-                                             for a, b in zip(workflow, outcomes[("graphify-legacy", 2000)])
-                                             if a["required"])
-                paired[name + "-vs-graphify-legacy-2000"] = {
-                    str(a) + "/" + str(b): count for (a, b), count in sorted(counts.items())}
-                slug = corpus["name"].replace("/", "-")
-                write_new(work / slug / (name + ".scores.jsonl"), b"".join(json_bytes(row) for row in workflow))
         report["corpora"][corpus["name"]] = {"metrics": aggregates, "paired_complete": paired}
     write_new(work / "report.json", json_bytes(report))
     public = {"schema": 1, "phase": phase, "manifest_sha256": sha(manifest_data),

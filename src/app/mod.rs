@@ -213,11 +213,6 @@ fn run_query(
                 budget(600),
             ))
         }
-        CommandName::Ctx => {
-            let terms = args.join(" ");
-            query::ctx::render(index, filter, &terms, json, budget(2000))
-                .ok_or_else(|| AppError::NoMatch(no_match(&terms)))
-        }
         CommandName::Show => {
             let node = query::names::resolve_one(index, filter, &args[0], json, ambiguity)?;
             let show = query::show::ShowOptions {

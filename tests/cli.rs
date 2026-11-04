@@ -2201,9 +2201,8 @@ fn query_text_escapes_control_characters_in_paths_across_commands() -> TestResul
     );
 
     let escaped = "control\\\\name\\trow\\rreturn\\nend.go";
-    let cases: [(&str, &[&str], u32); 7] = [
+    let cases: [(&str, &[&str], u32); 6] = [
         ("find", &["find", "escaped_path_symbol"], 2),
-        ("ctx", &["ctx", "escaped_path_symbol"], 2),
         ("show", &["show", "escaped_path_symbol"], 2),
         (
             "path",
@@ -2216,7 +2215,7 @@ fn query_text_escapes_control_characters_in_paths_across_commands() -> TestResul
     ];
     for (command, args, line) in cases {
         let expected_text = match command {
-            "find" | "ctx" => format!("{escaped}\n  {line} func escaped_path_symbol()"),
+            "find" => format!("{escaped}\n  {line} func escaped_path_symbol()"),
             "show" => format!("{escaped}:{line}-{line} fn escaped_path_symbol"),
             "path" => format!(". escaped_path_symbol {escaped}:{line}"),
             "impact" => format!("~ escaped_path_symbol {escaped}:{line}"),
@@ -4625,12 +4624,6 @@ fn a_clear_top_hit_answers_with_its_source_and_neighbours() -> TestResult {
     assert!(clear.contains("    > audit :"), "{clear}");
     assert!(clear.contains("    t TestCharge pay_test.go:"), "{clear}");
     assert!(clear.contains("    r go test"), "{clear}");
-    let output = support::command(BINARY, &dir.0)
-        .args(["ctx", "-C", &root, "ChargeInvoice"])
-        .output()?;
-    let bundle = String::from_utf8_lossy(&output.stdout);
-    assert!(bundle.contains("\nt TestCharge pay_test.go:"), "{bundle}");
-    assert!(bundle.contains("\nr go test"), "{bundle}");
     // Query words pull their lines out of a long body.
     let named = find(&["ChargeInvoice", "step20"])?;
     assert!(named.contains("    24     step20()"), "{named}");

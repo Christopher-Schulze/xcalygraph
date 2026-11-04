@@ -197,14 +197,6 @@ with tempfile.TemporaryDirectory(prefix="evaluation-labels.", dir=repo / ".cache
     metrics = report["corpora"]["xcalygraph"]["metrics"]
     assert metrics["find-text-600"]["multi_total"] == 1
     assert metrics["find-text-600"]["multi_location_total"] == 2
-    finds = [json.loads(line) for line in (final_evidence / "xcalygraph/find-text-600.scores.jsonl").read_text().splitlines()]
-    contexts = [json.loads(line) for line in (final_evidence / "xcalygraph/ctx-text-600.scores.jsonl").read_text().splitlines()]
-    workflow = [json.loads(line) for line in (final_evidence / "xcalygraph/workflow-text-600.scores.jsonl").read_text().splitlines()]
-    assert finds[0] != contexts[0] and finds[2] != contexts[2]
-    assert workflow == [context if find["required"] > 1 else find for find, context in zip(finds, contexts)]
-    assert metrics["workflow-text-600"]["multi_location_total"] == 2
-    paired = report["corpora"]["xcalygraph"]["paired_complete"]["workflow-text-600-vs-graphify-legacy-2000"]
-    assert sum(paired.values()) == 4
     existing = set((root / ".cache/evaluation").glob("sealed.*"))
     repeat = subprocess.run(arguments, env=environment, capture_output=True, text=True)
     assert repeat.returncode != 0 and "already evaluated" in repeat.stderr

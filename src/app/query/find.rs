@@ -24,7 +24,7 @@ const EXCERPT_WIDTH: usize = 100;
 const DOMINANCE: f32 = 1.3;
 /// Callers and callees of the first answer, each.
 const NEIGHBOURS: usize = 3;
-/// Tests of the first answer and of a context bundle, with one command to run them.
+/// Tests of the first answer, with one command to run them.
 const TESTS: usize = 2;
 const CARD_INDENT: usize = 2;
 
@@ -32,8 +32,6 @@ const CARD_INDENT: usize = 2;
 pub struct Hit {
     pub node: u32,
     pub score: f32,
-    /// Query terms matched in the symbol's own name, used to diversify context seeds.
-    pub name_evidence: u64,
 }
 
 /// Scores every candidate of the query; sorted by score, then path, then line.
@@ -122,9 +120,8 @@ fn search_terms(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
         .map(|symbol| (1.0 + symbol.rank * node_count).ln())
         .fold(0.0f32, f32::max)
         .max(f32::EPSILON);
-    let track_evidence = terms.len() <= u64::BITS as usize;
-    let mut scores = vec![(0.0f32, 0u32, 0u64); candidates.len()];
-    for (term_index, (exact, expanded)) in postings.iter().enumerate() {
+    let mut scores = vec![(0.0f32, 0u32); candidates.len()];
+    for (exact, expanded) in &postings {
         let idf = |list: &[PostingRecord]| {
             let df = list.len() as f32;
             (1.0 + (node_count - df + 0.5) / (df + 0.5)).ln()
@@ -142,7 +139,6 @@ fn search_terms(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
                 .get(node as usize)
                 .map_or([0; FIELDS], |record| record.lengths);
             let mut best = 0.0f32;
-            let mut matched_name = false;
             for (alternative, (list, idf, strength)) in alternatives.iter().copied().enumerate() {
                 if list.is_empty() {
                     continue;
@@ -159,7 +155,6 @@ fn search_terms(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
                         *slot = found.tf(field);
                     }
                 }
-                matched_name |= node < symbol_count && tf[search::NAME] > 0;
                 if node < symbol_count {
                     let file = derived.symbols()[node as usize].file;
                     // Symbols inherit path evidence; adjacent candidates often share a file.
@@ -185,9 +180,6 @@ fn search_terms(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
             if best > 0.0 {
                 entry.0 += best;
                 entry.1 += 1;
-                if track_evidence && matched_name {
-                    entry.2 |= 1u64 << term_index;
-                }
             }
         }
     }
@@ -195,7 +187,7 @@ fn search_terms(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
         .into_iter()
         .zip(scores)
         .filter(|(_, score)| score.1 > 0)
-        .map(|(node, (bm25, matched, name_evidence))| {
+        .map(|(node, (bm25, matched))| {
             let coverage = matched as f32 / terms.len() as f32;
             let mut score = bm25 * coverage.powf(COORD_EXPONENT);
             let mut rank = 0.0;
@@ -227,7 +219,6 @@ fn search_terms(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
             Hit {
                 node,
                 score: score * index.role_weight(node) + RANK_WEIGHT * rank,
-                name_evidence,
             }
         })
         .collect();
@@ -300,11 +291,30 @@ fn posting(list: &[PostingRecord], node: u32) -> Option<&PostingRecord> {
 /// Renders the best hits that fit the budget in score order; adjacent hits of one file share
 /// its path line, so a weak sibling never pushes a stronger hit of another file down.
 pub fn render(index: &Index, hits: &[Hit], json: bool, budget: usize) -> String {
-    let nodes: Vec<(u32, Option<f32>, bool)> = hits
-        .iter()
-        .map(|hit| (hit.node, json.then_some(hit.score), false))
-        .collect();
-    render_nodes(index, &nodes, json, budget, false, &|_: &mut Writer| {})
+    let write = |writer: &mut Writer, count: usize| {
+        for hit in &hits[..count] {
+            index.write_symbol(writer, hit.node, json.then_some(hit.score));
+        }
+    };
+    let fits = |count: usize| {
+        let mut writer = Writer::new(json, budget);
+        write(&mut writer, count);
+        !writer.is_full()
+    };
+    let (mut low, mut high) = (0, hits.len());
+    while low < high {
+        let middle = (low + high).div_ceil(2);
+        if fits(middle) {
+            low = middle
+        } else {
+            high = middle - 1
+        }
+    }
+    let count = low.max(usize::from(!hits.is_empty()));
+    let mut writer = Writer::new(json, budget);
+    write(&mut writer, count);
+    writer.skip(hits.len() - count);
+    writer.finish()
 }
 
 /// [`render`] with the first answer: the top hit's source and neighbours follow its line, so
@@ -327,7 +337,7 @@ pub fn render_answer(
     let lines = excerpt(index, root, first.node, query);
     let write = |writer: &mut Writer, count: usize| {
         for (position, hit) in hits[..count].iter().enumerate() {
-            index.write_symbol(writer, hit.node, json.then_some(hit.score), false);
+            index.write_symbol(writer, hit.node, json.then_some(hit.score));
             if position == 0 {
                 for (line, text) in &lines {
                     let shown = match line {
@@ -344,7 +354,7 @@ pub fn render_answer(
                     );
                 }
                 show::neighbours(index, filter, writer, hit.node, NEIGHBOURS);
-                show::verification(index, filter, writer, &[hit.node], TESTS, CARD_INDENT);
+                show::verification(index, filter, writer, hit.node, TESTS, CARD_INDENT);
             }
         }
     };
@@ -424,81 +434,4 @@ fn clip(line: &str) -> String {
     let mut clipped: String = line.chars().take(EXCERPT_WIDTH).collect();
     clipped.push('…');
     clipped
-}
-
-/// Writes the longest prefix of `nodes` (node, score, with doc) whose form grouped under files
-/// in order of first appearance fits.
-pub fn render_grouped(
-    index: &Index,
-    filter: &Filter,
-    nodes: &[(u32, Option<f32>, bool)],
-    seeds: &[u32],
-    json: bool,
-    budget: usize,
-) -> String {
-    render_nodes(index, nodes, json, budget, true, &|writer: &mut Writer| {
-        show::verification(index, filter, writer, seeds, TESTS, 0);
-    })
-}
-
-/// Writes the longest prefix of `nodes` that fits; `regroup` gathers each file's nodes under its
-/// first appearance, otherwise only adjacent nodes of one file share its path line.
-fn render_nodes(
-    index: &Index,
-    nodes: &[(u32, Option<f32>, bool)],
-    json: bool,
-    budget: usize,
-    regroup: bool,
-    tail: &dyn Fn(&mut Writer),
-) -> String {
-    let write = |writer: &mut super::output::Writer, nodes: &[(u32, Option<f32>, bool)]| {
-        if regroup {
-            write_groups(index, writer, nodes);
-        } else {
-            for &(node, score, doc) in nodes {
-                index.write_symbol(writer, node, score, doc);
-            }
-        }
-        tail(writer);
-    };
-    let fits = |count: usize| {
-        let mut writer = super::output::Writer::new(json, budget);
-        write(&mut writer, &nodes[..count]);
-        !writer.is_full()
-    };
-    let (mut low, mut high) = (0, nodes.len());
-    while low < high {
-        let middle = (low + high).div_ceil(2);
-        if fits(middle) {
-            low = middle
-        } else {
-            high = middle - 1
-        }
-    }
-    let count = low.max(usize::from(!nodes.is_empty()));
-    let mut writer = super::output::Writer::new(json, budget);
-    write(&mut writer, &nodes[..count]);
-    writer.skip(nodes.len() - count);
-    writer.finish()
-}
-
-fn write_groups(
-    index: &Index,
-    writer: &mut super::output::Writer,
-    nodes: &[(u32, Option<f32>, bool)],
-) {
-    let mut order: Vec<u32> = Vec::new();
-    let mut groups: HashMap<u32, Vec<(u32, Option<f32>, bool)>> = HashMap::new();
-    for &entry in nodes {
-        let file = index.file_index_of(entry.0);
-        if !groups.contains_key(&file) {
-            order.push(file);
-        }
-        groups.entry(file).or_default().push(entry);
-    }
-    for file in order {
-        for (node, score, doc) in groups.remove(&file).unwrap_or_default() {
-            index.write_symbol(writer, node, score, doc);
-        }
-    }
 }

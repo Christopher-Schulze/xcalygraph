@@ -213,7 +213,7 @@ fn header(index: &Index, filter: &Filter, writer: &mut Writer, node: u32) {
                     writer.skip(top.len() - shown);
                     break;
                 }
-                index.write_symbol(writer, *symbol, None, false);
+                index.write_symbol(writer, *symbol, None);
             }
         }
     }
@@ -309,25 +309,17 @@ fn rank_of(index: &Index, node: u32) -> f32 {
 
 /// One related node: `<marker> <label> <path>:<line>[?]`; `site` prints the reference line
 /// instead of the definition line (incoming edges).
-/// Up to `cap` tests of the symbols and one command to run them, so a change can be verified
+/// Up to `cap` tests of the symbol and one command to run them, so a change can be verified
 /// without a second call.
 pub fn verification(
     index: &Index,
     filter: &Filter,
     writer: &mut Writer,
-    nodes: &[u32],
+    node: u32,
     cap: usize,
     indent: usize,
 ) {
-    let mut seen = HashSet::new();
-    let mut found = Vec::new();
-    for &node in nodes {
-        for test in tests_of(index, filter, node) {
-            if seen.insert(test.0.node) {
-                found.push(test);
-            }
-        }
-    }
+    let found = tests_of(index, filter, node);
     write_tests(index, writer, &found, cap, indent);
     let reachable = found
         .iter()

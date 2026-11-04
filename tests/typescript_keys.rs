@@ -1320,15 +1320,8 @@ fn same_file_interfaces_merge_without_losing_declaration_locations() -> Result<(
         1,
         "{found}"
     );
-    let context = fixture.run(&["ctx", "Services", "--json", "--read-only"])?;
-    assert!(context.status.success());
-    let context = String::from_utf8(context.stdout)?;
-    assert_eq!(
-        context.matches("\"name\":\"model.Services\"").count(),
-        1,
-        "{context}"
-    );
-    for command in ["find", "ctx"] {
+    {
+        let command = "find";
         let exact = fixture.run(&[
             command,
             "exact symbol model.Services",

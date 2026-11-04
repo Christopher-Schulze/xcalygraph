@@ -69,7 +69,7 @@ stores=("${WORK}"/index/*)
   exit 1
 }
 python3 -I - "${BINARY}" "${WORK}/questions.tsv" "${snapshot}/../snapshot.json" \
-  src/app/query/find.rs src/app/query/ctx.rs src/app/query/names.rs src/app/query/show.rs \
+  src/app/query/find.rs src/app/query/names.rs src/app/query/show.rs \
   src/app/query/mod.rs src/app/query/output.rs src/app/query/benchmark.rs src/domain/search.rs \
   src/infra/store/derived.rs > "${WORK}/identity.tsv" <<'PYTHON'
 import hashlib

@@ -55,7 +55,6 @@ xcalygraph impact --diff            # what your uncommitted changes affect
 |---|---|
 | `map` | How is this repository laid out and run? Languages, largest modules with their top symbols, entrypoints, tasks (Makefile, scripts, CI jobs, services) with what they run, hubs, API operations and framework routes with their handlers, cycles, layers, external dependencies, env vars. |
 | `find TERMS...` | Where is X? Ranked symbols and files (BM25F over names, parents, paths, signatures, docs and the words of each body, combined with graph rank). |
-| `ctx TERMS...` | What do I need to read for X? The best seeds with their doc sentence plus related symbols by personalized PageRank. |
 | `show NAME` | What is X? Signature, doc, members, fields, supertypes, implementations, callers, callees, tests, env reads. |
 | `impact NAME... \| --diff [REV]` | What does this change affect? Dependents, tests reaching them, test commands to run. |
 | `path FROM TO` | How does A reach B? The shortest dependency path. |
@@ -85,7 +84,7 @@ Building and updating the index, same files for both tools:
 | [Graphify](https://github.com/Graphify-Labs/graphify) source (Python, 1,111 files) | xcalygraph | **0.56 s** | **102 MB** | **7.20 MiB** | **145 ms** |
 | | Graphify | 18.70 s | 918 MB | 59.66 MiB | 12.65 s |
 
-Fact precision is measured against compiler indexes over about 60,000 edges in ten corpora: exact facts 96 to 100 %, inferred 98 to 100 % (one small exception is documented). On a frozen suite of 240 source-verified questions in eight corpora, `find` and `ctx` return every required definition for 80 to 84 % of the questions at 600 tokens (Graphify at 2,000 tokens: 56 %) and no false hits on absent symbols (Graphify: 12 of 24). Method, limitations and reproduction: [documentation](docs/documentation.md#measured-results).
+Fact precision is measured against compiler indexes over about 60,000 edges in ten corpora: exact facts 96 to 100 %, inferred 98 to 100 % (one small exception is documented). On a frozen suite of 240 source-verified questions in eight corpora, `find` returns every required definition for 91 % of the questions at 600 tokens (Graphify at 2,000 tokens: 56 %) and no false hits on absent symbols (Graphify: 12 of 24). Method, limitations and reproduction: [documentation](docs/documentation.md#measured-results).
 
 ## Languages
 

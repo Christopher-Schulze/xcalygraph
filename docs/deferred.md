@@ -22,6 +22,7 @@ Considered and deliberately not in `docs/spec.md`. Each entry names the evidence
 | Bulk directory attribute walker (`getattrlistbulk` on macOS) replacing the `ignore` crate's walk; measured limit about 13 ms below today's freshness check | agent-visible latency caused by the freshness check, or an owner request |
 | Hand-written tree walks instead of tree-sitter queries for the most used languages (query walk and compile cost, about 30 % of a build's CPU) | a measured refresh or build target that query cost alone misses |
 | Search terms selected by rarity instead of first occurrence (doubling terms per symbol lowered sealed quality, so truncation is not the limit) | a retrieval miss traced to a term beyond the cap |
+| Related-symbol bundle (`ctx`, personalized PageRank; removed because `find` beat it at every budget on the sealed questions) | agent questions whose answer shares no word with the question and is one graph hop from a hit |
 | Typo-tolerant search | evaluation misses caused by misspelled terms |
 | Search text for text-format documents (Markdown, text, reStructuredText, Org, AsciiDoc, LaTeX, HTML) | evaluation questions about documentation content that `rg` answers worse; indexing it exceeded the index size target and slowed single-file refresh with no gain on code questions |
 | Media durations of WebM, Matroska, MP3 and Ogg | agent questions that need these durations (format is reported) |

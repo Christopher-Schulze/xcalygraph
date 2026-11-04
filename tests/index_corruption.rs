@@ -318,10 +318,9 @@ fn every_read_only_command_and_state_leaves_the_filesystem_untouched() -> TestRe
         "pub fn recoverable_marker() -> usize { 42 }\npub fn caller() -> usize { recoverable_marker() }\n",
     )?;
     assert_success(&fixture.run(&["index"], None)?);
-    let commands: [&[&str]; 7] = [
+    let commands: [&[&str]; 6] = [
         &["map"],
         &["find", "marker"],
-        &["ctx", "marker"],
         &["show", "caller"],
         &["impact", "recoverable_marker"],
         &["path", "caller", "recoverable_marker"],

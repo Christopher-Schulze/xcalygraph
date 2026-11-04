@@ -1,7 +1,6 @@
 //! Query commands over the mapped derived index (`docs/spec.md` section 7).
 
 pub mod audit;
-pub mod ctx;
 pub mod find;
 pub mod impact;
 pub mod map;
@@ -358,13 +357,7 @@ impl Index {
     }
 
     /// One symbol as a grouped text line and JSON record.
-    pub fn write_symbol(
-        &self,
-        writer: &mut Writer,
-        node: u32,
-        score: Option<f32>,
-        with_doc: bool,
-    ) -> bool {
+    pub fn write_symbol(&self, writer: &mut Writer, node: u32, score: Option<f32>) -> bool {
         let Node::Symbol(symbol) = self.node(node) else {
             let path = self.path_of(node);
             let mut record = vec![("t", Value::Str("file")), ("path", Value::Str(path))];
@@ -375,21 +368,12 @@ impl Index {
         };
         let path = self.path_of(node);
         let summary = self.summary(symbol);
-        let doc = if with_doc {
-            self.string(symbol.doc)
-        } else {
-            ""
-        };
         // The signature carries the kind; symbols without one show kind and name.
-        let mut text = if self.string(symbol.signature).is_empty() {
+        let text = if self.string(symbol.signature).is_empty() {
             format!("{} {} {}", symbol.line, symbol.kind().id(), summary)
         } else {
             format!("{} {}", symbol.line, summary)
         };
-        if !doc.is_empty() {
-            text.push_str(" // ");
-            text.push_str(doc);
-        }
         let qualified = self.qualified(symbol);
         let mut record = vec![
             ("t", Value::Str("sym")),
@@ -399,7 +383,6 @@ impl Index {
             ("kind", Value::Str(symbol.kind().id())),
             ("name", Value::Str(&qualified)),
             ("sig", Value::Str(self.string(symbol.signature))),
-            ("doc", Value::Str(doc)),
         ];
         if let Some(score) = score {
             record.push(("score", Value::Float(score)));

@@ -9,10 +9,9 @@ use crate::domain::facts::SymKind;
 use crate::domain::filetype::FileType;
 
 /// Every command, in help order.
-const COMMANDS: [CommandName; 14] = [
+const COMMANDS: [CommandName; 13] = [
     CommandName::Map,
     CommandName::Find,
-    CommandName::Ctx,
     CommandName::Show,
     CommandName::Impact,
     CommandName::Path,
@@ -74,7 +73,6 @@ const IMPACT_FLAGS: [Flag; 12] = [
 pub enum CommandName {
     Map,
     Find,
-    Ctx,
     Show,
     Impact,
     Path,
@@ -97,7 +95,6 @@ impl CommandName {
         match self {
             Self::Map => "map",
             Self::Find => "find",
-            Self::Ctx => "ctx",
             Self::Show => "show",
             Self::Impact => "impact",
             Self::Path => "path",
@@ -116,7 +113,6 @@ impl CommandName {
         match self {
             Self::Map => "map",
             Self::Find => "find TERMS...",
-            Self::Ctx => "ctx TERMS...",
             Self::Show => "show NAME [--all]",
             Self::Impact => "impact NAME... | --diff [REV]",
             Self::Path => "path FROM TO",
@@ -139,7 +135,6 @@ impl CommandName {
             Self::Find => {
                 "ranked symbols and files; a clear top hit with its source and neighbours"
             }
-            Self::Ctx => "context bundle: best matches plus related symbols with signatures",
             Self::Show => "card of a symbol or file: members, types, callers, callees, tests, env",
             Self::Impact => "changed symbols, affected dependents by depth, tests and run commands",
             Self::Path => "shortest dependency path between two names",
@@ -163,7 +158,7 @@ impl CommandName {
     /// Accepted positional arguments: minimum and maximum count.
     fn arity(self) -> (usize, usize) {
         match self {
-            Self::Find | Self::Ctx => (1, usize::MAX),
+            Self::Find => (1, usize::MAX),
             Self::Show => (1, 1),
             Self::Impact => (0, usize::MAX),
             Self::Path => (2, 2),
@@ -181,7 +176,7 @@ impl CommandName {
 
     fn flags(self) -> &'static [Flag] {
         match self {
-            Self::Map | Self::Find | Self::Ctx | Self::Path | Self::Audit => &QUERY_FLAGS,
+            Self::Map | Self::Find | Self::Path | Self::Audit => &QUERY_FLAGS,
             Self::Show => &SHOW_FLAGS,
             Self::Impact => &IMPACT_FLAGS,
             Self::Index => &[Flag::Root, Flag::IndexDir],

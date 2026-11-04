@@ -41,7 +41,8 @@ fn different_query_evidence_in_one_file_survives_duplicate_siblings() -> Result<
             "pub fn decompress_related() {\n    let _ = \"decompress\";\n}\n",
         )?;
     }
-    for verb in ["find", "ctx"] {
+    {
+        let verb = "find";
         for json in [false, true] {
             let mut command = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &work.0);
             command
@@ -68,14 +69,10 @@ fn different_query_evidence_in_one_file_survives_duplicate_siblings() -> Result<
                 answer.contains("decompress_archive"),
                 "{verb} json={json}: {answer}"
             );
-            // Siblings are no longer damped, so a bundle's seeds may all match one file; `find`
-            // still lists the weaker hit behind them.
-            if verb == "find" {
-                assert!(
-                    answer.contains("decompress_related"),
-                    "{verb} json={json}: {answer}"
-                );
-            }
+            assert!(
+                answer.contains("decompress_related"),
+                "{verb} json={json}: {answer}"
+            );
         }
     }
     Ok(())
@@ -99,7 +96,8 @@ fn related_word_forms_find_definitions_without_hiding_exact_matches() -> Result<
         ("token", "fn tokenize("),
         ("retrieval", "fn get("),
     ] {
-        for verb in ["find", "ctx"] {
+        {
+            let verb = "find";
             let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &work.0)
                 .args([verb, question, "-b", "600", "-C"])
                 .arg(&root)
@@ -128,7 +126,8 @@ fn related_word_forms_find_definitions_without_hiding_exact_matches() -> Result<
         .collect::<Vec<_>>()
         .join(" ");
     let long_question = format!("validation {many_terms}");
-    for verb in ["find", "ctx"] {
+    {
+        let verb = "find";
         let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &work.0)
             .args([verb, &long_question, "-b", "600", "-C"])
             .arg(&root)
@@ -143,122 +142,6 @@ fn related_word_forms_find_definitions_without_hiding_exact_matches() -> Result<
         );
         let answer = String::from_utf8(output.stdout)?;
         assert!(answer.contains("validation_report"), "{verb}: {answer}");
-    }
-    Ok(())
-}
-
-#[test]
-fn context_covers_distinct_named_concepts_before_repeating_one() -> Result<(), Box<dyn Error>> {
-    let work = TempDir::new()?;
-    let root = work.0.join("root");
-    fs::create_dir(&root)?;
-    for number in 0..8 {
-        fs::write(
-            root.join(format!("writer_{number}.rs")),
-            format!("pub fn write_image_{number}(data: &[u8]) -> usize {{\n    data.len()\n}}\n"),
-        )?;
-    }
-    fs::write(
-        root.join("checks.rs"),
-        "pub fn validate(data: &[u8]) -> bool {\n    !data.is_empty()\n}\n",
-    )?;
-    for json in [false, true] {
-        let mut command = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &work.0);
-        command
-            .args(["ctx", "writing image and validation", "-b", "600", "-C"])
-            .arg(&root)
-            .arg("--index-dir")
-            .arg(work.0.join("index"))
-            .env("HOME", &work.0);
-        if json {
-            command.arg("--json");
-        }
-        let output = command.output()?;
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let answer = String::from_utf8(output.stdout)?;
-        assert!(answer.contains("write_image_0"), "json={json}: {answer}");
-        assert!(answer.contains("validate"), "json={json}: {answer}");
-    }
-    Ok(())
-}
-
-#[test]
-fn context_is_byte_identical_across_processes_for_a_symmetric_graph() -> Result<(), Box<dyn Error>>
-{
-    let work = TempDir::new()?;
-    let root = work.0.join("root");
-    fs::create_dir(&root)?;
-    let mut source = String::from("pub fn start() { ");
-    for number in 0..8 {
-        for side in ["left", "right"] {
-            source.push_str(&format!("branch_{side}_{number}(); "));
-        }
-    }
-    source.push_str("}\n");
-    for side in ["left", "right"] {
-        source.push_str(&format!("fn {side}() -> usize {{ 1 }}\n"));
-        for number in 0..8 {
-            source.push_str(&format!("fn branch_{side}_{number}() {{ {side}(); "));
-            for leaf in 0..number {
-                source.push_str(&format!("leaf_{side}_{number}_{leaf}(); "));
-            }
-            source.push_str("}\n");
-            for leaf in 0..number {
-                source.push_str(&format!(
-                    "fn leaf_{side}_{number}_{leaf}() -> usize {{ {} }}\n",
-                    leaf + 1
-                ));
-            }
-        }
-    }
-    fs::write(root.join("graph.rs"), source)?;
-    let index = work.0.join("index");
-    let built = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &work.0)
-        .args(["index", "-C"])
-        .arg(&root)
-        .arg("--index-dir")
-        .arg(&index)
-        .env("HOME", &work.0)
-        .output()?;
-    assert!(
-        built.status.success(),
-        "{}",
-        String::from_utf8_lossy(&built.stderr)
-    );
-    for json in [false, true] {
-        let mut previous = None;
-        for _ in 0..20 {
-            let mut command = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &work.0);
-            command
-                .args(["ctx", "start", "-b", "600", "-C"])
-                .arg(&root)
-                .arg("--index-dir")
-                .arg(&index)
-                .arg("--read-only")
-                .env("HOME", &work.0);
-            if json {
-                command.arg("--json");
-            }
-            let output = command.output()?;
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let answer = String::from_utf8(output.stdout)?;
-            assert!(
-                answer.contains("start") && answer.contains("branch_"),
-                "{answer}"
-            );
-            if let Some(previous) = &previous {
-                assert_eq!(previous, &answer, "json={json}");
-            }
-            previous = Some(answer);
-        }
     }
     Ok(())
 }
@@ -438,7 +321,8 @@ fn explicit_exact_symbol_queries_reject_semantic_neighbors_and_keep_behavioral_s
         "where is the exact symbol `InvoiceBillingClient` defined?",
         "WHERE IS THE EXACT SYMBOL PaymentBillingClient defined?",
     ] {
-        for verb in ["find", "ctx"] {
+        {
+            let verb = "find";
             for json in [false, true] {
                 let output = run(verb, query, json)?;
                 assert_eq!(
@@ -456,7 +340,8 @@ fn explicit_exact_symbol_queries_reject_semantic_neighbors_and_keep_behavioral_s
         }
     }
 
-    for verb in ["find", "ctx"] {
+    {
+        let verb = "find";
         for json in [false, true] {
             let output = run(
                 verb,
@@ -479,18 +364,6 @@ fn explicit_exact_symbol_queries_reject_semantic_neighbors_and_keep_behavioral_s
                     !answer.contains("payment_billing_client_config"),
                     "{answer}"
                 );
-            } else {
-                let exact = answer
-                    .find("BillingClient")
-                    .ok_or("missing exact ctx seed")?;
-                for related in [
-                    "invoice_billing_client_config",
-                    "payment_billing_client_config",
-                ] {
-                    if let Some(related) = answer.find(related) {
-                        assert!(exact < related, "exact seed must precede context: {answer}");
-                    }
-                }
             }
 
             let output = run(

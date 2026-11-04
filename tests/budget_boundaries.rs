@@ -121,7 +121,6 @@ fn tiny_budgets_are_hard_caps_for_every_query_and_coverage_notices() -> TestResu
     let queries: &[&[&str]] = &[
         &["map"],
         &["find", "F0"],
-        &["ctx", "F0"],
         &["show", "F0"],
         &["impact", "F0"],
         &["impact", "--diff"],

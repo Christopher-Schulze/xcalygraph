@@ -76,7 +76,7 @@ impl Role {
         )
     }
 
-    /// Ranking weight of `find` and `ctx` (section 7.2).
+    /// Ranking weight of `find` (section 7.2).
     pub const fn weight(self) -> f32 {
         match self {
             Self::Src => 1.0,

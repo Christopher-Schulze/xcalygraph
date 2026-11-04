@@ -28,7 +28,6 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 |---------|-----------|--------|--------|
 | `map` | none | 2500 | orientation (7.1) |
 | `find` | `TERMS...` | 600 | ranked symbols and files, a clear top hit with source and neighbours (7.2) |
-| `ctx` | `TERMS...` | 2000 | context bundle: seeds plus related symbols with signatures (7.3) |
 | `show` | `NAME [--all]` | 1200 | symbol card (7.4); `--all` lifts per-section caps |
 | `impact` | `NAME...` or `--diff [REV]` | 1500 | changed and affected symbols, tests, run commands (7.5) |
 | `path` | `FROM TO` | 400 | shortest dependency path (7.6) |
@@ -41,7 +40,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | `version` | none | none | binary, index format and installed skill versions |
 | `help` | `[COMMAND]` | none | syntax reference |
 
-- Query commands (`map`, `find`, `ctx`, `show`, `impact`, `path`, `audit`) refresh the index first (section 4) unless `--read-only`.
+- Query commands (`map`, `find`, `show`, `impact`, `path`, `audit`) refresh the index first (section 4) unless `--read-only`.
 - `impact --diff` verifies each required fact shard against the indexed source hashes and exact file roster; writable queries re-derive damaged shards and retry, while `--read-only` returns exit 5 without writes.
 - Filters (`-p`, `-l`, `-k`, `--exact`, `--no-tests`) apply to every query command and restrict seeds, expansions and listed facts alike: every NAME form (an excluded file or `path:line` is no match), `path` searches only the subgraph of included nodes, `impact` traverses the whole graph but lists only included dependents, tests and their run lines, and `map` module sections (cycles, layers, externals) show only modules with an included file. `map` and `audit` cycles are recomputed on that induced module graph so excluded intermediates cannot create a reported cycle. `-k` restricts symbols; a file NAME, file-level facts and import hops stay usable.
 - NAME forms: `qualified.name`; `path:line`; `path::name`; bare name (must be unique). Resolution checks the input as a file path first (including the existing `./` alias), then its surrounding-whitespace-trimmed form before locator syntax; a matching file path wins a collision.
@@ -269,7 +268,7 @@ Git data requires `git` on PATH and a git work tree; otherwise git sections prin
 
 ## 7. Query semantics
 
-Detail ladder: `find` (one line per hit, a clear top hit with source and neighbours) -> `ctx` (bundle with signatures) -> `show` (full card) -> source read at the cited lines.
+Detail ladder: `find` (one line per hit, a clear top hit with source and neighbours) -> `show` (full card) -> source read at the cited lines.
 
 ### 7.1 map
 
@@ -281,19 +280,12 @@ Sections in priority order: root line (name, files per language, symbol count) -
 
 First answer: when the top hit's score is at least 1.3 times the runner-up's, its source follows its line (4 spaces, then line number and code, clipped to 100 characters): a body of at most 8 non-empty lines whole, otherwise its first 4 lines and up to 4 lines naming a query word, then `+N lines`; then up to 3 callers and 3 callees (`<`, `>`), up to 2 tests (`t`, `t2`) and one command to run them (`r`). JSON: `source` records with `line` and `text`, `edge` records.
 
-An explicit, case-insensitive `exact symbol NAME` cue resolves the following identifier through exact symbol lookup; a missing name returns no hits instead of semantic candidates. `ctx` uses the resolved hits for seed selection before adding related graph context.
+An explicit, case-insensitive `exact symbol NAME` cue resolves the following identifier through exact symbol lookup; a missing name returns no hits instead of semantic candidates.
 
 1. Tokenize the query; look up exact names for the raw query and each term. Query-only expansions: `-ization` -> `-iz`, `-ation` -> `-at`, `retriev`/`retrieval` -> `get`, other ASCII terms of at least 4 bytes -> the term plus `iz`; retain the original term.
 2. Candidates = union of the postings.
 3. Score = BM25F (k1 1.2, b 0.75; field weights name 3, body 1.8, parent 1.5, path 1, doc 1, signature 0.5, used by 0.5; tokens stemmed, code abbreviations and synonyms canonicalized: `remove` and `delete`, `sign in` and `login`, `invalidate` and `refresh`; per term use the higher score of its original and 0.5 x its expansion) times the share of query terms the node matches, + exact-name bonus 5 when the whole query names the symbol, multiplied by the role weight (src 1, test 0.3, gen 0.2, doc 0.5, config 0.5, manifest 0.5, asset 0.3), + 2 x normalized log rank.
 4. Order: score descending, then path, line and node ID; files matched by path tokens appear as file lines, unless one of their symbols ranks higher; output keeps the score order, adjacent hits of one file share its path line.
-
-### 7.3 ctx
-
-1. Seeds = top 5 `find` results with score >= 0.25 x top score.
-2. Personalized PageRank from the seeds over the symbol graph in both directions, restart probability 0.3, 15 iterations.
-3. Order: seeds first, then the highest-ranked result whose symbol name covers a query term absent from the seed names, then PPR score x role weight; queries over 64 distinct terms omit the extra result.
-4. Packing: group by file in first-appearance order; seeds with signature and doc, others with signature; stop at the budget.
 
 ### 7.4 show
 
@@ -359,7 +351,7 @@ Record-specific fields: `root` uses `n` for files and `symbols` for symbols; `mo
 | `doc` | string | doc sentence |
 | `rel` | string | edge role (`in`, `out`, `sup`, `sub`, `test`, `env`, `run`, `chg`), map relation (`entry`, `task`, `hub`, `api`) or audit relation from section 7.7 |
 | `conf` | string | `exact` or `inferred` |
-| `score` | float | ranking score (`find`, `ctx`) |
+| `score` | float | ranking score (`find`) |
 | `n` | int | record-specific count or depth |
 | `symbols`, `files`, `commits` | int | symbol, file or commit count |
 | `status`, `other_path` | string | audit drift status; second path in a coupling pair |
@@ -431,7 +423,7 @@ Reference corpora: xcalygraph itself, the upstream Graphify clone at the pinned 
 
 | metric | definition |
 |--------|------------|
-| hit@5 | share of questions whose expected symbol or file appears in the first 5 results of `find` or `ctx` |
+| hit@5 | share of questions whose expected symbol or file appears in the first 5 results of `find` |
 | tokens per answer | output tokens of the command that answers the question |
 | rg baseline | tokens of `rg` output plus the file reads an agent needs to reach the expected location |
 | upstream baseline | hit@5 and tokens of `graphify query` on the same corpus |
