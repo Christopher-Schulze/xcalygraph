@@ -295,7 +295,7 @@ An explicit, case-insensitive `exact symbol NAME` cue resolves the following ide
 
 ### 7.4 show
 
-Card order: header (path:start-end, kind, qualified name) -> signature -> doc -> members (methods, field names) -> supertypes -> implementations -> incoming edges by rank (callers, referrers, `runs`, `queries`) -> outgoing edges -> tests -> env reads -> ambiguity notices. Each env read appears only on its recorded owner: the symbol card, or the file card when it has no enclosing symbol. Incoming and outgoing edges follow `--depth` hops, indented per hop. Test confidence includes every caller and test edge in the displayed path; an exact alternative wins. `--exact` requires every edge in that path to be exact. Each section max 10 lines unless `--all`.
+Text lines print a symbol's name without its module part, since their `path:line` identifies it (JSON keeps the qualified name), and `:line` right after a line of the same file. Card order: header (path:start-end, kind, name) -> signature -> doc -> members (methods, field names) -> supertypes -> implementations -> incoming edges by rank (callers, referrers, `runs`, `queries`) -> outgoing edges -> tests -> env reads -> ambiguity notices. Each env read appears only on its recorded owner: the symbol card, or the file card when it has no enclosing symbol. Incoming and outgoing edges follow `--depth` hops, indented per hop. Test confidence includes every caller and test edge in the displayed path; an exact alternative wins. `--exact` requires every edge in that path to be exact. Each section max 10 lines unless `--all`.
 
 ### 7.5 impact
 

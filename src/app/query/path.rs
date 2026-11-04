@@ -146,25 +146,28 @@ pub fn render(
         let label = index.label(hop.node);
         let path = index.path_of(hop.node);
         let line = index.line_of(hop.node);
-        let text = if label == path {
-            format!("{marker} {path}{mark}")
+        let record = [
+            ("t", Value::Str("edge")),
+            ("rel", Value::Str(if hop.reversed { "in" } else { "out" })),
+            ("name", Value::Str(&label)),
+            ("path", Value::Str(path)),
+            ("line", Value::Int(u64::from(line))),
+            (
+                "conf",
+                Value::Str(if hop.exact { "exact" } else { "inferred" }),
+            ),
+        ];
+        if label == path {
+            writer.line(&format!("{marker} {path}{mark}"), &record);
         } else {
-            format!("{marker} {label} {path}:{line}{mark}")
-        };
-        writer.line(
-            &text,
-            &[
-                ("t", Value::Str("edge")),
-                ("rel", Value::Str(if hop.reversed { "in" } else { "out" })),
-                ("name", Value::Str(&label)),
-                ("path", Value::Str(path)),
-                ("line", Value::Int(u64::from(line))),
-                (
-                    "conf",
-                    Value::Str(if hop.exact { "exact" } else { "inferred" }),
-                ),
-            ],
-        );
+            writer.location_line(
+                &format!("{marker} {}", index.short_label(hop.node)),
+                path,
+                line,
+                mark,
+                &record,
+            );
+        }
     }
     Some(writer.finish())
 }

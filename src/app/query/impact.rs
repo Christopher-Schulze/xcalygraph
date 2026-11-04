@@ -1481,8 +1481,11 @@ fn render(
         let path = index.path_of(*node);
         let line = index.line_of(*node);
         let mark = if *exact { "" } else { "?" };
-        writer.line(
-            &format!("< {depth} {label} {path}:{line}{mark}"),
+        writer.location_line(
+            &format!("< {depth} {}", index.short_label(*node)),
+            path,
+            line,
+            mark,
             &[
                 ("t", Value::Str("edge")),
                 ("rel", Value::Str("in")),
@@ -1506,8 +1509,16 @@ fn render(
         let path = index.path_of(test);
         let line = index.line_of(test);
         let mark = if exact { "" } else { "?" };
-        writer.line(
-            &format!("t {label} {path}:{line}{mark}"),
+        let name = if label == path {
+            "t".to_owned()
+        } else {
+            format!("t {}", index.short_label(test))
+        };
+        writer.location_line(
+            &name,
+            path,
+            line,
+            mark,
             &[
                 ("t", Value::Str("edge")),
                 ("rel", Value::Str("test")),
@@ -1589,7 +1600,11 @@ fn write_changes(
         let label = index.label(target.node);
         let path = index.path_of(target.node);
         let line = index.line_of(target.node);
-        let mut text = format!("~ {label} {path}:{line}");
+        let mut text = if label == path {
+            format!("~ {path}:{line}")
+        } else {
+            format!("~ {} {path}:{line}", index.short_label(target.node))
+        };
         if !target.note.is_empty() {
             text.push(' ');
             text.push_str(&target.note);

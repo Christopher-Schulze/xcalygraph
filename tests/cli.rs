@@ -1764,10 +1764,10 @@ fn path_and_impact_keep_inferred_dispatch_inferred_on_every_hop() -> TestResult 
         Ok((output.status.code(), String::from_utf8(output.stdout)?))
     };
     let (_, show) = query(&["show", "Send"])?;
-    assert!(show.contains("> FileStore.Write app.go:9?\n"), "{show}");
+    assert!(show.contains("> FileStore.Write :9?\n"), "{show}");
     // Directed path through interface dispatch: the dispatch hop is inferred in text and JSON.
     let (_, text) = query(&["path", "Send", "FileStore.Write"])?;
-    assert_eq!(text, ". Send app.go:13\n> FileStore.Write app.go:9?\n");
+    assert_eq!(text, ". Send app.go:13\n> FileStore.Write :9?\n");
     let (_, json) = query(&["path", "Send", "FileStore.Write", "--json"])?;
     assert!(
         json.contains(
@@ -1779,31 +1779,31 @@ fn path_and_impact_keep_inferred_dispatch_inferred_on_every_hop() -> TestResult 
     let (_, text) = query(&["path", "Top", "FileStore.Write"])?;
     assert_eq!(
         text,
-        ". Top app.go:31\n> Run app.go:27\n> Send app.go:13\n> FileStore.Write app.go:9?\n"
+        ". Top app.go:31\n> Run :27\n> Send :13\n> FileStore.Write :9?\n"
     );
     // An equally short all-exact route wins over an inferred one listed first in source.
     let (_, text) = query(&["path", "Both", "FileStore.Write"])?;
     assert_eq!(
         text,
-        ". Both app.go:22\n> Direct app.go:17\n> FileStore.Write app.go:9\n"
+        ". Both app.go:22\n> Direct :17\n> FileStore.Write :9\n"
     );
     // --exact drops the inferred dispatch and never falls back to an undirected path.
     let (code, text) = query(&["path", "Send", "FileStore.Write", "--exact"])?;
     assert_eq!((code, text.as_str()), (Some(4), ""));
     // Undirected fallback: the reversed hop is inferred.
     let (_, text) = query(&["path", "FileStore.Write", "Direct"])?;
-    assert_eq!(text, ". FileStore.Write app.go:9\n< Direct app.go:17?\n");
+    assert_eq!(text, ". FileStore.Write app.go:9\n< Direct :17?\n");
     // Cycles terminate and stay exact.
     let (_, text) = query(&["path", "Ping", "Pong"])?;
-    assert_eq!(text, ". Ping app.go:35\n> Pong app.go:39\n");
+    assert_eq!(text, ". Ping app.go:35\n> Pong :39\n");
     // Impact: uncertainty propagates downstream; an exact chain at the same depth wins.
     let (_, text) = query(&["impact", "FileStore.Write"])?;
     for line in [
         "< 1 Send app.go:13?\n",
-        "< 1 Direct app.go:17\n",
-        "< 2 Both app.go:22\n",
-        "< 2 Run app.go:27?\n",
-        "< 3 Top app.go:31?\n",
+        "< 1 Direct :17\n",
+        "< 2 Both :22\n",
+        "< 2 Run :27?\n",
+        "< 3 Top :31?\n",
     ] {
         assert!(text.contains(line), "{line}{text}");
     }
@@ -1821,11 +1821,7 @@ fn path_and_impact_keep_inferred_dispatch_inferred_on_every_hop() -> TestResult 
     );
     // Several targets: dependents of exact targets are exact.
     let (_, text) = query(&["impact", "Send", "Direct"])?;
-    for line in [
-        "< 1 Both app.go:22\n",
-        "< 1 Run app.go:27\n",
-        "< 2 Top app.go:31\n",
-    ] {
+    for line in ["< 1 Both :22\n", "< 1 Run app.go:27\n", "< 2 Top :31\n"] {
         assert!(text.contains(line), "{line}{text}");
     }
     // Deterministic across runs.
@@ -1852,7 +1848,7 @@ fn impact_stops_after_reachable_frontiers_are_exhausted() -> TestResult {
     assert_eq!(bounded.status.code(), Some(0));
     let bounded = String::from_utf8(bounded.stdout)?;
     assert!(bounded.contains("< 1 Send app.go:13?\n"), "{bounded}");
-    assert!(bounded.contains("< 3 Top app.go:31?\n"), "{bounded}");
+    assert!(bounded.contains("< 3 Top :31?\n"), "{bounded}");
     assert_impact_large_depth_matches(
         &root,
         &index,
@@ -1928,9 +1924,7 @@ fn show_indirect_test_confidence_includes_the_caller_edge() -> TestResult {
             );
             assert!(
                 ordinary.lines().any(|line| {
-                    line.contains("TestDirect")
-                        && line.contains("app_test.go:10")
-                        && !line.ends_with('?')
+                    line.contains("TestDirect") && line.contains(":10") && !line.ends_with('?')
                 }),
                 "{ordinary}"
             );
@@ -2158,7 +2152,11 @@ fn literal_indexed_paths_precede_name_syntax_in_shared_queries() -> TestResult {
         let output = query(&["show", name, "--read-only"])?;
         assert_eq!(output.status.code(), Some(0), "show {name:?}");
         let text = String::from_utf8(output.stdout)?;
-        assert!(text.contains(symbol), "show {name:?}: {text}");
+        let short = symbol.trim_start_matches("crate::");
+        assert!(
+            text.contains(&format!("fn {short}")),
+            "show {name:?}: {text}"
+        );
 
         let output = query(&["impact", name, "--json", "--read-only"])?;
         assert_eq!(output.status.code(), Some(0), "impact {name:?}");
@@ -2306,14 +2304,14 @@ fn every_query_stage_obeys_the_shared_filters() -> TestResult {
     git(&root, &["init", "-q"])?;
     let index = dir.0.join("index");
     let cases: &[FilterCase] = &[
-        (&["path", "a.A", "c.C"], 0, &["> b.B b/b.go:5\n"], &[]),
+        (&["path", "a.A", "c.C"], 0, &["> B b/b.go:5\n"], &[]),
         (
             &["path", "a.A", "c.C", "-p", "a/", "-p", "c/"],
             4,
             &[],
             &["b.B"],
         ),
-        (&["show", "c/c.go:6"], 0, &["fn c.C"], &[]),
+        (&["show", "c/c.go:6"], 0, &["fn C"], &[]),
         (&["show", "c/c.go:6", "-p", "a/"], 4, &[], &["c.C"]),
         (&["show", "c/c.go", "-p", "a/"], 4, &[], &["c.C"]),
         (&["show", "c/c.go::C", "-p", "a/"], 4, &[], &["c.C"]),
@@ -2325,18 +2323,18 @@ fn every_query_stage_obeys_the_shared_filters() -> TestResult {
         ),
         (&["show", "c.C", "-k", "struct"], 4, &[], &[]),
         (&["show", "c.C", "-l", "python"], 4, &[], &[]),
-        (&["show", "c.C"], 0, &["t c.TestC", "< b.B"], &[]),
-        (&["show", "c.C", "--no-tests"], 0, &["< b.B"], &["TestC"]),
+        (&["show", "c.C"], 0, &["t TestC", "< B"], &[]),
+        (&["show", "c.C", "--no-tests"], 0, &["< B"], &["TestC"]),
         (
             &["impact", "c.C"],
             0,
-            &["< 1 b.B", "< 2 a.A", "t c.TestC", "r go test ./c"],
+            &["< 1 B", "< 2 A", "t TestC", "r go test ./c"],
             &[],
         ),
         (
             &["impact", "c.C", "--no-tests"],
             0,
-            &["< 1 b.B", "< 2 a.A"],
+            &["< 1 B", "< 2 A"],
             &["TestC", "go test"],
         ),
         (
@@ -2349,7 +2347,7 @@ fn every_query_stage_obeys_the_shared_filters() -> TestResult {
         (
             &["impact", "c.C", "-p", "c/", "-p", "a/"],
             0,
-            &["< 2 a.A", "t c.TestC"],
+            &["< 2 A", "t TestC"],
             &["b.B"],
         ),
         (&["find", "C", "-p", "a/"], 4, &[], &["c/c.go"]),
@@ -3695,7 +3693,7 @@ fn impact_of_removed_files_and_symbols_names_their_surviving_dependents() -> Tes
     let text = impact(&["impact", "--diff", "--depth", "3"])?;
     assert_eq!(
         text,
-        "~ Close store/open.go:7 removed\n~ Open store/open.go:3 removed\n< 1 store.Warm store/use.go:3?\n< 1 store.Stop store/use.go:7?\nt store.TestOpen store/open_test.go:5?\nr go test ./store -run '^(TestOpen)$'\n"
+        "~ Close store/open.go:7 removed\n~ Open store/open.go:3 removed\n< 1 Warm store/use.go:3?\n< 1 Stop :7?\nt TestOpen store/open_test.go:5?\nr go test ./store -run '^(TestOpen)$'\n"
     );
     assert_impact_large_depth_matches(
         &root,
@@ -3729,22 +3727,19 @@ fn impact_of_removed_files_and_symbols_names_their_surviving_dependents() -> Tes
     )?;
     let text = impact(&["impact", "--diff"])?;
     assert!(text.contains("~ Close store/open.go:7 removed\n"), "{text}");
-    assert!(text.contains("< 1 store.Stop store/use.go:8?\n"), "{text}");
+    assert!(text.contains("< 1 Stop :8?\n"), "{text}");
     assert!(!text.contains("Open store/open.go:3 removed"), "{text}");
     git(&root, &["checkout", "-q", "HEAD", "--", "store/use.go"])?;
     restore()?;
     // Rename: definitions moved, nothing removed, dependents stay exact.
     git(&root, &["mv", "store/open.go", "store/opening.go"])?;
     let text = impact(&["impact", "--diff"])?;
-    assert!(
-        text.contains("~ store/opening.go store/opening.go:1 new 2\n"),
-        "{text}"
-    );
+    assert!(text.contains("~ store/opening.go:1 new 2\n"), "{text}");
     assert!(
         !text.contains("removed") && text.contains("moved?"),
         "{text}"
     );
-    assert!(text.contains("< 1 store.Warm store/use.go:3\n"), "{text}");
+    assert!(text.contains("< 1 Warm store/use.go:3\n"), "{text}");
     git(&root, &["mv", "store/opening.go", "store/open.go"])?;
     // Non-HEAD revision.
     git(&root, &["commit", "-q", "--allow-empty", "-m", "empty"])?;
@@ -3951,13 +3946,10 @@ fn impact_of_a_diff_lists_changes_dependents_tests_and_run_lines() -> TestResult
         String::from_utf8_lossy(&output.stderr)
     );
     let text = String::from_utf8(output.stdout)?;
+    assert!(text.contains("~ Open store/store.go:3 sig\n"), "{text}");
+    assert!(text.contains("< 1 Warm store/use.go:3\n"), "{text}");
     assert!(
-        text.contains("~ store.Open store/store.go:3 sig\n"),
-        "{text}"
-    );
-    assert!(text.contains("< 1 store.Warm store/use.go:3\n"), "{text}");
-    assert!(
-        text.contains("t store.TestWarm store/store_test.go:5\n"),
+        text.contains("t TestWarm store/store_test.go:5\n"),
         "{text}"
     );
     assert!(
@@ -3966,8 +3958,8 @@ fn impact_of_a_diff_lists_changes_dependents_tests_and_run_lines() -> TestResult
     );
     let named = run_in(&root, &dir.0.join("index"), &["impact", "store.Warm"])?;
     let text = String::from_utf8(named.stdout)?;
-    assert!(text.starts_with("~ store.Warm store/use.go:3\n"), "{text}");
-    assert!(text.contains("t store.TestWarm"), "{text}");
+    assert!(text.starts_with("~ Warm store/use.go:3\n"), "{text}");
+    assert!(text.contains("t TestWarm"), "{text}");
     let missing = run_in(&root, &dir.0.join("index"), &["impact"])?;
     assert_eq!(missing.status.code(), Some(1));
     Ok(())
@@ -4046,7 +4038,7 @@ fn impact_on_jvm_tests_prints_gradle_and_maven_run_lines() -> TestResult {
         &["impact", "Store.open"],
     )?;
     let text = String::from_utf8(maven.stdout)?;
-    assert!(text.contains("t com.example.StoreTest.opens "), "{text}");
+    assert!(text.contains("t StoreTest.opens "), "{text}");
     assert!(
         text.contains("r mvn test -Dtest=com.example.StoreTest\n"),
         "{text}"
@@ -4083,7 +4075,7 @@ fn impact_on_dotnet_tests_prints_dotnet_test_filters() -> TestResult {
         &["impact", "Store.Open"],
     )?;
     let text = String::from_utf8(output.stdout)?;
-    assert!(text.contains("t App.Tests.StoreTests.Opens "), "{text}");
+    assert!(text.contains("t StoreTests.Opens "), "{text}");
     assert!(
         text.contains("r dotnet test tests/App.Tests --filter 'FullyQualifiedName~App.Tests.StoreTests.Opens'\n"),
         "{text}"
@@ -4626,7 +4618,7 @@ fn a_clear_top_hit_answers_with_its_source_and_neighbours() -> TestResult {
         "the rest of the body is counted: {clear}"
     );
     assert!(clear.contains("    < Checkout pay.go:"), "{clear}");
-    assert!(clear.contains("    > audit pay.go:"), "{clear}");
+    assert!(clear.contains("    > audit :"), "{clear}");
     // Query words pull their lines out of a long body.
     let named = find(&["ChargeInvoice", "step20"])?;
     assert!(named.contains("    24     step20()"), "{named}");
@@ -4643,5 +4635,77 @@ fn a_clear_top_hit_answers_with_its_source_and_neighbours() -> TestResult {
             .any(|line| line.contains("\"t\":\"source\"") && line.contains("step0")),
         "{json}"
     );
+    Ok(())
+}
+
+#[test]
+fn every_printed_location_resolves_to_its_symbol() -> TestResult {
+    let dir = TempDir::new("short-names")?;
+    dir.write(
+        "pkg/store.go",
+        "package pkg\n\ntype Store struct{}\n\nfunc (s Store) Get() {}\n\nfunc Open() Store {\n\treturn Store{}\n}\n",
+    )?;
+    dir.write(
+        "pkg/other.go",
+        "package pkg\n\nfunc Open2() {}\n\nfunc Load() {\n\tOpen().Get()\n\tOpen2()\n}\n",
+    )?;
+    dir.write(
+        "web/a.ts",
+        "export function open() {}\nexport function run() { open(); }\n",
+    )?;
+    dir.write(
+        "web/b.ts",
+        "export function open() {}\nexport function go() { open(); }\n",
+    )?;
+    dir.write(
+        "app/a.py",
+        "def open():\n    pass\n\ndef run():\n    open()\n",
+    )?;
+    let root = dir.0.to_string_lossy().into_owned();
+    let show = |name: &str| -> io::Result<String> {
+        let output = support::command(BINARY, &dir.0)
+            .args(["show", "-C", &root, name])
+            .output()?;
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    };
+    let mut resolved = 0;
+    for start in [
+        "Load",
+        "Open",
+        "pkg/store.go:5",
+        "web/a.ts:2",
+        "web/b.ts:2",
+        "app/a.py:4",
+    ] {
+        let card = show(start)?;
+        let mut last_path = String::new();
+        for line in card.lines().skip(1) {
+            let mut fields = line.split_whitespace();
+            let (Some(marker), Some(label), Some(location)) =
+                (fields.next(), fields.next(), fields.next())
+            else {
+                continue;
+            };
+            if !matches!(marker, "<" | ">" | "m") {
+                continue;
+            }
+            let Some((path, number)) = location.split_once(':') else {
+                continue;
+            };
+            if !path.is_empty() {
+                last_path = path.to_owned();
+            }
+            let number = number.trim_end_matches('?');
+            let target = show(&format!("{last_path}:{number}"))?;
+            let header = target.lines().next().unwrap_or_default();
+            let expected = if marker == "<" { "" } else { label };
+            assert!(
+                header.starts_with(&format!("{last_path}:")) && header.contains(expected),
+                "{start}: {line} resolved to {header}"
+            );
+            resolved += 1;
+        }
+    }
+    assert!(resolved >= 6, "only {resolved} locations checked");
     Ok(())
 }

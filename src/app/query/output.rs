@@ -40,6 +40,8 @@ pub struct Writer {
     full: bool,
     /// Path of the file whose line was printed last (text grouping).
     current_file: Option<String>,
+    /// Path of the location line printed last: the next one in that file prints `:line` only.
+    last_location: Option<String>,
 }
 
 impl Writer {
@@ -55,6 +57,7 @@ impl Writer {
             cut: 0,
             full: false,
             current_file: None,
+            last_location: None,
         }
     }
 
@@ -69,6 +72,29 @@ impl Writer {
     /// Counts an item that was not written because the budget is exhausted.
     pub fn skip(&mut self, items: usize) {
         self.cut = self.cut.saturating_add(items);
+    }
+
+    /// Writes `{prefix} {path}:{line}{suffix}`, or `{prefix} :{line}{suffix}` right after a line
+    /// of the same file.
+    pub fn location_line(
+        &mut self,
+        prefix: &str,
+        path: &str,
+        line: u32,
+        suffix: &str,
+        record: &[(&str, Value)],
+    ) -> bool {
+        let same_file = self.last_location.as_deref() == Some(path);
+        let text = if same_file {
+            format!("{prefix} :{line}{suffix}")
+        } else {
+            format!("{prefix} {path}:{line}{suffix}")
+        };
+        let written = self.line(&text, record);
+        if written {
+            self.last_location = Some(path.to_owned());
+        }
+        written
     }
 
     /// Writes one item: in text form under its file line (when `file` is given), in JSON form
@@ -100,6 +126,7 @@ impl Writer {
             return false;
         }
         self.out.push_str(&chunk);
+        self.last_location = None;
         if !self.json {
             self.current_file = file.map(str::to_owned);
         }

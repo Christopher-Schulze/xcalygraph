@@ -282,6 +282,31 @@ impl Index {
         }
     }
 
+    /// Name for a text line that also prints the symbol's `path:line`: that handle identifies it,
+    /// so the module part of the qualified name only repeats the path (`Store.Get`).
+    pub fn short_label(&self, node: u32) -> Cow<'_, str> {
+        let Node::Symbol(symbol) = self.node(node) else {
+            return self.label(node);
+        };
+        let module = self
+            .derived
+            .modules()
+            .get(self.file_of(node).module as usize)
+            .map_or("", |module| self.string(module.name));
+        let qualified = self.qualified(symbol);
+        match qualified.strip_prefix(module) {
+            Some(rest) if !module.is_empty() => {
+                let rest = rest.trim_start_matches(['.', ':', '/', '\\']);
+                if rest.is_empty() {
+                    qualified
+                } else {
+                    Cow::Owned(rest.to_owned())
+                }
+            }
+            _ => qualified,
+        }
+    }
+
     /// Qualified name of a symbol: its stored prefix and its name.
     pub fn qualified(&self, symbol: &SymbolRecord) -> Cow<'_, str> {
         let prefix = self.string(symbol.prefix);

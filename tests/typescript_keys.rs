@@ -31,6 +31,13 @@ impl Drop for Fixture {
     }
 }
 
+/// Text output names a symbol without its module part; its `path:line` identifies it.
+fn short(qualified: &str) -> &str {
+    qualified
+        .split_once('.')
+        .map_or(qualified, |(_, rest)| rest)
+}
+
 #[test]
 fn typescript_type_names_respect_lexical_visibility() -> Result<(), Box<dyn Error>> {
     let fixture = Fixture::new()?;
@@ -110,14 +117,15 @@ fn typescript_type_names_respect_lexical_visibility() -> Result<(), Box<dyn Erro
         assert!(result.status.success());
         let text = String::from_utf8(result.stdout)?;
         assert!(
-            text.contains(expected) && !text.contains(wrong),
+            text.contains(&format!("> {}", short(expected)))
+                && !text.contains(&format!("> {}", short(wrong))),
             "{caller}: {text}"
         );
     }
     let result = fixture.run(&["show", "invalid.outside", "--exact", "--read-only"])?;
     assert!(result.status.success());
     let text = String::from_utf8(result.stdout)?;
-    assert!(!text.contains("invalid.Other.Hidden.run"), "{text}");
+    assert!(!text.contains("Other.Hidden.run"), "{text}");
     let result = fixture.run(&[
         "show",
         "private-import.usePrivate",
@@ -126,7 +134,7 @@ fn typescript_type_names_respect_lexical_visibility() -> Result<(), Box<dyn Erro
     ])?;
     assert!(result.status.success());
     let text = String::from_utf8(result.stdout)?;
-    assert!(!text.contains("provider.Private.run"), "{text}");
+    assert!(!text.contains("Private.run"), "{text}");
     let result = fixture.run(&[
         "show",
         "scope-augment.outsideAugmentation",
@@ -135,7 +143,7 @@ fn typescript_type_names_respect_lexical_visibility() -> Result<(), Box<dyn Erro
     ])?;
     assert!(result.status.success());
     let text = String::from_utf8(result.stdout)?;
-    assert!(!text.contains("scope-augment.Imported.extra"), "{text}");
+    assert!(!text.contains("Imported.extra"), "{text}");
     for caller in [
         "valid.generic",
         "valid.genericArrow",
@@ -146,7 +154,7 @@ fn typescript_type_names_respect_lexical_visibility() -> Result<(), Box<dyn Erro
         let result = fixture.run(&["show", caller, "--exact", "--read-only"])?;
         assert!(result.status.success());
         let text = String::from_utf8(result.stdout)?;
-        assert!(!text.contains("valid.Service.run"), "{text}");
+        assert!(!text.contains("Service.run"), "{text}");
     }
     for (file, name) in &long_names {
         let result = fixture.run(&["show", &format!("{file}.{name}"), "--exact", "--read-only"])?;
@@ -158,7 +166,7 @@ fn typescript_type_names_respect_lexical_visibility() -> Result<(), Box<dyn Erro
     assert!(impact.status.success());
     let text = String::from_utf8(impact.stdout)?;
     assert!(
-        text.contains("valid.outside") && !text.contains("valid.Area.inside"),
+        text.contains("outside") && !text.contains("Area.inside"),
         "{text}"
     );
     assert_eq!(
@@ -193,7 +201,7 @@ fn typescript_index_signatures_merge_only_with_proven_member_values() -> Result<
     let valid = fixture.run(&["show", "index-valid.useBag", "--exact"])?;
     assert!(valid.status.success());
     let valid = String::from_utf8(valid.stdout)?;
-    assert!(valid.contains("index-valid.Service.run"), "{valid}");
+    assert!(valid.contains("Service.run"), "{valid}");
     let impact = fixture.run(&[
         "impact",
         "index-valid.Service.run",
@@ -202,7 +210,7 @@ fn typescript_index_signatures_merge_only_with_proven_member_values() -> Result<
     ])?;
     assert!(impact.status.success());
     let impact = String::from_utf8(impact.stdout)?;
-    assert!(impact.contains("index-valid.useBag"), "{impact}");
+    assert!(impact.contains("useBag"), "{impact}");
     let filtered = fixture.run(&[
         "show",
         "index-valid.useBag",
@@ -211,7 +219,7 @@ fn typescript_index_signatures_merge_only_with_proven_member_values() -> Result<
         "--read-only",
     ])?;
     assert!(filtered.status.success());
-    assert!(String::from_utf8(filtered.stdout)?.contains("index-valid.Service.run"));
+    assert!(String::from_utf8(filtered.stdout)?.contains("Service.run"));
     assert_eq!(
         fixture
             .run(&[
@@ -274,7 +282,7 @@ fn typescript_field_lists_are_lossless_and_budgeted() -> Result<(), Box<dyn Erro
     let typed = fixture.run(&["show", "useTyped", "--read-only"])?;
     assert!(typed.status.success());
     let typed = String::from_utf8(typed.stdout)?;
-    assert!(typed.contains("> keys.Service.run "), "{typed}");
+    assert!(typed.contains("> Service.run "), "{typed}");
     assert!(!typed.contains("OtherService.run"), "{typed}");
     for json in [false, true] {
         for budget in [10, 20, 40, 80, 160] {
@@ -369,7 +377,7 @@ fn equivalent_interface_property_spellings_merge_only_when_compatible() -> Resul
     let impact = fixture.run(&["impact", "valid.ts:2", "--read-only", "--exact"])?;
     assert!(impact.status.success());
     let impact = String::from_utf8(impact.stdout)?;
-    assert!(impact.contains("valid.readValue"), "{impact}");
+    assert!(impact.contains("readValue"), "{impact}");
     let filtered = fixture.run(&["show", "Strings", "--read-only", "-p", "invalid.ts"])?;
     assert_eq!(filtered.status.code(), Some(4));
     let distinct = fixture.run(&["show", "valid.EscapedIdentifier", "--read-only"])?;
@@ -435,7 +443,7 @@ fn escaped_identifier_keys_normalize_across_fields_members_and_references()
         let output = fixture.run(&["show", caller, "--exact", "--read-only"])?;
         let text = String::from_utf8(output.stdout)?;
         assert!(output.status.success(), "{caller}: {text}");
-        assert!(text.contains(target), "{caller}: {text}");
+        assert!(text.contains(short(target)), "{caller}: {text}");
         assert!(!text.contains("ambiguous references"), "{caller}: {text}");
         let repeated = fixture.run(&["show", caller, "--exact", "--read-only"])?;
         assert_eq!(repeated.stdout, text.as_bytes(), "{caller}");
@@ -443,10 +451,7 @@ fn escaped_identifier_keys_normalize_across_fields_members_and_references()
     let method = fixture.run(&["show", "escaped.useEscapedMethod", "--read-only"])?;
     let method_text = String::from_utf8(method.stdout)?;
     assert!(method.status.success(), "{method_text}");
-    assert!(
-        method_text.contains("escaped.EscapedMethod.do"),
-        "{method_text}"
-    );
+    assert!(method_text.contains("EscapedMethod.do"), "{method_text}");
     let repeated = fixture.run(&["show", "escaped.useEscapedMethod", "--read-only"])?;
     assert_eq!(repeated.stdout, method_text.as_bytes());
 
@@ -511,7 +516,7 @@ fn escaped_identifier_keys_normalize_across_fields_members_and_references()
         "escaped.ts",
     ])?;
     assert!(filtered.status.success());
-    assert!(String::from_utf8(filtered.stdout)?.contains("escaped.Service.run"));
+    assert!(String::from_utf8(filtered.stdout)?.contains("Service.run"));
     assert_eq!(
         fixture
             .run(&[
@@ -584,7 +589,7 @@ fn inherited_interfaces_merge_without_hiding_incompatible_base_members()
     let show = fixture.run(&["show", "valid.Inherited"])?;
     let text = String::from_utf8(show.stdout)?;
     assert!(show.status.success(), "{text}");
-    for expected in ["valid.ts:2", "valid.ts:3", "left", "right", "valid.Base"] {
+    for expected in ["ts:2", "ts:3", "left", "right", "Base"] {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
     let invalid = fixture.run(&["show", "invalid.Broken", "--read-only"])?;
@@ -607,38 +612,32 @@ fn inherited_interfaces_merge_without_hiding_incompatible_base_members()
     let caller = fixture.run(&["show", "valid.callBase", "--read-only", "--exact"])?;
     assert!(caller.status.success());
     let caller = String::from_utf8(caller.stdout)?;
-    assert!(caller.contains("> valid.Base.run "), "{caller}");
+    assert!(caller.contains("> Base.run "), "{caller}");
     let caller = fixture.run(&["show", "valid.callField", "--read-only", "--exact"])?;
     assert!(caller.status.success());
     let caller = String::from_utf8(caller.stdout)?;
-    assert!(caller.contains("> valid.Service.execute "), "{caller}");
+    assert!(caller.contains("> Service.execute "), "{caller}");
     assert!(!caller.contains("OtherService.execute"), "{caller}");
     let base = fixture.run(&["show", "valid.Base", "--read-only"])?;
     assert!(base.status.success());
     let base = String::from_utf8(base.stdout)?;
-    assert_eq!(base.matches("v valid.Inherited ").count(), 1, "{base}");
+    assert_eq!(base.matches("v Inherited ").count(), 1, "{base}");
     let second = fixture.run(&["show", "valid.ts:3", "--read-only", "--exact"])?;
     assert!(second.status.success());
     let second = String::from_utf8(second.stdout)?;
-    assert!(second.contains("^ valid.Base "), "{second}");
+    assert!(second.contains("^ Base "), "{second}");
     let impact = fixture.run(&["impact", "valid.ts:3", "--read-only", "--exact"])?;
     assert!(impact.status.success());
     let impact = String::from_utf8(impact.stdout)?;
     assert!(
-        impact.contains("valid.inspect") && impact.contains("valid.callBase"),
+        impact.contains("inspect") && impact.contains("callBase"),
         "{impact}"
     );
     let ambiguous = fixture.run(&["show", "ambiguous.run", "--read-only", "--exact"])?;
     assert!(ambiguous.status.success());
     let ambiguous = String::from_utf8(ambiguous.stdout)?;
-    assert!(
-        ambiguous.contains("ambiguous.Service.execute"),
-        "{ambiguous}"
-    );
-    assert!(
-        !ambiguous.contains("ambiguous.OtherService.execute"),
-        "{ambiguous}"
-    );
+    assert!(ambiguous.contains("Service.execute"), "{ambiguous}");
+    assert!(!ambiguous.contains("OtherService.execute"), "{ambiguous}");
     Ok(())
 }
 
@@ -676,7 +675,7 @@ fn imported_interface_bases_require_cross_file_compatibility() -> Result<(), Box
         if valid {
             let text = String::from_utf8(output.stdout)?;
             assert!(output.status.success(), "{text}");
-            for expected in ["child.ts:2", "child.ts:3", "base.Base"] {
+            for expected in ["ts:2", "ts:3", "Base"] {
                 assert!(text.contains(expected), "missing {expected}: {text}");
             }
             let public = fixture.run(&["show", "child.Public", "--read-only"])?;
@@ -688,11 +687,11 @@ fn imported_interface_bases_require_cross_file_compatibility() -> Result<(), Box
             let call = fixture.run(&["show", "child.call", "--exact", "--read-only"])?;
             assert!(call.status.success());
             let text = String::from_utf8(call.stdout)?;
-            assert!(text.contains("base.Base.run"), "{text}");
+            assert!(text.contains("Base.run"), "{text}");
             let impact = fixture.run(&["impact", "base.Base", "--exact", "--read-only"])?;
             assert!(impact.status.success());
             let text = String::from_utf8(impact.stdout)?;
-            assert!(text.contains("child.call"), "{text}");
+            assert!(text.contains("call"), "{text}");
             let sibling = root.join("child.d.ts");
             fs::write(&sibling, "export interface Child { extra: string; }")?;
             let changed = fixture.run(&["show", "child.ts:2"])?;
@@ -769,13 +768,13 @@ fn augmented_imported_base_preserves_members_and_invalidates_compatibility()
     assert!(call.status.success());
     let text = String::from_utf8(call.stdout)?;
     assert!(
-        text.contains("augment.Base.extra") && text.contains("augment.ts:2"),
+        text.contains("Base.extra") && text.contains("augment.ts:2"),
         "{text}"
     );
     let impact = fixture.run(&["impact", "augment.Base.extra", "--exact", "--read-only"])?;
     assert!(impact.status.success());
     let text = String::from_utf8(impact.stdout)?;
-    assert!(text.contains("child.callExtra"), "{text}");
+    assert!(text.contains("callExtra"), "{text}");
     let base = fixture.run(&["show", "base.Base", "--read-only"])?;
     assert!(base.status.success());
     let text = String::from_utf8(base.stdout)?;
@@ -876,8 +875,8 @@ fn augmented_field_types_use_the_declaration_file() -> Result<(), Box<dyn Error>
     let output = fixture.run(&["show", "child.call", "--exact"])?;
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout)?;
-    assert!(text.contains("augment.Service.run"), "{text}");
-    assert!(!text.contains("base.Service"), "{text}");
+    assert!(text.contains("Service.run augment.ts"), "{text}");
+    assert!(!text.contains("base.ts"), "{text}");
     fs::write(
         root.join("base.ts"),
         "export class Service { run(): number { return 1; } }\nexport interface Base { id: string; }\n",
@@ -885,8 +884,8 @@ fn augmented_field_types_use_the_declaration_file() -> Result<(), Box<dyn Error>
     let output = fixture.run(&["show", "child.call", "--exact"])?;
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout)?;
-    assert!(text.contains("base.Service.run"), "{text}");
-    assert!(!text.contains("augment.Service.run"), "{text}");
+    assert!(text.contains("Service.run base.ts"), "{text}");
+    assert!(!text.contains("augment.ts"), "{text}");
     fs::write(
         root.join("base.ts"),
         "class Service { run(): number { return 1; } } export { Service }; export interface Base { id: string; }",
@@ -894,7 +893,7 @@ fn augmented_field_types_use_the_declaration_file() -> Result<(), Box<dyn Error>
     let output = fixture.run(&["show", "child.call", "--exact"])?;
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout)?;
-    assert!(!text.contains("augment.Service.run"), "{text}");
+    assert!(!text.contains("augment.ts"), "{text}");
     Ok(())
 }
 
@@ -925,11 +924,11 @@ fn generic_defaults_preserve_substitution_and_reject_conflicts() -> Result<(), B
         );
         let text = String::from_utf8(result.stdout)?;
         let base = if name == "valid.Child" {
-            "valid.Pair"
+            "Pair"
         } else if name == "valid.BareDefault" {
-            "valid.DefaultBox"
+            "DefaultBox"
         } else {
-            "valid.Concrete"
+            "Concrete"
         };
         assert!(text.contains(base), "{name}: {text}");
     }
@@ -949,12 +948,12 @@ fn generic_defaults_preserve_substitution_and_reject_conflicts() -> Result<(), B
         let result = fixture.run(&["show", name, "--read-only", "--exact"])?;
         assert!(result.status.success());
         let text = String::from_utf8(result.stdout)?;
-        assert!(text.contains("valid.Service.execute"), "{name}: {text}");
+        assert!(text.contains("Service.execute"), "{name}: {text}");
     }
     let impact = fixture.run(&["impact", "valid.Pair", "--read-only", "--exact"])?;
     assert!(impact.status.success());
     let text = String::from_utf8(impact.stdout)?;
-    assert!(text.contains("valid.call"), "{text}");
+    assert!(text.contains("call"), "{text}");
     Ok(())
 }
 
@@ -993,7 +992,7 @@ fn transitive_and_multiple_generic_bases_preserve_real_targets() -> Result<(), B
         let output = fixture.run(&["show", name, "--read-only", "--exact"])?;
         assert!(output.status.success());
         let text = String::from_utf8(output.stdout)?;
-        assert!(text.contains("valid.Service.execute"), "{name}: {text}");
+        assert!(text.contains("Service.execute"), "{name}: {text}");
     }
     for name in [
         "invalid.BadTransitive",
@@ -1020,7 +1019,7 @@ fn transitive_and_multiple_generic_bases_preserve_real_targets() -> Result<(), B
     let impact = fixture.run(&["impact", "valid.Root", "--read-only", "--exact"])?;
     assert!(impact.status.success());
     let text = String::from_utf8(impact.stdout)?;
-    assert!(text.contains("valid.callTransitive"), "{text}");
+    assert!(text.contains("callTransitive"), "{text}");
     Ok(())
 }
 
@@ -1036,11 +1035,11 @@ fn generic_bases_have_source_backed_inheritance_edges() -> Result<(), Box<dyn Er
     let base = fixture.run(&["show", "valid.Box", "--exact"])?;
     assert!(base.status.success());
     let text = String::from_utf8(base.stdout)?;
-    assert!(text.contains("v valid.Child"), "{text}");
+    assert!(text.contains("v Child"), "{text}");
     let impact = fixture.run(&["impact", "valid.Box", "--exact", "--read-only"])?;
     assert!(impact.status.success());
     let text = String::from_utf8(impact.stdout)?;
-    assert!(text.contains("valid.Child"), "{text}");
+    assert!(text.contains("Child"), "{text}");
     Ok(())
 }
 
@@ -1071,9 +1070,9 @@ fn generic_inherited_types_resolve_and_conflicts_remain_distinct() -> Result<(),
         );
         let text = String::from_utf8(result.stdout)?;
         let expected = if name.ends_with("PairChild") {
-            "valid.Pair"
+            "Pair"
         } else {
-            "valid.Box"
+            "Box"
         };
         assert!(text.contains(expected), "{name}: {text}");
     }
@@ -1095,20 +1094,20 @@ fn generic_inherited_types_resolve_and_conflicts_remain_distinct() -> Result<(),
     let call = fixture.run(&["show", "valid.call", "--read-only", "--exact"])?;
     assert!(call.status.success());
     let text = String::from_utf8(call.stdout)?;
-    assert!(text.contains("valid.Service.execute"), "{text}");
-    assert!(!text.contains("valid.T.execute"), "{text}");
+    assert!(text.contains("Service.execute"), "{text}");
+    assert!(!text.contains("T.execute"), "{text}");
     let second = fixture.run(&["show", "valid.second", "--read-only", "--exact"])?;
     assert!(second.status.success());
     let text = String::from_utf8(second.stdout)?;
-    assert!(text.contains("valid.Other.other"), "{text}");
+    assert!(text.contains("Other.other"), "{text}");
     let upper = fixture.run(&["show", "valid.upper", "--read-only", "--exact"])?;
     assert!(upper.status.success());
     let text = String::from_utf8(upper.stdout)?;
-    assert!(!text.contains("valid.T.toUpperCase"), "{text}");
+    assert!(!text.contains("T.toUpperCase"), "{text}");
     let impact = fixture.run(&["impact", "valid.Box", "--read-only", "--exact"])?;
     assert!(impact.status.success());
     let text = String::from_utf8(impact.stdout)?;
-    assert!(text.contains("valid.call"), "{text}");
+    assert!(text.contains("call"), "{text}");
     for name in ["valid.Nested", "valid.NestedOverride"] {
         let output = fixture.run(&["show", name, "--read-only"])?;
         assert!(
@@ -1137,7 +1136,7 @@ fn complex_local_inheritance_keeps_valid_members_and_rejects_conflicts()
     let show = fixture.run(&["show", "valid.Child"])?;
     let text = String::from_utf8(show.stdout)?;
     assert!(show.status.success(), "{text}");
-    for expected in ["valid.ts:4", "valid.ts:5", "valid.Left", "valid.Right"] {
+    for expected in ["ts:4", "ts:5", "Left", "Right"] {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
     let overload = fixture.run(&["show", "valid.OverChild", "--read-only"])?;
@@ -1149,10 +1148,7 @@ fn complex_local_inheritance_keeps_valid_members_and_rejects_conflicts()
     let different = fixture.run(&["show", "valid.Different", "--read-only"])?;
     let text = String::from_utf8(different.stdout)?;
     assert!(different.status.success(), "{text}");
-    assert!(
-        text.contains("valid.Root") && text.contains("valid.Right"),
-        "{text}"
-    );
+    assert!(text.contains("Root") && text.contains("Right"), "{text}");
     for name in [
         "invalid.Conflict",
         "invalid.Cycle",
@@ -1173,12 +1169,12 @@ fn complex_local_inheritance_keeps_valid_members_and_rejects_conflicts()
         let output = fixture.run(&["show", caller, "--exact", "--read-only"])?;
         assert!(output.status.success());
         let text = String::from_utf8(output.stdout)?;
-        assert!(text.contains(target), "{caller}: {text}");
+        assert!(text.contains(short(target)), "{caller}: {text}");
     }
     let impact = fixture.run(&["impact", "valid.Root", "--exact", "--read-only"])?;
     assert!(impact.status.success());
     let impact = String::from_utf8(impact.stdout)?;
-    assert!(impact.contains("valid.Child"), "{impact}");
+    assert!(impact.contains("Child"), "{impact}");
     Ok(())
 }
 
@@ -1199,7 +1195,7 @@ fn identical_inherited_property_overrides_merge_without_accepting_conflicts()
     let valid = fixture.run(&["show", "valid.Child"])?;
     let text = String::from_utf8(valid.stdout)?;
     assert!(valid.status.success(), "{text}");
-    for expected in ["valid.ts:2", "valid.ts:3", "valid.Base", "right"] {
+    for expected in ["ts:2", "ts:3", "Base", "right"] {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
     assert_eq!(
@@ -1263,7 +1259,7 @@ fn same_file_interfaces_merge_without_losing_declaration_locations() -> Result<(
         let typed = fixture.run(&["show", caller, "--read-only"])?;
         assert!(typed.status.success());
         let typed = String::from_utf8(typed.stdout)?;
-        assert!(typed.contains("> model.Service.run "), "{caller}: {typed}");
+        assert!(typed.contains("> Service.run "), "{caller}: {typed}");
         assert!(!typed.contains("OtherService.run"), "{caller}: {typed}");
     }
     let second_part = fixture.run(&["show", "model.ts:8", "--read-only"])?;
@@ -1285,12 +1281,12 @@ fn same_file_interfaces_merge_without_losing_declaration_locations() -> Result<(
     let method = fixture.run(&["show", "useWorker", "--read-only"])?;
     assert!(method.status.success());
     let method = String::from_utf8(method.stdout)?;
-    assert!(method.contains("> model.Worker.finish "), "{method}");
+    assert!(method.contains("> Worker.finish "), "{method}");
     let overload = fixture.run(&["show", "useQuery", "--exact", "--read-only"])?;
     assert!(overload.status.success());
     let overload = String::from_utf8(overload.stdout)?;
     assert!(
-        overload.contains("> model.Query.execute model.ts:14"),
+        overload.contains("> Query.execute model.ts:14"),
         "{overload}"
     );
     for name in ["model.Services", "model.ts:7", "model.ts:8"] {
@@ -1315,10 +1311,7 @@ fn same_file_interfaces_merge_without_losing_declaration_locations() -> Result<(
         String::from_utf8_lossy(&path.stderr)
     );
     let path = String::from_utf8(path.stdout)?;
-    assert!(
-        path.contains("useService") && path.contains("model.ts:8"),
-        "{path}"
-    );
+    assert!(path.contains("useService") && path.contains(":8"), "{path}");
     let found = fixture.run(&["find", "Services", "--json", "--read-only"])?;
     assert!(found.status.success());
     let found = String::from_utf8(found.stdout)?;
@@ -1421,7 +1414,7 @@ fn reopened_namespace_interfaces_merge_only_within_matching_paths() -> Result<()
     let merged = fixture.run(&["show", "Api.Config", "--exact"])?;
     let merged_text = String::from_utf8(merged.stdout.clone())?;
     assert!(merged.status.success(), "{merged_text}");
-    for expected in ["valid.ts:3", "valid.ts:8", "left", "right", "service"] {
+    for expected in ["ts:3", "ts:8", "left", "right", "service"] {
         assert!(
             merged_text.contains(expected),
             "missing {expected}: {merged_text}"
@@ -1444,7 +1437,7 @@ fn reopened_namespace_interfaces_merge_only_within_matching_paths() -> Result<()
         let by_line = fixture.run(&["show", line, "--exact", "--read-only"])?;
         let text = String::from_utf8(by_line.stdout)?;
         assert!(by_line.status.success(), "{line}: {text}");
-        for expected in ["valid.ts:3", "valid.ts:8", "left", "right"] {
+        for expected in ["ts:3", "ts:8", "left", "right"] {
             assert!(
                 text.contains(expected),
                 "{line}: missing {expected}: {text}"
@@ -1455,7 +1448,7 @@ fn reopened_namespace_interfaces_merge_only_within_matching_paths() -> Result<()
     let nested = fixture.run(&["show", "Root.Nested.Data", "--exact", "--read-only"])?;
     let nested_text = String::from_utf8(nested.stdout)?;
     assert!(nested.status.success(), "{nested_text}");
-    for expected in ["valid.ts:16", "valid.ts:20", "left", "right"] {
+    for expected in ["ts:16", "ts:20", "left", "right"] {
         assert!(
             nested_text.contains(expected),
             "missing {expected}: {nested_text}"
@@ -1486,10 +1479,7 @@ fn reopened_namespace_interfaces_merge_only_within_matching_paths() -> Result<()
     let caller = fixture.run(&["show", "Api.useSecond", "--exact", "--read-only"])?;
     let caller_text = String::from_utf8(caller.stdout)?;
     assert!(caller.status.success(), "{caller_text}");
-    assert!(
-        caller_text.contains("valid.Api.Service.run"),
-        "{caller_text}"
-    );
+    assert!(caller_text.contains("Api.Service.run"), "{caller_text}");
     let impact = fixture.run(&["impact", "Api.Config", "--exact", "--read-only"])?;
     let impact_text = String::from_utf8(impact.stdout)?;
     assert!(impact.status.success(), "{impact_text}");
@@ -1746,7 +1736,7 @@ fn interface_second_part_diff_reaches_all_dependents() -> Result<(), Box<dyn Err
         String::from_utf8_lossy(&output.stderr)
     );
     let output = String::from_utf8(output.stdout)?;
-    for expected in ["model.Services", "useService", "useImported"] {
+    for expected in ["Services", "useService", "useImported"] {
         assert!(output.contains(expected), "missing {expected}: {output}");
     }
     for unrelated in ["Config", "Worker"] {
@@ -1862,7 +1852,7 @@ fn global_interfaces_merge_only_inside_proven_compatible_project_scope()
 
     let consumer = fixture.run(&["show", "a.consumeShared", "--exact", "--read-only"])?;
     assert!(consumer.status.success());
-    assert!(String::from_utf8(consumer.stdout)?.contains("a.Shared a.ts:1"));
+    assert!(String::from_utf8(consumer.stdout)?.contains("Shared a.ts:1"));
     let impact = fixture.run(&["impact", "a.ts::Shared", "--exact", "--read-only"])?;
     assert!(impact.status.success());
     assert!(String::from_utf8(impact.stdout)?.contains("consumeShared"));
@@ -2095,7 +2085,7 @@ fn typescript_declarations_pair_only_with_unique_same_module_header_identity()
     let overloads_text = String::from_utf8(overloads.stdout)?;
     assert!(overloads.status.success(), "{overloads_text}");
     assert!(overloads_text.contains("paired.d.ts:2"), "{overloads_text}");
-    assert!(overloads_text.contains("paired.d.ts:3"), "{overloads_text}");
+    assert!(overloads_text.contains(":3"), "{overloads_text}");
     assert!(overloads_text.contains("paired.ts:4"), "{overloads_text}");
 
     let other_module = fixture.run(&[
@@ -2127,7 +2117,7 @@ fn typescript_composite_fields_require_complete_source_type_proofs() -> Result<(
         include_bytes!("fixtures/typescript-composite-property-types.ts"),
     )?;
     let has_line = |output: &str, expected: u32| {
-        output.split("composite.ts:").skip(1).any(|location| {
+        output.split(':').skip(1).any(|location| {
             location
                 .chars()
                 .take_while(|character| character.is_ascii_digit())

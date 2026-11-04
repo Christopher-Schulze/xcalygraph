@@ -159,10 +159,11 @@ fn header(index: &Index, filter: &Filter, writer: &mut Writer, node: u32) {
             let path = index.path_of(node);
             let qualified = index.qualified(symbol);
             let text = format!(
-                "{path}:{}-{} {} {qualified}",
+                "{path}:{}-{} {} {}",
                 symbol.line,
                 symbol.end_line,
-                symbol.kind().id()
+                symbol.kind().id(),
+                index.short_label(node)
             );
             let signature = index.string(symbol.signature);
             let doc = index.string(symbol.doc);
@@ -241,10 +242,12 @@ fn members(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: 
             continue;
         };
         let path = index.path_of(*member);
-        let text = format!("m {} {}:{}", index.summary(symbol), path, symbol.line);
         let qualified = index.qualified(symbol);
-        writer.line(
-            &text,
+        writer.location_line(
+            &format!("m {}", index.summary(symbol)),
+            path,
+            symbol.line,
+            "",
             &[
                 ("t", Value::Str("edge")),
                 ("rel", Value::Str("member")),
@@ -413,16 +416,20 @@ fn write_edge(
         }
         other => format!(" {}", other.id()),
     };
-    let text = if index.path_of(edge.node) == label {
-        format!("{indent}{} {path}:{line}{kind}{inferred}", display.marker)
+    let prefix = if path == label {
+        format!("{indent}{}", display.marker)
     } else {
         format!(
-            "{indent}{} {label} {path}:{line}{kind}{inferred}",
-            display.marker
+            "{indent}{} {}",
+            display.marker,
+            index.short_label(edge.node)
         )
     };
-    writer.line(
-        &text,
+    writer.location_line(
+        &prefix,
+        path,
+        line,
+        &format!("{kind}{inferred}"),
         &[
             ("t", Value::Str("edge")),
             ("rel", Value::Str(display.relation)),
