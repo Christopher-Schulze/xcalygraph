@@ -29,14 +29,17 @@ pub fn tokenize(text: &str) -> Vec<String> {
 /// byte-level fast path without per-character allocation. Two-word phrases with a one-word
 /// equivalent (`sign in`, `signIn`) also emit that word (`login`).
 pub fn for_each_token(text: &str, buffer: &mut String, mut emit: impl FnMut(&str)) {
-    let mut previous = String::new();
+    let mut previous = "";
     each_token(text, buffer, |token| {
         emit(token);
-        if let Some(word) = phrase(&previous, token) {
+        if let Some(word) = phrase(previous, token) {
             emit(word);
         }
-        previous.clear();
-        previous.push_str(token);
+        previous = match token {
+            "sign" => "sign",
+            "log" => "log",
+            _ => "",
+        };
     });
 }
 

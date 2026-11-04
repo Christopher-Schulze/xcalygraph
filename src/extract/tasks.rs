@@ -66,7 +66,7 @@ fn push_symbol(
         name: name.to_owned(),
         line,
         end_line: end_line.max(line),
-        signature: facts::clip(&facts::normalize_space(&signature), 160),
+        signature: facts::clip_space(&signature, 160),
         exported: true,
         flags: facts::FLAG_ENTRY,
         ..Symbol::default()

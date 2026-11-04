@@ -25,7 +25,7 @@ fn push_symbol(
         parent,
         line,
         end_line: end_line.max(line),
-        signature: facts::clip(&facts::normalize_space(signature), 160),
+        signature: facts::clip_space(signature, 160),
         exported: true,
         ..Symbol::default()
     });

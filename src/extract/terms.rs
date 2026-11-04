@@ -280,6 +280,7 @@ fn collect(
     let mut count = 0;
     let mut line_words = String::new();
     let mut buffer = String::new();
+    let mut lower = String::new();
     for line in text.split(|byte| *byte == b'\n') {
         if count >= BODY_TERMS {
             break;
@@ -289,8 +290,16 @@ fn collect(
         // its frequency still counts.
         line_words.clear();
         for_each_body_word(line, |word| {
-            let lower = word.to_lowercase();
-            if !KEYWORDS.contains(&lower.as_str()) && seen.insert(lower) {
+            // Only a new word costs a string: the set owns one copy of it.
+            lower.clear();
+            if word.is_ascii() {
+                lower.push_str(word);
+                lower.make_ascii_lowercase();
+            } else {
+                lower.push_str(&word.to_lowercase());
+            }
+            if !KEYWORDS.contains(&lower.as_str()) && !seen.contains(&lower) {
+                seen.insert(lower.clone());
                 line_words.push_str(word);
                 line_words.push(' ');
             }

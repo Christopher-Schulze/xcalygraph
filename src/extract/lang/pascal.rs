@@ -128,7 +128,7 @@ pub fn form(path: &str, text: &str) -> Facts {
                 parent: open.last().copied(),
                 line: number,
                 end_line: line_count,
-                signature: facts::clip(&facts::normalize_space(trimmed), 160),
+                signature: facts::clip_space(trimmed, 160),
                 exported: true,
                 ..Symbol::default()
             });

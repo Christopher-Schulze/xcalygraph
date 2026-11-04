@@ -72,7 +72,7 @@ impl Outline {
     }
 
     pub(super) fn heading(&mut self, level: usize, title: &str, line: u32) {
-        let title = facts::clip(&facts::normalize_space(title), 160);
+        let title = facts::clip_space(title, 160);
         if title.is_empty() {
             return;
         }
@@ -213,7 +213,7 @@ impl Outline {
 
     pub(super) fn finish(mut self) -> Facts {
         self.flush_segment();
-        self.facts.doc = facts::clip(&facts::normalize_space(&self.paragraph.join(" ")), 400);
+        self.facts.doc = facts::clip_space(&self.paragraph.join(" "), 400);
         self.facts
     }
 }
@@ -519,7 +519,7 @@ fn html(text: &str) -> Facts {
     flush_visible(&mut outline, &mut visible);
     let mut facts = outline.finish();
     if facts.doc.is_empty() {
-        facts.doc = facts::clip(&facts::normalize_space(&title), 400);
+        facts.doc = facts::clip_space(&title, 400);
     }
     facts
 }

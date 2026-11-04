@@ -259,7 +259,7 @@ fn svg(text: &str) -> Facts {
                 name: id.to_owned(),
                 line: tag_line,
                 end_line: tag_line,
-                signature: facts::clip(&facts::normalize_space(tag), 160),
+                signature: facts::clip_space(tag, 160),
                 exported: true,
                 ..Symbol::default()
             });
@@ -333,21 +333,9 @@ pub fn literal_paths(text: &str, facts: &mut Facts) {
         if facts.imports.iter().any(|import| import.line == number) {
             continue;
         }
-        // Quotes nested in template literals (`` `<img src="a.png">` ``) count too.
-        let literals: Vec<&str> = quoted(line)
-            .into_iter()
-            .flat_map(|literal| {
-                let literal = literal.trim();
-                if is_path_literal(literal) {
-                    vec![literal]
-                } else {
-                    quoted(literal).into_iter().map(str::trim).collect()
-                }
-            })
-            .collect();
-        for literal in literals {
+        let mut path_literal = |literal: &str| {
             if !is_path_literal(literal) {
-                continue;
+                return;
             }
             let scope = facts
                 .symbols
@@ -369,20 +357,28 @@ pub fn literal_paths(text: &str, facts: &mut Facts) {
                     arity: NO_ARITY,
                 });
             }
-        }
+        };
+        // Quotes nested in template literals (`` `<img src="a.png">` ``) count too.
+        for_each_quoted(line, |literal| {
+            let literal = literal.trim();
+            if is_path_literal(literal) {
+                path_literal(literal);
+            } else {
+                for_each_quoted(literal, |nested| path_literal(nested.trim()));
+            }
+        });
     }
 }
 
 /// Contents of `"..."`, `'...'`, `` `...` `` and `url(...)` on one line.
-fn quoted(line: &str) -> Vec<&str> {
-    let mut found = Vec::new();
+fn for_each_quoted(line: &str, mut emit: impl FnMut(&str)) {
     let bytes = line.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
         let byte = bytes[index];
         if matches!(byte, b'"' | b'\'' | b'`') {
             if let Some(end) = line[index + 1..].find(byte as char) {
-                found.push(&line[index + 1..index + 1 + end]);
+                emit(&line[index + 1..index + 1 + end]);
                 index += end + 2;
                 continue;
             }
@@ -392,20 +388,18 @@ fn quoted(line: &str) -> Vec<&str> {
         if bytes[index..].starts_with(b"url(")
             && let Some(end) = line[index + 4..].find(')')
         {
-            found.push(line[index + 4..index + 4 + end].trim_matches(['"', '\'']));
+            emit(line[index + 4..index + 4 + end].trim_matches(['"', '\'']));
             index += end + 5;
             continue;
         }
         index += 1;
     }
-    found
 }
 
 fn is_path_literal(literal: &str) -> bool {
     let Some((stem, extension)) = literal.rsplit_once('.') else {
         return false;
     };
-    let extension = extension.to_ascii_lowercase();
     let plain = literal
         .chars()
         .all(|ch| ch.is_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | '@' | '+'));
@@ -416,7 +410,10 @@ fn is_path_literal(literal: &str) -> bool {
         && (1..=5).contains(&extension.len())
         && extension.chars().all(|ch| ch.is_ascii_alphanumeric())
         && extension.chars().any(|ch| ch.is_ascii_alphabetic())
-        && (stem.contains('/') || REFERENCED_EXTENSIONS.contains(&extension.as_str()))
+        && (stem.contains('/')
+            || REFERENCED_EXTENSIONS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(extension)))
 }
 
 #[cfg(test)]

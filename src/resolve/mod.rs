@@ -17,6 +17,7 @@ mod typescript;
 #[cfg(feature = "lang-typescript")]
 mod typescript_groups;
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::domain::hash::FastMap as HashMap;
@@ -1429,7 +1430,7 @@ impl<'a> Index<'a> {
                 ) {
                     return None;
                 }
-                let chain = scope_chain(facts, scope);
+                let chain: Vec<u32> = scope_chain(facts, scope).collect();
                 if chain.iter().any(|&scope| {
                     facts
                         .symbols
@@ -2868,7 +2869,7 @@ impl<'a> Index<'a> {
         // 1. Lexical scope: definitions of the file visible from the reference.
         if let Some(facts) = self.facts(file) {
             let base = self.base[file as usize];
-            let chain = scope_chain(facts, reference.scope);
+            let chain: Vec<u32> = scope_chain(facts, reference.scope).collect();
             let mut best: Option<(usize, u32)> = None;
             let mut found: Vec<(usize, u32)> = Vec::new();
             for (local, symbol) in facts.symbols.iter().enumerate() {
@@ -3155,7 +3156,11 @@ impl<'a> Index<'a> {
             };
         }
         // `a->b` (PHP, C++) and `a?->b` chain like `a.b`.
-        let dotted = qualifier.replace("?->", ".").replace("->", ".");
+        let dotted = if qualifier.contains("->") {
+            Cow::Owned(qualifier.replace("?->", ".").replace("->", "."))
+        } else {
+            Cow::Borrowed(qualifier)
+        };
         let chain: Vec<&str> = dotted.split('.').map(str::trim).collect();
         let head = chain[0];
         // 3. Qualified name through imports and the module map; a local binding of the head
@@ -3772,7 +3777,6 @@ impl<'a> Index<'a> {
     /// Closest binding of `name` visible from `scope` at `line`.
     fn binding(&self, file: u32, scope: Option<u32>, name: &str, line: u32) -> Option<&'a Binding> {
         let facts = self.facts(file)?;
-        let chain = scope_chain(facts, scope);
         facts
             .bindings
             .iter()
@@ -3784,12 +3788,16 @@ impl<'a> Index<'a> {
             })
             .filter(|binding| match binding.scope {
                 None => true,
-                Some(binding_scope) => chain.contains(&binding_scope),
+                Some(binding_scope) => {
+                    scope_chain(facts, scope).any(|local| local == binding_scope)
+                }
             })
             .max_by_key(|binding| {
                 (
                     binding.scope.map_or(0, |s| {
-                        chain.iter().position(|&c| c == s).map_or(0, |p| p + 1)
+                        scope_chain(facts, scope)
+                            .position(|c| c == s)
+                            .map_or(0, |p| p + 1)
                     }),
                     binding.line,
                 )
@@ -4699,17 +4707,13 @@ fn typescript_generic_parameter_may_shadow(symbol: &facts::Symbol, name: &str) -
 }
 
 /// Local indices of `scope` and its enclosing symbols, innermost first.
-fn scope_chain(facts: &Facts, scope: Option<u32>) -> Vec<u32> {
-    let mut chain = Vec::new();
-    let mut current = scope;
-    while let Some(local) = current {
-        chain.push(local);
-        current = facts
+fn scope_chain(facts: &Facts, scope: Option<u32>) -> impl Iterator<Item = u32> {
+    std::iter::successors(scope, |&local| {
+        facts
             .symbols
             .get(local as usize)
-            .and_then(|symbol| symbol.parent);
-    }
-    chain
+            .and_then(|symbol| symbol.parent)
+    })
 }
 
 /// Splits `pkg.Name` or `a::b::Name` at the last separator.

@@ -3,7 +3,9 @@
 //! `.env.example`, Dockerfiles, compose files, GitHub Actions workflows and Kubernetes manifests.
 //! Values are never stored.
 
-use super::json::{self, Value};
+use std::collections::HashSet;
+
+use super::json::{self, KeyVisitor, Kind};
 use crate::domain::facts::{ConfigKey, EnvDef, EnvRead, EnvSource, Facts, ValueKind};
 use crate::domain::filetype::FileType;
 
@@ -23,10 +25,14 @@ pub fn extract(path: &str, file_type: FileType, text: &str, facts: &mut Facts) {
         FileType::Dockerfile => dockerfile(text, facts),
         _ => {}
     }
-    let mut seen = std::collections::HashSet::new();
-    facts
+    let mut seen = HashSet::with_capacity(facts.config_keys.len());
+    let first: Vec<bool> = facts
         .config_keys
-        .retain(|key| seen.insert(key.path.clone()));
+        .iter()
+        .map(|key| seen.insert(key.path.as_str()))
+        .collect();
+    let mut first = first.into_iter();
+    facts.config_keys.retain(|_| first.next().unwrap_or(false));
     facts.config_keys.truncate(MAX_KEYS);
 }
 
@@ -63,46 +69,85 @@ fn push_env(facts: &mut Facts, name: &str, source: EnvSource, line: u32) {
 }
 
 fn json_keys(text: &str, facts: &mut Facts) {
-    let Some(value) = json::parse(text) else {
-        return;
+    let before = facts.config_keys.len();
+    let mut walk = JsonWalk {
+        path: String::new(),
+        lengths: Vec::new(),
+        seen: HashSet::new(),
+        facts,
     };
-    let mut path = Vec::new();
-    walk_json(&value, &mut path, facts);
-}
-
-fn json_kind(value: &Value) -> ValueKind {
-    match value {
-        Value::Null => ValueKind::Null,
-        Value::Bool(_) => ValueKind::Bool,
-        Value::Number(_) => ValueKind::Number,
-        Value::Str(_) => ValueKind::String,
-        Value::Array(_) => ValueKind::Array,
-        Value::Object(_) => ValueKind::Object,
+    if json::walk_keys(text, &mut walk).is_none() {
+        facts.config_keys.truncate(before);
     }
 }
 
-fn walk_json(value: &Value, path: &mut Vec<String>, facts: &mut Facts) {
-    if path.len() >= MAX_DEPTH {
-        return;
+fn json_kind(kind: Kind) -> ValueKind {
+    match kind {
+        Kind::Null => ValueKind::Null,
+        Kind::Bool => ValueKind::Bool,
+        Kind::Number => ValueKind::Number,
+        Kind::Str => ValueKind::String,
+        Kind::Array => ValueKind::Array,
+        Kind::Object => ValueKind::Object,
     }
-    match value {
-        Value::Object(entries) => {
-            for (key, line, child) in entries {
-                path.push(key.clone());
-                push_key(facts, path, json_kind(child), *line);
-                walk_json(child, path, facts);
-                path.pop();
-            }
+}
+
+/// Keeps the first [`MAX_KEYS`] distinct paths down to [`MAX_DEPTH`] in document order; repeated
+/// keys of a large data file cost no string.
+struct JsonWalk<'a> {
+    path: String,
+    /// Path length before each open segment.
+    lengths: Vec<usize>,
+    seen: HashSet<String>,
+    facts: &'a mut Facts,
+}
+
+impl JsonWalk<'_> {
+    fn enter(&mut self, segment: &str) {
+        self.lengths.push(self.path.len());
+        if self.lengths.len() > MAX_DEPTH {
+            return;
         }
-        Value::Array(items) => {
-            // Objects in arrays share one path segment `[]`.
-            for item in items.iter().filter(|item| matches!(item, Value::Object(_))) {
-                path.push("[]".to_owned());
-                walk_json(item, path, facts);
-                path.pop();
-            }
+        if self.lengths.len() > 1 {
+            self.path.push('.');
         }
-        _ => {}
+        self.path.push_str(segment);
+    }
+
+    fn leave(&mut self) {
+        if let Some(length) = self.lengths.pop() {
+            self.path.truncate(length);
+        }
+    }
+}
+
+impl KeyVisitor for JsonWalk<'_> {
+    fn key(&mut self, key: &str, line: u32, kind: Kind) {
+        self.enter(key);
+        if self.lengths.len() <= MAX_DEPTH
+            && self.seen.len() < MAX_KEYS
+            && !self.seen.contains(&self.path)
+        {
+            self.seen.insert(self.path.clone());
+            self.facts.config_keys.push(ConfigKey {
+                path: self.path.clone(),
+                kind: json_kind(kind),
+                line,
+            });
+        }
+    }
+
+    fn end_key(&mut self) {
+        self.leave();
+    }
+
+    // Objects in arrays share one path segment `[]`.
+    fn array_object(&mut self) {
+        self.enter("[]");
+    }
+
+    fn end_array_object(&mut self) {
+        self.leave();
     }
 }
 

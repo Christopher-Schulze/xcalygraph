@@ -59,14 +59,50 @@ pub fn parse_strict(text: &str) -> Option<Value> {
     parse_with_mode(text, false)
 }
 
-fn parse_with_mode(text: &str, allow_jsonc: bool) -> Option<Value> {
-    let mut parser = Parser {
+/// Kind of a value, known from its first byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Null,
+    Bool,
+    Number,
+    Str,
+    Array,
+    Object,
+}
+
+/// Receives the object keys of a document in source order, for [`walk_keys`].
+pub trait KeyVisitor {
+    /// A key of an object and the kind of its value; the value's keys follow.
+    fn key(&mut self, key: &str, line: u32, kind: Kind);
+    fn end_key(&mut self);
+    /// An object inside an array; its keys follow.
+    fn array_object(&mut self);
+    fn end_array_object(&mut self);
+}
+
+/// Reads a whole JSONC document like [`parse`] without building values, so a large data file
+/// costs no allocation per value. On `None` the document was invalid and the keys already
+/// visited are void.
+pub fn walk_keys(text: &str, visitor: &mut impl KeyVisitor) -> Option<()> {
+    let mut parser = new_parser(text, true);
+    parser.walk_value(visitor)?;
+    parser.skip();
+    Some(())
+}
+
+fn new_parser(text: &str, allow_jsonc: bool) -> Parser<'_> {
+    Parser {
         bytes: text.as_bytes(),
         position: 0,
         line: 1,
         depth: 0,
         allow_jsonc,
-    };
+        scratch: Vec::new(),
+    }
+}
+
+fn parse_with_mode(text: &str, allow_jsonc: bool) -> Option<Value> {
+    let mut parser = new_parser(text, allow_jsonc);
     let value = parser.value()?;
     parser.skip();
     if !allow_jsonc && parser.position != parser.bytes.len() {
@@ -75,12 +111,24 @@ fn parse_with_mode(text: &str, allow_jsonc: bool) -> Option<Value> {
     Some(value)
 }
 
+/// Ignores the keys of a value that is parsed for validity only.
+struct NoKeys;
+
+impl KeyVisitor for NoKeys {
+    fn key(&mut self, _key: &str, _line: u32, _kind: Kind) {}
+    fn end_key(&mut self) {}
+    fn array_object(&mut self) {}
+    fn end_array_object(&mut self) {}
+}
+
 struct Parser<'a> {
     bytes: &'a [u8],
     position: usize,
     line: u32,
     depth: usize,
     allow_jsonc: bool,
+    /// Bytes of the string being read.
+    scratch: Vec<u8>,
 }
 
 const MAX_DEPTH: usize = 256;
@@ -141,6 +189,106 @@ impl Parser<'_> {
         }
     }
 
+    /// [`Self::value`] for a tolerant document, reporting keys instead of building values.
+    fn walk_value(&mut self, visitor: &mut impl KeyVisitor) -> Option<Kind> {
+        self.skip();
+        let kind = self.peek_kind()?;
+        match kind {
+            Kind::Object => self.walk_object(visitor)?,
+            Kind::Array => self.walk_array(visitor)?,
+            Kind::Str => {
+                self.read_string()?;
+                std::str::from_utf8(&self.scratch).ok()?;
+            }
+            Kind::Bool if self.peek() == Some(b't') => self.word("true")?,
+            Kind::Bool => self.word("false")?,
+            Kind::Null => self.word("null")?,
+            Kind::Number => {
+                let start = self.position;
+                self.skip_number();
+                if self.position == start {
+                    return None;
+                }
+            }
+        }
+        Some(kind)
+    }
+
+    fn peek_kind(&self) -> Option<Kind> {
+        Some(match self.peek()? {
+            b'{' => Kind::Object,
+            b'[' => Kind::Array,
+            b'"' => Kind::Str,
+            b't' | b'f' => Kind::Bool,
+            b'n' => Kind::Null,
+            _ => Kind::Number,
+        })
+    }
+
+    fn walk_object(&mut self, visitor: &mut impl KeyVisitor) -> Option<()> {
+        self.enter()?;
+        self.bump();
+        loop {
+            self.skip();
+            match self.peek()? {
+                b'}' => {
+                    self.bump();
+                    break;
+                }
+                b',' => {
+                    self.bump();
+                }
+                b'"' => {
+                    let line = self.line;
+                    self.read_string()?;
+                    let key = std::mem::take(&mut self.scratch);
+                    let text = std::str::from_utf8(&key).ok()?;
+                    self.skip();
+                    if self.bump()? != b':' {
+                        return None;
+                    }
+                    self.skip();
+                    visitor.key(text, line, self.peek_kind()?);
+                    self.scratch = key;
+                    self.walk_value(visitor)?;
+                    visitor.end_key();
+                }
+                _ => return None,
+            }
+        }
+        self.depth -= 1;
+        Some(())
+    }
+
+    fn walk_array(&mut self, visitor: &mut impl KeyVisitor) -> Option<()> {
+        self.enter()?;
+        self.bump();
+        loop {
+            self.skip();
+            match self.peek()? {
+                b']' => {
+                    self.bump();
+                    break;
+                }
+                b',' => {
+                    self.bump();
+                }
+                b'{' => {
+                    visitor.array_object();
+                    self.walk_object(visitor)?;
+                    visitor.end_array_object();
+                }
+                // Keys of arrays nested directly in arrays are no path of the document.
+                b'[' => self.walk_array(&mut NoKeys)?,
+                _ => {
+                    self.walk_value(visitor)?;
+                }
+            }
+        }
+        self.depth -= 1;
+        Some(())
+    }
+
     fn word(&mut self, word: &str) -> Option<()> {
         if self.bytes[self.position..].starts_with(word.as_bytes()) {
             self.position += word.len();
@@ -155,14 +303,18 @@ impl Parser<'_> {
             return self.strict_number();
         }
         let start = self.position;
+        self.skip_number();
+        (self.position > start).then(|| {
+            Value::Number(String::from_utf8_lossy(&self.bytes[start..self.position]).into_owned())
+        })
+    }
+
+    fn skip_number(&mut self) {
         while self.peek().is_some_and(|byte| {
             byte.is_ascii_digit() || matches!(byte, b'-' | b'+' | b'.' | b'e' | b'E')
         }) {
             self.position += 1;
         }
-        (self.position > start).then(|| {
-            Value::Number(String::from_utf8_lossy(&self.bytes[start..self.position]).into_owned())
-        })
     }
 
     fn strict_number(&mut self) -> Option<Value> {
@@ -211,8 +363,21 @@ impl Parser<'_> {
     }
 
     fn string(&mut self) -> Option<String> {
+        self.read_string()?;
+        std::str::from_utf8(&self.scratch).ok().map(str::to_owned)
+    }
+
+    /// Reads the string at the cursor into `scratch`.
+    fn read_string(&mut self) -> Option<()> {
         self.bump();
-        let mut out = Vec::new();
+        let mut out = std::mem::take(&mut self.scratch);
+        out.clear();
+        let closed = self.string_bytes(&mut out);
+        self.scratch = out;
+        closed
+    }
+
+    fn string_bytes(&mut self, out: &mut Vec<u8>) -> Option<()> {
         loop {
             match self.bump()? {
                 b'"' => break,
@@ -225,7 +390,7 @@ impl Parser<'_> {
                     b'n' => out.push(b'\n'),
                     b't' => out.push(b'\t'),
                     b'r' => out.push(b'\r'),
-                    b'u' if !self.allow_jsonc => self.push_json_unicode(&mut out)?,
+                    b'u' if !self.allow_jsonc => self.push_json_unicode(out)?,
                     b'u' => {
                         let hex = self.bytes.get(self.position..self.position + 4)?;
                         self.position += 4;
@@ -241,7 +406,7 @@ impl Parser<'_> {
                 byte => out.push(byte),
             }
         }
-        String::from_utf8(out).ok()
+        Some(())
     }
 
     fn push_json_unicode(&mut self, output: &mut Vec<u8>) -> Option<()> {
@@ -390,6 +555,91 @@ impl Parser<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct Recorder(Vec<String>);
+
+    impl KeyVisitor for Recorder {
+        fn key(&mut self, key: &str, line: u32, kind: Kind) {
+            self.0.push(format!("key {key} {line} {kind:?}"));
+        }
+        fn end_key(&mut self) {
+            self.0.push("end".to_owned());
+        }
+        fn array_object(&mut self) {
+            self.0.push("[".to_owned());
+        }
+        fn end_array_object(&mut self) {
+            self.0.push("]".to_owned());
+        }
+    }
+
+    /// The same events from the parsed value: the walk must agree with the parser it replaces.
+    fn events_of(value: &Value, events: &mut Vec<String>) {
+        match value {
+            Value::Object(entries) => {
+                for (key, line, child) in entries {
+                    let kind = match child {
+                        Value::Null => Kind::Null,
+                        Value::Bool(_) => Kind::Bool,
+                        Value::Number(_) => Kind::Number,
+                        Value::Str(_) => Kind::Str,
+                        Value::Array(_) => Kind::Array,
+                        Value::Object(_) => Kind::Object,
+                    };
+                    events.push(format!("key {key} {line} {kind:?}"));
+                    events_of(child, events);
+                    events.push("end".to_owned());
+                }
+            }
+            Value::Array(items) => {
+                for item in items.iter().filter(|item| matches!(item, Value::Object(_))) {
+                    events.push("[".to_owned());
+                    events_of(item, events);
+                    events.push("]".to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn key_walk_agrees_with_the_parser() {
+        let documents = [
+            r#"{"a": 1, "b": {"c": "x", "d": [1, {"e": null}, [{"hidden": true}]]}}"#,
+            "// comment\n{\n  \"a\": true, /* c */\n  \"b\": [{\"c\": false},],\n}\ntrailing",
+            r#"[{"a": 1}, {"a": 2}, "x", 3]"#,
+            r#"{"esc\"aped\n\u00e4": 1, "": {"": 2}}"#,
+            "\"just a string\"",
+            "12.5e3",
+            "null",
+            r#"{"a": }"#,
+            r#"{"a" 1}"#,
+            r#"{"a": tru}"#,
+            r#"{"a": [1, {"b": 2}"#,
+            r#"{"a": "unterminated"#,
+            r#"{1: 2}"#,
+            "",
+        ];
+        for document in documents {
+            let mut recorder = Recorder::default();
+            let walked = walk_keys(document, &mut recorder);
+            let parsed = parse(document);
+            assert_eq!(walked.is_some(), parsed.is_some(), "{document}");
+            if let Some(value) = parsed {
+                let mut expected = Vec::new();
+                events_of(&value, &mut expected);
+                assert_eq!(recorder.0, expected, "{document}");
+            }
+        }
+    }
+
+    #[test]
+    fn key_walk_rejects_excessive_depth_like_the_parser() {
+        let document = format!("{}{}", "[".repeat(300), "]".repeat(300));
+        assert!(parse(&document).is_none());
+        assert!(walk_keys(&document, &mut Recorder::default()).is_none());
+    }
 
     #[test]
     fn jsonc_with_comments_trailing_commas_and_lines() -> Result<(), &'static str> {

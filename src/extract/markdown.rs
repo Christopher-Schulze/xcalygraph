@@ -104,7 +104,7 @@ pub fn extract(text: &str) -> Facts {
         Some(title) => format!("{title}: {}", first_paragraph.join(" ")),
         None => first_paragraph.join(" "),
     };
-    facts.doc = facts::clip(&facts::normalize_space(&doc), 400);
+    facts.doc = facts::clip_space(&doc, 400);
     facts
 }
 

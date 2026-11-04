@@ -420,7 +420,7 @@ fn collect(
                 path,
                 primary_node,
                 kind,
-                &name_text,
+                name_text,
                 source,
                 reference.arity,
             );
@@ -455,8 +455,7 @@ fn collect(
                         text(qualifier).to_owned()
                     }
                 };
-                reference.qualifier =
-                    Some(facts::clip(&facts::normalize_space(&qualifier_text), 80));
+                reference.qualifier = Some(facts::clip_space(&qualifier_text, 80));
             }
             if path.ends_with(".jl")
                 && kind == Some(RefKind::Call)
@@ -1084,16 +1083,22 @@ fn assemble(assembly: Assembly) -> Parsed {
     // A value reference repeated in its scope adds no edge: binding shadowing only grows with
     // the line and edges keep their first line, so the first occurrence decides.
     let mut seen_values = HashSet::new();
-    facts_refs.retain(|entry| {
-        let reference = &entry.reference;
-        reference.kind != RefKind::Value
-            || seen_values.insert((
-                reference.name.clone(),
-                reference.qualifier.clone(),
-                reference.scope,
-                entry.identity.clone(),
-            ))
-    });
+    let first: Vec<bool> = facts_refs
+        .iter()
+        .map(|entry| {
+            let reference = &entry.reference;
+            reference.kind != RefKind::Value
+                || seen_values.insert((
+                    reference.name.as_str(),
+                    reference.qualifier.as_deref(),
+                    reference.scope,
+                    entry.identity.as_deref(),
+                ))
+        })
+        .collect();
+    drop(seen_values);
+    let mut first = first.into_iter();
+    facts_refs.retain(|_| first.next().unwrap_or(true));
     let mut refs = Vec::with_capacity(facts_refs.len());
     let mut julia_builtin_calls = Vec::new();
     let mut julia_call_arguments = Vec::new();
@@ -1739,21 +1744,21 @@ fn source_reference_identity(
     path: &str,
     node: Node,
     kind: Option<RefKind>,
-    name: &str,
+    name: String,
     source: &[u8],
     arity: u8,
 ) -> (String, Option<String>) {
     if path.ends_with(".swift")
         && kind == Some(RefKind::Call)
-        && let Some(identity) = swift_call_identity(node, name, source, arity)
+        && let Some(identity) = swift_call_identity(node, &name, source, arity)
     {
-        return (name.to_owned(), Some(identity));
+        return (name, Some(identity));
     }
     if node.kind() == "message_expression"
         && kind == Some(RefKind::Call)
         && let Some(identity) = objective_c_message_identity(node, source, arity)
     {
-        return (name.to_owned(), Some(identity));
+        return (name, Some(identity));
     }
     if node.kind() == "selector_expression"
         && kind == Some(RefKind::Value)
@@ -1769,7 +1774,7 @@ fn source_reference_identity(
             return (base.to_owned(), Some(selector.to_owned()));
         }
     }
-    (name.to_owned(), None)
+    (name, None)
 }
 
 fn row(node: Node) -> u32 {
@@ -2363,7 +2368,7 @@ fn decorations(node: Node, source: &[u8]) -> String {
 /// Leading comments of the file before its first other node: module or package documentation.
 fn file_doc(root: Node, source: &[u8]) -> String {
     if let Some(docstring) = docstring(root, source) {
-        return facts::clip(&facts::normalize_space(&docstring), 400);
+        return facts::clip_space(&docstring, 400);
     }
     let mut lines: Vec<String> = Vec::new();
     for index in 0..root.named_child_count() {
@@ -2381,7 +2386,7 @@ fn file_doc(root: Node, source: &[u8]) -> String {
             text.trim_start_matches("//!").trim_start_matches("/*!"),
         ));
     }
-    facts::clip(&facts::normalize_space(&lines.join(" ")), 400)
+    facts::clip_space(&lines.join(" "), 400)
 }
 
 /// First sentence of the comment block directly above the definition.

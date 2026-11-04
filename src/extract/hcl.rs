@@ -149,7 +149,7 @@ fn push_block(facts: &mut Facts, kind: SymKind, name: &str, header: &str, line: 
         name: name.to_owned(),
         line,
         end_line: (end as u32 + 1).max(line),
-        signature: facts::clip(&facts::normalize_space(header.trim_end_matches('{')), 160),
+        signature: facts::clip_space(header.trim_end_matches('{'), 160),
         exported: true,
         ..Symbol::default()
     });

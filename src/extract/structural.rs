@@ -44,7 +44,7 @@ fn push_symbol(facts: &mut Facts, kind: SymKind, name: &str, line: u32, signatur
         parent,
         line,
         end_line: line,
-        signature: facts::clip(&facts::normalize_space(signature), 160),
+        signature: facts::clip_space(signature, 160),
         exported: true,
         ..Symbol::default()
     });

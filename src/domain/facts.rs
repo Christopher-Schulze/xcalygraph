@@ -874,6 +874,15 @@ pub fn clip(text: &str, max: usize) -> String {
     clipped
 }
 
+/// [`normalize_space`] then [`clip`], with one string unless the text is too long.
+pub fn clip_space(text: &str, max: usize) -> String {
+    let normalized = normalize_space(text);
+    if normalized.chars().count() <= max {
+        return normalized;
+    }
+    clip(&normalized, max)
+}
+
 /// Collapses whitespace runs to one space and trims.
 pub fn normalize_space(text: &str) -> String {
     let mut out = String::with_capacity(text.len());

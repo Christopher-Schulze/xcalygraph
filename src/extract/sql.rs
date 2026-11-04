@@ -163,12 +163,17 @@ pub fn embedded_queries(text: &str, facts: &mut Facts) {
             .sum();
         let literal = &full[skipped.min(full.len())..];
         let offset = offset + skipped;
+        let first = literal.split_whitespace().next().unwrap_or_default();
+        if !STATEMENT_KEYWORDS
+            .iter()
+            .any(|keyword| keyword.eq_ignore_ascii_case(first))
+        {
+            continue;
+        }
         let lower = literal.to_ascii_lowercase();
-        let first = lower.split_whitespace().next().unwrap_or_default();
-        if !STATEMENT_KEYWORDS.contains(&first)
-            || !TABLE_KEYWORDS
-                .iter()
-                .any(|keyword| lower.contains(&format!(" {keyword} ")))
+        if !TABLE_KEYWORDS
+            .iter()
+            .any(|keyword| lower.contains(&format!(" {keyword} ")))
         {
             continue;
         }
@@ -443,8 +448,7 @@ fn string_literals(text: &str) -> Vec<(usize, &str)> {
             index += 1;
             continue;
         }
-        let triple =
-            text[index..].starts_with(&String::from_utf8_lossy(&[byte, byte, byte]).into_owned());
+        let triple = bytes[index..].starts_with(&[byte, byte, byte]);
         let delimiter = if triple { 3 } else { 1 };
         let start = index + delimiter;
         let mut end = start;

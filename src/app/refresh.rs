@@ -11,6 +11,7 @@ use super::workspace::Workspace;
 use crate::domain::corpus::{ChangeSet, FileRecord};
 use crate::domain::facts::{Coverage, Facts};
 use crate::extract;
+use crate::infra::alloc_stats::stage;
 use crate::infra::lock::{self, WriterLock};
 use crate::infra::scan;
 use crate::infra::store::container::{Kind, OpenError};
@@ -94,11 +95,13 @@ pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError> {
         root: workspace.root.to_string_lossy().into_owned(),
         write_time_ns: scan_start,
     };
+    stage("scan");
     store.remove_temp_leftovers();
     if changes.has_content_changes() || rebuilt || !derived_valid {
         report.bytes_written += invalidate_meta(workspace, &meta)?;
     }
     report.bytes_written += write_shards(workspace, &changes, rebuilt)?;
+    stage("extract");
     if changes.has_content_changes() || rebuilt || !derived_valid {
         report.bytes_written += write_derived(workspace, &changes.records)?;
     }
@@ -234,8 +237,11 @@ fn write_derived(workspace: &Workspace, records: &[FileRecord]) -> Result<u64, A
         })
         .collect::<Result<_, _>>()?;
     drop(per_shard);
+    stage("read-facts");
     let graph = resolve::build(records, facts);
+    stage("resolve");
     let image = derived::build(&graph);
+    stage("derive");
     let ((), written) = rayon::join(
         move || drop(graph),
         || workspace.store.write_container("derived", &image),

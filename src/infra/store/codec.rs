@@ -27,7 +27,8 @@ pub struct Encoder {
 #[derive(Debug, Default)]
 struct StringTable {
     ids: FastMap<String, u32>,
-    strings: Vec<String>,
+    /// Each string length-prefixed, in id order.
+    bytes: Vec<u8>,
 }
 
 impl Encoder {
@@ -43,10 +44,9 @@ impl Encoder {
     pub fn table_bytes(&self) -> Vec<u8> {
         let mut out = Encoder::default();
         if let Some(table) = &self.table {
-            out.var_usize(table.strings.len());
-            for text in &table.strings {
-                out.str(text);
-            }
+            out.bytes.reserve(table.bytes.len() + 10);
+            out.var_usize(table.ids.len());
+            out.bytes.extend_from_slice(&table.bytes);
         }
         out.bytes
     }
@@ -55,12 +55,8 @@ impl Encoder {
         self.bytes.push(value);
     }
 
-    pub fn var(&mut self, mut value: u64) {
-        while value >= 0x80 {
-            self.bytes.push((value as u8) | 0x80);
-            value >>= 7;
-        }
-        self.bytes.push(value as u8);
+    pub fn var(&mut self, value: u64) {
+        push_var(&mut self.bytes, value);
     }
 
     pub fn var_usize(&mut self, value: usize) {
@@ -84,9 +80,10 @@ impl Encoder {
             let id = match table.ids.get(value) {
                 Some(&id) => id,
                 None => {
-                    let id = table.strings.len() as u32;
+                    let id = table.ids.len() as u32;
                     table.ids.insert(value.to_owned(), id);
-                    table.strings.push(value.to_owned());
+                    push_var(&mut table.bytes, value.len() as u64);
+                    table.bytes.extend_from_slice(value.as_bytes());
                     id
                 }
             };
@@ -113,6 +110,14 @@ impl Encoder {
             self.str(value);
         }
     }
+}
+
+fn push_var(bytes: &mut Vec<u8>, mut value: u64) {
+    while value >= 0x80 {
+        bytes.push((value as u8) | 0x80);
+        value >>= 7;
+    }
+    bytes.push(value as u8);
 }
 
 pub struct Decoder<'a> {
