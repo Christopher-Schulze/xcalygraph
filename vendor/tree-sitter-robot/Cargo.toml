@@ -1,0 +1,21 @@
+# Vendored grammar: no release exists on crates.io. Source files are unchanged copies from
+# https://github.com/Hubro/tree-sitter-robot at 85c0bf63b7146292404974e6b01d3f5cb2c80708; the
+# checksums are in SOURCE.sha256 (scripts/audits/check-supply-chain.sh verifies them).
+[package]
+name = "tree-sitter-robot"
+description = "Tree-sitter parser for Robot Framework files"
+version = "1.5.0"
+authors = ["Tomas Sandven"]
+license = "ISC"
+edition = "2021"
+publish = false
+build = "build.rs"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+cc = "1.2"

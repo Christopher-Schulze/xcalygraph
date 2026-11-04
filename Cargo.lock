@@ -1176,7 +1176,6 @@ dependencies = [
 [[package]]
 name = "tree-sitter-robot"
 version = "1.5.0"
-source = "git+https://github.com/Hubro/tree-sitter-robot?rev=85c0bf63b7146292404974e6b01d3f5cb2c80708#85c0bf63b7146292404974e6b01d3f5cb2c80708"
 dependencies = [
  "cc",
  "tree-sitter-language",

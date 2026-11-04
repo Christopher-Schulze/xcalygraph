@@ -55,6 +55,11 @@ jobs:
           print(versions[0])
           ')"
           bash scripts/utils/validate-release-tag.sh "${GITHUB_REF_NAME}" "${version}"
+      - name: Supply chain
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          cargo install --locked cargo-deny cargo-audit
+          scripts/audits/check-supply-chain.sh
       - name: Gate
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: scripts/tests/test.sh --all
