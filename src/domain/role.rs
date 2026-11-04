@@ -171,10 +171,6 @@ pub fn classify(file: &FileFacts) -> Classification {
         return with(role);
     };
     if file_type.is_code() {
-        // A bundle or minified file has no declarations worth a parse: its path stays.
-        if is_minified(head) {
-            return with(Role::Other);
-        }
         if is_generated(head) {
             return with(Role::Gen);
         }
@@ -191,9 +187,6 @@ pub fn classify(file: &FileFacts) -> Classification {
     };
     with(role)
 }
-
-/// Line length in the head that marks minified code.
-const MINIFIED_LINE: usize = 4096;
 
 fn is_plain_text(head: &[u8]) -> bool {
     !head.is_empty()
@@ -274,12 +267,6 @@ fn is_manifest(name: &str) -> bool {
         )
         || SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
         || (name.starts_with("requirements") && name.ends_with(".txt"))
-}
-
-/// One line fills half of the head: nobody writes source like that.
-fn is_minified(head: &[u8]) -> bool {
-    head.split(|byte| *byte == b'\n')
-        .any(|line| line.len() >= MINIFIED_LINE)
 }
 
 fn is_generated(head: &[u8]) -> bool {
@@ -491,9 +478,17 @@ mod tests {
     }
 
     #[test]
-    fn minified_code_keeps_only_its_path() {
+    fn long_lines_do_not_change_source_roles() {
         let bundle = format!("/* banner */\n{}", "a=b;".repeat(2000));
-        assert_eq!(role("dist/app.js", &bundle), Role::Other);
+        assert_eq!(role("dist/app.js", &bundle), Role::Src);
+        let literal = format!(
+            "DATA = \"{}\"\n\ndef survivor():\n    return DATA\n",
+            "x".repeat(5000)
+        );
+        assert_eq!(role("app.py", &literal), Role::Src);
+        assert_eq!(role("tests/test_app.py", &literal), Role::Test);
+        let generated = format!("# @generated\n{literal}");
+        assert_eq!(role("app_generated.py", &generated), Role::Gen);
         assert_eq!(
             role("src/app.js", "const a = 1;\nconst b = 2;\n"),
             Role::Src
