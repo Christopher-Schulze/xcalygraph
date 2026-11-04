@@ -78,6 +78,8 @@ pub trait KeyVisitor {
     /// An object inside an array; its keys follow.
     fn array_object(&mut self);
     fn end_array_object(&mut self);
+    /// Decoded string values, excluding object keys and comments; ignored by key-only visitors.
+    fn string_value(&mut self, _value: &str, _line: u32) {}
 }
 
 /// Reads a whole JSONC document like [`parse`] without building values, so a large data file
@@ -197,8 +199,9 @@ impl Parser<'_> {
             Kind::Object => self.walk_object(visitor)?,
             Kind::Array => self.walk_array(visitor)?,
             Kind::Str => {
+                let line = self.line;
                 self.read_string()?;
-                std::str::from_utf8(&self.scratch).ok()?;
+                visitor.string_value(std::str::from_utf8(&self.scratch).ok()?, line);
             }
             Kind::Bool if self.peek() == Some(b't') => self.word("true")?,
             Kind::Bool => self.word("false")?,

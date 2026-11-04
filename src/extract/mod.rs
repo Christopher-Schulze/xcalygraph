@@ -36,7 +36,7 @@ use crate::domain::role::{self, Role};
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
 /// Rows of a CSV or TSV file that reach search.
 const CSV_INDEXED_ROWS: usize = 2000;
-const EXTRACTION_VERSION: u32 = 110;
+const EXTRACTION_VERSION: u32 = 111;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -82,11 +82,15 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
         | FileType::Csv
         | FileType::Tex),
     ) = record.file_type
-        && record.role == Role::Doc
+        && matches!(record.role, Role::Doc | Role::Config)
     {
         let text = String::from_utf8_lossy(content);
         let mut facts = prose::extract(file_type, &text);
         facts.lines = count_lines(content);
+        if record.role == Role::Config {
+            config::extract(&record.path, file_type, &text, &mut facts);
+            config::retain_in_root_paths(&record.path, file_type, &mut facts);
+        }
         if file_type == FileType::Csv {
             // A data table: its first rows say what it holds, the rest would only add sections.
             let head: String = text
@@ -308,8 +312,14 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
     if matches!(
         record.role,
         Role::Src | Role::Test | Role::Gen | Role::Config
-    ) {
+    ) && !(record.role == Role::Config && record.file_type == Some(FileType::Json))
+    {
         assets::literal_paths(&String::from_utf8_lossy(content), &mut facts);
+    }
+    if record.role == Role::Config
+        && let Some(file_type) = record.file_type
+    {
+        config::retain_in_root_paths(&record.path, file_type, &mut facts);
     }
     // Test and generated bodies are left out: they rank below sources and would double the
     // index share.

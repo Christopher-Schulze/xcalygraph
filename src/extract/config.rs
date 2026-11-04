@@ -6,8 +6,10 @@
 use std::collections::HashSet;
 
 use super::json::{self, KeyVisitor, Kind};
-use crate::domain::facts::{ConfigKey, EnvDef, EnvRead, EnvSource, Facts, ValueKind};
-use crate::domain::filetype::FileType;
+use crate::domain::facts::{
+    ConfigKey, Coverage, EnvDef, EnvRead, EnvSource, Facts, NO_ARITY, Ref, RefKind, ValueKind,
+};
+use crate::domain::filetype::{self, Detection, FileType};
 
 const MAX_DEPTH: usize = 6;
 /// Key paths kept per file: large data files would flood the search index.
@@ -20,6 +22,7 @@ pub fn extract(path: &str, file_type: FileType, text: &str, facts: &mut Facts) {
         FileType::Yaml => yaml(path, text, facts),
         FileType::Toml => toml_keys(text, facts),
         FileType::Ini | FileType::Properties => ini_keys(text, facts),
+        FileType::Text => server_keys(text, facts),
         FileType::Xml => xml_keys(text, facts),
         FileType::EnvExample => env_example(text, facts),
         FileType::Dockerfile => dockerfile(text, facts),
@@ -47,6 +50,266 @@ fn push_key(facts: &mut Facts, path: &[String], kind: ValueKind, line: u32) {
     });
 }
 
+/// A complete scalar path, rather than an arbitrary word inside prose or a command.
+fn path_value(facts: &mut Facts, value: &str, line: u32) {
+    let value = value.trim().trim_end_matches(';').trim_end();
+    let quoted = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .or_else(|| {
+            value
+                .strip_prefix('\'')
+                .and_then(|value| value.strip_suffix('\''))
+        });
+    let value = quoted.unwrap_or(value);
+    if quoted.is_none() && value.chars().any(char::is_whitespace) {
+        return;
+    }
+    path_literal(facts, value, line);
+}
+
+/// Already decoded scalar text, including quoted paths with spaces.
+fn path_literal(facts: &mut Facts, value: &str, line: u32) {
+    if value.is_empty()
+        || value.contains(['$', '%', '*', '?', '#', '\\', '\n', '\r', '"', '\''])
+        || value.starts_with('/')
+        || value.contains("://")
+        || value.chars().any(char::is_control)
+        || (!value.contains('/')
+            && !matches!(
+                filetype::detect(value),
+                Detection::Known(_) | Detection::Ambiguous(_)
+            ))
+        || !value.rsplit_once('.').is_some_and(|(stem, extension)| {
+            !stem.is_empty()
+                && !stem.ends_with('/')
+                && !extension.is_empty()
+                && extension
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric())
+                && extension
+                    .chars()
+                    .any(|character| character.is_ascii_alphabetic())
+        })
+    {
+        return;
+    }
+    if !facts.refs.iter().any(|reference| {
+        reference.kind == RefKind::Path && reference.scope.is_none() && reference.name == value
+    }) {
+        facts.refs.push(Ref {
+            kind: RefKind::Path,
+            name: value.to_owned(),
+            qualifier: None,
+            scope: None,
+            line,
+            arity: NO_ARITY,
+        });
+    }
+}
+
+/// Config paths cannot escape the indexed root, even if a root-relative fallback exists.
+pub(super) fn retain_in_root_paths(path: &str, file_type: FileType, facts: &mut Facts) {
+    facts.refs.retain(|reference| {
+        if reference.kind != RefKind::Path {
+            return true;
+        }
+        if reference.name.starts_with('/') {
+            return file_type != FileType::Text;
+        }
+        let mut depth = path.bytes().filter(|byte| *byte == b'/').count();
+        for part in reference.name.split('/') {
+            match part {
+                "" | "." => {}
+                ".." if depth == 0 => return false,
+                ".." => depth -= 1,
+                _ => depth += 1,
+            }
+        }
+        true
+    });
+}
+
+/// Server text configs retain INI sections or literal directive names; values stay out of keys.
+fn server_keys(text: &str, facts: &mut Facts) {
+    let first = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with(['#', ';']))
+        .unwrap_or_default();
+    if !first.starts_with('[')
+        && !first.contains('=')
+        && (first.ends_with(';') || first.contains('{'))
+    {
+        server_directives(text, facts);
+        return;
+    }
+    let mut section: Option<&str> = None;
+    let mut continued = false;
+    for (index, raw) in text.lines().enumerate() {
+        let line = index as u32 + 1;
+        let text = raw.trim();
+        if text.is_empty() || text.starts_with(['#', ';']) {
+            continue;
+        }
+        if continued {
+            continued = text.ends_with('\\');
+            continue;
+        }
+        continued = text.ends_with('\\');
+        if let Some(name) = text
+            .strip_prefix('[')
+            .and_then(|text| text.strip_suffix(']'))
+        {
+            section = Some(name.trim());
+            push_key(facts, &[name.trim().to_owned()], ValueKind::Object, line);
+            continue;
+        }
+        if text == "}" || text == "};" {
+            continue;
+        }
+        let Some(split) =
+            text.find(|character: char| character == '=' || character.is_whitespace())
+        else {
+            facts.coverage = facts.coverage.max(Coverage::NoGrammar);
+            continue;
+        };
+        let key = &text[..split];
+        if key.is_empty()
+            || !key.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
+            })
+        {
+            facts.coverage = facts.coverage.max(Coverage::NoGrammar);
+            continue;
+        }
+        let value = text[split..]
+            .trim_start()
+            .trim_start_matches('=')
+            .trim_start();
+        let mut path: Vec<String> = section.into_iter().map(str::to_owned).collect();
+        path.push(key.to_owned());
+        push_key(
+            facts,
+            &path,
+            if value == "{" {
+                ValueKind::Object
+            } else {
+                scalar_kind(value.trim_end_matches(';'))
+            },
+            line,
+        );
+        if !continued {
+            path_value(facts, value, line);
+        }
+        // Inline blocks and multiple directives need a grammar; do not invent nested keys.
+        if value.contains(['{', '}']) && value != "{" {
+            facts.coverage = facts.coverage.max(Coverage::NoGrammar);
+        }
+    }
+}
+
+/// Semicolon/block configuration syntax: newlines inside a directive are not new keys.
+fn server_directives(text: &str, facts: &mut Facts) {
+    let mut parents: Vec<String> = Vec::new();
+    let mut statement = String::new();
+    let (mut line, mut start) = (1, 1);
+    let mut quote = None;
+    let mut escaped = false;
+    let mut comment = false;
+    let mut expansion = false;
+    for character in text.chars() {
+        if comment {
+            if character == '\n' {
+                comment = false;
+                if !statement.is_empty() {
+                    statement.push(' ');
+                }
+                line += 1;
+            }
+            continue;
+        }
+        if statement.is_empty() {
+            if character.is_whitespace() {
+                if character == '\n' {
+                    line += 1;
+                }
+                continue;
+            }
+            start = line;
+        }
+        if escaped {
+            statement.push(character);
+            escaped = false;
+        } else if character == '\\' {
+            statement.push(character);
+            escaped = true;
+        } else if let Some(delimiter) = quote {
+            statement.push(character);
+            if character == delimiter {
+                quote = None;
+            }
+        } else if matches!(character, '\'' | '"') {
+            quote = Some(character);
+            statement.push(character);
+        } else if expansion {
+            statement.push(character);
+            if character == '}' {
+                expansion = false;
+            }
+        } else if character == '{' && statement.ends_with('$') {
+            expansion = true;
+            statement.push(character);
+        } else if character == '#' {
+            comment = true;
+        } else if matches!(character, ';' | '{') {
+            let body = statement.trim();
+            let split = body.find(char::is_whitespace).unwrap_or(body.len());
+            let key = &body[..split];
+            if key.is_empty() || key.contains(['$', '\\', '"', '\'']) {
+                facts.coverage = facts.coverage.max(Coverage::NoGrammar);
+                return;
+            } else {
+                let value = body[split..].trim();
+                parents.push(key.to_owned());
+                push_key(
+                    facts,
+                    &parents,
+                    if character == '{' {
+                        ValueKind::Object
+                    } else {
+                        scalar_kind(value)
+                    },
+                    start,
+                );
+                if character == ';' {
+                    parents.pop();
+                    path_value(facts, value, start);
+                }
+            }
+            statement.clear();
+        } else if character == '}' {
+            if !statement.trim().is_empty() || parents.pop().is_none() {
+                facts.coverage = facts.coverage.max(Coverage::ParseErrors);
+            }
+            statement.clear();
+        } else {
+            statement.push(character);
+        }
+        if character == '\n' {
+            line += 1;
+        }
+    }
+    if quote.is_some()
+        || escaped
+        || expansion
+        || !statement.trim().is_empty()
+        || !parents.is_empty()
+    {
+        facts.coverage = facts.coverage.max(Coverage::ParseErrors);
+    }
+}
+
 fn push_env(facts: &mut Facts, name: &str, source: EnvSource, line: u32) {
     let name = name.trim().trim_matches(|ch| ch == '"' || ch == '\'');
     let valid = !name.is_empty()
@@ -70,6 +333,7 @@ fn push_env(facts: &mut Facts, name: &str, source: EnvSource, line: u32) {
 
 fn json_keys(text: &str, facts: &mut Facts) {
     let before = facts.config_keys.len();
+    let before_refs = facts.refs.len();
     let mut walk = JsonWalk {
         path: String::new(),
         lengths: Vec::new(),
@@ -78,6 +342,8 @@ fn json_keys(text: &str, facts: &mut Facts) {
     };
     if json::walk_keys(text, &mut walk).is_none() {
         facts.config_keys.truncate(before);
+        facts.refs.truncate(before_refs);
+        facts.coverage = facts.coverage.max(Coverage::ParseErrors);
     }
 }
 
@@ -122,6 +388,10 @@ impl JsonWalk<'_> {
 }
 
 impl KeyVisitor for JsonWalk<'_> {
+    fn string_value(&mut self, value: &str, line: u32) {
+        path_literal(self.facts, value, line);
+    }
+
     fn key(&mut self, key: &str, line: u32, kind: Kind) {
         self.enter(key);
         if self.lengths.len() <= MAX_DEPTH
@@ -231,6 +501,9 @@ fn yaml(path: &str, text: &str, facts: &mut Facts) {
             }
         }
         let Some((key, value)) = split_yaml_key(body) else {
+            if item {
+                path_value(facts, body, line);
+            }
             continue;
         };
         while stack.last().is_some_and(|(level, _)| *level >= indent) {
@@ -240,6 +513,9 @@ fn yaml(path: &str, text: &str, facts: &mut Facts) {
         stack.push((indent, key.to_owned()));
         let segments: Vec<String> = stack.iter().map(|(_, segment)| segment.clone()).collect();
         push_key(facts, &segments, scalar_kind(value), line);
+        if !((workflow && key == "run") || (compose && matches!(key, "command" | "entrypoint"))) {
+            path_value(facts, value, line);
+        }
         if matches!(value.trim(), "|" | ">" | "|-" | ">-" | "|+" | ">+") {
             block_scalar = Some(indent);
         }
@@ -329,6 +605,7 @@ fn toml_keys(text: &str, facts: &mut Facts) {
             scalar_kind(value.split(" #").next().unwrap_or_default()),
             line,
         );
+        path_value(facts, value.split(" #").next().unwrap_or_default(), line);
     }
 }
 
@@ -370,6 +647,7 @@ fn ini_keys(text: &str, facts: &mut Facts) {
         let mut path: Vec<String> = section.iter().cloned().collect();
         path.extend(split_dotted(key));
         push_key(facts, &path, scalar_kind(&trimmed[split + 1..]), line);
+        path_value(facts, &trimmed[split + 1..], line);
     }
 }
 
@@ -658,5 +936,67 @@ mod tests {
             .map(|env| format!("{}:{}", env.line, env.name))
             .collect();
         assert_eq!(reads, ["5:HOST", "5:USERS"]);
+    }
+
+    #[test]
+    fn server_config_keys_and_paths_follow_statements_and_skip_comments() {
+        let nginx = run(
+            "nginx.conf",
+            FileType::Text,
+            "http {\n  server { include \"child config.conf\";\n    listen\n      8080; # include ignored.conf;\n  }\n}\n",
+        );
+        assert_eq!(
+            keys(&nginx),
+            [
+                "1:http:object",
+                "2:http.server:object",
+                "2:http.server.include:string",
+                "3:http.server.listen:number"
+            ]
+        );
+        assert_eq!(nginx.coverage, Coverage::Complete);
+        assert_eq!(nginx.refs.len(), 1);
+        assert_eq!(
+            (nginx.refs[0].name.as_str(), nginx.refs[0].line),
+            ("child config.conf", 2)
+        );
+
+        let ssh = run(
+            "sshd_config",
+            FileType::Text,
+            "PermitRootLogin no\nInclude child.conf\n# Include ignored.conf\n",
+        );
+        assert_eq!(keys(&ssh), ["1:PermitRootLogin:bool", "2:Include:string"]);
+        assert_eq!(ssh.refs.len(), 1);
+        assert_eq!(ssh.refs[0].name, "child.conf");
+
+        let unit = run(
+            "app.service",
+            FileType::Text,
+            "[Service]\nEnvironmentFile=child.conf\nExecStart=/bin/server \\\n# comment\n  --config=ignored.conf\n",
+        );
+        assert_eq!(
+            keys(&unit),
+            [
+                "1:Service:object",
+                "2:Service.EnvironmentFile:string",
+                "3:Service.ExecStart:string"
+            ]
+        );
+        assert_eq!(unit.refs.len(), 1);
+        assert_eq!(unit.refs[0].name, "child.conf");
+        let malformed = run("nginx.conf", FileType::Text, "http { include child.conf;\n");
+        assert_eq!(malformed.coverage, Coverage::ParseErrors);
+
+        let json = run(
+            "app.json",
+            FileType::Json,
+            "{\n// \"ignored.conf\"\n\"include\": \"child config.conf\"\n}",
+        );
+        assert_eq!(json.refs.len(), 1);
+        assert_eq!(
+            (json.refs[0].name.as_str(), json.refs[0].line),
+            ("child config.conf", 3)
+        );
     }
 }

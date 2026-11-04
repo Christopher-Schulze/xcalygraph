@@ -179,6 +179,9 @@ pub fn classify(file: &FileFacts) -> Classification {
         }
         return with(Role::Src);
     }
+    if file_type == FileType::Text && is_text_config(name) {
+        return with(Role::Config);
+    }
     let role = match file_type.class() {
         Class::Config => Role::Config,
         Class::Doc => Role::Doc,
@@ -193,6 +196,17 @@ fn is_plain_text(head: &[u8]) -> bool {
         && !head.contains(&0)
         // The head may end inside a multibyte character.
         && std::str::from_utf8(head).map_or_else(|error| error.error_len().is_none(), |_| true)
+}
+
+fn is_text_config(name: &str) -> bool {
+    name == "config"
+        || name.ends_with("_config")
+        || name.rsplit_once('.').is_some_and(|(_, extension)| {
+            matches!(
+                extension,
+                "conf" | "cfg" | "cnf" | "config" | "service" | "socket" | "timer" | "rules"
+            )
+        })
 }
 
 fn detect_type(file: &FileFacts) -> Option<FileType> {
