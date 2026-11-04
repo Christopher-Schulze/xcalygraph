@@ -17,7 +17,7 @@ src/routes/+layout.Layout -calls-> src/lib/Nav.Nav @6
 src/routes/+page.Page -calls-> src/lib/format.formatDate @11
 src/routes/+page.Page -uses-> src/routes/+page.more @13
 src/routes/+page.Page -uses-> src/routes/+page.shown @10
-src/routes/+page.server.actions -calls-> src/lib/items.addItem @9
+src/routes/+page.server.actions.default -calls-> src/lib/items.addItem @9
 src/routes/+page.server.load -calls-> src/lib/items.listItems @4
 src/routes/api/items/+server.GET -calls-> src/lib/items.listItems @4
 ext src/lib/Nav $app 1

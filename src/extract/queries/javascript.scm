@@ -107,3 +107,7 @@
 (object_pattern (pair_pattern value: (identifier) @local))
 (object_pattern (object_assignment_pattern left: (shorthand_property_identifier_pattern) @local))
 (array_pattern (identifier) @local)
+
+; Functions in an object literal bound at module level (`export const actions = { save: async () => ... }`).
+((pair key: (property_identifier) @name value: [(arrow_function) (function_expression)]) @definition.method (#parent? @definition.method "object" "variable_declarator" "lexical_declaration" "program"))
+((pair key: (property_identifier) @name value: [(arrow_function) (function_expression)]) @definition.method (#parent? @definition.method "object" "variable_declarator" "lexical_declaration" "export_statement"))
