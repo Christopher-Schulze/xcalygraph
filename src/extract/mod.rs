@@ -31,7 +31,7 @@ use crate::domain::filetype::{Class, FileType};
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 97;
+const EXTRACTION_VERSION: u32 = 98;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -154,6 +154,18 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
     } else {
         content
     };
+    #[cfg(feature = "lang-dm")]
+    let (dm_masked, dm_includes) = if record.file_type == Some(FileType::Dm) {
+        lang::dm::split_includes(content)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    #[cfg(feature = "lang-dm")]
+    let content = if record.file_type == Some(FileType::Dm) {
+        dm_masked.as_slice()
+    } else {
+        content
+    };
     // World of Warcraft `.toc` files list the addon's files; they are no Lua source.
     let toc = record.path.ends_with(".toc");
     let parsed = record
@@ -195,6 +207,8 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
         mut identities,
         incomplete,
     } = parsed;
+    #[cfg(feature = "lang-dm")]
+    facts.imports.extend(dm_includes);
     #[cfg(any(feature = "lang-c", feature = "lang-cpp", feature = "lang-objc"))]
     if matches!(
         record.file_type,

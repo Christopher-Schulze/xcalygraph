@@ -2,9 +2,44 @@
 //! calls the own type.
 
 use super::Pack;
-use crate::domain::facts::{Facts, NO_ARITY, Ref, RefKind, SymKind, Symbol};
+use crate::domain::facts::{Facts, Import, NO_ARITY, Ref, RefKind, SymKind, Symbol};
 use crate::domain::filetype::FileType;
 use crate::extract::engine::{self, Hooks};
+
+/// Moves quoted `#include` lines out of the parse: the grammar's external scanner is quadratic in
+/// consecutive preprocessor lines (a 7,200-line `.dme` took 10 s), and these lines need no syntax
+/// tree. Lines stay in place, blanked, so every other fact keeps its line number. Lines inside
+/// block comments are left alone.
+pub fn split_includes(source: &[u8]) -> (Vec<u8>, Vec<Import>) {
+    let mut masked = source.to_vec();
+    let mut imports = Vec::new();
+    let mut in_comment = false;
+    let mut start = 0;
+    for (index, line) in source.split(|&byte| byte == b'\n').enumerate() {
+        let trimmed = line.trim_ascii();
+        if !in_comment
+            && let Some(rest) = trimmed.strip_prefix(b"#include")
+            && let Some(path) = rest
+                .trim_ascii()
+                .strip_prefix(b"\"")
+                .and_then(|rest| rest.split(|&byte| byte == b'"').next())
+            && let Ok(path) = std::str::from_utf8(path)
+        {
+            imports.push(Import {
+                spec: path.to_owned(),
+                line: index as u32 + 1,
+                ..Import::default()
+            });
+            masked[start..start + line.len()].fill(b' ');
+        } else {
+            let opens = line.windows(2).filter(|pair| pair == b"/*").count();
+            let closes = line.windows(2).filter(|pair| pair == b"*/").count();
+            in_comment = (usize::from(in_comment) + opens).saturating_sub(closes) > 0;
+        }
+        start += line.len() + 1;
+    }
+    (masked, imports)
+}
 
 pub static PACK: Pack = Pack {
     suffixes: &[],
@@ -212,5 +247,28 @@ mod tests {
             inherits,
             [("/obj/item", Some(0)), ("/obj/item/store", Some(2))]
         );
+    }
+}
+
+#[cfg(test)]
+mod include_tests {
+    use super::split_includes;
+
+    #[test]
+    fn includes_leave_the_parse_with_lines_intact() {
+        let source = b"// head\n#include \"code\\a.dm\"\n  #include \"b.dm\" // note\n/* #include \"no.dm\"\n#include \"no2.dm\" */\n#include <lib>\n/proc/f()\n";
+        let (masked, imports) = split_includes(source);
+        assert_eq!(masked.len(), source.len());
+        let found: Vec<(&str, u32)> = imports
+            .iter()
+            .map(|import| (import.spec.as_str(), import.line))
+            .collect();
+        assert_eq!(found, [("code\\a.dm", 2), ("b.dm", 3)]);
+        let text = String::from_utf8_lossy(&masked);
+        assert!(!text.contains("a.dm") && !text.contains("b.dm"), "{text}");
+        for kept in ["// head", "no.dm", "no2.dm", "#include <lib>", "/proc/f()"] {
+            assert!(text.contains(kept), "{kept}: {text}");
+        }
+        assert_eq!(text.lines().count(), 7);
     }
 }

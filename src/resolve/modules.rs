@@ -507,20 +507,7 @@ fn rust_root_target(map: &ModuleMap, path: &str, relative: &str) -> Option<Strin
 }
 
 fn append_root_relative(base: &str, relative: &str) -> Option<String> {
-    let relative = if cfg!(windows) {
-        relative.replace('\\', "/")
-    } else {
-        relative.to_owned()
-    };
-    if relative.starts_with('/')
-        || relative.contains('\0')
-        || (cfg!(windows)
-            && relative.as_bytes().get(1) == Some(&b':')
-            && relative
-                .as_bytes()
-                .first()
-                .is_some_and(u8::is_ascii_alphabetic))
-    {
+    if relative.starts_with('/') || relative.contains('\0') {
         return None;
     }
     let mut parts: Vec<&str> = base.split('/').filter(|part| !part.is_empty()).collect();
