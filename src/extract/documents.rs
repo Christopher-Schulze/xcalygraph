@@ -1,6 +1,6 @@
-//! Binary documents (`docs/spec.md` section 5): the PDF text layer and outline, DOCX paragraphs
-//! with heading styles and XLSX sheets with their strings. Locators are pages (PDF), paragraphs
-//! (DOCX) and sheets (XLSX). Unreadable files keep their path and one notice as file doc.
+//! Document text and source locators: PDF pages, Word/RTF paragraphs, spreadsheet sheets and
+//! presentation slides. Shared bounded XML reads account for partial and malformed packages;
+//! legacy Office uses real compound-file parsers. Unreadable files retain their path and coverage.
 
 use std::io::{Cursor, Read};
 
@@ -8,12 +8,10 @@ use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
 use super::prose::Outline;
-use crate::domain::facts::{self, Facts};
+use crate::domain::facts::{self, Coverage, Facts};
 
 /// Decompressed content read per PDF page or XML part, against decompression bombs.
 const PART_LIMIT: usize = 16 << 20;
-/// Shortest run of readable characters taken from a legacy binary document.
-const MIN_RUN: usize = 6;
 
 pub fn pdf(content: &[u8]) -> Facts {
     let document = match lopdf::Document::load_mem(content) {
@@ -25,16 +23,20 @@ pub fn pdf(content: &[u8]) -> Facts {
     let pages: Vec<u32> = document.get_pages().keys().copied().collect();
     let toc = document.get_toc().map(|toc| toc.toc).unwrap_or_default();
     let mut outline = Outline::with_text(pages.len() as u32);
+    let mut coverage = Coverage::Complete;
     let mut entries = toc.iter().peekable();
     for &page in &pages {
         while let Some(entry) = entries.next_if(|entry| entry.page as u32 <= page) {
             outline.heading(entry.level, &entry.title, (entry.page as u32).max(1));
         }
         outline.at(page);
-        if let Ok(text) = document.extract_text_with_limit(&[page], PART_LIMIT) {
-            for line in text.lines() {
-                outline.text(line);
+        match document.extract_text_with_limit(&[page], PART_LIMIT) {
+            Ok(text) => {
+                for line in text.lines() {
+                    outline.text(line);
+                }
             }
+            Err(_) => coverage = coverage.max(Coverage::ParseErrors),
         }
     }
     for entry in entries {
@@ -42,19 +44,24 @@ pub fn pdf(content: &[u8]) -> Facts {
     }
     let mut facts = outline.finish();
     facts.lines = pages.len() as u32;
+    facts.coverage = coverage;
     facts
 }
 
 /// DOCX: `word/document.xml` paragraphs; `Title` and `HeadingN` styles are headings; relative
 /// hyperlink targets from `word/_rels/document.xml.rels` are path references.
 pub fn docx(content: &[u8]) -> Facts {
+    let mut coverage = Coverage::Complete;
     let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(content)) else {
         return unreadable("unreadable DOCX (encrypted or malformed)");
     };
-    let Some(document) = part(&mut archive, "word/document.xml") else {
-        return unreadable("unreadable DOCX (encrypted or malformed)");
+    let Some(document) = part(&mut archive, "word/document.xml", true, &mut coverage) else {
+        return Facts {
+            coverage,
+            ..unreadable("DOCX main part missing, unreadable or over size limit")
+        };
     };
-    let paragraphs = docx_paragraphs(&document);
+    let paragraphs = docx_paragraphs(&document, &mut coverage);
     let mut outline = Outline::with_text(paragraphs.len() as u32);
     for (index, (level, text)) in paragraphs.iter().enumerate() {
         let number = index as u32 + 1;
@@ -63,19 +70,25 @@ pub fn docx(content: &[u8]) -> Facts {
             None => outline.prose(text, number),
         }
     }
-    if let Some(relations) = part(&mut archive, "word/_rels/document.xml.rels") {
-        for target in external_targets(&relations) {
+    if let Some(relations) = part(
+        &mut archive,
+        "word/_rels/document.xml.rels",
+        false,
+        &mut coverage,
+    ) {
+        for target in external_targets(&relations, &mut coverage) {
             outline.path(&target, 1);
         }
     }
     let mut facts = outline.finish();
     facts.lines = paragraphs.len() as u32;
+    facts.coverage = coverage;
     facts
 }
 
 /// Paragraphs with their heading level (`Title` 1, `HeadingN` N).
-fn docx_paragraphs(xml: &str) -> Vec<(Option<usize>, String)> {
-    let mut reader = Reader::from_str(xml);
+fn docx_paragraphs(xml: &str, coverage: &mut Coverage) -> Vec<(Option<usize>, String)> {
+    let mut reader = XmlReader::new(xml, &["document"], coverage);
     let mut paragraphs = Vec::new();
     let mut text = String::new();
     let mut level = None;
@@ -98,6 +111,7 @@ fn docx_paragraphs(xml: &str) -> Vec<(Option<usize>, String)> {
                 _ => {}
             },
             Ok(Event::Text(chunk)) if in_text => text.push_str(&chunk),
+            Ok(Event::CData(chunk)) if in_text => text.push_str(&chunk),
             Ok(Event::GeneralRef(entity)) if in_text => text.push_str(&resolve_entity(&entity)),
             Ok(Event::Eof) | Err(_) => break,
             _ => {}
@@ -123,18 +137,27 @@ fn heading_level(style: &str) -> Option<usize> {
 /// XLSX: sheets in workbook order as headings (locator = sheet number), their shared, inline
 /// and formula strings as text.
 pub fn xlsx(content: &[u8]) -> Facts {
+    let mut coverage = Coverage::Complete;
     let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(content)) else {
         return unreadable("unreadable XLSX (encrypted or malformed)");
     };
-    let Some(workbook) = part(&mut archive, "xl/workbook.xml") else {
-        return unreadable("unreadable XLSX (encrypted or malformed)");
+    let Some(workbook) = part(&mut archive, "xl/workbook.xml", true, &mut coverage) else {
+        return Facts {
+            coverage,
+            ..unreadable("unreadable XLSX workbook part (missing, damaged or over size limit)")
+        };
     };
-    let sheets = workbook_sheets(&workbook);
-    let relations = part(&mut archive, "xl/_rels/workbook.xml.rels")
-        .map(|xml| relation_targets(&xml))
-        .unwrap_or_default();
-    let shared = part(&mut archive, "xl/sharedStrings.xml")
-        .map(|xml| shared_strings(&xml))
+    let sheets = workbook_sheets(&workbook, &mut coverage);
+    let relations = part(
+        &mut archive,
+        "xl/_rels/workbook.xml.rels",
+        true,
+        &mut coverage,
+    )
+    .map(|xml| relation_targets(&xml, &mut coverage))
+    .unwrap_or_default();
+    let shared = part(&mut archive, "xl/sharedStrings.xml", false, &mut coverage)
+        .map(|xml| shared_strings(&xml, &mut coverage))
         .unwrap_or_default();
     let mut outline = Outline::with_text(sheets.len() as u32);
     for (index, (name, relation)) in sheets.iter().enumerate() {
@@ -144,20 +167,22 @@ pub fn xlsx(content: &[u8]) -> Facts {
             .find(|(id, _)| id == relation)
             .map(|(_, target)| target)
         else {
+            coverage = coverage.max(Coverage::ParseErrors);
             continue;
         };
-        let path = match target.strip_prefix('/') {
-            Some(absolute) => absolute.to_owned(),
-            None => format!("xl/{target}"),
+        let Some(path) = package_path("xl/workbook.xml", target) else {
+            coverage = coverage.max(Coverage::ParseErrors);
+            continue;
         };
-        if let Some(sheet) = part(&mut archive, &path) {
-            for text in sheet_strings(&sheet, &shared) {
+        if let Some(sheet) = part(&mut archive, &path, true, &mut coverage) {
+            for text in sheet_strings(&sheet, &shared, &mut coverage) {
                 outline.text(&text);
             }
         }
     }
     let mut facts = outline.finish();
     facts.lines = sheets.len() as u32;
+    facts.coverage = coverage;
     facts
 }
 
@@ -167,52 +192,80 @@ pub fn pptx(content: &[u8]) -> Facts {
     let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(content)) else {
         return unreadable("unreadable PPTX (encrypted or malformed)");
     };
-    let mut slides: Vec<u32> = archive
-        .file_names()
-        .filter_map(|name| {
-            name.ok()?
-                .strip_prefix("ppt/slides/slide")?
-                .strip_suffix(".xml")?
-                .parse()
-                .ok()
-        })
-        .collect();
-    slides.sort_unstable();
+    let mut coverage = Coverage::Complete;
+    let Some(presentation) = part(&mut archive, "ppt/presentation.xml", true, &mut coverage) else {
+        return Facts {
+            coverage,
+            ..unreadable("PPTX presentation part missing, damaged or over size limit")
+        };
+    };
+    let relations = part(
+        &mut archive,
+        "ppt/_rels/presentation.xml.rels",
+        true,
+        &mut coverage,
+    )
+    .map(|xml| relation_targets(&xml, &mut coverage))
+    .unwrap_or_default();
+    let mut reader = XmlReader::new(&presentation, &["presentation"], &mut coverage);
+    let mut slides = Vec::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(tag)) | Ok(Event::Empty(tag))
+                if tag.local_name().as_ref() == "sldId" =>
+            {
+                slides.push(attribute(&tag, "r:id"));
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
     let mut outline = Outline::with_text(slides.len() as u32);
-    for (index, slide) in slides.iter().enumerate() {
+    for (index, relation) in slides.iter().enumerate() {
         let number = index as u32 + 1;
-        let Some(xml) = part(&mut archive, &format!("ppt/slides/slide{slide}.xml")) else {
+        let Some(slide) = relation
+            .as_ref()
+            .and_then(|id| relations.iter().find(|(key, _)| key == id))
+            .and_then(|(_, target)| package_path("ppt/presentation.xml", target))
+        else {
+            coverage = coverage.max(Coverage::ParseErrors);
             continue;
         };
-        let (title, text) = slide_text(&xml);
+        let Some(xml) = part(&mut archive, &slide, true, &mut coverage) else {
+            continue;
+        };
+        let (title, text) = slide_text(&xml, &mut coverage);
         let heading = title.unwrap_or_else(|| format!("Slide {number}"));
         outline.heading(1, &heading, number);
         for line in &text {
             outline.text(line);
         }
+        let (directory, name) = slide.rsplit_once('/').unwrap_or(("", &slide));
         let notes = part(
             &mut archive,
-            &format!("ppt/slides/_rels/slide{slide}.xml.rels"),
+            &format!("{directory}/_rels/{name}.rels"),
+            false,
+            &mut coverage,
         )
         .into_iter()
-        .flat_map(|xml| relation_targets(&xml))
-        .find_map(|(_, target)| target.strip_prefix("../notesSlides/").map(str::to_owned));
-        if let Some(xml) =
-            notes.and_then(|name| part(&mut archive, &format!("ppt/notesSlides/{name}")))
-        {
-            for line in slide_text(&xml).1 {
+        .flat_map(|xml| relation_targets(&xml, &mut coverage))
+        .filter_map(|(_, target)| package_path(&slide, &target))
+        .find(|target| target.starts_with("ppt/notesSlides/"));
+        if let Some(xml) = notes.and_then(|name| part(&mut archive, &name, true, &mut coverage)) {
+            for line in slide_text(&xml, &mut coverage).1 {
                 outline.text(&line);
             }
         }
     }
     let mut facts = outline.finish();
     facts.lines = slides.len() as u32;
+    facts.coverage = coverage;
     facts
 }
 
 /// Title placeholder text and the other paragraphs of a slide or notes part.
-fn slide_text(xml: &str) -> (Option<String>, Vec<String>) {
-    let mut reader = Reader::from_str(xml);
+fn slide_text(xml: &str, coverage: &mut Coverage) -> (Option<String>, Vec<String>) {
+    let mut reader = XmlReader::new(xml, &["sld", "notes"], coverage);
     let mut title = None;
     let mut text = Vec::new();
     let mut is_title = false;
@@ -230,6 +283,7 @@ fn slide_text(xml: &str) -> (Option<String>, Vec<String>) {
             Ok(Event::Start(tag)) if tag.name().as_ref() == "a:t" => in_run = true,
             Ok(Event::End(tag)) if tag.name().as_ref() == "a:t" => in_run = false,
             Ok(Event::Text(chunk)) if in_run => paragraph.push_str(&chunk),
+            Ok(Event::CData(chunk)) if in_run => paragraph.push_str(&chunk),
             Ok(Event::GeneralRef(entity)) if in_run => paragraph.push_str(&resolve_entity(&entity)),
             Ok(Event::End(tag)) if tag.name().as_ref() == "a:p" => {
                 let line = facts::normalize_space(&std::mem::take(&mut paragraph));
@@ -252,13 +306,17 @@ fn slide_text(xml: &str) -> (Option<String>, Vec<String>) {
 /// OpenDocument text, spreadsheet or presentation: `text:h` and sheet or page names are headings;
 /// line = paragraph in a text document, sheet or page otherwise.
 pub fn opendocument(content: &[u8]) -> Facts {
+    let mut coverage = Coverage::Complete;
     let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(content)) else {
         return unreadable("unreadable OpenDocument (encrypted or malformed)");
     };
-    let Some(xml) = part(&mut archive, "content.xml") else {
-        return unreadable("unreadable OpenDocument (encrypted or malformed)");
+    let Some(xml) = part(&mut archive, "content.xml", true, &mut coverage) else {
+        return Facts {
+            coverage,
+            ..unreadable("OpenDocument content missing, damaged or over size limit")
+        };
     };
-    let blocks = opendocument_blocks(&xml);
+    let blocks = opendocument_blocks(&xml, &mut coverage);
     let mut outline = Outline::with_text(blocks.len() as u32);
     let mut pages = 0;
     for (index, (level, page, text)) in blocks.iter().enumerate() {
@@ -280,19 +338,25 @@ pub fn opendocument(content: &[u8]) -> Facts {
     } else {
         blocks.len() as u32
     };
+    facts.coverage = coverage;
     facts
 }
 
 /// Blocks of `content.xml`: heading level (sheets and pages count as level 1), whether it names a
 /// sheet or page, and the text.
-fn opendocument_blocks(xml: &str) -> Vec<(Option<usize>, bool, String)> {
-    let mut reader = Reader::from_str(xml);
+fn opendocument_blocks(xml: &str, coverage: &mut Coverage) -> Vec<(Option<usize>, bool, String)> {
+    let mut reader = XmlReader::new(
+        xml,
+        &["document-content", "text", "spreadsheet", "presentation"],
+        coverage,
+    );
     let mut blocks = Vec::new();
     let mut open: Option<Option<usize>> = None;
     let mut current = String::new();
     loop {
         match reader.read_event() {
-            Ok(Event::Start(tag)) => match tag.name().as_ref() {
+            Ok(Event::Start(tag)) | Ok(Event::Empty(tag)) => match tag.name().as_ref() {
+                "text:s" | "text:tab" | "text:line-break" if open.is_some() => current.push(' '),
                 "table:table" | "draw:page" => {
                     if let Some(name) =
                         attribute(&tag, "table:name").or_else(|| attribute(&tag, "draw:name"))
@@ -314,6 +378,7 @@ fn opendocument_blocks(xml: &str) -> Vec<(Option<usize>, bool, String)> {
                 _ => {}
             },
             Ok(Event::Text(chunk)) if open.is_some() => current.push_str(&chunk),
+            Ok(Event::CData(chunk)) if open.is_some() => current.push_str(&chunk),
             Ok(Event::GeneralRef(entity)) if open.is_some() => {
                 current.push_str(&resolve_entity(&entity));
             }
@@ -337,17 +402,18 @@ pub fn rtf(content: &[u8]) -> Facts {
     if !content.starts_with(b"{\\rtf") {
         return unreadable("unreadable RTF");
     }
-    let lines = rtf_lines(content);
+    let (lines, coverage) = rtf_lines(content);
     let mut outline = Outline::with_text(lines.len() as u32);
     for (index, line) in lines.iter().enumerate() {
         outline.prose(line, index as u32 + 1);
     }
     let mut facts = outline.finish();
     facts.lines = lines.len() as u32;
+    facts.coverage = coverage;
     facts
 }
 
-fn rtf_lines(content: &[u8]) -> Vec<String> {
+fn rtf_lines(content: &[u8]) -> (Vec<String>, Coverage) {
     const HIDDEN: [&[u8]; 6] = [
         b"fonttbl",
         b"colortbl",
@@ -362,15 +428,35 @@ fn rtf_lines(content: &[u8]) -> Vec<String> {
     let mut hidden: Option<usize> = None;
     let mut depth = 0usize;
     let mut position = 0;
+    let mut coverage = Coverage::Complete;
+    let mut unicode_skip = 1usize;
+    let mut unicode_stack = Vec::new();
+    let mut encoding = encoding_rs::WINDOWS_1252;
+    let mut ansi = Vec::new();
+    let mut fallback = 0usize;
+    let mut high_surrogate = None;
     while let Some(&byte) = content.get(position) {
         position += 1;
         match byte {
-            b'{' => depth += 1,
+            b'{' => {
+                rtf_ansi(&mut ansi, encoding, &mut line, &mut coverage);
+                depth += 1;
+                unicode_stack.push((unicode_skip, encoding));
+                fallback = 0;
+            }
             b'}' => {
+                rtf_ansi(&mut ansi, encoding, &mut line, &mut coverage);
                 if hidden == Some(depth) {
                     hidden = None;
                 }
+                if let Some((skip, prior_encoding)) = unicode_stack.pop() {
+                    unicode_skip = skip;
+                    encoding = prior_encoding;
+                } else {
+                    coverage = coverage.max(Coverage::ParseErrors);
+                }
                 depth = depth.saturating_sub(1);
+                fallback = 0;
             }
             b'\\' => {
                 let start = position;
@@ -399,17 +485,30 @@ fn rtf_lines(content: &[u8]) -> Vec<String> {
                         Some(b'\'') => {
                             let hex = content.get(position..position + 2);
                             position += 2;
+                            if fallback > 0 {
+                                fallback -= 1;
+                                continue;
+                            }
                             if let Some(value) = hex
                                 .and_then(|hex| std::str::from_utf8(hex).ok())
                                 .and_then(|hex| u8::from_str_radix(hex, 16).ok())
                             {
-                                line.push(char::from(value));
+                                ansi.push(value);
+                            } else {
+                                coverage = coverage.max(Coverage::ParseErrors);
                             }
                         }
                         Some(b'*') => hidden = hidden.or(Some(depth)),
-                        Some(symbol @ (b'\\' | b'{' | b'}')) => line.push(char::from(symbol)),
+                        Some(symbol @ (b'\\' | b'{' | b'}')) => {
+                            if fallback > 0 {
+                                fallback -= 1;
+                            } else {
+                                ansi.push(symbol);
+                            }
+                        }
                         // An escaped line break is a paragraph.
                         Some(b'\n' | b'\r') => {
+                            rtf_ansi(&mut ansi, encoding, &mut line, &mut coverage);
                             lines.push(facts::normalize_space(&std::mem::take(&mut line)));
                         }
                         _ => {}
@@ -419,97 +518,237 @@ fn rtf_lines(content: &[u8]) -> Vec<String> {
                 if content.get(position) == Some(&b' ') {
                     position += 1;
                 }
+                if word == b"bin" {
+                    if let Some(length) = number.and_then(|number| usize::try_from(number).ok())
+                        && let Some(end) = position
+                            .checked_add(length)
+                            .filter(|end| *end <= content.len())
+                    {
+                        position = end;
+                    } else {
+                        coverage = coverage.max(Coverage::ParseErrors);
+                        break;
+                    }
+                    continue;
+                }
                 if HIDDEN.contains(&word) {
                     hidden = hidden.or(Some(depth));
                 }
                 if hidden.is_some() {
                     continue;
                 }
+                if fallback > 0 && word != b"u" && word != b"uc" {
+                    fallback -= 1;
+                    continue;
+                }
                 match word {
+                    b"ansicpg" => {
+                        rtf_ansi(&mut ansi, encoding, &mut line, &mut coverage);
+                        let label = number.map(|number| match number {
+                            932 => "shift_jis".to_owned(),
+                            936 => "gbk".to_owned(),
+                            949 => "euc-kr".to_owned(),
+                            950 => "big5".to_owned(),
+                            10000 => "macintosh".to_owned(),
+                            65001 => "utf-8".to_owned(),
+                            _ => format!("windows-{number}"),
+                        });
+                        if let Some(next) = label
+                            .as_deref()
+                            .and_then(|label| encoding_rs::Encoding::for_label(label.as_bytes()))
+                        {
+                            encoding = next;
+                        } else {
+                            coverage = coverage.max(Coverage::NoGrammar);
+                            break;
+                        }
+                    }
                     b"par" | b"line" | b"sect" | b"page" => {
+                        rtf_ansi(&mut ansi, encoding, &mut line, &mut coverage);
                         lines.push(facts::normalize_space(&std::mem::take(&mut line)));
                     }
-                    b"tab" | b"cell" => line.push(' '),
+                    b"tab" | b"cell" => {
+                        rtf_ansi(&mut ansi, encoding, &mut line, &mut coverage);
+                        line.push(' ');
+                    }
+                    b"uc" => {
+                        if let Some(skip) = number.and_then(|number| usize::try_from(number).ok()) {
+                            unicode_skip = skip;
+                        } else {
+                            coverage = coverage.max(Coverage::ParseErrors);
+                        }
+                    }
                     b"u" => {
-                        if let Some(character) = number
-                            .and_then(|code| {
-                                u32::try_from(if code < 0 { code + 65536 } else { code }).ok()
-                            })
-                            .and_then(char::from_u32)
-                        {
-                            line.push(character);
+                        rtf_ansi(&mut ansi, encoding, &mut line, &mut coverage);
+                        if let Some(unit) = number.and_then(|code| {
+                            u16::try_from(if code < 0 { code + 65536 } else { code }).ok()
+                        }) {
+                            match unit {
+                                0xD800..=0xDBFF => {
+                                    if high_surrogate.replace(unit).is_some() {
+                                        coverage = coverage.max(Coverage::ParseErrors);
+                                    }
+                                }
+                                0xDC00..=0xDFFF => {
+                                    if let Some(high) = high_surrogate.take()
+                                        && let Some(character) = char::from_u32(
+                                            0x10000
+                                                + ((u32::from(high) - 0xD800) << 10)
+                                                + u32::from(unit)
+                                                - 0xDC00,
+                                        )
+                                    {
+                                        line.push(character);
+                                    } else {
+                                        coverage = coverage.max(Coverage::ParseErrors);
+                                    }
+                                }
+                                _ => {
+                                    if high_surrogate.take().is_some() {
+                                        coverage = coverage.max(Coverage::ParseErrors);
+                                    }
+                                    if let Some(character) = char::from_u32(u32::from(unit)) {
+                                        line.push(character);
+                                    }
+                                }
+                            }
+                        } else {
+                            coverage = coverage.max(Coverage::ParseErrors);
                         }
-                        // The plain-text fallback after `\\uN`.
-                        if content.get(position) == Some(&b'?') {
-                            position += 1;
-                        }
+                        fallback = unicode_skip;
                     }
                     _ => {}
                 }
             }
             b'\r' | b'\n' => {}
-            _ if hidden.is_none() => line.push(char::from(byte)),
+            _ if hidden.is_none() => {
+                if fallback > 0 {
+                    fallback -= 1;
+                } else {
+                    ansi.push(byte);
+                }
+            }
             _ => {}
         }
     }
+    rtf_ansi(&mut ansi, encoding, &mut line, &mut coverage);
     lines.push(facts::normalize_space(&line));
-    lines
+    if depth != 0 || high_surrogate.is_some() {
+        coverage = coverage.max(Coverage::ParseErrors);
+    }
+    (lines, coverage)
 }
 
-/// DOC, XLS, PPT: compound binary files. Their text is recovered as runs of readable characters,
-/// without structure, so the file doc says so.
-pub fn legacy_office(content: &[u8]) -> Facts {
-    if !content.starts_with(&[0xD0, 0xCF, 0x11, 0xE0]) {
-        return unreadable("unreadable legacy Office file");
+fn rtf_ansi(
+    bytes: &mut Vec<u8>,
+    encoding: &'static encoding_rs::Encoding,
+    line: &mut String,
+    coverage: &mut Coverage,
+) {
+    let (text, invalid) = encoding.decode_without_bom_handling(bytes);
+    line.push_str(&text);
+    if invalid {
+        *coverage = (*coverage).max(Coverage::ParseErrors);
     }
-    let mut outline = Outline::with_text(1);
-    for run in readable_runs(content) {
-        outline.text(&run);
+    bytes.clear();
+}
+
+/// Real compound-file readers; never promote arbitrary binary byte runs to facts.
+pub fn legacy_office(path: &str, content: &[u8]) -> Facts {
+    use office_oxide::{Document, DocumentFormat, options::ParseOptions};
+    let Some(format @ (DocumentFormat::Doc | DocumentFormat::Xls | DocumentFormat::Ppt)) = path
+        .rsplit('.')
+        .next()
+        .and_then(DocumentFormat::from_extension)
+    else {
+        return unreadable("unsupported legacy Office format");
+    };
+    let mut options = ParseOptions::default();
+    options.limits.part_bytes = PART_LIMIT as u64;
+    options.limits.text_chars = PART_LIMIT;
+    let document = match Document::from_reader_with(Cursor::new(content.to_vec()), format, &options)
+    {
+        Ok(document) => document,
+        Err(_) => return unreadable("unreadable legacy Office file (encrypted or malformed)"),
+    };
+    let mut facts = if let Some(workbook) = document.as_xls() {
+        legacy_sheets(workbook)
+    } else if let Some(presentation) = document.as_ppt() {
+        legacy_slides(presentation)
+    } else {
+        let text = document.plain_text();
+        let mut outline = Outline::with_text(text.lines().count() as u32);
+        for (index, line) in text.lines().enumerate() {
+            outline.prose(line, index as u32 + 1);
+        }
+        let mut facts = outline.finish();
+        facts.lines = text.lines().count() as u32;
+        facts
+    };
+    if let Some(damage) = document.damage().iter().find(|damage| damage.is_loss()) {
+        facts.coverage = Coverage::ParseErrors;
+        facts.doc = format!(
+            "! incomplete legacy Office: {}",
+            facts::clip_space(&damage.to_string(), 120)
+        );
     }
-    let mut facts = outline.finish();
-    facts.doc = "! legacy Office format: text recovered without structure".to_owned();
-    facts.lines = 1;
     facts
 }
 
-/// Runs of at least [`MIN_RUN`] readable characters, as UTF-16LE and as single bytes.
-fn readable_runs(content: &[u8]) -> Vec<String> {
-    let readable = |ch: char| ch.is_alphanumeric() || " .,;:!?()-/'\"&%".contains(ch);
-    let keep = |run: &mut String, runs: &mut Vec<String>| {
-        let text = facts::normalize_space(&std::mem::take(run));
-        // At least one word: binary noise rarely has three letters in a row.
-        let has_word = text
-            .split(|ch: char| !ch.is_alphabetic())
-            .any(|word| word.chars().count() >= 3);
-        if text.chars().count() >= MIN_RUN && has_word {
-            runs.push(text);
+fn legacy_sheets(workbook: &office_oxide::xls::XlsDocument) -> Facts {
+    let mut outline = Outline::with_text(workbook.sheets.len() as u32);
+    for (index, sheet) in workbook.sheets.iter().enumerate() {
+        outline.heading(1, &sheet.name, index as u32 + 1);
+        for (row, cells) in sheet.rows.iter().enumerate() {
+            for column in 0..cells.len() {
+                if let Some(text) = sheet.display_text(row, column) {
+                    outline.text(&text);
+                }
+            }
         }
-    };
-    let mut runs = Vec::new();
-    let mut run = String::new();
-    for pair in content.as_chunks::<2>().0 {
-        let unit = u16::from_le_bytes(*pair);
-        match char::from_u32(u32::from(unit)).filter(|ch| readable(*ch)) {
-            Some(ch) => run.push(ch),
-            None => keep(&mut run, &mut runs),
+        for text in &sheet.chart_text {
+            outline.text(text);
+        }
+        for comment in &sheet.comments {
+            outline.text(&comment.text);
         }
     }
-    keep(&mut run, &mut runs);
-    for &byte in content {
-        let ch = char::from(byte);
-        if byte < 0x80 && readable(ch) {
-            run.push(ch);
-        } else {
-            keep(&mut run, &mut runs);
+    let mut facts = outline.finish();
+    facts.lines = workbook.sheets.len() as u32;
+    facts
+}
+
+fn legacy_slides(presentation: &office_oxide::ppt::PptDocument) -> Facts {
+    use office_oxide::ppt::TextType;
+    let mut outline = Outline::with_text(presentation.slides.len() as u32);
+    for (index, slide) in presentation.slides.iter().enumerate() {
+        let number = index as u32 + 1;
+        let title = slide
+            .text_runs
+            .iter()
+            .find(|run| matches!(run.text_type, TextType::Title | TextType::CenterTitle));
+        let heading = title.map_or_else(
+            || format!("Slide {number}"),
+            |run| facts::normalize_space(&run.text),
+        );
+        outline.heading(1, &heading, number);
+        for run in slide.text_runs.iter().chain(
+            slide
+                .tables
+                .iter()
+                .flat_map(|table| table.rows.iter().flatten().flatten()),
+        ) {
+            outline.text(&run.text);
         }
     }
-    keep(&mut run, &mut runs);
-    runs
+    let mut facts = outline.finish();
+    facts.lines = presentation.slides.len() as u32;
+    facts
 }
 
 /// `(name, relationship id)` per `<sheet>` of the workbook.
-fn workbook_sheets(xml: &str) -> Vec<(String, String)> {
-    let mut reader = Reader::from_str(xml);
+fn workbook_sheets(xml: &str, coverage: &mut Coverage) -> Vec<(String, String)> {
+    let mut reader = XmlReader::new(xml, &["workbook"], coverage);
     let mut sheets = Vec::new();
     loop {
         match reader.read_event() {
@@ -518,6 +757,8 @@ fn workbook_sheets(xml: &str) -> Vec<(String, String)> {
             {
                 if let (Some(name), Some(id)) = (attribute(&tag, "name"), attribute(&tag, "r:id")) {
                     sheets.push((name, id));
+                } else {
+                    *reader.coverage = (*reader.coverage).max(Coverage::ParseErrors);
                 }
             }
             Ok(Event::Eof) | Err(_) => break,
@@ -528,8 +769,8 @@ fn workbook_sheets(xml: &str) -> Vec<(String, String)> {
 }
 
 /// `(Id, Target)` per relationship.
-fn relation_targets(xml: &str) -> Vec<(String, String)> {
-    let mut reader = Reader::from_str(xml);
+fn relation_targets(xml: &str, coverage: &mut Coverage) -> Vec<(String, String)> {
+    let mut reader = XmlReader::new(xml, &["Relationships"], coverage);
     let mut relations = Vec::new();
     loop {
         match reader.read_event() {
@@ -549,8 +790,8 @@ fn relation_targets(xml: &str) -> Vec<(String, String)> {
 }
 
 /// Targets of external relationships that name local files (no URL scheme).
-fn external_targets(xml: &str) -> Vec<String> {
-    let mut reader = Reader::from_str(xml);
+fn external_targets(xml: &str, coverage: &mut Coverage) -> Vec<String> {
+    let mut reader = XmlReader::new(xml, &["Relationships"], coverage);
     let mut targets = Vec::new();
     loop {
         match reader.read_event() {
@@ -574,8 +815,8 @@ fn external_targets(xml: &str) -> Vec<String> {
     targets
 }
 
-fn shared_strings(xml: &str) -> Vec<String> {
-    let mut reader = Reader::from_str(xml);
+fn shared_strings(xml: &str, coverage: &mut Coverage) -> Vec<String> {
+    let mut reader = XmlReader::new(xml, &["sst"], coverage);
     let mut strings = Vec::new();
     let mut current = String::new();
     let mut in_text = false;
@@ -588,6 +829,7 @@ fn shared_strings(xml: &str) -> Vec<String> {
                 _ => {}
             },
             Ok(Event::Text(chunk)) if in_text => current.push_str(&chunk),
+            Ok(Event::CData(chunk)) if in_text => current.push_str(&chunk),
             Ok(Event::GeneralRef(entity)) if in_text => current.push_str(&resolve_entity(&entity)),
             Ok(Event::Eof) | Err(_) => break,
             _ => {}
@@ -597,8 +839,8 @@ fn shared_strings(xml: &str) -> Vec<String> {
 }
 
 /// String cells of a sheet in document order: shared (`t="s"`), inline and formula strings.
-fn sheet_strings(xml: &str, shared: &[String]) -> Vec<String> {
-    let mut reader = Reader::from_str(xml);
+fn sheet_strings(xml: &str, shared: &[String], coverage: &mut Coverage) -> Vec<String> {
+    let mut reader = XmlReader::new(xml, &["worksheet"], coverage);
     let mut strings = Vec::new();
     let mut cell_type = String::new();
     let mut value = String::new();
@@ -615,11 +857,17 @@ fn sheet_strings(xml: &str, shared: &[String]) -> Vec<String> {
                 "c" => {
                     let text = std::mem::take(&mut value);
                     let resolved = match cell_type.as_str() {
-                        "s" => text
-                            .trim()
-                            .parse::<usize>()
-                            .ok()
-                            .and_then(|index| shared.get(index).cloned()),
+                        "s" => {
+                            let value = text
+                                .trim()
+                                .parse::<usize>()
+                                .ok()
+                                .and_then(|index| shared.get(index).cloned());
+                            if value.is_none() {
+                                *reader.coverage = (*reader.coverage).max(Coverage::ParseErrors);
+                            }
+                            value
+                        }
                         "inlineStr" | "str" => Some(text),
                         _ => None,
                     };
@@ -630,6 +878,7 @@ fn sheet_strings(xml: &str, shared: &[String]) -> Vec<String> {
                 _ => {}
             },
             Ok(Event::Text(chunk)) if in_value => value.push_str(&chunk),
+            Ok(Event::CData(chunk)) if in_value => value.push_str(&chunk),
             Ok(Event::GeneralRef(entity)) if in_value => value.push_str(&resolve_entity(&entity)),
             Ok(Event::Eof) | Err(_) => break,
             _ => {}
@@ -639,13 +888,125 @@ fn sheet_strings(xml: &str, shared: &[String]) -> Vec<String> {
 }
 
 /// A ZIP member as UTF-8, bounded by `PART_LIMIT`.
-fn part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<String> {
-    let file = archive.by_name(name).ok()?;
+fn part(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    name: &str,
+    required: bool,
+    coverage: &mut Coverage,
+) -> Option<String> {
+    let file = match archive.by_name(name) {
+        Ok(file) => file,
+        Err(zip::result::ZipError::FileNotFound) if !required => return None,
+        Err(_) => {
+            *coverage = (*coverage).max(Coverage::ParseErrors);
+            return None;
+        }
+    };
+    if file.size() > PART_LIMIT as u64 {
+        *coverage = (*coverage).max(Coverage::MatchLimit);
+        return None;
+    }
     let mut text = String::new();
-    file.take(PART_LIMIT as u64)
+    if file
+        .take(PART_LIMIT as u64 + 1)
         .read_to_string(&mut text)
-        .ok()?;
+        .is_err()
+    {
+        *coverage = (*coverage).max(Coverage::ParseErrors);
+        return None;
+    }
+    if text.len() > PART_LIMIT {
+        *coverage = (*coverage).max(Coverage::MatchLimit);
+        return None;
+    }
     Some(text)
+}
+
+/// Resolve a package relationship relative to the part that owns it.
+fn package_path(owner: &str, target: &str) -> Option<String> {
+    if target.contains([':', '\\', '#', '?']) {
+        return None;
+    }
+    let mut parts: Vec<&str> = if target.starts_with('/') {
+        Vec::new()
+    } else {
+        owner
+            .rsplit_once('/')
+            .map_or(Vec::new(), |(directory, _)| directory.split('/').collect())
+    };
+    for segment in target.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            _ => parts.push(segment),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// Account for malformed and unfinished XML in the same pass that extracts its text.
+struct XmlReader<'source, 'coverage> {
+    reader: Reader<&'source [u8]>,
+    coverage: &'coverage mut Coverage,
+    roots: &'static [&'static str],
+    depth: usize,
+    seen_root: bool,
+}
+
+impl<'source, 'coverage> XmlReader<'source, 'coverage> {
+    fn new(
+        xml: &'source str,
+        roots: &'static [&'static str],
+        coverage: &'coverage mut Coverage,
+    ) -> Self {
+        Self {
+            reader: Reader::from_str(xml),
+            coverage,
+            roots,
+            depth: 0,
+            seen_root: false,
+        }
+    }
+
+    fn read_event(&mut self) -> Result<Event<'source>, quick_xml::Error> {
+        let event = self.reader.read_event();
+        match &event {
+            Ok(Event::Start(tag) | Event::Empty(tag)) => {
+                if self.depth == 0 {
+                    if self.seen_root
+                        || !self
+                            .roots
+                            .iter()
+                            .any(|root| tag.local_name().as_ref() == *root)
+                    {
+                        *self.coverage = (*self.coverage).max(Coverage::ParseErrors);
+                    }
+                    self.seen_root = true;
+                }
+                if tag.attributes().any(|attribute| attribute.is_err()) {
+                    *self.coverage = (*self.coverage).max(Coverage::ParseErrors);
+                }
+                if matches!(&event, Ok(Event::Start(_))) {
+                    self.depth += 1;
+                }
+            }
+            Ok(Event::End(_)) => self.depth = self.depth.saturating_sub(1),
+            Ok(Event::Eof) if self.depth != 0 || !self.seen_root => {
+                *self.coverage = (*self.coverage).max(Coverage::ParseErrors);
+            }
+            Ok(Event::Text(text)) if self.depth == 0 && !text.trim().is_empty() => {
+                *self.coverage = (*self.coverage).max(Coverage::ParseErrors);
+            }
+            Ok(Event::GeneralRef(entity)) if resolve_entity(entity).is_empty() => {
+                *self.coverage = (*self.coverage).max(Coverage::NoGrammar);
+            }
+            Err(_) => *self.coverage = (*self.coverage).max(Coverage::ParseErrors),
+            _ => {}
+        }
+        event
+    }
 }
 
 fn attribute(tag: &BytesStart, name: &str) -> Option<String> {
@@ -687,6 +1048,7 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 fn unreadable(reason: &str) -> Facts {
     Facts {
         doc: format!("! {reason}, text unavailable"),
+        coverage: Coverage::Failed,
         ..Facts::default()
     }
 }
@@ -886,12 +1248,128 @@ mod tests {
     }
 
     #[test]
+    fn audit_document_errors_never_prove_complete_coverage() {
+        use crate::domain::facts::Coverage;
+        for facts in [
+            docx(&zip_of(&[(
+                "word/document.xml",
+                "<w:document><w:p><w:t>Paris",
+            )])),
+            xlsx(&zip_of(&[(
+                "xl/workbook.xml",
+                "<workbook><sheets><sheet name=\"A\" r:id=\"r1\"/></sheets></workbook>",
+            )])),
+            opendocument(&zip_of(&[("content.xml", "<office:text><text:p>Paris")])),
+            rtf(br"{\rtf1 unclosed"),
+            pdf(b"broken"),
+        ] {
+            assert_ne!(facts.coverage, Coverage::Complete, "{facts:?}");
+        }
+        let partial = docx(&zip_of(&[(
+            "word/document.xml",
+            "<w:document><w:p><w:t>Paris</w:t></w:p><w:p>",
+        )]));
+        assert!(
+            partial
+                .symbols
+                .iter()
+                .any(|symbol| symbol.terms.contains("paris"))
+        );
+        assert_ne!(partial.coverage, Coverage::Complete);
+        let oversized = " ".repeat(PART_LIMIT + 1);
+        assert_eq!(
+            docx(&zip_of(&[("word/document.xml", &oversized)])).coverage,
+            Coverage::MatchLimit
+        );
+        let cdata = docx(&zip_of(&[(
+            "word/document.xml",
+            "<w:document><w:p><w:r><w:t><![CDATA[Paris & London]]></w:t></w:r></w:p></w:document>",
+        )]));
+        assert_eq!(cdata.doc, "Paris & London");
+        assert_eq!(cdata.coverage, Coverage::Complete);
+    }
+
+    #[test]
+    fn audit_presentation_order_comes_from_relationships() {
+        let slide = |title: &str| {
+            format!(
+                "<p:sld><p:sp><p:nvPr><p:ph type=\"title\"/></p:nvPr><a:p><a:r><a:t>{title}</a:t></a:r></a:p></p:sp></p:sld>"
+            )
+        };
+        let first = slide("First");
+        let second = slide("Second");
+        let facts = pptx(&zip_of(&[
+            (
+                "ppt/presentation.xml",
+                "<p:presentation><p:sldIdLst><p:sldId r:id=\"second\"/><p:sldId r:id=\"first\"/></p:sldIdLst></p:presentation>",
+            ),
+            (
+                "ppt/_rels/presentation.xml.rels",
+                "<Relationships><Relationship Id=\"first\" Target=\"slides/slide1.xml\"/><Relationship Id=\"second\" Target=\"slides/slide2.xml\"/></Relationships>",
+            ),
+            ("ppt/slides/slide1.xml", &first),
+            ("ppt/slides/slide2.xml", &second),
+        ]));
+        assert_eq!(
+            section_terms(&facts)
+                .iter()
+                .map(|(name, line, _)| (name.as_str(), *line))
+                .collect::<Vec<_>>(),
+            [("Second", 1), ("First", 2)]
+        );
+    }
+
+    #[test]
+    fn audit_opendocument_explicit_spaces_keep_words_separate() {
+        let facts = opendocument(&zip_of(&[(
+            "content.xml",
+            "<office:text><text:p>alpha<text:s text:c=\"3\"/>beta<text:tab/>gamma<text:line-break/>delta</text:p></office:text>",
+        )]));
+        assert_eq!(facts.doc, "alpha beta gamma delta");
+        assert!(facts.symbols[0].terms.contains("alpha beta gamma delta"));
+    }
+
+    #[test]
+    fn audit_rtf_unicode_fallback_is_group_scoped_and_counts_characters() {
+        assert_eq!(
+            rtf_lines(br"{\rtf1\uc2 \u945abX{\uc0 \u946}\u947\'3f\'3fY}").0,
+            ["αXβγY"]
+        );
+        assert_eq!(rtf_lines(br"{\rtf1\uc1 \u-10179?\u-8704?}").0, ["😀"]);
+        assert_eq!(
+            rtf_lines(br"{\rtf1\ansi\ansicpg1252 \u8364x \'80}").0,
+            ["€ €"]
+        );
+        assert_eq!(
+            rtf_lines(br"{\rtf1\ansi\ansicpg932 \'93\'8c\'8b\'9e}").0,
+            ["東京"]
+        );
+    }
+
+    #[test]
+    fn audit_legacy_binary_noise_is_not_document_text() {
+        let mut bytes = vec![0xD0, 0xCF, 0x11, 0xE0, 0, 0, 0, 0];
+        bytes.extend(b"Not an actual document stream with Paris");
+        let facts = legacy_office("broken.doc", &bytes);
+        assert!(facts.symbols.is_empty(), "{facts:?}");
+        assert_ne!(facts.coverage, crate::domain::facts::Coverage::Complete);
+    }
+
+    #[test]
     fn pptx_slides_titles_text_and_notes() {
         let slide = r#"<p:sld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:r><a:t>Quarterly plan</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:txBody><a:p><a:r><a:t>Budget for </a:t></a:r><a:r><a:t>wombats</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:sld>"#;
         let untitled = r#"<p:sld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Second page body</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:sld>"#;
         let relations = r#"<Relationships><Relationship Id="rId1" Target="../notesSlides/notesSlide7.xml"/></Relationships>"#;
         let notes = r#"<p:notes><p:sp><p:txBody><a:p><a:r><a:t>Speaker reminder</a:t></a:r></a:p></p:txBody></p:sp></p:notes>"#;
         let facts = pptx(&zip_of(&[
+            (
+                "ppt/presentation.xml",
+                "<p:presentation><p:sldIdLst><p:sldId r:id=\"one\"/><p:sldId r:id=\"two\"/></p:sldIdLst></p:presentation>",
+            ),
+            (
+                "ppt/_rels/presentation.xml.rels",
+                "<Relationships><Relationship Id=\"one\" Target=\"slides/slide1.xml\"/><Relationship Id=\"two\" Target=\"slides/slide2.xml\"/></Relationships>",
+            ),
             ("ppt/slides/slide2.xml", untitled),
             ("ppt/slides/slide1.xml", slide),
             ("ppt/slides/_rels/slide1.xml.rels", relations),
@@ -928,10 +1406,13 @@ mod tests {
     #[test]
     fn rtf_text_skips_tables_and_decodes_escapes() {
         let source = br#"{\rtf1\ansi{\fonttbl{\f0 Hidden Font;}}{\*\generator Hidden;}\f0 Gr\'fc\'df wombat\par Next \u8364? line\par}"#;
-        let lines = rtf_lines(source);
+        let lines = rtf_lines(source).0;
         assert_eq!(lines[0], "Grüß wombat");
         assert_eq!(lines[1], "Next € line");
-        assert_eq!(rtf_lines(b"{\\rtf1 First\\\nSecond}"), ["First", "Second"]);
+        assert_eq!(
+            rtf_lines(b"{\\rtf1 First\\\nSecond}").0,
+            ["First", "Second"]
+        );
         assert!(!lines.join(" ").contains("Hidden"), "{lines:?}");
         let facts = rtf(source);
         assert_eq!(facts.lines, 3);
@@ -940,31 +1421,43 @@ mod tests {
     }
 
     #[test]
-    fn legacy_office_recovers_text_and_says_so() {
-        let mut file = vec![0xD0, 0xCF, 0x11, 0xE0, 0, 0, 0, 0];
-        file.extend(b"Single byte budget wombat\x01\x02\x03");
-        for unit in "Double byte quokka text".encode_utf16() {
-            file.extend(unit.to_le_bytes());
+    fn legacy_office_reads_real_short_documents_and_preserves_locators() {
+        // Exported by LibreOffice 26.8 from original text/sheet/slide documents, not binary runs.
+        let doc = legacy_office(
+            "short.doc",
+            include_bytes!("../../tests/fixtures/documents/short.doc"),
+        );
+        assert_eq!(doc.coverage, Coverage::Complete, "{doc:?}");
+        assert_eq!(doc.doc, "Paris");
+        assert!(doc.symbols.iter().any(|symbol| symbol.terms == "paris"));
+        for (path, bytes) in [
+            (
+                "workbook.xls",
+                include_bytes!("../../tests/fixtures/documents/workbook.xls").as_slice(),
+            ),
+            (
+                "slides.ppt",
+                include_bytes!("../../tests/fixtures/documents/slides.ppt").as_slice(),
+            ),
+        ] {
+            let facts = legacy_office(path, bytes);
+            assert_eq!(facts.coverage, Coverage::Complete, "{path}: {facts:?}");
+            assert_eq!(facts.lines, 2, "{path}: {facts:?}");
+            assert!(
+                facts
+                    .symbols
+                    .iter()
+                    .any(|symbol| symbol.line == 1 && symbol.terms.contains("paris")),
+                "{path}: {facts:?}"
+            );
+            assert!(
+                facts
+                    .symbols
+                    .iter()
+                    .any(|symbol| symbol.line == 2 && symbol.terms.contains("quokka")),
+                "{path}: {facts:?}"
+            );
         }
-        file.extend([0xFF, 0xFE, 0x01, 0x02, 0x03]);
-        let facts = legacy_office(&file);
-        assert!(
-            facts.doc.starts_with("! legacy Office format"),
-            "{}",
-            facts.doc
-        );
-        let terms: String = facts
-            .symbols
-            .iter()
-            .map(|symbol| symbol.terms.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert!(terms.contains("wombat"), "{terms}");
-        assert!(terms.contains("quokka"), "{terms}");
-        assert!(
-            legacy_office(b"plain")
-                .doc
-                .starts_with("! unreadable legacy")
-        );
+        assert!(legacy_office("broken.doc", b"plain").symbols.is_empty());
     }
 }

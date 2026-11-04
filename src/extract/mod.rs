@@ -37,7 +37,7 @@ use crate::domain::role::{self, Role};
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
 /// Rows of a CSV or TSV file that reach search.
 const CSV_INDEXED_ROWS: usize = 2000;
-const EXTRACTION_VERSION: u32 = 112;
+const EXTRACTION_VERSION: u32 = 113;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -100,6 +100,9 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
                 .collect::<Vec<_>>()
                 .join("\n");
             sections::index_lines(&mut facts, &head);
+            if text.lines().nth(CSV_INDEXED_ROWS).is_some() {
+                facts.coverage = facts.coverage.max(Coverage::MatchLimit);
+            }
         } else {
             sections::index_lines(&mut facts, &text);
         }
@@ -120,7 +123,7 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
         Some(FileType::Pptx) => Some(documents::pptx(content)),
         Some(FileType::OpenDocument) => Some(documents::opendocument(content)),
         Some(FileType::Rtf) => Some(documents::rtf(content)),
-        Some(FileType::LegacyOffice) => Some(documents::legacy_office(content)),
+        Some(FileType::LegacyOffice) => Some(documents::legacy_office(&record.path, content)),
         Some(FileType::Image | FileType::Svg | FileType::Video | FileType::Audio) => {
             let mut facts = assets::extract(&record.path, content);
             if record.file_type == Some(FileType::Svg) {
@@ -542,6 +545,36 @@ mod tests {
         );
         let notes = extract(&record("docs/notes.txt", Role::Doc), b"First line.\n");
         assert_eq!(notes.doc, "First line.");
+    }
+
+    #[test]
+    fn bounded_csv_search_does_not_claim_complete_coverage() {
+        let content = format!("{}tailquokkaz\n", "firstrow\n".repeat(CSV_INDEXED_ROWS));
+        let record = FileRecord {
+            path: "rows.csv".to_owned(),
+            size: content.len() as u64,
+            mtime_ns: 0,
+            identity: None,
+            hash: 0,
+            role: Role::Doc,
+            file_type: Some(FileType::Csv),
+        };
+        let facts = extract(&record, content.as_bytes());
+        assert_eq!(facts.coverage, Coverage::MatchLimit);
+        assert!(
+            !facts
+                .symbols
+                .iter()
+                .any(|symbol| symbol.terms.contains("tailquokkaz"))
+        );
+        let complete = extract(&record, b"firstrow\ntailquokkaz\n");
+        assert_eq!(complete.coverage, Coverage::Complete);
+        assert!(
+            complete
+                .symbols
+                .iter()
+                .any(|symbol| symbol.terms.contains("tailquokkaz"))
+        );
     }
 
     #[test]

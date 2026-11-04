@@ -17,11 +17,13 @@ unimplemented = "deny"
 
 [dependencies]
 bytemuck = { version = "1.25.2", features = ["derive"] }
+encoding_rs = "0.8.35"
 flate2 = "1.1.10"
 ignore = "0.4.34"
 imagesize = "0.15.0"
 lopdf = { version = "0.46.0", default-features = false }
 memmap2 = "0.9.12"
+office_oxide = { version = "0.1.16", default-features = false }
 quick-xml = "0.42.0"
 rayon = "1.12.0"
 regex = "1.13.1"

@@ -147,6 +147,7 @@ Freshness:
 - Deep languages: tree-sitter grammar plus embedded query files (definitions, references, imports); query captures map to fact records; language code only for semantics a query cannot express (module rules, section 6).
 - Structural languages: grammar or line patterns for symbols, includes and calls.
 - `config`, `doc`, `asset` files: one format parser per file type; PDF text layer only, no OCR; DOCX and XLSX from their XML parts; audio and video from container headers, no transcription.
+- Document coverage: missing required parts, malformed XML, failed PDF text extraction and legacy-parser losses qualify incomplete analysis; encrypted or unreadable documents retain their path and a reason. XML parts are bounded to 16 MiB; CSV/TSV indexing beyond 2,000 rows is explicitly incomplete. PPTX locators follow presentation relationships; OpenDocument preserves explicit whitespace; RTF decodes scoped Unicode fallback and ANSI code pages; legacy DOC/XLS/PPT use compound-file parsers with paragraph/sheet/slide locators, never arbitrary binary string runs.
 
 | fact | fields |
 |------|--------|
