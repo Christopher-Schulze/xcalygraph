@@ -58,6 +58,7 @@
 (variable_declarator name: (identifier) @binding.name value: (await_expression (call_expression function: (_) @binding.call))) @binding
 
 (public_field_definition name: (property_identifier) @field.name type: (type_annotation (_) @field.type)) @field
+(public_field_definition name: (private_property_identifier) @field.name type: (type_annotation (_) @field.type)) @field
 (public_field_definition name: (property_identifier) @field.name value: (new_expression constructor: (_) @field.type)) @field
 (interface_declaration body: (interface_body (property_signature name: (property_identifier) @field.name) @field))
 (interface_declaration body: (interface_body (property_signature name: (property_identifier) @field.name type: (type_annotation [(type_identifier) (nested_type_identifier) (predefined_type)] @field.type)) @field))

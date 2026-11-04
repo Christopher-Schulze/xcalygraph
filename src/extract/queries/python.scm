@@ -28,6 +28,16 @@
 (typed_parameter (identifier) @binding.name type: (type) @binding.type) @binding
 (typed_default_parameter name: (identifier) @binding.name type: (type) @binding.type) @binding
 (assignment left: (identifier) @binding.name type: (type) @binding.type) @binding
+; `with Client() as client:` binds the context manager's value; its type is the call's unless the
+; class says otherwise (no `__enter__` analysis).
+(with_item value: (as_pattern
+  (call function: [(identifier) (attribute)] @binding.ctor)
+  alias: (as_pattern_target (identifier) @binding.name))
+  (#match? @binding.ctor "(^|[.])[A-Z][A-Za-z0-9_]*$")) @binding
+(with_item value: (as_pattern
+  (call function: [(identifier) (attribute)] @binding.call)
+  alias: (as_pattern_target (identifier) @binding.name))
+  (#match? @binding.call "(^|[.])[a-z_][A-Za-z0-9_]*$")) @binding
 (assignment
   left: (identifier) @binding.name
   right: (call function: [(identifier) (attribute)] @binding.ctor)

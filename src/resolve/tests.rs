@@ -405,6 +405,81 @@ fn typescript_string_match_does_not_fall_back_to_router_match() -> io::Result<()
 }
 
 #[test]
+fn python_receivers_flow_through_packages_context_managers_and_properties() -> io::Result<()> {
+    let root = crate::infra::testdir::TestDir::new("python-receivers")?;
+    fs::create_dir_all(root.path().join("pkg"))?;
+    fs::write(root.path().join("pkg/__init__.py"), "from ._m import *\n")?;
+    fs::write(
+        root.path().join("pkg/_m.py"),
+        "class Url:\n    def path(self):\n        return 1\n\n\
+         class Foo:\n    def run(self) -> Url:\n        return Url()\n\n\
+         \x20   @property\n    def url(self) -> Url:\n        return Url()\n",
+    )?;
+    fs::write(
+        root.path().join("use.py"),
+        "import pkg\n\n\
+         def with_block():\n    with pkg.Foo() as f:\n        f.run()\n\n\
+         def assigned():\n    g = pkg.Foo()\n    g.run()\n\n\
+         def chained():\n    g = pkg.Foo()\n    g.run().path()\n\n\
+         def through_property():\n    g = pkg.Foo()\n    g.url.path()\n",
+    )?;
+    let graph = graph_of(root.path())?;
+    let text = render(&graph);
+    for expected in [
+        "use.with_block -> pkg._m.Foo.run",
+        "use.assigned -> pkg._m.Foo.run",
+        "use.chained -> pkg._m.Url.path",
+        "use.through_property -> pkg._m.Url.path",
+    ] {
+        assert!(
+            text.lines().any(|line| {
+                let (source, target) = expected.split_once(" -> ").unwrap_or((expected, ""));
+                line.contains(source) && line.contains(target)
+            }),
+            "{expected}\n{text}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn receivers_flow_through_return_types_getters_and_private_fields() -> io::Result<()> {
+    let root = crate::infra::testdir::TestDir::new("receiver-chains")?;
+    fs::write(
+        root.path().join("lib.rs"),
+        "pub struct Builder;\npub struct Walk;\n\
+         impl Builder {\n    pub fn new() -> Builder { Builder }\n\
+         \x20   pub fn depth(&mut self) -> &mut Builder { self }\n\
+         \x20   pub fn build(&self) -> Result<Walk, String> { Ok(Walk) }\n}\n\
+         impl Walk {\n    pub fn run(&self) {}\n}\n\
+         pub fn chained() {\n    Builder::new().depth().depth().build().unwrap().run();\n}\n",
+    )?;
+    fs::write(
+        root.path().join("a.ts"),
+        "export class Item { insert(): void {} }\n\
+         export async function make(): Promise<Item> { return new Item() }\n\
+         export class Router {\n  #node: Item = new Item()\n  get y(): Item { return this.#node }\n\
+         \x20 viaPrivate() { this.#node.insert() }\n  viaGetter() { this.y.insert() }\n}\n\
+         export async function awaited() { const res = await make(); res.insert() }\n",
+    )?;
+    let text = render(&graph_of(root.path())?);
+    for (source, target) in [
+        ("chained", "Walk::run"),
+        ("Router.viaPrivate", "Item.insert"),
+        ("Router.viaGetter", "Item.insert"),
+        ("awaited", "Item.insert"),
+    ] {
+        assert!(
+            text.lines().any(|line| line.contains(source)
+                && line.contains(target)
+                && line.contains("calls")),
+            "{source} -> {target}\n{text}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn python_calls_resolve_to_last_same_module_definition() -> io::Result<()> {
     let root = crate::infra::testdir::TestDir::new("python-module-redefinition")?;
     fs::write(

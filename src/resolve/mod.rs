@@ -2,6 +2,7 @@
 //! resolution order steps 1 to 8). Pure; recomputed from cached facts on every change (D6).
 
 mod cfamily;
+mod chains;
 pub mod derive;
 mod dotnet;
 mod go;
@@ -38,7 +39,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 98;
+pub const RESOLVE_VERSION: u32 = 99;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -3258,6 +3259,21 @@ impl<'a> Index<'a> {
                 }
             }
         }
+        // 5b. Receiver chain through calls and getters (`Builder::new().depth(1).build()`).
+        if let Some(steps) = chains::receiver_steps(qualifier)
+            && steps.len() > 1
+            && steps.iter().any(|step| step.call)
+            && let Some(types) = self.chain_type(file, imports, reference, &steps)
+        {
+            let targets: Vec<(u32, Confidence)> = types
+                .iter()
+                .flat_map(|&type_symbol| self.members(type_symbol, name))
+                .map(|member| (member, Confidence::Inferred))
+                .collect();
+            if !targets.is_empty() {
+                return Outcome::Targets(targets, Confidence::Inferred);
+            }
+        }
         // 5. Member call: receiver type from self, bindings or fields.
         if chain.iter().all(|segment| is_identifier(segment)) {
             let receiver =
@@ -3570,7 +3586,13 @@ impl<'a> Index<'a> {
                     .get(&(part, *field))
                     .map(|&field_type| (part, field_type))
             }) else {
-                return Receiver::Unknown;
+                // A getter or property reads like a field.
+                let Some(result) = self.member_result(&parts, field) else {
+                    return Receiver::Unknown;
+                };
+                types = result;
+                confidence = Confidence::Inferred;
+                continue;
             };
             let mut owner_file = self.symbols[type_symbol as usize].file;
             let concrete = if types.len() == 1 {
@@ -4725,6 +4747,8 @@ fn split_qualified(name: &str) -> Option<(&str, &str)> {
 }
 
 fn is_identifier(text: &str) -> bool {
+    // ECMAScript private names read `#name`.
+    let text = text.strip_prefix('#').unwrap_or(text);
     !text.is_empty()
         && text
             .chars()

@@ -159,9 +159,10 @@ with open(verdicts_path, "w") as verdicts:
                       if parent in definitions}
             dispatch = set()
         else:
-            # Module and namespace symbols (`utils` -> file) say nothing about the member called.
+            # Module and namespace symbols (`utils` -> file, scip-python's `pkg/__init__:` for a name
+            # re-exported by the package) say nothing about the member called.
             oracle = {symbol for symbol in references.get((source, int(line)), set())
-                      if not symbol.endswith("/")}
+                      if not symbol.endswith(("/", "__init__:"))}
             if (kind in ("calls", "tests") and name not in {descriptor_name(symbol) for symbol in oracle}
                     and not any(symbol.endswith((").", "#")) for symbol in oracle)):
                 # The compiler resolved no call on this line (only parameters or variables, e.g.
@@ -169,6 +170,9 @@ with open(verdicts_path, "w") as verdicts:
                 oracle = set()
             dispatch = {parent for symbol in expected for parent in implements.get(symbol, ())}
         names = {descriptor_name(symbol) for symbol in oracle}
+        # A name read through a package's re-export reaches the compiler only as `pkg/__init__:`, so
+        # the other symbols on that line cannot contradict the edge.
+        reexported = any(symbol.endswith("__init__:") for symbol in references.get((source, int(line)), set()))
         # Without any in-repo reference there, or without a compiler symbol for the target (local
         # functions, CommonJS export objects), the compiler cannot judge the edge.
         if not oracle or not expected:
@@ -182,6 +186,8 @@ with open(verdicts_path, "w") as verdicts:
         elif name in names and any(symbol.endswith(name + ".") and not symbol.endswith(")." )
                                    for symbol in oracle):
             # Field shorthand (`Struct { name }`): the compiler reports only the field.
+            verdict = "unknown"
+        elif reexported:
             verdict = "unknown"
         else:
             verdict = "incorrect"

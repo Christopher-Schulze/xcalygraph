@@ -237,13 +237,18 @@ impl Index<'_> {
             };
             let is_package = self.input.files[file].path.ends_with("__init__.py");
             for import in &facts.imports {
-                let Some(original) = import
-                    .names
-                    .iter()
-                    .find(|imported| import.alias.as_deref().unwrap_or(imported.as_str()) == name)
-                else {
-                    continue;
-                };
+                // `from .models import *` offers the public names of that module.
+                let star = import.names.iter().any(|imported| imported == "*");
+                let original =
+                    if star && !name.starts_with('_') {
+                        name
+                    } else if let Some(original) = import.names.iter().find(|imported| {
+                        import.alias.as_deref().unwrap_or(imported.as_str()) == name
+                    }) {
+                        original.as_str()
+                    } else {
+                        continue;
+                    };
                 let Some(source) = absolute(&import.spec, &current, is_package)
                     .and_then(|path| self.python_module(&path))
                 else {
@@ -282,11 +287,7 @@ impl Index<'_> {
             dotted = join(&dotted, segment);
             module = self.python_module(&dotted)?;
         }
-        let found: Vec<u32> = self
-            .module_symbol(module, name, None)
-            .into_iter()
-            .filter(|&symbol| self.symbols[symbol as usize].kind != SymKind::Mod)
-            .collect();
+        let found = self.python_exported(module, name, 0);
         (!found.is_empty()).then_some(found)
     }
 }

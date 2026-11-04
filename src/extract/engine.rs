@@ -2099,9 +2099,15 @@ pub fn type_name(text: &str) -> String {
 pub fn result_type(text: &str) -> String {
     let mut text = facts::normalize_space(text);
     loop {
-        let unwrapped = ["Result<", "Option<", "io::Result<", "anyhow::Result<"]
-            .iter()
-            .find_map(|wrapper| text.strip_prefix(wrapper).map(str::to_owned));
+        let unwrapped = [
+            "Result<",
+            "Option<",
+            "io::Result<",
+            "anyhow::Result<",
+            "Promise<",
+        ]
+        .iter()
+        .find_map(|wrapper| text.strip_prefix(wrapper).map(str::to_owned));
         match unwrapped {
             Some(inner) => text = inner,
             None => break,
