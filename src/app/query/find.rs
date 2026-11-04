@@ -1,8 +1,10 @@
 //! `find`: ranked symbols and files, one line each (`docs/spec.md` section 7.2).
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
-use super::{Filter, Index, Node};
+use super::output::{Value, Writer};
+use super::{Filter, Index, Node, show};
 use crate::domain::search::{self, B, FIELD_WEIGHTS, FIELDS, K1};
 use crate::infra::store::derived::PostingRecord;
 
@@ -15,6 +17,14 @@ const DIVERSITY: f32 = 0.4;
 const EXPANSION_WEIGHT: f32 = 0.5;
 /// Hits below this share of the top score are noise.
 const RELEVANCE_FLOOR: f32 = 0.05;
+/// Source lines of the first answer and the width they are clipped to.
+const EXCERPT_LINES: usize = 8;
+const EXCERPT_WIDTH: usize = 100;
+/// The top hit gets its source only when it leads the runner-up by this factor: then it is right
+/// in about 78 % of the sealed questions, below it in about 38 %, and the list serves better.
+const DOMINANCE: f32 = 1.3;
+/// Callers and callees of the first answer, each.
+const NEIGHBOURS: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hit {
@@ -344,6 +354,124 @@ pub fn render(index: &Index, hits: &[Hit], json: bool, budget: usize) -> String 
         .map(|hit| (hit.node, json.then_some(hit.score), false))
         .collect();
     render_nodes(index, &nodes, json, budget, false)
+}
+
+/// [`render`] with the first answer: the top hit's source and neighbours follow its line, so
+/// an agent can conclude without a second call (about 20,000 tokens of re-sent context).
+pub fn render_answer(
+    index: &Index,
+    filter: &Filter,
+    root: &Path,
+    hits: &[Hit],
+    query: &str,
+    json: bool,
+    budget: usize,
+) -> String {
+    let [first, second, ..] = hits else {
+        return render(index, hits, json, budget);
+    };
+    if first.score < second.score * DOMINANCE {
+        return render(index, hits, json, budget);
+    }
+    let lines = excerpt(index, root, first.node, query);
+    let write = |writer: &mut Writer, count: usize| {
+        for (position, hit) in hits[..count].iter().enumerate() {
+            index.write_symbol(writer, hit.node, json.then_some(hit.score), false);
+            if position == 0 {
+                for (line, text) in &lines {
+                    let shown = match line {
+                        Some(line) => format!("    {line} {text}"),
+                        None => format!("    {text}"),
+                    };
+                    writer.line(
+                        &shown,
+                        &[
+                            ("t", Value::Str("source")),
+                            ("line", Value::Int(u64::from(line.unwrap_or(0)))),
+                            ("text", Value::Str(text)),
+                        ],
+                    );
+                }
+                show::neighbours(index, filter, writer, hit.node, NEIGHBOURS);
+            }
+        }
+    };
+    let fits = |count: usize| {
+        let mut writer = Writer::new(json, budget);
+        write(&mut writer, count);
+        !writer.is_full()
+    };
+    let (mut low, mut high) = (1, hits.len());
+    while low < high {
+        let middle = (low + high).div_ceil(2);
+        if fits(middle) {
+            low = middle
+        } else {
+            high = middle - 1
+        }
+    }
+    let mut writer = Writer::new(json, budget);
+    write(&mut writer, low);
+    writer.skip(hits.len() - low);
+    writer.finish()
+}
+
+/// Lines of a symbol's body worth reading: all of a short one, otherwise its start and the lines
+/// naming a query word; the last entry counts what stayed out.
+fn excerpt(index: &Index, root: &Path, node: u32, query: &str) -> Vec<(Option<u32>, String)> {
+    let Node::Symbol(symbol) = index.node(node) else {
+        return Vec::new();
+    };
+    if symbol.end_line <= symbol.line {
+        return Vec::new();
+    }
+    let Ok(content) = std::fs::read(root.join(index.path_of(node))) else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&content);
+    let words: Vec<String> = query
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|word| word.len() >= 3)
+        .map(str::to_lowercase)
+        .collect();
+    let body: Vec<(u32, &str)> = text
+        .lines()
+        .enumerate()
+        .map(|(index, line)| (index as u32 + 1, line))
+        .skip(symbol.line as usize)
+        .take((symbol.end_line - symbol.line) as usize)
+        .filter(|(_, line)| !line.trim().is_empty())
+        .collect();
+    let chosen: Vec<&(u32, &str)> = if body.len() <= EXCERPT_LINES {
+        body.iter().collect()
+    } else {
+        let start = EXCERPT_LINES / 2;
+        let named = body[start..].iter().filter(|(_, line)| {
+            let line = line.to_lowercase();
+            words.iter().any(|word| line.contains(word.as_str()))
+        });
+        body[..start]
+            .iter()
+            .chain(named.take(EXCERPT_LINES - start))
+            .collect()
+    };
+    let mut lines: Vec<(Option<u32>, String)> = chosen
+        .iter()
+        .map(|(line, code)| (Some(*line), clip(code.trim_end())))
+        .collect();
+    if body.len() > chosen.len() {
+        lines.push((None, format!("+{} lines", body.len() - chosen.len())));
+    }
+    lines
+}
+
+fn clip(line: &str) -> String {
+    if line.chars().count() <= EXCERPT_WIDTH {
+        return line.to_owned();
+    }
+    let mut clipped: String = line.chars().take(EXCERPT_WIDTH).collect();
+    clipped.push('…');
+    clipped
 }
 
 /// Writes the longest prefix of `nodes` (node, score, with doc) whose form grouped under files

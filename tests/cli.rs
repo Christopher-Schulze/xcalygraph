@@ -4590,3 +4590,58 @@ fn building_a_new_index_removes_indexes_of_vanished_roots() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn a_clear_top_hit_answers_with_its_source_and_neighbours() -> TestResult {
+    let dir = TempDir::new("find-answer")?;
+    let long_body: String = (0..30)
+        .map(|index| format!("    step{index}()\n"))
+        .collect();
+    dir.write(
+        "pay.go",
+        &format!(
+            "package pay\n\nfunc ChargeInvoice() {{\n{long_body}    audit()\n}}\n\n\
+             func audit() {{}}\n\nfunc Checkout() {{\n    ChargeInvoice()\n}}\n"
+        ),
+    )?;
+    dir.write(
+        "other.go",
+        "package pay\n\nfunc Refund() {}\n\nfunc Rebate() {}\n",
+    )?;
+    let root = dir.0.to_string_lossy().into_owned();
+    let find = |terms: &[&str]| -> io::Result<String> {
+        let mut args = vec!["find", "-C", &root];
+        args.extend_from_slice(terms);
+        let output = support::command(BINARY, &dir.0).args(&args).output()?;
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    };
+    let clear = find(&["ChargeInvoice"])?;
+    assert!(clear.contains("  3 func ChargeInvoice()"), "{clear}");
+    assert!(
+        clear.contains("    4     step0()"),
+        "body follows the hit: {clear}"
+    );
+    assert!(
+        clear.contains("    +"),
+        "the rest of the body is counted: {clear}"
+    );
+    assert!(clear.contains("    < Checkout pay.go:"), "{clear}");
+    assert!(clear.contains("    > audit pay.go:"), "{clear}");
+    // Query words pull their lines out of a long body.
+    let named = find(&["ChargeInvoice", "step20"])?;
+    assert!(named.contains("    24     step20()"), "{named}");
+    // Two equal hits: the list serves better than one body.
+    let tied = find(&["Re"])?;
+    assert!(!tied.lines().any(|line| line.starts_with("    ")), "{tied}");
+    // JSON carries the same facts.
+    let output = support::command(BINARY, &dir.0)
+        .args(["find", "-C", &root, "--json", "ChargeInvoice"])
+        .output()?;
+    let json = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        json.lines()
+            .any(|line| line.contains("\"t\":\"source\"") && line.contains("step0")),
+        "{json}"
+    );
+    Ok(())
+}

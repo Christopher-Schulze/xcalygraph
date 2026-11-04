@@ -27,7 +27,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | command | arguments | budget | result |
 |---------|-----------|--------|--------|
 | `map` | none | 2500 | orientation (7.1) |
-| `find` | `TERMS...` | 600 | ranked symbols and files, one line each (7.2) |
+| `find` | `TERMS...` | 600 | ranked symbols and files, a clear top hit with source and neighbours (7.2) |
 | `ctx` | `TERMS...` | 2000 | context bundle: seeds plus related symbols with signatures (7.3) |
 | `show` | `NAME [--all]` | 1200 | symbol card (7.4); `--all` lifts per-section caps |
 | `impact` | `NAME...` or `--diff [REV]` | 1500 | changed and affected symbols, tests, run commands (7.5) |
@@ -269,13 +269,15 @@ Git data requires `git` on PATH and a git work tree; otherwise git sections prin
 
 ## 7. Query semantics
 
-Detail ladder: `find` (one line per hit) -> `ctx` (bundle with signatures) -> `show` (full card) -> source read at the cited lines.
+Detail ladder: `find` (one line per hit, a clear top hit with source and neighbours) -> `ctx` (bundle with signatures) -> `show` (full card) -> source read at the cited lines.
 
 ### 7.1 map
 
 Sections in priority order: root line (name, files per language, symbol count) -> modules (tree by path, depth max 3; files, symbols, top 3 symbols by rank; max 40 lines) -> entrypoints -> tasks -> hubs (top 10 by rank) -> api contracts -> cycles -> layers -> external dependencies (top 15 by use count) -> env vars (name, read count, definition sources, first read location). Sections other than modules hold max 10 lines; the budget cuts from the lowest-priority section upward.
 
 ### 7.2 find
+
+First answer: when the top hit's score is at least 1.3 times the runner-up's, its source follows its line (4 spaces, then line number and code, clipped to 100 characters): a body of at most 8 non-empty lines whole, otherwise its first 4 lines and up to 4 lines naming a query word, then `+N lines`; then up to 3 callers and 3 callees (`<`, `>`). JSON: `source` records with `line` and `text`, `edge` records.
 
 An explicit, case-insensitive `exact symbol NAME` cue resolves the following identifier through exact symbol lookup; a missing name returns no hits instead of semantic candidates. `ctx` uses the resolved hits for seed selection before adding related graph context.
 
@@ -343,8 +345,9 @@ Record-specific fields: `root` uses `n` for files and `symbols` for symbols; `mo
 
 | field | type | description |
 |-------|------|-------------|
-| `t` | string | record type: `sym`, `file`, `edge`, `sec`, `note`, `more`, `root`, `mod`, `cycle`, `layer`, `ext`, `env` |
+| `t` | string | record type: `sym`, `file`, `source`, `edge`, `sec`, `note`, `more`, `root`, `mod`, `cycle`, `layer`, `ext`, `env` |
 | `path` | string | root-relative path |
+| `text` | string | source line (`source` records) |
 | `line`, `end`, `new_line` | int | 1-based source or current line |
 | `kind` | string | symbol kind, edge kind or audit drift direction |
 | `name` | string | symbol, root/module, reference or finding name |

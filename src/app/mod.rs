@@ -195,7 +195,15 @@ fn run_query(
             if hits.is_empty() {
                 return Err(AppError::NoMatch(format!("no match for '{terms}'")));
             }
-            Ok(query::find::render(index, &hits, json, budget(600)))
+            Ok(query::find::render_answer(
+                index,
+                filter,
+                root,
+                &hits,
+                &terms,
+                json,
+                budget(600),
+            ))
         }
         CommandName::Ctx => {
             let terms = args.join(" ");

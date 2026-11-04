@@ -10,11 +10,15 @@ use crate::infra::store::derived::EdgeRecord;
 
 /// Lines per section unless `--all`.
 const SECTION_LINES: usize = 10;
+/// Indentation levels of neighbours under a hit of `find`.
+const CARD_INDENT: usize = 2;
 
 struct EdgeDisplay<'a> {
     marker: &'a str,
     relation: &'a str,
     depth: usize,
+    /// Extra levels of text indentation.
+    indent: usize,
     site: bool,
     exact: bool,
 }
@@ -92,14 +96,14 @@ pub fn render(index: &Index, filter: &Filter, node: u32, options: &ShowOptions) 
                 distinct.push(edge);
             }
         }
-        relation(index, &mut writer, "^", "sup", &distinct, cap, false);
+        relation(index, &mut writer, ("^", "sup"), &distinct, cap, false, 0);
         let subtypes = edges(
             index,
             filter,
             index.derived.incoming(node),
             &[EdgeKind::Inherits, EdgeKind::Implements],
         );
-        relation(index, &mut writer, "v", "sub", &subtypes, cap, true);
+        relation(index, &mut writer, ("v", "sub"), &subtypes, cap, true, 0);
     }
     traverse(
         index,
@@ -310,14 +314,41 @@ fn rank_of(index: &Index, node: u32) -> f32 {
 
 /// One related node: `<marker> <label> <path>:<line>[?]`; `site` prints the reference line
 /// instead of the definition line (incoming edges).
+/// Callers and callees of a symbol, at most `cap` of each.
+pub fn neighbours(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: usize) {
+    if !matches!(index.node(node), Node::Symbol(_)) {
+        return;
+    }
+    let incoming = edges(index, filter, index.derived.incoming(node), &INCOMING);
+    relation(
+        index,
+        writer,
+        ("<", "in"),
+        &incoming,
+        cap,
+        true,
+        CARD_INDENT,
+    );
+    let outgoing = edges(index, filter, index.derived.outgoing(node), &OUTGOING);
+    relation(
+        index,
+        writer,
+        (">", "out"),
+        &outgoing,
+        cap,
+        false,
+        CARD_INDENT,
+    );
+}
+
 fn relation(
     index: &Index,
     writer: &mut Writer,
-    marker: &str,
-    rel: &str,
+    (marker, rel): (&str, &str),
     list: &[&EdgeRecord],
     cap: usize,
     site: bool,
+    indent: usize,
 ) {
     let mut positions: HashMap<(u32, EdgeKind), usize> = HashMap::new();
     let mut distinct: Vec<&EdgeRecord> = Vec::with_capacity(list.len());
@@ -353,6 +384,7 @@ fn relation(
                 marker,
                 relation: rel,
                 depth: 0,
+                indent,
                 site,
                 exact: edge.is_exact(),
             },
@@ -374,7 +406,7 @@ fn write_edge(
     };
     let label = index.label(edge.node);
     let inferred = if display.exact { "" } else { "?" };
-    let indent = "  ".repeat(display.depth);
+    let indent = "  ".repeat(display.depth + display.indent);
     let kind = match edge.kind() {
         EdgeKind::Calls | EdgeKind::Tests | EdgeKind::Inherits | EdgeKind::Implements => {
             String::new()
@@ -466,6 +498,7 @@ fn traverse(
                     marker,
                     relation: rel,
                     depth: level,
+                    indent: 0,
                     site: direction == Direction::In,
                     exact: edge.is_exact(),
                 },
@@ -536,6 +569,7 @@ fn tests(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: us
                 marker,
                 relation: "test",
                 depth: 0,
+                indent: 0,
                 site: true,
                 exact: *exact,
             },

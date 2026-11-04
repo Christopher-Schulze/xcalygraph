@@ -136,7 +136,9 @@ impl CommandName {
             Self::Map => {
                 "orientation: languages, modules, entrypoints, hubs, cycles, layers, deps, env"
             }
-            Self::Find => "ranked symbols and files, one line each",
+            Self::Find => {
+                "ranked symbols and files; a clear top hit with its source and neighbours"
+            }
             Self::Ctx => "context bundle: best matches plus related symbols with signatures",
             Self::Show => "card of a symbol or file: members, types, callers, callees, tests, env",
             Self::Impact => "changed symbols, affected dependents by depth, tests and run commands",
