@@ -328,7 +328,6 @@ pub fn is_test_path(file_type: FileType, path: &str) -> bool {
         OCaml | Fortran => has_dir(&["test", "tests"]),
         Lisp => has_dir(&["test", "tests", "t"]),
         Solidity => name.ends_with(".t.sol") || has_dir(&["test"]),
-        Verilog => stem.ends_with("_tb") || stem.starts_with("tb_"),
         PowerShell => name.ends_with(".Tests.ps1"),
         Bash => name.ends_with(".bats"),
         Terraform => name.ends_with(".tftest.hcl"),
@@ -450,7 +449,6 @@ mod tests {
             (FileType::Ruby, "spec/models/user_spec.rb"),
             (FileType::R, "tests/testthat/test-model.R"),
             (FileType::Solidity, "src/Token.t.sol"),
-            (FileType::Verilog, "rtl/alu_tb.sv"),
             (FileType::PowerShell, "Module.Tests.ps1"),
             (FileType::Terraform, "main.tftest.hcl"),
         ];

@@ -108,7 +108,6 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | Pascal, Delphi | `pascal` | `.pas`, `.pp`, `.dpr`, `.dpk`, `.lpr`, `.inc`, `.dfm`, `.lfm`, `.lpk` | deep | `TTestCase` subclasses |
 | Common Lisp | `lisp` | `.lisp`, `.cl`, `.lsp`, `.asd` | deep | files under `test/`, `tests/`, `t/` |
 | Solidity | `solidity` | `.sol` | deep | `*.t.sol`, files under `test/` |
-| Verilog, SystemVerilog | `verilog` | `.v`, `.sv`, `.svh`, `.vh` | deep | `*_tb.*`, `tb_*.*` |
 | PowerShell | `powershell` | `.ps1`, `.psm1`, `.psd1` | deep | `*.Tests.ps1` |
 | Bash | `bash` | `.sh`, `.bash`, `.bats`; extensionless files with `sh`, `bash` or `zsh` shebang | deep | `.bats` files |
 | SQL | `sql` | `.sql` | deep | none |
@@ -124,7 +123,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | XAML | `xaml` | `.xaml` | structural | none |
 | DM resources | `dmres` | `.dmi`, `.dmm`, `.dmf` | structural | none |
 
-- Detection: longest suffix wins (`.blade.php` before `.php`). Ambiguous suffixes are decided by content markers in the first 8 KiB, else role `other`: `.h` (Objective-C on `@interface` or `#import`, C++ on `class`, `namespace`, `template` or a C++ sibling with the same stem, else C; a sibling appearing, disappearing, being renamed or ignored reclassifies the unchanged header, so an update equals a fresh build); `.m` (Objective-C on `#import`, `@interface` or `@implementation`); `.v` (Verilog on `module` with `endmodule`); `.inc`, `.pp` (Pascal on `unit`, `procedure`, `function` or `begin`); `.cl` (Common Lisp on a leading `(`); `.cls` (Apex on `class` or `interface` with an access modifier).
+- Detection: longest suffix wins (`.blade.php` before `.php`). Ambiguous suffixes are decided by content markers in the first 8 KiB, else role `other`: `.h` (Objective-C on `@interface` or `#import`, C++ on `class`, `namespace`, `template` or a C++ sibling with the same stem, else C; a sibling appearing, disappearing, being renamed or ignored reclassifies the unchanged header, so an update equals a fresh build); `.m` (Objective-C on `#import`, `@interface` or `@implementation`); `.inc`, `.pp` (Pascal on `unit`, `procedure`, `function` or `begin`); `.cl` (Common Lisp on a leading `(`); `.cls` (Apex on `class` or `interface` with an access modifier).
 - Embedded code: HTML inline classic JavaScript (missing/empty `type`, a JavaScript MIME essence, or a legacy `language` value) and module scripts with literal attribute values are parsed per block with function body terms kept on their owning symbols; external `src`, data blocks, comments, declarations, CDATA, inert `<template>` and `<noscript>` contents, classic `nomodule` scripts and unclosed blocks are omitted. Vue, Svelte and Astro `<script>` blocks are extracted in their language; Markdown fenced code contributes mentions only.
 - Ignore rules, lowest to highest precedence: global git excludes (`$XDG_CONFIG_HOME/git/ignore`), `.git/info/exclude`, nested `.gitignore`, nested `.xcalygraphignore` (gitignore syntax).
 - Always pruned: `.git`, `.hg`, `.svn`, `node_modules`, `__pycache__`, `graphify-out`, directories containing `CACHEDIR.TAG` or `pyvenv.cfg`, `vendor` next to `go.mod` when `vendor/modules.txt` exists.
@@ -201,7 +200,6 @@ Freshness:
 | Pascal, Delphi | `unit` | `uses` clauses; forms linked to the unit of the same name |
 | Common Lisp | `defpackage` and `in-package`; systems from `.asd` | `package:symbol`, `:use` lists, `.asd` components |
 | Solidity | file | `import` paths with `remappings.txt` and `foundry.toml` remappings |
-| Verilog, SystemVerilog | `module`, `package` | instantiation by module name, `` `include ``, `import pkg::*` |
 | PowerShell | file; module manifests | dot-sourcing and `Import-Module` with literal paths |
 | Bash | file | `source` and `.` with literal relative paths |
 | SQL | schema object | object names in DDL and DML |

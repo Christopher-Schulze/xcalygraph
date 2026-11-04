@@ -69,8 +69,6 @@ pub mod swift;
 pub mod typescript;
 #[cfg(feature = "lang-vbnet")]
 pub mod vbnet;
-#[cfg(feature = "lang-verilog")]
-pub mod verilog;
 #[cfg(feature = "lang-zig")]
 pub mod zig;
 
@@ -156,8 +154,6 @@ const PACKS: &[&Pack] = &[
     &commonlisp::PACK,
     #[cfg(feature = "lang-solidity")]
     &solidity::PACK,
-    #[cfg(feature = "lang-verilog")]
-    &verilog::PACK,
     #[cfg(feature = "lang-powershell")]
     &powershell::PACK,
     #[cfg(feature = "lang-robot")]

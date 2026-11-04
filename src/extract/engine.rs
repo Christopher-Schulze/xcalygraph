@@ -104,7 +104,6 @@ pub struct FileContext<'a> {
     feature = "lang-elixir",
     feature = "lang-erlang",
     feature = "lang-dm",
-    feature = "lang-verilog",
     feature = "lang-ruby",
     feature = "lang-commonlisp",
     feature = "lang-dart"

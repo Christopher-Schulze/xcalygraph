@@ -26,7 +26,6 @@ json-fortran	https://github.com/jacobwilliams/json-fortran	d9ed2e4ee53745f4ed98d
 horse	https://github.com/HashLoad/horse	a0ac019be1d29fd9deb20f61ca779d5631718bdb	pascal
 hunchentoot	https://github.com/edicl/hunchentoot	65a3a3cca7e6e91fb068efc2ef8069b5c78ee91f	lisp
 solmate	https://github.com/transmissions11/solmate	89365b880c4f3c786bdd453d4b8e8fe410344a69	solidity
-serv	https://github.com/olofk/serv	f200eb2ed7b69ac1c6b8eddd47654522aeee5ce8	verilog
 psslack	https://github.com/RamblingCookieMonster/PSSlack	1c9d6c0b810803fbf9a1c666f299ccd90e3f5bee	powershell
 robotdemo	https://github.com/robotframework/RobotDemo	c7d226faaea06c43deb26038080a670e10afa93f	robot
 tgstation	https://github.com/tgstation/tgstation	b2b976a48044d915c0b3c16bbe97e72dad42019e	dm

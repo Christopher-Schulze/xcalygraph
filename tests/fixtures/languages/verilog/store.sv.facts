@@ -1,8 +1,0 @@
-sym 2-2 mod store_pkg parent=- owner= pub flags=0 sig="package store_pkg; typedef int row_t; endpackage" doc=""
-sym 3-9 class store parent=- owner= pub flags=0 sig="module store #(parameter W = 8) (input logic clk, output logic [W-1:0] q)" doc=""
-sym 6-6 method add parent=store owner=store pub flags=0 sig="function automatic int add(int a); return a + 1; endfunction" doc=""
-sym 7-7 method reset parent=store owner=store pub flags=0 sig="task reset(); endtask" doc=""
-import 1 "defs.svh" names= alias=- reexport=false
-import 4 "store_pkg" names= alias=- reexport=false
-ref 5 Call counter qualifier=- scope=store
-ref 8 Call add qualifier=- scope=store

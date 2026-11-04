@@ -36,7 +36,6 @@ pub enum FileType {
     Pascal,
     Lisp,
     Solidity,
-    Verilog,
     PowerShell,
     Bash,
     Sql,
@@ -95,8 +94,6 @@ pub enum Ambiguous {
     Header,
     /// `.m`: Objective-C, else unknown.
     M,
-    /// `.v`: Verilog, else unknown.
-    V,
     /// `.inc`, `.pp`: Pascal, else unknown.
     PascalInclude,
     /// `.cl`: Common Lisp, else unknown.
@@ -116,15 +113,15 @@ pub enum Detection {
 }
 
 /// Every file type in discriminant order (1-based).
-pub const ALL: [FileType; 72] = {
+pub const ALL: [FileType; 71] = {
     use FileType::*;
     [
         Go, Rust, TypeScript, JavaScript, Vue, Svelte, Astro, Python, Java, Kotlin, Scala, Groovy,
         CSharp, VbNet, C, Cpp, ObjC, Swift, Ruby, Php, Lua, Zig, Elixir, Erlang, Dart, Julia, R,
-        OCaml, Fortran, Pascal, Lisp, Solidity, Verilog, PowerShell, Bash, Sql, Terraform, Robot,
-        Dm, Apex, Razor, Blade, Ejs, Jinja, Cobol, Xaml, DmResource, Json, Yaml, Toml, Xml, Ini,
-        Properties, Proto, GraphQl, Dockerfile, Make, EnvExample, Markdown, Text, Rst, Org,
-        AsciiDoc, Tex, Html, Pdf, Docx, Xlsx, Image, Svg, Video, Audio,
+        OCaml, Fortran, Pascal, Lisp, Solidity, PowerShell, Bash, Sql, Terraform, Robot, Dm, Apex,
+        Razor, Blade, Ejs, Jinja, Cobol, Xaml, DmResource, Json, Yaml, Toml, Xml, Ini, Properties,
+        Proto, GraphQl, Dockerfile, Make, EnvExample, Markdown, Text, Rst, Org, AsciiDoc, Tex,
+        Html, Pdf, Docx, Xlsx, Image, Svg, Video, Audio,
     ]
 };
 
@@ -176,7 +173,6 @@ impl FileType {
             Pascal => "pascal",
             Lisp => "lisp",
             Solidity => "solidity",
-            Verilog => "verilog",
             PowerShell => "powershell",
             Bash => "bash",
             Sql => "sql",
@@ -289,7 +285,6 @@ pub fn detect(name: &str) -> Detection {
         "pas" | "dpr" | "dpk" | "lpr" | "dfm" | "lfm" | "lpk" => Pascal,
         "lisp" | "lsp" | "asd" => Lisp,
         "sol" => Solidity,
-        "sv" | "svh" | "vh" => Verilog,
         "ps1" | "psm1" | "psd1" => PowerShell,
         "sh" | "bash" | "bats" => Bash,
         "sql" => Sql,
@@ -329,7 +324,6 @@ pub fn detect(name: &str) -> Detection {
         "mp3" | "wav" | "m4a" | "ogg" => Audio,
         "h" => return Detection::Ambiguous(Ambiguous::Header),
         "m" => return Detection::Ambiguous(Ambiguous::M),
-        "v" => return Detection::Ambiguous(Ambiguous::V),
         "inc" | "pp" => return Detection::Ambiguous(Ambiguous::PascalInclude),
         "cl" => return Detection::Ambiguous(Ambiguous::Cl),
         "cls" => return Detection::Ambiguous(Ambiguous::Cls),
@@ -361,7 +355,6 @@ pub fn resolve_ambiguous(ambiguous: Ambiguous, head: &[u8], cpp_sibling: bool) -
             || text.contains("@interface")
             || text.contains("@implementation"))
         .then_some(FileType::ObjC),
-        Ambiguous::V => (has_word("module") && has_word("endmodule")).then_some(FileType::Verilog),
         Ambiguous::PascalInclude => {
             let lower = text.to_ascii_lowercase();
             ["unit", "procedure", "function", "begin"]
@@ -459,7 +452,7 @@ mod tests {
     #[test]
     fn ambiguous_suffixes_follow_content_markers() {
         use Ambiguous::*;
-        let cases: [(Ambiguous, &str, bool, Option<FileType>); 12] = [
+        let cases: [(Ambiguous, &str, bool, Option<FileType>); 11] = [
             (
                 Header,
                 "#import <Foundation/Foundation.h>",
@@ -472,7 +465,6 @@ mod tests {
             (Header, "int classify(int a);", false, Some(FileType::C)),
             (M, "@implementation Foo\n@end", false, Some(FileType::ObjC)),
             (M, "x = [1 2 3];", false, None),
-            (V, "module top(); endmodule", false, Some(FileType::Verilog)),
             (
                 PascalInclude,
                 "procedure Run; begin end;",
