@@ -47,6 +47,28 @@ fn same_language_family(a: FileType, b: FileType) -> bool {
     a == b || (family(a) != 0 && family(a) == family(b))
 }
 
+/// One line on what "nothing refers to this" means for a node without incoming edges: proven up
+/// to dynamic use, or unproven because analysis or name resolution stayed incomplete.
+pub(super) fn absence_note(index: &Index, filter: &Filter, node: u32) -> String {
+    let file_type = index.file_of(node).file_type();
+    if let Some(note) = coverage_note(index, filter, Coverage::ParseErrors, file_type) {
+        return note;
+    }
+    let Node::Symbol(symbol) = index.node(node) else {
+        return "! no static reference in the repository; complete analysis".to_owned();
+    };
+    let name = index.string(symbol.name);
+    if index.derived.is_ambiguous_name(name) {
+        return format!(
+            "! no resolved reference; ambiguous references named {name} remain, absence unproven"
+        );
+    }
+    if symbol.exported != 0 {
+        return "! no static reference in the repository; complete analysis, exported".to_owned();
+    }
+    "! no static reference in the repository; complete analysis".to_owned()
+}
+
 /// One bounded line naming the files, among those passing `filter` and at least `minimum` severe,
 /// that were not fully analyzed: most severe first, deterministic. With `language`, only files
 /// that could reference symbols of that language count. `None` when no such file exists, so

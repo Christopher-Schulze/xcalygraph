@@ -1449,15 +1449,19 @@ fn render(
         ),
     );
     // No dependent is only proven when the analysis saw everything.
-    if affected.is_empty()
-        && let Some(target) = targets.first()
-        && let Some(note) = super::coverage_note(
+    let absence = match targets {
+        [target] if affected.is_empty() && tests.is_empty() => {
+            Some(super::absence_note(index, filter, target.node))
+        }
+        [target, ..] if affected.is_empty() => super::coverage_note(
             index,
             filter,
             Coverage::ParseErrors,
             index.file_of(target.node).file_type(),
-        )
-    {
+        ),
+        _ => None,
+    };
+    if let Some(note) = absence {
         writer.line(
             &note,
             &[("t", Value::Str("note")), ("name", Value::Str(&note))],

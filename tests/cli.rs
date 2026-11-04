@@ -4721,3 +4721,43 @@ fn every_printed_location_resolves_to_its_symbol() -> TestResult {
     assert!(resolved >= 6, "only {resolved} locations checked");
     Ok(())
 }
+
+#[test]
+fn an_unreferenced_symbol_says_what_its_absence_proves() -> TestResult {
+    let dir = TempDir::new("absence")?;
+    dir.write(
+        "app.go",
+        "package app\n\nfunc Used() {}\n\nfunc unused() {}\n\nfunc Exported() {}\n\nfunc Caller() {\n\tUsed()\n}\n",
+    )?;
+    let root = dir.0.to_string_lossy().into_owned();
+    let query = |command: &str, name: &str| -> io::Result<(String, String)> {
+        let output = support::command(BINARY, &dir.0)
+            .args([command, "-C", &root, name])
+            .output()?;
+        Ok((
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        ))
+    };
+    let (unused, _) = query("show", "unused")?;
+    assert!(
+        unused.contains("! no static reference in the repository; complete analysis\n"),
+        "{unused}"
+    );
+    let (exported, _) = query("impact", "Exported")?;
+    assert!(
+        exported.contains("! no static reference in the repository; complete analysis, exported\n"),
+        "{exported}"
+    );
+    let (used, _) = query("show", "Used")?;
+    assert!(!used.contains("no static reference"), "{used}");
+    // Incomplete analysis: absence is unproven, not asserted.
+    dir.write("broken.go", "package app\n\nfunc ( {\n")?;
+    let (unproven, _) = query("show", "unused")?;
+    assert!(unproven.contains("absence unproven"), "{unproven}");
+    assert!(!unproven.contains("complete analysis"), "{unproven}");
+    // A miss names what was searched.
+    let (_, miss) = query("find", "zzznothinghere")?;
+    assert!(miss.contains("rg checks exact text"), "{miss}");
+    Ok(())
+}

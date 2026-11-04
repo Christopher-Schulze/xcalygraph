@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 
 use super::output::{Value, Writer};
 use super::{Filter, Index, Node};
-use crate::domain::facts::Coverage;
 use crate::domain::graph::EdgeKind;
 use crate::infra::store::derived::EdgeRecord;
 
@@ -125,15 +124,8 @@ pub fn render(index: &Index, filter: &Filter, node: u32, options: &ShowOptions) 
     );
     tests(index, filter, &mut writer, node, cap);
     envs(index, filter, &mut writer, node, cap);
-    // No caller is only proven when the analysis saw everything.
-    if index.derived.incoming(node).is_empty()
-        && let Some(note) = super::coverage_note(
-            index,
-            filter,
-            Coverage::ParseErrors,
-            index.file_of(node).file_type(),
-        )
-    {
+    if index.derived.incoming(node).is_empty() {
+        let note = super::absence_note(index, filter, node);
         writer.line(
             &note,
             &[("t", Value::Str("note")), ("name", Value::Str(&note))],

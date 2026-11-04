@@ -134,6 +134,13 @@ fn prepare_workspace(
     }
 }
 
+/// A search miss says what was searched, so the agent knows what it does and does not prove.
+fn no_match(terms: &str) -> String {
+    format!(
+        "no match for '{terms}' in names, signatures, docs and body words; rg checks exact text"
+    )
+}
+
 fn prepare_index(
     workspace: &Workspace,
     mode: Mode,
@@ -193,7 +200,7 @@ fn run_query(
             let terms = args.join(" ");
             let hits = query::find::search(index, filter, &terms);
             if hits.is_empty() {
-                return Err(AppError::NoMatch(format!("no match for '{terms}'")));
+                return Err(AppError::NoMatch(no_match(&terms)));
             }
             Ok(query::find::render_answer(
                 index,
@@ -208,7 +215,7 @@ fn run_query(
         CommandName::Ctx => {
             let terms = args.join(" ");
             query::ctx::render(index, filter, &terms, json, budget(2000))
-                .ok_or_else(|| AppError::NoMatch(format!("no match for '{terms}'")))
+                .ok_or_else(|| AppError::NoMatch(no_match(&terms)))
         }
         CommandName::Show => {
             let node = query::names::resolve_one(index, filter, &args[0], json, ambiguity)?;
