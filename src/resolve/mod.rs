@@ -39,7 +39,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 102;
+pub const RESOLVE_VERSION: u32 = 103;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1532,6 +1532,10 @@ impl<'a> Index<'a> {
             .flatten()
             .copied()
             .filter(|&s| self.symbols[s as usize].kind.is_type())
+            .filter(|&s| {
+                self.file_type(file) != Some(FileType::Rust)
+                    || self.file_type(self.symbols[s as usize].file) == Some(FileType::Rust)
+            })
             .collect();
         unique(&candidates, |s| self.is_test(s)).map(|symbol| (vec![symbol], Confidence::Inferred))
     }
@@ -3213,7 +3217,7 @@ impl<'a> Index<'a> {
         }
         // 5a. Receiver that is itself a call (`Service().run()`, `open(x).read()`): the result
         // type of the call, inferred.
-        if let Some(callee) = call_receiver(qualifier) {
+        if !rust && let Some(callee) = call_receiver(qualifier) {
             if self.call_result_is_external(file, imports, reference.scope, reference.line, callee)
             {
                 return self
@@ -3241,17 +3245,22 @@ impl<'a> Index<'a> {
         }
         // 5b. Receiver chain through calls and getters (`Builder::new().depth(1).build()`).
         if let Some(steps) = chains::receiver_steps(qualifier)
-            && steps.len() > 1
+            && (rust || steps.len() > 1)
             && steps.iter().any(|step| step.call)
-            && let Some(types) = self.chain_type(file, imports, reference, &steps)
         {
-            let targets: Vec<(u32, Confidence)> = types
-                .iter()
-                .flat_map(|&type_symbol| self.members(type_symbol, name))
-                .map(|member| (member, Confidence::Inferred))
-                .collect();
-            if !targets.is_empty() {
-                return Outcome::Targets(targets, Confidence::Inferred);
+            match self.chain_type(file, imports, reference, &steps) {
+                Ok(types) => {
+                    let targets: Vec<(u32, Confidence)> = types
+                        .iter()
+                        .flat_map(|&type_symbol| self.members(type_symbol, name))
+                        .map(|member| (member, Confidence::Inferred))
+                        .collect();
+                    if !targets.is_empty() {
+                        return Outcome::Targets(targets, Confidence::Inferred);
+                    }
+                }
+                Err(chains::ChainFailure::External) => return Outcome::External,
+                Err(chains::ChainFailure::Unknown) => {}
             }
         }
         // 5. Member call: receiver type from self, bindings or fields.
@@ -3466,6 +3475,14 @@ impl<'a> Index<'a> {
                 arity: facts::NO_ARITY,
             },
         };
+        if self.file_type(file) == Some(FileType::Rust)
+            && callee_ref
+                .qualifier
+                .as_deref()
+                .is_some_and(|path| self.rust_external_path(file, imports, path))
+        {
+            return true;
+        }
         let Some(_guard) = DepthGuard::enter() else {
             return false;
         };
@@ -3480,7 +3497,7 @@ impl<'a> Index<'a> {
                 };
                 let callee_file = self.symbols[callee as usize].file;
                 let callee_scope = Some(callee - self.base[callee_file as usize]);
-                self.resolve_type(callee_file, None, callee_scope, result)
+                self.resolve_result_type(callee_file, callee_scope, result)
                     .is_none()
             }),
             _ => false,
@@ -3524,12 +3541,14 @@ impl<'a> Index<'a> {
         } else if let Some(binding) = self.binding(file, scope, head, line) {
             match self.binding_type(file, imports, scope, binding) {
                 Some(found) => Some(found),
-                None if let Some(callee) = binding.type_name.strip_suffix("()")
+                None if let Some((callee, _)) = chains::call_binding(&binding.type_name)
                     && self.call_result_is_external(file, imports, scope, binding.line, callee) =>
                 {
                     return Receiver::External;
                 }
-                None if binding.type_name.ends_with("()") => return Receiver::Unknown,
+                None if chains::call_binding(&binding.type_name).is_some() => {
+                    return Receiver::Unknown;
+                }
                 None => return Receiver::External,
             }
         } else if let Some(field) = jvm::has_implicit_this(self.file_type(file))
@@ -3717,7 +3736,7 @@ impl<'a> Index<'a> {
                 .binding_type(file, imports, scope, source)
                 .map(|(types, _)| (types, Confidence::Inferred));
         }
-        if let Some(call) = binding.type_name.strip_suffix("()") {
+        if let Some((call, _)) = chains::call_binding(&binding.type_name) {
             // Result of a call: resolve the callee, then its declared result type.
             let reference = match split_qualified(call) {
                 Some((qualifier, name)) => Ref {
@@ -3768,7 +3787,7 @@ impl<'a> Index<'a> {
             };
             let callee_file = self.symbols[callee as usize].file;
             let callee_scope = Some(callee - self.base[callee_file as usize]);
-            let (types, _) = self.resolve_type(callee_file, None, callee_scope, result)?;
+            let (types, _) = self.resolve_result_type(callee_file, callee_scope, result)?;
             return Some((types, Confidence::Inferred));
         }
         let (types, type_confidence) =
@@ -4927,16 +4946,13 @@ fn call_receiver(qualifier: &str) -> Option<&str> {
     let open = qualifier.find('(')?;
     let callee = &qualifier[..open];
     let rest = &qualifier[open..];
-    let balanced_once = rest.ends_with(')')
-        && rest[1..rest.len() - 1].matches('(').count()
-            == rest[1..rest.len() - 1].matches(')').count();
+    let balanced_once = chains::closing(rest.as_bytes(), 0, b'(', b')') == Some(rest.len() - 1);
     (balanced_once
         && !callee.is_empty()
         && callee
             .split(['.', ':'])
             .filter(|part| !part.is_empty())
-            .all(is_identifier)
-        && !rest[1..rest.len() - 1].contains(")."))
+            .all(is_identifier))
     .then_some(callee)
 }
 

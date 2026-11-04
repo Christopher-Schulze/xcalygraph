@@ -480,6 +480,134 @@ fn receivers_flow_through_return_types_getters_and_private_fields() -> io::Resul
 }
 
 #[test]
+fn rust_unwrap_methods_follow_declared_results_and_consume_only_result_layers() -> io::Result<()> {
+    let root = crate::infra::testdir::TestDir::new("rust-unwrap-results")?;
+    fs::write(
+        root.path().join("lib.rs"),
+        concat!(
+            "pub struct Wrapper;\npub struct Value;\n",
+            "impl Wrapper {\n",
+            "    pub fn new() -> Self { Self }\n",
+            "    pub fn unwrap(self) -> Value { Value }\n",
+            "    pub fn expect(self, _: &str) -> Value { Value }\n",
+            "    pub fn finish(self) {}\n}\n",
+            "impl Value { pub fn finish(self) {} }\n",
+            "pub fn optional() -> Option<Wrapper> { Some(Wrapper) }\n",
+            "pub fn nested() -> Result<Option<Wrapper>, ()> { Ok(Some(Wrapper)) }\n",
+            "pub fn custom_unwrap() { Wrapper::new().unwrap().finish(); }\n",
+            "pub fn custom_expect() { Wrapper::new().expect(\"ok\").finish(); }\n",
+            "pub fn standard_unwrap() { optional().unwrap().finish(); }\n",
+            "pub fn standard_expect() { optional().expect(\"ok\").finish(); }\n",
+            "pub fn mixed() { optional().unwrap().unwrap().finish(); }\n",
+            "pub fn nested_layers() { nested().unwrap().expect(\"ok\").finish(); }\n",
+            "pub fn through_try() -> Option<()> { optional()?.unwrap().finish(); Some(()) }\n",
+            "pub fn standard_try() -> Option<()> { optional()?.finish(); Some(()) }\n",
+            "pub fn assigned() { let x = optional(); x.unwrap().finish(); }\n",
+            "pub struct Factory;\n",
+            "impl Factory {\n",
+            "    pub fn new() -> Option<Wrapper> { Some(Wrapper) }\n",
+            "    pub fn unwrap(self) -> Value { Value }\n}\n",
+            "pub fn assigned_constructor() { let x = Factory::new(); x.unwrap().finish(); }\n",
+            "pub fn assigned_try() -> Option<()> { let x = optional()?; x.unwrap().finish(); Some(()) }\n",
+        ),
+    )?;
+    let graph = graph_of(root.path())?;
+    for (caller, target) in [
+        ("custom_unwrap", "Value::finish"),
+        ("custom_expect", "Value::finish"),
+        ("standard_unwrap", "Wrapper::finish"),
+        ("standard_expect", "Wrapper::finish"),
+        ("mixed", "Value::finish"),
+        ("nested_layers", "Wrapper::finish"),
+        ("through_try", "Value::finish"),
+        ("standard_try", "Wrapper::finish"),
+        ("assigned", "Wrapper::finish"),
+        ("assigned_constructor", "Wrapper::finish"),
+        ("assigned_try", "Value::finish"),
+    ] {
+        let targets: Vec<&str> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Calls)
+            .filter_map(|edge| {
+                let source = node_location(&graph, edge.source)?;
+                let target = node_location(&graph, edge.target)?;
+                (source.name.ends_with(&format!("::{caller}")) && target.name.ends_with("::finish"))
+                    .then_some(target.name)
+            })
+            .collect();
+        assert_eq!(
+            targets.len(),
+            1,
+            "{caller}: {targets:?}\n{}",
+            render(&graph)
+        );
+        assert!(targets[0].ends_with(target), "{caller}: {targets:?}");
+    }
+    let custom = crate::infra::testdir::TestDir::new("rust-local-option-result")?;
+    fs::write(
+        custom.path().join("lib.rs"),
+        concat!(
+            "pub struct Option<T>(T);\npub struct Wrapper;\npub struct Value;\n",
+            "impl Option<Wrapper> { pub fn unwrap(self) -> Value { Value } }\n",
+            "impl Wrapper { pub fn finish(self) {} }\n",
+            "impl Value { pub fn finish(self) {} }\n",
+            "pub fn factory() -> Option<Wrapper> { Option(Wrapper) }\n",
+            "pub fn entry() { factory().unwrap().finish(); }\n",
+        ),
+    )?;
+    let graph = graph_of(custom.path())?;
+    let text = render(&graph);
+    assert!(
+        text.contains("entry -calls?-> crate::Value::finish"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("entry -calls?-> crate::Wrapper::finish"),
+        "{text}"
+    );
+    Ok(())
+}
+
+#[test]
+fn rust_external_receiver_chains_do_not_fall_back_to_local_methods() -> io::Result<()> {
+    let root = crate::infra::testdir::TestDir::new("rust-external-chains")?;
+    fs::write(
+        root.path().join("foreign.py"),
+        "class Command:\n    def __init__(self):\n        self.ready = True\n",
+    )?;
+    fs::write(
+        root.path().join("lib.rs"),
+        concat!(
+            "use std::process::{self, Command};\n",
+            "pub struct Local;\n",
+            "impl Local {\n",
+            "    pub fn arg(&mut self, _: &str) -> &mut Self { self }\n",
+            "    pub fn output(&mut self) {}\n",
+            "    pub fn finish(&mut self) {}\n}\n",
+            "pub fn external_command() { let mut cmd = std::process::Command::new(\"git\"); cmd.arg(\"--version\").output(); }\n",
+            "pub fn external_import() { Command::new(\"git\").arg(\"--version\").output(); }\n",
+            "pub fn external_formatter(f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.debug_struct(\"Example\").field(\"x\", &1).finish() }\n",
+            "pub fn local_command(cmd: &mut Local) { cmd.arg(\"x\").output(); }\n",
+        ),
+    )?;
+    let text = render(&graph_of(root.path())?);
+    assert!(
+        text.contains("local_command -calls?-> crate::Local::output"),
+        "{text}"
+    );
+    for caller in ["external_command", "external_import", "external_formatter"] {
+        assert!(
+            !text.lines().any(|line| line.contains(caller)
+                && line.contains("-calls")
+                && line.contains("crate::Local::")),
+            "{text}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn python_calls_resolve_to_last_same_module_definition() -> io::Result<()> {
     let root = crate::infra::testdir::TestDir::new("python-module-redefinition")?;
     fs::write(

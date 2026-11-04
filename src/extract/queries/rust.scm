@@ -91,10 +91,8 @@
   value: (struct_expression name: (_) @binding.ctor)) @binding
 (let_declaration
   pattern: (identifier) @binding.name
-  value: [(call_expression function: (scoped_identifier path: (_) @binding.ctor name: (identifier) @_ctor))
-          (try_expression (call_expression function: (scoped_identifier path: (_) @binding.ctor name: (identifier) @_ctor)))]
-  (#match? @binding.ctor "(^|::)[A-Z][A-Za-z0-9_]*$")
-  (#match? @_ctor "^(new|default|from|with_.*|open|create|build|load|parse|connect)$")) @binding
+  value: [(call_expression function: (scoped_identifier) @binding.call)
+          (try_expression (call_expression function: (scoped_identifier) @binding.call))]) @binding
 (let_declaration
   pattern: (identifier) @binding.name
   value: [(call_expression function: (identifier) @binding.call)

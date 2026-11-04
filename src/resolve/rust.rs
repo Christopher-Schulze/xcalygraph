@@ -302,4 +302,95 @@ impl<'a> Index<'a> {
         }
         Some(traits)
     }
+
+    /// Whether a qualified path leaves the root, respecting locally imported module aliases.
+    pub(super) fn rust_external_path(&self, file: u32, imports: &Imports, path: &str) -> bool {
+        if !path.contains("::") {
+            return false;
+        }
+        let segments: Vec<&str> = path.split("::").collect();
+        let target = if let Some(root) = imports.names.get(segments[0]) {
+            segments[1..]
+                .iter()
+                .try_fold(root.clone(), |target, segment| {
+                    self.rust_member(file, &target, segment)
+                })
+        } else {
+            self.rust_path(file, &segments)
+        };
+        matches!(target, Some(Target::External(_)))
+    }
+
+    /// Pending Rust result layers of a source-resolved call. Ambiguous returns stay unknown.
+    pub(super) fn call_result_layers(
+        &self,
+        file: u32,
+        imports: &Imports,
+        reference: &Ref,
+        callee: &str,
+    ) -> Option<usize> {
+        let (qualifier, name) = split_qualified(callee)
+            .map_or((None, callee), |(qualifier, name)| (Some(qualifier), name));
+        let call = Ref {
+            kind: RefKind::Call,
+            qualifier: qualifier.map(str::to_owned),
+            name: name.to_owned(),
+            scope: reference.scope,
+            line: reference.line,
+            arity: facts::NO_ARITY,
+        };
+        let _guard = DepthGuard::enter()?;
+        let Outcome::Targets(targets, _) = self.resolve_ref(file, imports, &call) else {
+            // Existing constructor inference may still establish a plain type without a
+            // local method declaration; binding_type independently checks that evidence.
+            return Some(0);
+        };
+        let mut layers = None;
+        for (symbol, _) in targets {
+            let owner = self.symbols[symbol as usize].file;
+            let scope = Some(symbol - self.base[owner as usize]);
+            let next = self
+                .returns
+                .get(&symbol)
+                .map_or(0, |result| self.rust_result(owner, scope, result).1);
+            if layers.is_some_and(|previous| previous != next) {
+                return None;
+            }
+            layers = Some(next);
+        }
+        layers
+    }
+
+    /// Keep standard result layers apart from methods declared on a local type of the same name.
+    pub(super) fn rust_result<'r>(
+        &self,
+        file: u32,
+        scope: Option<u32>,
+        mut result: &'r str,
+    ) -> (&'r str, usize) {
+        let mut layers = 0;
+        loop {
+            let Some((outer, inner)) = result.trim_start().split_once('<') else {
+                return (result, layers);
+            };
+            if !matches!(
+                outer.trim(),
+                "Result"
+                    | "Option"
+                    | "io::Result"
+                    | "anyhow::Result"
+                    | "std::result::Result"
+                    | "core::result::Result"
+                    | "std::option::Option"
+                    | "core::option::Option"
+            ) || matches!(
+                self.resolve_type(file, None, scope, outer.trim()),
+                Some((_, Confidence::Exact))
+            ) {
+                return (result, layers);
+            }
+            layers += 1;
+            result = inner;
+        }
+    }
 }

@@ -67,16 +67,16 @@ ref 71 Call len qualifier=store scope=load args=0
 ref 80 Type Store qualifier=- scope=opens
 ref 80 Call open qualifier=Store scope=opens args=1
 ref 81 Call is_ok qualifier=store scope=opens
-bind 17 "": Row declared scope=get
+bind 17 "": Option<&Row> declared scope=get
 bind 17 "id": Id declared scope=get
 bind 18 "": usize declared scope=len
-bind 43 "": Self declared scope=open
+bind 43 "": Result<Self, Error> declared scope=open
 bind 43 "path": str declared scope=open
-bind 44 "client": Client declared scope=open
-bind 45 "url":  inferred scope=open
+bind 44 "client": Client::connect()? inferred scope=open
+bind 45 "url": env::var() inferred scope=open
 bind 46 "fallback":  inferred scope=open
 bind 50 "row": Row declared scope=insert
-bind 57 "": Row declared scope=get
+bind 57 "": Option<&Row> declared scope=get
 bind 57 "id": Id declared scope=get
 bind 61 "": usize declared scope=len
 bind 66 "": usize declared scope=load
@@ -84,7 +84,7 @@ bind 66 "reader": Reader declared scope=load
 bind 67 "store":  inferred scope=load
 bind 68 "other": Store declared scope=load
 bind 69 "row":  inferred scope=load
-bind 80 "store": Store declared scope=opens
+bind 80 "store": Store::open() inferred scope=opens
 fields Store rows:HashMap client:Client
 env 45 DB_URL scope=open
 env 46 BUILD_TAG scope=open

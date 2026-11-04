@@ -8,11 +8,17 @@ use super::*;
 pub(super) struct Step<'a> {
     pub name: &'a str,
     pub call: bool,
+    pub tries: usize,
+}
+
+pub(super) enum ChainFailure {
+    Unknown,
+    External,
 }
 
 /// Splits a receiver expression at its top-level member accesses; `None` for anything else, such
-/// as an index or an operator. `?`, `!` and `.await` keep the type: return types are unwrapped
-/// when they are recorded.
+/// as an index or an operator. Rust try operators are retained; TypeScript's non-null assertion
+/// and optional access do not change the recorded type.
 pub(super) fn receiver_steps(qualifier: &str) -> Option<Vec<Step<'_>>> {
     let text = qualifier.trim();
     let text = text.strip_prefix("new ").map_or(text, str::trim_start);
@@ -55,14 +61,20 @@ pub(super) fn receiver_steps(qualifier: &str) -> Option<Vec<Step<'_>>> {
         if call {
             position = closing(bytes, position, b'(', b')')? + 1;
         }
-        if name != "await" {
-            steps.push(Step { name, call });
-        }
+        let mut tries = 0;
         while matches!(bytes.get(position), Some(b'?' | b'!')) {
             if bytes.get(position + 1) == Some(&b'.') {
+                tries += usize::from(bytes[position] == b'?');
+                position += 1;
                 break;
             }
+            tries += usize::from(bytes[position] == b'?');
             position += 1;
+        }
+        if name != "await" {
+            steps.push(Step { name, call, tries });
+        } else if let Some(previous) = steps.last_mut() {
+            previous.tries += tries;
         }
         while bytes.get(position).is_some_and(u8::is_ascii_whitespace) {
             position += 1;
@@ -85,7 +97,7 @@ pub(super) fn receiver_steps(qualifier: &str) -> Option<Vec<Step<'_>>> {
 }
 
 /// Position of the bracket closing the one at `open`; brackets inside string literals do not count.
-fn closing(bytes: &[u8], open: usize, left: u8, right: u8) -> Option<usize> {
+pub(super) fn closing(bytes: &[u8], open: usize, left: u8, right: u8) -> Option<usize> {
     let mut depth = 0usize;
     let mut quote = None;
     let mut position = open;
@@ -115,6 +127,29 @@ fn closing(bytes: &[u8], open: usize, left: u8, right: u8) -> Option<usize> {
 }
 
 impl Index<'_> {
+    /// Resolve the normalized result while keeping full Rust return syntax in cached facts.
+    pub(super) fn resolve_result_type(
+        &self,
+        file: u32,
+        scope: Option<u32>,
+        result: &str,
+    ) -> Option<(Vec<u32>, Confidence)> {
+        if self.file_type(file) == Some(FileType::Rust) {
+            let (result, _) = self.rust_result(file, scope, result);
+            let result = crate::extract::engine::type_name(result);
+            self.resolve_type(file, None, scope, &result)
+        } else {
+            self.resolve_type(file, None, scope, result)
+        }
+    }
+
+    fn member_result_symbol(&self, types: &[u32], name: &str) -> Option<u32> {
+        types.iter().find_map(|&symbol| {
+            let member = *self.members(symbol, name).first()?;
+            self.returns.contains_key(&member).then_some(member)
+        })
+    }
+
     /// The declared result type of a member named `name` of one of `types`, in its own file.
     pub(super) fn member_result(&self, types: &[u32], name: &str) -> Option<Vec<u32>> {
         types.iter().find_map(|&type_symbol| {
@@ -122,21 +157,37 @@ impl Index<'_> {
             let result = *self.returns.get(&member)?;
             let file = self.symbols[member as usize].file;
             let scope = Some(member - self.base[file as usize]);
-            self.resolve_type(file, None, scope, result)
+            self.resolve_result_type(file, scope, result)
                 .map(|(types, _)| types)
         })
     }
 
-    /// Type of a receiver expression containing a call, step by step. Rust's `unwrap` and `expect`
-    /// keep the type like `?`, because recorded return types are unwrapped.
+    /// Type of a receiver expression containing a call, step by step. A Rust unwrap/expect
+    /// consumes a pending Option/Result layer; on a plain type it is an ordinary declared method.
     pub(super) fn chain_type(
         &self,
         file: u32,
         imports: &Imports,
         reference: &Ref,
         steps: &[Step],
-    ) -> Option<Vec<u32>> {
-        let (first, rest) = steps.split_first()?;
+    ) -> Result<Vec<u32>, ChainFailure> {
+        let (first, rest) = steps.split_first().ok_or(ChainFailure::Unknown)?;
+        let rust = self.file_type(file) == Some(FileType::Rust);
+        let mut layers = if rust && first.call {
+            self.call_result_layers(file, imports, reference, first.name)
+                .ok_or(ChainFailure::Unknown)?
+        } else if rust {
+            self.binding(file, reference.scope, first.name, reference.line)
+                .and_then(|binding| call_binding(&binding.type_name))
+                .map(|(callee, tries)| {
+                    self.call_result_layers(file, imports, reference, callee)?
+                        .checked_sub(tries)
+                })
+                .unwrap_or(Some(0))
+                .ok_or(ChainFailure::Unknown)?
+        } else {
+            0
+        };
         let mut types = if first.call {
             let binding = Binding {
                 scope: reference.scope,
@@ -146,19 +197,42 @@ impl Index<'_> {
                 scope_end_line: None,
                 declared: false,
             };
-            self.binding_type(file, imports, reference.scope, &binding)?
-                .0
+            match self.binding_type(file, imports, reference.scope, &binding) {
+                Some((types, _)) => types,
+                None if self.call_result_is_external(
+                    file,
+                    imports,
+                    reference.scope,
+                    reference.line,
+                    first.name,
+                ) =>
+                {
+                    return Err(ChainFailure::External);
+                }
+                None => return Err(ChainFailure::Unknown),
+            }
         } else {
             let chain = [first.name];
             match self.receiver_type(file, imports, reference.scope, &chain, reference.line) {
                 Receiver::Known(types, _) => types,
-                _ => return None,
+                Receiver::External => return Err(ChainFailure::External),
+                _ => return Err(ChainFailure::Unknown),
             }
         };
-        let rust = self.file_type(file) == Some(FileType::Rust);
+        if rust {
+            layers = layers
+                .checked_sub(first.tries)
+                .ok_or(ChainFailure::Unknown)?;
+        }
         for step in rest {
-            if rust && step.call && matches!(step.name, "unwrap" | "expect") {
+            if rust && layers > 0 && step.call && matches!(step.name, "unwrap" | "expect") {
+                layers = (layers - 1)
+                    .checked_sub(step.tries)
+                    .ok_or(ChainFailure::Unknown)?;
                 continue;
+            }
+            if rust && layers > 0 {
+                return Err(ChainFailure::External);
             }
             let field = (!step.call)
                 .then(|| {
@@ -172,11 +246,42 @@ impl Index<'_> {
                 .flatten();
             types = match field {
                 Some(found) => found,
-                None => self.member_result(&types, step.name)?,
+                None => {
+                    if rust {
+                        let member = self
+                            .member_result_symbol(&types, step.name)
+                            .ok_or(ChainFailure::Unknown)?;
+                        let owner = self.symbols[member as usize].file;
+                        let scope = Some(member - self.base[owner as usize]);
+                        let result = self.returns.get(&member).ok_or(ChainFailure::Unknown)?;
+                        layers = self.rust_result(owner, scope, result).1;
+                    }
+                    self.member_result(&types, step.name).ok_or(if rust {
+                        ChainFailure::External
+                    } else {
+                        ChainFailure::Unknown
+                    })?
+                }
             };
+            if rust {
+                layers = layers
+                    .checked_sub(step.tries)
+                    .ok_or(ChainFailure::Unknown)?;
+            }
         }
-        Some(types)
+        if layers == 0 {
+            Ok(types)
+        } else {
+            Err(ChainFailure::External)
+        }
     }
+}
+
+/// Callee and try operations retained in a call-result binding, without argument contents.
+pub(super) fn call_binding(type_name: &str) -> Option<(&str, usize)> {
+    let call = type_name.trim_end_matches('?');
+    let tries = type_name.len() - call.len();
+    Some((call.strip_suffix("()")?, tries))
 }
 
 #[cfg(test)]

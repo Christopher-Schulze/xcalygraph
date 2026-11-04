@@ -168,6 +168,7 @@ struct RawBinding {
     type_name: Option<String>,
     declared: bool,
     call: bool,
+    try_result: bool,
     position: usize,
     line: u32,
     scope_end_line: Option<u32>,
@@ -306,6 +307,13 @@ fn collect(
         .any(|suffix| path.ends_with(suffix));
     let names = query.capture_names();
     let text = |node: Node| node.utf8_text(source).unwrap_or_default();
+    let return_type = |node: Node| {
+        if path.ends_with(".rs") {
+            facts::normalize_space(text(node))
+        } else {
+            result_type(text(node))
+        }
+    };
     let mut defs: FastMap<usize, RawDef> = FastMap::default();
     let mut impls: Vec<(Node, String, Option<String>)> = Vec::new();
     let mut refs: FastMap<usize, RawRef> = FastMap::default();
@@ -372,7 +380,7 @@ fn collect(
             }
             // A result type captured with the definition (one pattern instead of two).
             if let Some(node) = get("return.type") {
-                returns.push((primary_node.start_byte(), result_type(text(node))));
+                returns.push((primary_node.start_byte(), return_type(node)));
             }
         } else if let Some(kind) = primary.strip_prefix("reference.") {
             let Some(name) = get("name") else { continue };
@@ -560,21 +568,32 @@ fn collect(
                             type_name(type_text)
                         });
                         entry.declared = true;
+                        if path.ends_with(".rs") {
+                            entry.call = false;
+                            entry.try_result = false;
+                        }
                     } else if let Some(node) = get("binding.ctor") {
                         // A constructor call fixes the type as firmly as a declaration.
                         entry.type_name = Some(type_name(text(node)));
                         entry.declared = true;
                     } else if let Some(node) = get("binding.range") {
                         entry.type_name = Some(format!("range:{}", text(node)));
-                    } else if let Some(node) = get("binding.call") {
+                    } else if let Some(node) = get("binding.call")
+                        && (!path.ends_with(".rs") || !entry.declared)
+                    {
                         entry.type_name = Some(facts::normalize_space(text(node)));
                         entry.call = true;
+                        entry.try_result = path.ends_with(".rs")
+                            && node
+                                .parent()
+                                .and_then(|call| call.parent())
+                                .is_some_and(|parent| parent.kind() == "try_expression");
                         entry.declared = false;
                     }
                 }
                 "return" => {
                     if let Some(node) = get("return.type") {
-                        returns.push((primary_node.start_byte(), result_type(text(node))));
+                        returns.push((primary_node.start_byte(), return_type(node)));
                     }
                 }
                 "field" => {
@@ -1195,7 +1214,7 @@ fn assemble(assembly: Assembly) -> Parsed {
                 scope: scope_of(raw.position),
                 name,
                 type_name: if raw.call {
-                    format!("{type_name}()")
+                    format!("{type_name}(){}", if raw.try_result { "?" } else { "" })
                 } else {
                     type_name
                 },
