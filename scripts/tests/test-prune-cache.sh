@@ -157,7 +157,7 @@ with tempfile.TemporaryDirectory(prefix="prune-regression.", dir=base) as tempor
     assert result.returncode != 0 and "not a directory" in result.stderr
     assert (linked_project / ".cache").read_text() == "foreign cache file"
 
-    # Compaction keeps the newest two runs whole and only small top-level files of older ones.
+    # Only completed, aged runs can lose bulk data; interrupted work stays intact.
     compact_project = work / "compact"
     compact_script = compact_project / "scripts/utils/prune-cache.sh"
     compact_script.parent.mkdir(parents=True)
@@ -170,10 +170,23 @@ with tempfile.TemporaryDirectory(prefix="prune-regression.", dir=base) as tempor
         (run / "report.json").write_text("{}")
         (run / "index.bin").write_bytes(b"0" * (9 * 1024 * 1024))
         (run / ".keep").write_text("")
-        stamp = time.time() - 3600 * (age + 1)
+        (run / marker).write_bytes(b"xcalygraph-cache-v1\n")
+        stamp = time.time() - (60 * (age + 1) if age < 2 else 3600 * 48)
         os.utime(run, (stamp, stamp))
     (runs / "sealed.pinned/.keep-full").write_text("")
     os.utime(runs / "sealed.pinned", (time.time() - 3600 * 9, time.time() - 3600 * 9))
+    for name, completion, age_seconds in (
+        ("sealed.incomplete", None, 3600 * 72),
+        ("sealed.invalid", b"not completed\n", 3600 * 72),
+        ("sealed.fresh", b"xcalygraph-cache-v1\n", 300),
+    ):
+        run = runs / name
+        (run / "corpus").mkdir(parents=True)
+        (run / "corpus/source.txt").write_text("live data")
+        if completion is not None:
+            (run / marker).write_bytes(completion)
+        stamp = time.time() - age_seconds
+        os.utime(run, (stamp, stamp))
     result = subprocess.run(["bash", str(compact_script)], env=environment, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     for name in ("sealed.new", "sealed.mid", "sealed.pinned"):
@@ -181,5 +194,14 @@ with tempfile.TemporaryDirectory(prefix="prune-regression.", dir=base) as tempor
     old = runs / "sealed.old"
     assert (old / "report.json").read_text() == "{}" and (old / ".keep").exists() and (old / ".compacted").exists()
     assert not (old / "index.bin").exists() and not (old / "corpus").exists()
+    for name in ("sealed.incomplete", "sealed.invalid", "sealed.fresh"):
+        run = runs / name
+        assert (run / "corpus/source.txt").read_text() == "live data", name
+        assert not (run / ".compacted").exists(), name
+    result = subprocess.run(["bash", str(compact_script), "0"], env=environment, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert not (runs / "sealed.fresh/corpus").exists()
+    for name in ("sealed.incomplete", "sealed.invalid"):
+        assert (runs / name / "corpus/source.txt").read_text() == "live data", name
     print("PASS: age bounds, marked ownership, protected evidence, links, foreign data, size reporting and run compaction")
 PYTHON

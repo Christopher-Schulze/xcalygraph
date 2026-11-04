@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Remove aged, explicitly marked completed runs in known cache categories, compact older evidence
-# runs and report total size.
+# runs and report total size. Compaction uses the same age and completion requirements.
 # Usage: scripts/utils/prune-cache.sh [AGE_HOURS]  (default 24; 0 selects all marked runs)
 # Unknown entries, candidate symlinks, incomplete runs, snapshots and .keep-protected runs stay.
 # Compaction: in evaluation/, task192-manifests/ and edge-oracle/, runs beyond the newest
@@ -71,9 +71,9 @@ if [[ ! -e "${CACHE}/.keep" && ! -L "${CACHE}/.keep" ]]; then
   prune_children "${CACHE}/evaluation" 'run.*' 'sealed.*'
 fi
 
-# Keep reports of older evidence runs, drop their bulky corpora, indexes and builds.
+# Keep reports of completed, aged evidence runs, drop their bulky corpora, indexes and builds.
 compact_runs() {
-  local dir="$1" entry file
+  local dir="$1" entry file aged
   [[ -d "${dir}" && ! -L "${dir}" ]] || return 0
   local runs=()
   while IFS= read -r -d '' entry; do runs+=("${entry}"); done < <(python3 -I -c '
@@ -89,6 +89,12 @@ for name in sorted(names, key=lambda name: os.stat(os.path.join(base, name)).st_
   for (( index = KEEP_RUNS; index < ${#runs[@]}; index++ )); do
     entry="${runs[index]}"
     [[ -d "${entry}" && ! -L "${entry}" && ! -e "${entry}/.keep-full" && ! -e "${entry}/.compacted" ]] || continue
+    [[ -f "${entry}/${MARKER}" && ! -L "${entry}/${MARKER}" ]] || continue
+    cmp -s "${entry}/${MARKER}" <(printf 'xcalygraph-cache-v1\n') || continue
+    if (( age_hours > 0 )); then
+      aged="$(find "${entry}" -maxdepth 0 ${age_filter[@]+"${age_filter[@]}"} -print)" || return 1
+      [[ -n "${aged}" ]] || continue
+    fi
     while IFS= read -r -d '' file; do
       if [[ -f "${file}" && ! -L "${file}" && "$(du -sk "${file}" | awk '{ print $1 }')" -le SMALL_KIB ]]; then
         continue

@@ -234,3 +234,4 @@ for group in ("recall-calls", "recall-types"):
 PYTHON
 done
 column -t -s $'\t' "${WORK}/summary.tsv"
+( set -o noclobber; printf 'xcalygraph-cache-v1\n' > "${WORK}/.xcalygraph-disposable" )

@@ -370,3 +370,4 @@ PYTHON
 ( set -o noclobber; printf 'xcalygraph-cache-v1\n' > "${WORK}/.keep" )
 echo "manifest: ${WORK}/manifest.jsonl"
 echo "adjudication: ${WORK}/adjudication.tsv"
+( set -o noclobber; printf 'xcalygraph-cache-v1\n' > "${WORK}/.xcalygraph-disposable" )
