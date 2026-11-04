@@ -1,0 +1,208 @@
+{
+  "provenance": {
+    "generator": "scip-go 0.2.9",
+    "source_sha256": {
+      "go.mod": "1b225d7b06d313e968c6118a034a374491cb5dcaaf9ff47b2c75677d5c62e504",
+      "caller.go": "afe46f95d42d6b353225ca12fe1fdf643bd26e269e6725751e2cf4c1a4a58f8d"
+    }
+  },
+  "documents": [
+    {
+      "language": "go",
+      "relative_path": "caller.go",
+      "occurrences": [
+        {
+          "TypedRange": {
+            "SingleLineRange": {
+              "start_character": 8,
+              "end_character": 14
+            }
+          },
+          "symbol": "scip-go gomod example.com/oracle 5ff066a9fae5 `example.com/oracle`/",
+          "symbol_roles": 1,
+          "TypedEnclosingRange": null
+        },
+        {
+          "TypedRange": {
+            "SingleLineRange": {
+              "line": 1,
+              "start_character": 5,
+              "end_character": 10
+            }
+          },
+          "symbol": "scip-go gomod example.com/oracle 5ff066a9fae5 `example.com/oracle`/First().",
+          "symbol_roles": 1,
+          "TypedEnclosingRange": {
+            "SingleLineEnclosingRange": {
+              "line": 1,
+              "end_character": 15
+            }
+          }
+        },
+        {
+          "TypedRange": {
+            "SingleLineRange": {
+              "line": 2,
+              "start_character": 5,
+              "end_character": 11
+            }
+          },
+          "symbol": "scip-go gomod example.com/oracle 5ff066a9fae5 `example.com/oracle`/Second().",
+          "symbol_roles": 1,
+          "TypedEnclosingRange": {
+            "SingleLineEnclosingRange": {
+              "line": 2,
+              "end_character": 16
+            }
+          }
+        },
+        {
+          "TypedRange": {
+            "SingleLineRange": {
+              "line": 3,
+              "start_character": 5,
+              "end_character": 9
+            }
+          },
+          "symbol": "scip-go gomod example.com/oracle 5ff066a9fae5 `example.com/oracle`/Left().",
+          "symbol_roles": 1,
+          "TypedEnclosingRange": {
+            "SingleLineEnclosingRange": {
+              "line": 3,
+              "end_character": 23
+            }
+          }
+        },
+        {
+          "TypedRange": {
+            "SingleLineRange": {
+              "line": 3,
+              "start_character": 14,
+              "end_character": 19
+            }
+          },
+          "symbol": "scip-go gomod example.com/oracle 5ff066a9fae5 `example.com/oracle`/First().",
+          "symbol_roles": 8,
+          "TypedEnclosingRange": null
+        },
+        {
+          "TypedRange": {
+            "SingleLineRange": {
+              "line": 3,
+              "start_character": 30,
+              "end_character": 35
+            }
+          },
+          "symbol": "scip-go gomod example.com/oracle 5ff066a9fae5 `example.com/oracle`/Right().",
+          "symbol_roles": 1,
+          "TypedEnclosingRange": {
+            "SingleLineEnclosingRange": {
+              "line": 3,
+              "start_character": 25,
+              "end_character": 50
+            }
+          }
+        },
+        {
+          "TypedRange": {
+            "SingleLineRange": {
+              "line": 3,
+              "start_character": 40,
+              "end_character": 46
+            }
+          },
+          "symbol": "scip-go gomod example.com/oracle 5ff066a9fae5 `example.com/oracle`/Second().",
+          "symbol_roles": 8,
+          "TypedEnclosingRange": null
+        },
+        {
+          "TypedRange": {
+            "SingleLineRange": {
+              "line": 4,
+              "start_character": 5,
+              "end_character": 10
+            }
+          },
+          "symbol": "scip-go gomod example.com/oracle 5ff066a9fae5 `example.com/oracle`/Multi().",
+          "symbol_roles": 1,
+          "TypedEnclosingRange": {
+            "MultiLineEnclosingRange": {
+              "start_line": 4,
+              "end_line": 6,
+              "end_character": 1
+            }
+          }
+        },
+        {
+          "TypedRange": {
+            "SingleLineRange": {
+              "line": 5,
+              "start_character": 1,
+              "end_character": 6
+            }
+          },
+          "symbol": "scip-go gomod example.com/oracle 5ff066a9fae5 `example.com/oracle`/First().",
+          "symbol_roles": 8,
+          "TypedEnclosingRange": null
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "scip-go gomod example.com/oracle 5ff066a9fae5 `example.com/oracle`/Left().",
+          "kind": 17,
+          "display_name": "Left",
+          "signature_documentation": {
+            "language": "go",
+            "text": "func Left()"
+          }
+        },
+        {
+          "symbol": "scip-go gomod example.com/oracle 5ff066a9fae5 `example.com/oracle`/Right().",
+          "kind": 17,
+          "display_name": "Right",
+          "signature_documentation": {
+            "language": "go",
+            "text": "func Right()"
+          }
+        },
+        {
+          "symbol": "scip-go gomod example.com/oracle 5ff066a9fae5 `example.com/oracle`/Multi().",
+          "kind": 17,
+          "display_name": "Multi",
+          "signature_documentation": {
+            "language": "go",
+            "text": "func Multi()"
+          }
+        },
+        {
+          "symbol": "scip-go gomod example.com/oracle 5ff066a9fae5 `example.com/oracle`/",
+          "kind": 35,
+          "display_name": "oracle",
+          "signature_documentation": {
+            "language": "go",
+            "text": "package oracle"
+          }
+        },
+        {
+          "symbol": "scip-go gomod example.com/oracle 5ff066a9fae5 `example.com/oracle`/First().",
+          "kind": 17,
+          "display_name": "First",
+          "signature_documentation": {
+            "language": "go",
+            "text": "func First()"
+          }
+        },
+        {
+          "symbol": "scip-go gomod example.com/oracle 5ff066a9fae5 `example.com/oracle`/Second().",
+          "kind": 17,
+          "display_name": "Second",
+          "signature_documentation": {
+            "language": "go",
+            "text": "func Second()"
+          }
+        }
+      ],
+      "position_encoding": 1
+    }
+  ]
+}

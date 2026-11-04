@@ -154,7 +154,15 @@ def targets_of(path, name, line):
     candidates = {symbol for symbol, defined in by_location.get((path, name), ()) if defined == line}
     return candidates if len(candidates) == 1 and all(len(definitions[symbol]) == 1 for symbol in candidates) else set()
 
-def points(raw):
+def points(raw, typed=None):
+    # SCIP's Go JSON encoding uses typed ranges and omits zero-valued coordinates.
+    if not raw and typed:
+        for kind, value in typed.items():
+            if kind in ("SingleLineRange", "SingleLineEnclosingRange"):
+                raw = [value.get("line", 0), value.get("start_character", 0), value.get("end_character", 0)]
+            elif kind in ("MultiLineRange", "MultiLineEnclosingRange"):
+                raw = [value.get("start_line", 0), value.get("start_character", 0),
+                       value.get("end_line", 0), value.get("end_character", 0)]
     if not isinstance(raw, list) or len(raw) not in (3, 4):
         return None
     start = tuple(raw[:2])
@@ -179,20 +187,25 @@ for document in index["documents"]:
         if not occurrence.get("symbol_roles", 0) & DEFINITION or not (
                 callable_kind or symbol.endswith((").", "#", "/", "__init__:"))):
             continue
-        body, declaration = points(occurrence.get("enclosing_range")), points(occurrence.get("range"))
+        body = points(occurrence.get("enclosing_range"), occurrence.get("TypedEnclosingRange"))
+        declaration = points(occurrence.get("range"), occurrence.get("TypedRange"))
         if body is None or declaration is None:
-            missing_scopes.add(path)
+            # A package/module declaration is not a callable body. Go and Python omit its
+            # range; that does not invalidate the compiler's explicit function/type scopes.
+            if callable_kind or symbol.endswith((").", "#")):
+                missing_scopes.add(path)
             continue
         identity = (symbol, declaration[0])
         scopes.append((*body, identity))
         source_scopes[(path, descriptor_name(symbol), declaration[0][0] + 1)].add(identity)
     scopes.sort(key=lambda item: item[0])
     active, position = [], 0
-    occurrences = sorted((o for o in document["occurrences"] or [] if points(o.get("range"))),
-                         key=lambda o: tuple(o["range"][:2]))
+    occurrences = sorted((o for o in document["occurrences"] or []
+                          if points(o.get("range"), o.get("TypedRange"))),
+                         key=lambda o: points(o.get("range"), o.get("TypedRange"))[0])
     for occurrence in occurrences:
         symbol = occurrence["symbol"]
-        point = tuple(occurrence["range"][:2])
+        point = points(occurrence.get("range"), occurrence.get("TypedRange"))[0]
         active = [scope for scope in active if point < scope[1]]
         while position < len(scopes) and scopes[position][0] <= point:
             scope = scopes[position]

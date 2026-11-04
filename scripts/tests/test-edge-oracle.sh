@@ -104,11 +104,18 @@ with tempfile.TemporaryDirectory(prefix="edge-oracle-regression.", dir=cache) as
     assert actual == expected, f"caller oracle verdicts: {actual}; expected {expected}"
     recall = next(row for row in csv.reader(caller_result.stdout.splitlines(), delimiter="\t") if row[2] == "recall-calls")
     assert recall[4:] == ["5", "3", "0", "2", "100.0"], recall
-    for fixture_name, cases in [
-        ("accessor-identities", [("index.ts", 3, 1, "first", 2, "Box", "unknown")]),
-        ("local-accessor-identities", [
+    for fixture_name, language, cases in [
+        ("accessor-identities", "typescript", [("index.ts", 3, 1, "first", 2, "Box", "unknown")]),
+        ("local-accessor-identities", "typescript", [
             ("index.ts", 2, 1, "first", 2, "outer", "unknown"),
             ("plain.ts", 2, 1, "first", 2, "caller", "correct"),
+        ]),
+        ("go-caller-identities", "go", [
+            ("caller.go", 4, 2, "First", 4, "Left", "correct"),
+            ("caller.go", 4, 3, "Second", 4, "Left", "incorrect"),
+            ("caller.go", 4, 2, "First", 4, "Right", "incorrect"),
+            ("caller.go", 4, 3, "Second", 4, "Right", "correct"),
+            ("caller.go", 6, 2, "First", 5, "Multi", "correct"),
         ]),
     ]:
         fixture = repo / "tests/fixtures/oracle" / fixture_name
@@ -122,7 +129,7 @@ with tempfile.TemporaryDirectory(prefix="edge-oracle-regression.", dir=cache) as
             for path, line, target_line, name, caller_line, caller, _ in cases:
                 writer.writerow(("calls", "1", path, line, path, target_line, name, caller_line, caller, "symbol"))
         subprocess.run(
-            [sys.executable, "-I", "-", fixture_name, "typescript", str(compiler), str(edges), str(verdicts)],
+            [sys.executable, "-I", "-", fixture_name, language, str(compiler), str(edges), str(verdicts)],
             input=program, text=True, capture_output=True, env=dict(os.environ, HOME=str(home)), check=True,
         )
         actual = [row[0] for row in csv.reader(verdicts.open(), delimiter="\t")]
