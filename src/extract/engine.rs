@@ -18,7 +18,7 @@
 //! - Captures starting with `_` serve predicates only.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use tree_sitter::{
     Language, Node, Parser, Query, QueryCapture, QueryCursor, QueryPredicateArg, StreamingIterator,
@@ -28,6 +28,7 @@ use crate::domain::facts::{
     self, Binding, Coverage, EnvRead, Facts, FieldName, Fields, Import, JuliaCallArgument, Ref,
     RefKind, SourceIdentity, SourceIdentityKind, SymKind, Symbol,
 };
+use crate::domain::hash::FastMap;
 
 /// Language-specific behavior the query cannot express.
 pub struct Hooks {
@@ -307,14 +308,14 @@ fn collect(
         .any(|suffix| path.ends_with(suffix));
     let names = query.capture_names();
     let text = |node: Node| node.utf8_text(source).unwrap_or_default();
-    let mut defs: HashMap<usize, RawDef> = HashMap::new();
+    let mut defs: FastMap<usize, RawDef> = FastMap::default();
     let mut impls: Vec<(Node, String, Option<String>)> = Vec::new();
-    let mut refs: HashMap<usize, RawRef> = HashMap::new();
-    let mut imports: HashMap<usize, RawImport> = HashMap::new();
-    let mut bindings: HashMap<usize, RawBinding> = HashMap::new();
+    let mut refs: FastMap<usize, RawRef> = FastMap::default();
+    let mut imports: FastMap<usize, RawImport> = FastMap::default();
+    let mut bindings: FastMap<usize, RawBinding> = FastMap::default();
     let mut returns: Vec<(usize, String)> = Vec::new();
-    let mut fields: HashMap<usize, RawField> = HashMap::new();
-    let mut envs: HashMap<usize, (String, usize, u32)> = HashMap::new();
+    let mut fields: FastMap<usize, RawField> = FastMap::default();
+    let mut envs: FastMap<usize, (String, usize, u32)> = FastMap::default();
     let mut package = None;
     let mut entry = false;
     // Variables assigned in the file (Bash): their reads are no environment reads.
@@ -759,14 +760,14 @@ struct Assembly<'a, 'tree> {
     source: &'a [u8],
     capture_identities: bool,
     package: Option<String>,
-    defs: HashMap<usize, RawDef<'tree>>,
+    defs: FastMap<usize, RawDef<'tree>>,
     impls: Vec<(Node<'tree>, String, Option<String>)>,
-    refs: HashMap<usize, RawRef>,
-    imports: HashMap<usize, RawImport>,
-    bindings: HashMap<usize, RawBinding>,
+    refs: FastMap<usize, RawRef>,
+    imports: FastMap<usize, RawImport>,
+    bindings: FastMap<usize, RawBinding>,
     returns: Vec<(usize, String)>,
-    fields: HashMap<usize, RawField>,
-    envs: HashMap<usize, (String, usize, u32)>,
+    fields: FastMap<usize, RawField>,
+    envs: FastMap<usize, (String, usize, u32)>,
     locals: Vec<(usize, String)>,
 }
 
@@ -801,7 +802,7 @@ fn assemble(assembly: Assembly) -> Parsed {
     let defs = merge_clauses(defs);
     #[cfg(feature = "lang-typescript")]
     let repeated_interfaces = {
-        let mut counts: HashMap<(Vec<String>, &str), usize> = HashMap::new();
+        let mut counts: FastMap<(Vec<String>, &str), usize> = FastMap::default();
         if super::lang::typescript::is_typescript_path(path) {
             for def in &defs {
                 if def.kind == Some(SymKind::Iface)
@@ -2009,6 +2010,14 @@ pub fn unquote(text: &str) -> &str {
 /// Bare type name of a type expression: pointers, references, slices, generics and
 /// lifetimes removed; qualified names keep their qualifier (`pkg.T`, `a::T`).
 pub fn type_name(text: &str) -> String {
+    // Most types are plain names: nothing below can change them.
+    if !text.is_empty()
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return text.to_owned();
+    }
     let mut text = facts::normalize_space(text);
     if text.starts_with('(') {
         text = text
