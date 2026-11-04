@@ -4761,3 +4761,36 @@ fn an_unreferenced_symbol_says_what_its_absence_proves() -> TestResult {
     assert!(miss.contains("rg checks exact text"), "{miss}");
     Ok(())
 }
+
+#[test]
+fn map_lists_every_top_level_area_and_what_is_excluded() -> TestResult {
+    let dir = TempDir::new("areas")?;
+    dir.write("repo/src/a.go", "package src\n\nfunc A() {}\n")?;
+    dir.write("repo/src/b.go", "package src\n\nfunc B() {}\n")?;
+    dir.write("repo/docs/guide.md", "# Guide\n")?;
+    dir.write("repo/assets/data.bin", "x")?;
+    dir.write("repo/top.go", "package top\n")?;
+    dir.write("repo/node_modules/dep/index.js", "module.exports = 1\n")?;
+    let root = dir.0.join("repo").to_string_lossy().into_owned();
+    let map = |extra: &[&str]| -> io::Result<String> {
+        let mut args = vec!["map", "-C", &root];
+        args.extend_from_slice(extra);
+        let output = support::command(BINARY, &dir.0).args(&args).output()?;
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    };
+    let text = map(&[])?;
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| *line == "areas")
+        .ok_or("no areas")?;
+    assert!(lines[start + 1].starts_with("src 2f 2s go:2"), "{text}");
+    assert!(text.contains("\ndocs 1f 1s markdown:1"), "{text}");
+    assert!(text.contains("\nassets 1f 0s path-only:1"), "{text}");
+    assert!(text.contains("\n. 1f 0s go:1"), "{text}");
+    assert!(text.contains("\nexcluded node_modules\n"), "{text}");
+    // A filtered view cannot claim what is excluded.
+    let filtered = map(&["-p", "src/"])?;
+    assert!(!filtered.contains("excluded"), "{filtered}");
+    Ok(())
+}

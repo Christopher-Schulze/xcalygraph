@@ -1,6 +1,7 @@
 //! `map`: orientation on an unknown tree (`docs/spec.md` section 7.1).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
 
 use super::output::{OutputFact, Value, Writer, json_object};
 use super::{Filter, Index};
@@ -11,6 +12,10 @@ use crate::domain::graph::{EdgeKind, ModuleEdge};
 use crate::domain::role::Role;
 
 const MODULE_LINES: usize = 40;
+const AREA_LINES: usize = 12;
+/// Contents shown per area.
+const AREA_KINDS: usize = 3;
+const VCS_FOLDERS: [&str; 3] = [".git", ".hg", ".svn"];
 const SECTION_LINES: usize = 10;
 const EXTERNAL_LINES: usize = 15;
 const MODULE_DEPTH: usize = 3;
@@ -289,6 +294,7 @@ fn env_text(name: &str, reads: u32, sources: &[String], first: Option<&(String, 
 pub fn render(
     index: &Index,
     filter: &Filter,
+    root: &Path,
     root_name: &str,
     json: bool,
     budget: usize,
@@ -307,6 +313,7 @@ pub fn render(
             lines: head,
             cut: 0,
         },
+        section("areas", areas(index, filter, root), AREA_LINES),
         section("modules", modules(index, filter), MODULE_LINES),
         section("entry", entrypoints(index, filter), SECTION_LINES),
         section("tasks", tasks(index, filter), SECTION_LINES),
@@ -396,6 +403,79 @@ fn section(keyword: &'static str, mut lines: Vec<MapFact>, cap: usize) -> Sectio
         lines: lines.iter().map(RenderedFact::from_fact).collect(),
         cut,
     }
+}
+
+/// Every top-level folder with its files, symbols and contents, so a folder an agent would not
+/// open still shows up; `path-only` files are indexed by name, their content was not analyzed.
+/// A last line names top-level folders the index excludes.
+fn areas(index: &Index, filter: &Filter, root: &Path) -> Vec<MapFact> {
+    #[derive(Default)]
+    struct Area<'a> {
+        files: u32,
+        symbols: u32,
+        kinds: BTreeMap<&'a str, u32>,
+    }
+    let mut areas: BTreeMap<&str, Area> = BTreeMap::new();
+    for file in index.derived.files() {
+        if !filter.file(index, file) {
+            continue;
+        }
+        let path = index.string(file.path);
+        let name = path.split_once('/').map_or(".", |(first, _)| first);
+        let area = areas.entry(name).or_default();
+        area.files += 1;
+        area.symbols += file.symbol_count;
+        let kind = match file.file_type() {
+            Some(file_type) if file.role().is_extracted() => file_type.id(),
+            _ => "path-only",
+        };
+        *area.kinds.entry(kind).or_default() += 1;
+    }
+    // Only a complete view can tell what is missing from it.
+    let unfiltered = filter.paths.is_none() && filter.langs.is_empty() && !filter.no_tests;
+    let excluded = if unfiltered {
+        excluded_folders(root, &areas)
+    } else {
+        Vec::new()
+    };
+    let mut ordered: Vec<(&str, Area)> = areas.into_iter().collect();
+    ordered.sort_by(|a, b| b.1.files.cmp(&a.1.files).then(a.0.cmp(b.0)));
+    let mut lines: Vec<MapFact> = ordered
+        .into_iter()
+        .map(|(name, area)| {
+            let mut kinds: Vec<(&str, u32)> = area.kinds.into_iter().collect();
+            kinds.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+            MapFact::Module {
+                name: name.to_owned(),
+                files: area.files,
+                symbols: area.symbols,
+                top: kinds
+                    .iter()
+                    .take(AREA_KINDS)
+                    .map(|(kind, count)| format!("{kind}:{count}"))
+                    .collect(),
+            }
+        })
+        .collect();
+    if !excluded.is_empty() {
+        lines.push(MapFact::Notice(format!("excluded {}", excluded.join(" "))));
+    }
+    lines
+}
+
+/// Top-level folders without an indexed file: pruned, ignored or empty.
+fn excluded_folders<T>(root: &Path, areas: &BTreeMap<&str, T>) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| !areas.contains_key(name.as_str()) && !VCS_FOLDERS.contains(&name.as_str()))
+        .collect();
+    names.sort_unstable();
+    names
 }
 
 fn root_line(index: &Index, filter: &Filter, root_name: &str) -> MapFact {

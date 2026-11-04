@@ -189,6 +189,7 @@ fn run_query(
         CommandName::Map => Ok(query::map::render(
             index,
             filter,
+            root,
             &workspace.root.file_name().map_or_else(
                 || "root".to_owned(),
                 |name| name.to_string_lossy().into_owned(),

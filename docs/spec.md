@@ -273,6 +273,8 @@ Detail ladder: `find` (one line per hit, a clear top hit with source and neighbo
 
 ### 7.1 map
 
+Sections open with `areas`: at most 12 top-level folders by file count (`.` for root files) as `NAME Nf Ns KIND:COUNT...` with the top 3 contents, `path-only` for files without content analysis, then `excluded NAME...` for top-level folders without an indexed file, VCS folders left out; only without `-p`, `-l` or `--no-tests`.
+
 Sections in priority order: root line (name, files per language, symbol count) -> modules (tree by path, depth max 3; files, symbols, top 3 symbols by rank; max 40 lines) -> entrypoints -> tasks -> hubs (top 10 by rank) -> api contracts -> cycles -> layers -> external dependencies (top 15 by use count) -> env vars (name, read count, definition sources, first read location). Sections other than modules hold max 10 lines; the budget cuts from the lowest-priority section upward.
 
 ### 7.2 find
