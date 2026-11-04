@@ -11,7 +11,7 @@ use super::workspace::Workspace;
 use crate::domain::corpus::{ChangeSet, FileRecord};
 use crate::domain::facts::{Coverage, Facts};
 use crate::extract;
-use crate::infra::alloc_stats::stage;
+use crate::infra::alloc_stats::{self, stage};
 use crate::infra::lock::{self, WriterLock};
 use crate::infra::scan;
 use crate::infra::store::container::{Kind, OpenError};
@@ -72,6 +72,7 @@ pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError> {
         (stored, meta.write_time_ns)
     });
     let scan_start = now_ns();
+    alloc_stats::start();
     let mut changes = scan::scan(
         &workspace.root,
         &workspace.excluded(),
@@ -109,6 +110,7 @@ pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError> {
     if changes.has_content_changes() || rebuilt || !derived_valid {
         report.bytes_written += write_derived(workspace, &changes.records, known)?;
     }
+    stage("write-derived");
     report.bytes_written += store
         .write_files(&changes.records)
         .map_err(AppError::index_io("write file table"))?;

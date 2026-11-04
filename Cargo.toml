@@ -68,8 +68,9 @@ xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2"] }
 
 [features]
-# Counts allocations per pipeline stage; only for scripts/benchmarks/measure-allocations.sh.
-alloc-stats = []
+# Time and allocations per pipeline stage; only for scripts/benchmarks/measure-allocations.sh.
+stage-stats = []
+alloc-stats = ["stage-stats"]
 default = ["lang-go", "lang-rust", "lang-python", "lang-typescript", "lang-javascript", "lang-bash", "lang-java", "lang-kotlin", "lang-scala", "lang-groovy", "lang-csharp", "lang-vbnet", "lang-c", "lang-cpp", "lang-objc", "lang-swift", "lang-ruby", "lang-php", "lang-lua", "lang-zig", "lang-elixir", "lang-erlang", "lang-dart", "lang-julia", "lang-r", "lang-ocaml", "lang-fortran", "lang-pascal", "lang-commonlisp", "lang-solidity", "lang-verilog", "lang-powershell", "lang-robot", "lang-dm"]
 lang-go = ["dep:tree-sitter-go"]
 lang-rust = ["dep:tree-sitter-rust"]
