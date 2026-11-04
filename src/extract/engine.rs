@@ -1025,13 +1025,14 @@ fn assemble(assembly: Assembly) -> Parsed {
     // A builtin name the file defines as a function names that definition: a Python module
     // shadowing `open`, Julia `Base.length(q::Queue)` extending `length` for its type.
     let elixir = path.ends_with(".ex") || path.ends_with(".exs");
-    let local_functions: std::collections::HashSet<&str> = symbols
+    let local_functions: std::collections::HashSet<(&str, bool)> = symbols
         .iter()
         .filter(|symbol| {
             // Functions, and functions of a module (Julia and OCaml module blocks, Elixir
             // `defmodule` with `defp derive`); methods of a class never shadow a builtin call
             // (`len(x)` next to `def len(self)`).
             symbol.kind == Some(SymKind::Fn)
+                || (path.ends_with(".rs") && symbol.kind == Some(SymKind::Macro))
                 || (symbol.kind == Some(SymKind::Method)
                     && symbol.parent.is_some_and(|parent| {
                         let parent_kind = symbols[parent as usize].kind;
@@ -1039,7 +1040,12 @@ fn assemble(assembly: Assembly) -> Parsed {
                             || (elixir && parent_kind == Some(SymKind::Class))
                     }))
         })
-        .map(|symbol| symbol.name.as_str())
+        .map(|symbol| {
+            (
+                symbol.name.as_str(),
+                path.ends_with(".rs") && symbol.kind == Some(SymKind::Macro),
+            )
+        })
         .collect();
     let mut facts_refs: Vec<AssembledRef> = refs
         .into_iter()
@@ -1047,7 +1053,10 @@ fn assemble(assembly: Assembly) -> Parsed {
         .filter_map(|(_, mut raw)| {
             let kind = raw.kind?;
             let builtin = raw.qualifier.is_none() && (hooks.builtin)(&raw.name);
-            let local_function = local_functions.contains(raw.name.as_str());
+            let local_function = local_functions.contains(&(
+                raw.name.as_str(),
+                path.ends_with(".rs") && raw.source_identity.as_deref() == Some("rust:macro"),
+            ));
             let julia_builtin =
                 path.ends_with(".jl") && builtin && !local_function && kind == RefKind::Call;
             if builtin && !local_function && !julia_builtin {
@@ -1613,6 +1622,13 @@ fn julia_arguments(arguments: Node, source: &[u8]) -> Vec<(u8, String)> {
 }
 
 fn source_definition_identity(path: &str, node: Node, name: &str, source: &[u8]) -> Option<String> {
+    if path.ends_with(".rs") {
+        return Some(if node.kind() == "macro_definition" {
+            "rust:macro".to_owned()
+        } else {
+            "rust:item".to_owned()
+        });
+    }
     #[cfg(feature = "lang-python")]
     if path.ends_with(".py") || path.ends_with(".pyi") {
         return super::lang::python::structural_identity(node, source);
@@ -1798,6 +1814,14 @@ fn source_reference_identity(
     source: &[u8],
     arity: u8,
 ) -> (String, Option<String>) {
+    if path.ends_with(".rs") && kind == Some(RefKind::Call) {
+        let identity = if node.kind() == "macro_invocation" {
+            "rust:macro"
+        } else {
+            "rust:item"
+        };
+        return (name, Some(identity.to_owned()));
+    }
     if path.ends_with(".swift")
         && kind == Some(RefKind::Call)
         && let Some(identity) = swift_call_identity(node, &name, source, arity)

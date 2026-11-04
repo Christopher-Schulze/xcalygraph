@@ -220,6 +220,8 @@ Resolution order for a reference, first hit wins:
 7. Unique name among the modules the file can see (own and imported modules; the whole root only for languages without module rules; non-test preferred) -> inferred, one rule for every language; calls with unresolved receivers stay unresolved when the member name is common on builtin types (`get`, `len`, `match`, ...).
 8. Otherwise no edge; counted per file as ambiguous.
 
+- Rust call namespaces: macro invocations select macro definitions; ordinary calls select value items. Local values do not hide macros. Argument-count selection applies within the chosen namespace.
+
 - Rust symbols retain a directly attached target-family gate: Unix (`unix`, a Unix `target_os`, `target_family = "unix"`) or outside Unix (`not(unix)`, `windows`, `target_os = "windows"`, `target_family = "windows"`/`"wasm"`); a Rust relation excludes a target with the opposite family, while unguarded or otherwise unsupported conditions remain candidates.
 
 - Julia Base dispatch: an unqualified builtin call can target source-defined `Base.name` methods when a declared concrete nominal argument type equals the method annotation at the same position or is its subtype through declared supertype edges; any known type mismatch rejects that candidate. At least one known position must match. When all direct call argument types and each matching candidate's formal types are known, retain only non-dominated, most-specific signatures; otherwise retain compatible partial matches as inferred. Unsupported types cannot establish a match; untyped calls emit no edge.

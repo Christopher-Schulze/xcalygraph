@@ -39,7 +39,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 103;
+pub const RESOLVE_VERSION: u32 = 104;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -2650,7 +2650,7 @@ impl<'a> Index<'a> {
             };
         }
         match reference.qualifier.as_deref() {
-            None => self.resolve_plain(file, imports, reference, wants_type),
+            None => self.resolve_plain(file, imports, reference, wants_type, false),
             Some(qualifier) => self.resolve_qualified(file, imports, reference, qualifier),
         }
     }
@@ -2696,8 +2696,21 @@ impl<'a> Index<'a> {
             };
         }
         let mut lookup = reference.clone();
-        lookup.arity = facts::NO_ARITY;
-        let (candidates, confidence) = match self.resolve_ref(file, imports, &lookup) {
+        // Rust identities distinguish namespaces, not argument labels; keep arity selection.
+        lookup.arity = if self.file_type(file) == Some(FileType::Rust) {
+            reference.arity
+        } else {
+            facts::NO_ARITY
+        };
+        let outcome = if self.file_type(file) == Some(FileType::Rust)
+            && identity == "rust:macro"
+            && lookup.qualifier.is_none()
+        {
+            self.resolve_plain(file, imports, &lookup, false, true)
+        } else {
+            self.resolve_ref(file, imports, &lookup)
+        };
+        let (candidates, confidence) = match outcome {
             Outcome::Targets(candidates, confidence) => (candidates, confidence),
             Outcome::External => return Outcome::External,
             Outcome::Ambiguous | Outcome::Unresolved => return Outcome::Unresolved,
@@ -2780,9 +2793,11 @@ impl<'a> Index<'a> {
         imports: &Imports,
         reference: &Ref,
         wants_type: bool,
+        wants_macro: bool,
     ) -> Outcome {
         let name = reference.name.as_str();
         if !wants_type
+            && !wants_macro
             && reference.kind == RefKind::Call
             && self.file_type(file) == Some(FileType::Rust)
             && self
@@ -2807,7 +2822,9 @@ impl<'a> Index<'a> {
             reference.kind == RefKind::Call && self.file_type(file) == Some(FileType::Lisp);
         let kind_ok = |symbol: u32| {
             let kind = self.symbols[symbol as usize].kind;
-            if wants_type {
+            if wants_macro {
+                kind == SymKind::Macro
+            } else if wants_type {
                 kind.is_type()
             } else if lisp_call {
                 kind.is_callable() || kind == SymKind::Macro
@@ -3079,7 +3096,7 @@ impl<'a> Index<'a> {
                     None => Outcome::Unresolved,
                 }
             }
-            None => self.resolve_plain(file, imports, reference, false),
+            None => self.resolve_plain(file, imports, reference, false, false),
         };
         match outcome {
             Outcome::Targets(targets, Confidence::Exact) => {
