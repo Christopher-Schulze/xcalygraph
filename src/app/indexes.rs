@@ -123,6 +123,19 @@ pub fn clean(options: &Options, roots: &[String]) -> Result<String, AppError> {
     Ok(out)
 }
 
+/// Removes verified indexes whose root no longer exists, so a shared base does not collect
+/// leftovers. Best effort: anything unverifiable or failing stays, as `clean --missing` reports.
+pub fn prune_orphans(base: &Path) {
+    let Ok(dirs) = candidates(base) else {
+        return;
+    };
+    for dir in dirs {
+        if owned_root(&dir).is_some_and(|root| !root.is_dir()) {
+            let _ = Store::new(dir).drop_all();
+        }
+    }
+}
+
 fn candidates(base: &Path) -> io::Result<Vec<PathBuf>> {
     let entries = match fs::read_dir(base) {
         Ok(entries) => entries,

@@ -142,6 +142,12 @@ fn prepare_index(
         workspace.prepare_base()?;
     }
     let report = refresh::refresh(workspace, mode)?;
+    // Building a new index is the moment a shared base grows: clear what is left of gone roots.
+    if report.rebuilt
+        && let Some(base) = &workspace.default_base
+    {
+        indexes::prune_orphans(base);
+    }
     let index = open_index(workspace, mode)?;
     Ok((report, index))
 }

@@ -257,6 +257,24 @@ impl Store {
         used.into_iter().chain(written).max()
     }
 
+    /// Removes temporary files of killed writers. Every store write holds the writer lock, so
+    /// the caller, holding it too, sees no temporary file in use. Best effort: a leftover that
+    /// cannot be removed costs disk only, never correctness.
+    pub fn remove_temp_leftovers(&self) {
+        for dir in [self.dir.clone(), self.dir.join("facts")] {
+            let Ok(entries) = fs::read_dir(dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with('.') && name.contains(".tmp.") {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+
     pub fn drop_all(&self) -> io::Result<bool> {
         match fs::remove_dir_all(&self.dir) {
             Ok(()) => Ok(true),

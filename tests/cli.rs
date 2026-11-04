@@ -4535,3 +4535,58 @@ fn install_warns_when_another_binary_shadows_the_target() -> TestResult {
     assert!(text.contains("first on PATH"), "{text}");
     Ok(())
 }
+
+#[test]
+fn building_a_new_index_removes_indexes_of_vanished_roots() -> TestResult {
+    let dir = TempDir::new("prune-orphans")?;
+    dir.write("gone/main.go", "package main\n")?;
+    dir.write("kept/main.go", "package main\n")?;
+    dir.write("next/main.go", "package main\n")?;
+    // The default base lives under TMPDIR, which the test support points at the fixture.
+    let index = |root: &str| -> io::Result<Output> {
+        support::command(BINARY, &dir.0)
+            .args(["index", "-C"])
+            .arg(dir.0.join(root))
+            .output()
+    };
+    assert_eq!(index("gone")?.status.code(), Some(0));
+    assert_eq!(index("kept")?.status.code(), Some(0));
+    let base = fs::read_dir(&dir.0)?
+        .map(|entry| Ok(entry?.path()))
+        .collect::<io::Result<Vec<_>>>()?
+        .into_iter()
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("xcalygraph-"))
+        })
+        .ok_or("default base missing")?;
+    fs::write(base.join("foreign-file"), "keep")?;
+    let names = || -> io::Result<Vec<String>> {
+        let mut names: Vec<String> = fs::read_dir(&base)?
+            .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+            .collect::<io::Result<_>>()?;
+        names.sort();
+        Ok(names)
+    };
+    assert_eq!(names()?.len(), 3);
+    fs::remove_dir_all(dir.0.join("gone"))?;
+    // An update of an existing index changes nothing; only a new index triggers the pruning.
+    assert_eq!(index("kept")?.status.code(), Some(0));
+    assert_eq!(names()?.len(), 3);
+    assert_eq!(index("next")?.status.code(), Some(0));
+    let after = names()?;
+    assert!(
+        after.iter().any(|name| name.starts_with("kept-")),
+        "{after:?}"
+    );
+    assert!(
+        after.iter().any(|name| name.starts_with("next-")),
+        "{after:?}"
+    );
+    assert!(after.contains(&"foreign-file".to_owned()), "{after:?}");
+    assert!(
+        !after.iter().any(|name| name.starts_with("gone-")),
+        "{after:?}"
+    );
+    Ok(())
+}

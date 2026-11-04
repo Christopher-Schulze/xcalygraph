@@ -95,6 +95,7 @@ pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError> {
         root: workspace.root.to_string_lossy().into_owned(),
         write_time_ns: scan_start,
     };
+    store.remove_temp_leftovers();
     if changes.has_content_changes() || rebuilt || !derived_valid {
         report.bytes_written += invalidate_meta(workspace, &meta)?;
     }
@@ -403,6 +404,25 @@ mod tests {
             store: Store::new(dir.path().join("index")),
             default_base: None,
         }
+    }
+
+    #[test]
+    fn a_writing_refresh_removes_leftovers_of_killed_writers()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = TestDir::new("refresh-temp")?;
+        dir.write("root/a.go", "package a\n")?;
+        let workspace = workspace(&dir);
+        refresh(&workspace, Mode::Write)?;
+        let derived = dir.write("index/.derived.tmp.99.0", "partial")?;
+        let shard = dir.write("index/facts/.00.tmp.99.0", "partial")?;
+        let kept = dir.write("index/keep.tmp", "kept")?;
+        assert_eq!(refresh(&workspace, Mode::Write)?.bytes_written, 0);
+        assert!(derived.exists() && shard.exists());
+        dir.write("root/a.go", "package a\n\nfunc A() {}\n")?;
+        assert!(refresh(&workspace, Mode::Write)?.changed == 1);
+        assert!(!derived.exists() && !shard.exists());
+        assert!(kept.exists());
+        Ok(())
     }
 
     #[test]
