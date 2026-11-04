@@ -100,7 +100,7 @@ ours_names = set()
 ours_by_kind = collections.Counter()
 with open(ours_path) as handle:
     for row in handle:
-        kind, _, source, line, target, _, name = row.rstrip("\n").split("\t")
+        kind, _, source, line, target, _, name = row.rstrip("\n").split("\t")[:7]
         ours[(source, unit(target))].add((kind, int(line)))
         ours_names.add((source, kind, name.lower()))
         ours_by_kind[kind] += 1

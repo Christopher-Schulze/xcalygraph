@@ -53,7 +53,8 @@ with tempfile.TemporaryDirectory(prefix="edge-oracle-regression.", dir=cache) as
     with edges.open("x", newline="") as output:
         writer = csv.writer(output, delimiter="\t", lineterminator="\n")
         for confidence, path, line, target, target_line, name, _ in cases:
-            writer.writerow(("calls", confidence, path, line, target, target_line, name))
+            caller = (16, "ambiguous_line") if line == 16 else (11, "entry")
+            writer.writerow(("calls", confidence, path, line, target, target_line, name, *caller, "symbol"))
     result = subprocess.run(
         [sys.executable, "-I", "-", "fixture", "rust", str(compiler), str(edges), str(verdicts)],
         input=program, text=True, capture_output=True, env=dict(os.environ, HOME=str(home)),
@@ -67,5 +68,64 @@ with tempfile.TemporaryDirectory(prefix="edge-oracle-regression.", dir=cache) as
     inferred = next(row for row in summaries if row[2:4] == ["calls", "inferred"])
     assert exact[4:] == ["4", "1", "1", "2", "50.0"], exact
     assert inferred[4:] == ["2", "0", "0", "2", "-"], inferred
-print("PASS: real compiler identities reject nearby targets and leave ambiguous or name-only evidence unknown")
+
+    caller_fixture = repo / "tests/fixtures/oracle/caller-identities"
+    caller_index = caller_fixture / "compiler.json"
+    for relative, expected_hash in json.loads(caller_index.read_text())["provenance"]["source_sha256"].items():
+        assert hashlib.sha256((caller_fixture / relative).read_bytes()).hexdigest() == expected_hash, relative
+    caller_edges = work / "callers.edges.tsv"
+    caller_verdicts = work / "callers.verdicts.tsv"
+    caller_cases = [
+        # Same physical reference line, different real enclosing functions.
+        ("src/lib.rs", 3, "src/lib.rs", 1, "first", 3, "left", "correct"),
+        ("src/lib.rs", 3, "src/lib.rs", 2, "second", 3, "left", "incorrect"),
+        ("src/lib.rs", 3, "src/lib.rs", 1, "first", 3, "right", "incorrect"),
+        ("src/lib.rs", 3, "src/lib.rs", 2, "second", 3, "right", "correct"),
+        # A nested function's call is not a call by its enclosing function.
+        ("src/lib.rs", 4, "src/lib.rs", 1, "first", 4, "outer", "incorrect"),
+        ("src/lib.rs", 4, "src/lib.rs", 1, "first", 4, "nested", "correct"),
+        ("src/lib.rs", 4, "src/lib.rs", 4, "nested", 4, "outer", "correct"),
+        # rust-analyzer shares the target identity between two test crates.
+        ("tests/a.rs", 1, "tests/b.rs", 3, "target", 1, "repeated", "unknown"),
+        ("src/lib.rs", 3, "src/lib.rs", 1, "first", 3, "missing", "unknown"),
+    ]
+    with caller_edges.open("x", newline="") as output:
+        writer = csv.writer(output, delimiter="\t", lineterminator="\n")
+        for path, line, target, target_line, name, caller_line, caller, _ in caller_cases:
+            writer.writerow(("calls", "1", path, line, target, target_line, name, caller_line, caller, "symbol"))
+        # Historical seven-column evidence cannot prove the identity of the caller.
+        writer.writerow(("calls", "1", "src/lib.rs", 3, "src/lib.rs", 1, "first"))
+    caller_result = subprocess.run(
+        [sys.executable, "-I", "-", "callers", "rust", str(caller_index), str(caller_edges), str(caller_verdicts)],
+        input=program, text=True, capture_output=True, env=dict(os.environ, HOME=str(home)), check=True,
+    )
+    actual = [row[0] for row in csv.reader(caller_verdicts.open(), delimiter="\t")]
+    expected = [case[-1] for case in caller_cases] + ["unknown"]
+    assert actual == expected, f"caller oracle verdicts: {actual}; expected {expected}"
+    recall = next(row for row in csv.reader(caller_result.stdout.splitlines(), delimiter="\t") if row[2] == "recall-calls")
+    assert recall[4:] == ["5", "3", "0", "2", "100.0"], recall
+    for fixture_name, cases in [
+        ("accessor-identities", [("index.ts", 3, 1, "first", 2, "Box", "unknown")]),
+        ("local-accessor-identities", [
+            ("index.ts", 2, 1, "first", 2, "outer", "unknown"),
+            ("plain.ts", 2, 1, "first", 2, "caller", "correct"),
+        ]),
+    ]:
+        fixture = repo / "tests/fixtures/oracle" / fixture_name
+        compiler = fixture / "compiler.json"
+        for relative, expected_hash in json.loads(compiler.read_text())["provenance"]["source_sha256"].items():
+            assert hashlib.sha256((fixture / relative).read_bytes()).hexdigest() == expected_hash, relative
+        edges = work / (fixture_name + ".edges.tsv")
+        verdicts = work / (fixture_name + ".verdicts.tsv")
+        with edges.open("x", newline="") as output:
+            writer = csv.writer(output, delimiter="\t", lineterminator="\n")
+            for path, line, target_line, name, caller_line, caller, _ in cases:
+                writer.writerow(("calls", "1", path, line, path, target_line, name, caller_line, caller, "symbol"))
+        subprocess.run(
+            [sys.executable, "-I", "-", fixture_name, "typescript", str(compiler), str(edges), str(verdicts)],
+            input=program, text=True, capture_output=True, env=dict(os.environ, HOME=str(home)), check=True,
+        )
+        actual = [row[0] for row in csv.reader(verdicts.open(), delimiter="\t")]
+        assert actual == [case[-1] for case in cases], f"{fixture_name}: {actual}"
+print("PASS: real compiler identities prove targets and callers, reject shared-line/nested calls, and qualify ambiguous recall")
 PYTHON

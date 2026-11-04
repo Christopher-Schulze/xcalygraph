@@ -1,0 +1,479 @@
+{
+  "provenance": {
+    "generator": "rust-analyzer 1.99.1 (58cf8f9c 2026-10-13)",
+    "source_sha256": {
+      "Cargo.toml": "82f699bd3978ca7f73811c1f94e8d932b791c38691a462651190a1fdca03e124",
+      "src/lib.rs": "b073a2eac5dce1d90e966919f29888d4ba131290edfc5547742ed7b861fe03bb",
+      "tests/a.rs": "ad45b0163b0d107405270fbc8159f83b80d5040d946950d8d212dbf1705cd3e2",
+      "tests/b.rs": "200ebc07b5bade4cd4cea88c2f74dde204b20f9a9d052127cdc08b4655f64d23"
+    }
+  },
+  "documents": [
+    {
+      "language": "rust",
+      "relative_path": "tests/b.rs",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            3,
+            0
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 crate/",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            3,
+            0
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            0,
+            2,
+            6
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo core https://github.com/rust-lang/rust/library/core macros/builtin/test:",
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            1,
+            3,
+            11
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 repeated().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            1,
+            27
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            1,
+            16,
+            22
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 target().",
+          "enclosing_range": [
+            2,
+            0,
+            14
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            3,
+            9
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 target().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            2,
+            0,
+            14
+          ],
+          "TypedEnclosingRange": null
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 crate/",
+          "kind": 29,
+          "signature_documentation": {
+            "language": "rust",
+            "text": "extern crate b"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 repeated().",
+          "kind": 17,
+          "display_name": "repeated",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "fn repeated()"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 target().",
+          "kind": 17,
+          "display_name": "target",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "fn target()"
+          }
+        }
+      ],
+      "position_encoding": 1
+    },
+    {
+      "language": "rust",
+      "relative_path": "tests/a.rs",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            2,
+            0
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 crate/",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            2,
+            0
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            0,
+            2,
+            6
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo core https://github.com/rust-lang/rust/library/core macros/builtin/test:",
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            0,
+            11,
+            19
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 repeated().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            35
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            0,
+            24,
+            30
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 target().",
+          "enclosing_range": [
+            1,
+            0,
+            14
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            1,
+            3,
+            9
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 target().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            1,
+            0,
+            14
+          ],
+          "TypedEnclosingRange": null
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 crate/",
+          "kind": 29,
+          "signature_documentation": {
+            "language": "rust",
+            "text": "extern crate a"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 repeated().",
+          "kind": 17,
+          "display_name": "repeated",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "fn repeated()"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 target().",
+          "kind": 17,
+          "display_name": "target",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "fn target()"
+          }
+        }
+      ],
+      "position_encoding": 1
+    },
+    {
+      "language": "rust",
+      "relative_path": "src/lib.rs",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            4,
+            0
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 crate/",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            4,
+            0
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            0,
+            7,
+            12
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 first().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            17
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            1,
+            7,
+            13
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 second().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            1,
+            0,
+            18
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            7,
+            11
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 left().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            2,
+            0,
+            26
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            16,
+            21
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 first().",
+          "enclosing_range": [
+            0,
+            0,
+            17
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            34,
+            39
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 right().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            2,
+            27,
+            55
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            44,
+            50
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 second().",
+          "enclosing_range": [
+            1,
+            0,
+            18
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            3,
+            7,
+            12
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 outer().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            3,
+            0,
+            53
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            3,
+            20,
+            26
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 nested().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            3,
+            17,
+            41
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            3,
+            31,
+            36
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 first().",
+          "enclosing_range": [
+            0,
+            0,
+            17
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            3,
+            42,
+            48
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 nested().",
+          "enclosing_range": [
+            3,
+            17,
+            41
+          ],
+          "TypedEnclosingRange": null
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 crate/",
+          "kind": 29,
+          "signature_documentation": {
+            "language": "rust",
+            "text": "extern crate oracle_caller_identities"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 first().",
+          "kind": 17,
+          "display_name": "first",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "pub fn first()"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 second().",
+          "kind": 17,
+          "display_name": "second",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "pub fn second()"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 left().",
+          "kind": 17,
+          "display_name": "left",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "pub fn left()"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 right().",
+          "kind": 17,
+          "display_name": "right",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "pub fn right()"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 outer().",
+          "kind": 17,
+          "display_name": "outer",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "pub fn outer()"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_caller_identities 0.0.0 nested().",
+          "kind": 17,
+          "display_name": "nested",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "fn nested()"
+          }
+        }
+      ],
+      "position_encoding": 1
+    }
+  ]
+}

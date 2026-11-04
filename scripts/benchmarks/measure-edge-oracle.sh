@@ -13,12 +13,13 @@
 #   references, and how many have an edge; edges are deduplicated per source symbol and target,
 #   so recall is measured per file and target rather than per line).
 # Verdict per edge: unknown when the compiler has no symbol for the target; correct when the
-# compiler resolves a reference on the edge line to the edge
-# target (same file, name and definition line, identifying one compiler symbol) or to a method
+# compiler resolves a reference owned by the declared caller on the edge line to the edge
+# target (same file, name and definition line, identifying one physical definition) or to a method
 # the target implements; ambiguous locations and unsupported name-only dispatch stay unknown;
 # for inherits/implements, when the source type declared there has that relationship; incorrect
 # when the compiler resolves in-repo references (or relationships) there but none is the target;
-# unknown when the compiler reports nothing in-repo there.
+# unknown when caller ranges or unambiguous targets are unavailable. The native edge dump
+# appends caller declaration line, name and node kind after its seven-column depth prefix.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && /bin/pwd -P)"
@@ -29,6 +30,10 @@ PATH="${TOOLS}:${PATH}"
 for tool in cargo git python3 scip; do
   command -v "${tool}" >/dev/null || { echo "measure-edge-oracle.sh: ${tool} is required" >&2; exit 1; }
 done
+if ! bash "${REPO_ROOT}/scripts/utils/verification-lock.sh"; then
+  exec bash "${REPO_ROOT}/scripts/utils/guard-benchmark.sh" \
+    bash "${REPO_ROOT}/scripts/benchmarks/measure-edge-oracle.sh" "$@"
+fi
 
 language_of() {
   [[ "$1" == xcalygraph ]] && { echo rust; return; }
@@ -40,16 +45,17 @@ language_of() {
 index_corpus() {
   local language="$1" root="$2" output="$3"
   case "${language}" in
-    go) ( cd "${root}" && scip-go --output "${output}" >/dev/null 2>&1 ) ;;
-    rust) ( cd "${root}" && rustup run "$(sed -n 's/^channel = "\(.*\)"/\1/p' "${REPO_ROOT}/rust-toolchain.toml")" \
-              rust-analyzer scip . --output "${output}" >/dev/null 2>&1 ) ;;
-    python) ( cd "${root}" && scip-python index . --output "${output}" >/dev/null 2>&1 ) ;;
+    go) ( cd "${root}" && scip-go --output "${output}" ) ;;
+    rust) bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
+      ( cd "${root}" && rustup run "$(sed -n 's/^channel = "\(.*\)"/\1/p' "${REPO_ROOT}/rust-toolchain.toml")" \
+              rust-analyzer scip . --output "${output}" ) ;;
+    python) ( cd "${root}" && scip-python index . --output "${output}" ) ;;
     typescript|javascript)
-      # A tsconfig that extends an uninstalled package fails; retry with an inferred config.
-      ( cd "${root}" && scip-typescript index --infer-tsconfig --output "${output}" >/dev/null 2>&1 ) || {
-        find "${root}" -maxdepth 1 -name 'tsconfig*.json' -exec mv {} {}.disabled \;
-        ( cd "${root}" && scip-typescript index --infer-tsconfig --output "${output}" >/dev/null 2>&1 )
-      } ;;
+      # Keep the pinned configuration. Resolve its development dependencies without running
+      # lifecycle scripts or changing package.json/lockfiles; never disable a tsconfig.
+      command -v bun >/dev/null || { echo "measure-edge-oracle.sh: bun is required for TypeScript dependencies" >&2; return 1; }
+      ( cd "${root}" && bun install --no-save --ignore-scripts &&
+          scip-typescript index --infer-tsconfig --output "${output}" ) ;;
     *) echo "measure-edge-oracle.sh: no indexer for ${language}" >&2; return 1 ;;
   esac
 }
@@ -70,14 +76,20 @@ for corpus in "$@"; do
   # Both tools read the same committed tree.
   copy="${WORK}/${corpus}"
   mkdir "${copy}"
-  git -C "${source_root}" archive --format=tar HEAD | tar -x -C "${copy}"
-  index_corpus "${language}" "${copy}" "${WORK}/${corpus}.scip" || {
-    echo "measure-edge-oracle.sh: ${corpus}: indexer failed" >&2
+  revision="$(git -C "${source_root}" rev-parse --verify HEAD)"
+  git -C "${source_root}" archive --format=tar "${revision}" | tar -x -C "${copy}"
+  printf '%s\n' "${revision}" > "${WORK}/${corpus}.revision"
+  # Dump before installing compiler dependencies, so dependency directories never enter our graph.
+  bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
+  ( cd "${REPO_ROOT}" && XCALYGRAPH_DUMP_ROOT="${copy}" XCALYGRAPH_DUMP_FILE="${WORK}/${corpus}.edges.tsv" \
+      cargo test -q --release --locked --bin xcalygraph resolve::tests::precision_tools::dump_edges -- --ignored --exact >/dev/null )
+  index_corpus "${language}" "${copy}" "${WORK}/${corpus}.scip" > "${WORK}/${corpus}.index.log" 2>&1 || {
+    echo "measure-edge-oracle.sh: ${corpus}: indexer failed; see ${WORK}/${corpus}.index.log" >&2
     exit 1
   }
+  git --no-optional-locks -C "${source_root}" --work-tree="${copy}" diff --exit-code "${revision}" -- . \
+    > "${WORK}/${corpus}.source.diff" || { echo "measure-edge-oracle.sh: ${corpus}: indexer changed pinned source" >&2; exit 1; }
   scip print --json "${WORK}/${corpus}.scip" > "${WORK}/${corpus}.scip.json"
-  ( cd "${REPO_ROOT}" && XCALYGRAPH_DUMP_ROOT="${copy}" XCALYGRAPH_DUMP_FILE="${WORK}/${corpus}.edges.tsv" \
-      cargo test -q --release --locked dump_edges -- --ignored >/dev/null )
   python3 -I - "${corpus}" "${language}" "${WORK}/${corpus}.scip.json" "${WORK}/${corpus}.edges.tsv" \
     "${WORK}/${corpus}.verdicts.tsv" >> "${WORK}/summary.tsv" <<'PYTHON'
 import collections
@@ -106,8 +118,7 @@ def descriptor_name(symbol):
 
 # Generated files outside the corpus (Go build cache test mains) are not corpus source.
 index["documents"] = [d for d in index["documents"] if not d["relative_path"].startswith("..")]
-# A symbol can have several definitions: rust-analyzer gives same-named items in different
-# integration-test crates one symbol, so a reference matches any of them.
+# A reused compiler symbol cannot identify which physical target a reference reaches.
 definitions, implements = collections.defaultdict(set), collections.defaultdict(set)
 for document in index["documents"]:
     for occurrence in document["occurrences"] or []:
@@ -141,30 +152,112 @@ for symbol, locations in definitions.items():
 
 def targets_of(path, name, line):
     candidates = {symbol for symbol, defined in by_location.get((path, name), ()) if defined == line}
-    return candidates if len(candidates) == 1 else set()
+    return candidates if len(candidates) == 1 and all(len(definitions[symbol]) == 1 for symbol in candidates) else set()
+
+def points(raw):
+    if not isinstance(raw, list) or len(raw) not in (3, 4):
+        return None
+    start = tuple(raw[:2])
+    end = (raw[0], raw[2]) if len(raw) == 3 else tuple(raw[2:])
+    return (start, end) if start <= end else None
+
+# Definition enclosing ranges describe the source body. On a reference occurrence the
+# enclosing range can describe its TARGET instead, so never use that as the caller.
+source_scopes = collections.defaultdict(set)
+owned_references = collections.defaultdict(set)
+unknown_ownership = collections.defaultdict(set)
+missing_scopes = set()
+for document in index["documents"]:
+    path = document["relative_path"]
+    scopes = []
+    kinds = {info["symbol"]: info.get("kind", 0) for info in document.get("symbols") or []}
+    for occurrence in document["occurrences"] or []:
+        symbol = occurrence["symbol"]
+        # SCIP Function/Method/Constructor/Getter/Setter kinds include local symbols whose
+        # descriptor contains only an ID. Missing accessor ranges must not bless their parent.
+        callable_kind = kinds.get(symbol) in {9, 17, 18, 26, 45, 80}
+        if not occurrence.get("symbol_roles", 0) & DEFINITION or not (
+                callable_kind or symbol.endswith((").", "#", "/", "__init__:"))):
+            continue
+        body, declaration = points(occurrence.get("enclosing_range")), points(occurrence.get("range"))
+        if body is None or declaration is None:
+            missing_scopes.add(path)
+            continue
+        identity = (symbol, declaration[0])
+        scopes.append((*body, identity))
+        source_scopes[(path, descriptor_name(symbol), declaration[0][0] + 1)].add(identity)
+    scopes.sort(key=lambda item: item[0])
+    active, position = [], 0
+    occurrences = sorted((o for o in document["occurrences"] or [] if points(o.get("range"))),
+                         key=lambda o: tuple(o["range"][:2]))
+    for occurrence in occurrences:
+        symbol = occurrence["symbol"]
+        point = tuple(occurrence["range"][:2])
+        active = [scope for scope in active if point < scope[1]]
+        while position < len(scopes) and scopes[position][0] <= point:
+            scope = scopes[position]
+            if point < scope[1]:
+                active.append(scope)
+            position += 1
+        if occurrence.get("symbol_roles", 0) & DEFINITION or symbol not in definitions:
+            continue
+        values = {symbol, owner(symbol)}
+        location = (path, start_line(occurrence) + 1)
+        if not active:
+            if path in missing_scopes:
+                unknown_ownership[location].update(values)
+            else:
+                owned_references[(*location, None)].update(values)
+            continue
+        start = max(scope[0] for scope in active)
+        end = min(scope[1] for scope in active)
+        owners = {scope[2] for scope in active if scope[:2] == (start, end)}
+        if len(owners) != 1:
+            unknown_ownership[location].update(values)
+            continue
+        enclosing = next(iter(owners))
+        if enclosing[0].endswith(("/", "__init__:")):
+            enclosing = None
+        owned_references[(*location, enclosing)].update(values)
 
 indexed = {document["relative_path"] for document in index["documents"]}
 stats = collections.Counter()
 with open(verdicts_path, "w") as verdicts:
     for row in open(edges_path, encoding="utf-8"):
-        kind, confidence, source, line, target, target_line, name = row.rstrip("\n").split("\t")
+        fields = row.rstrip("\n").split("\t")
+        kind, confidence, source, line, target, target_line, name = fields[:7]
         # Only edges from files the compiler indexed (the corpus language) can be judged.
         if kind not in ("calls", "uses", "tests", "inherits", "implements") or source not in indexed:
             continue
         confidence = "exact" if confidence == "1" else "inferred"
         expected = targets_of(target, name, int(target_line))
+        caller_known = False
+        wrong_owner = False
+        caller = None
+        if len(fields) == 10:
+            caller_line, caller_name, caller_kind = fields[7:]
+            if caller_kind == "file":
+                caller_known = source not in missing_scopes
+            elif caller_kind == "symbol":
+                candidates = source_scopes.get((source, caller_name, int(caller_line)), set())
+                if len(candidates) == 1:
+                    caller = next(iter(candidates))
+                    caller_known = source not in missing_scopes
         if kind in ("inherits", "implements"):
             # The relationship belongs to the source type declared at the edge line.
-            declared = {symbol for symbol, locations in definitions.items()
-                        if (source, int(line)) in locations}
+            declared = targets_of(source, fields[8], int(fields[7])) if len(fields) == 10 else set()
+            caller_known = bool(declared)
             oracle = ({parent for symbol in declared for parent in implements.get(symbol, ())
                        if parent in definitions} if len(declared) == 1 else set())
             dispatch = set()
         else:
             # Module and namespace symbols (`utils` -> file, scip-python's `pkg/__init__:` for a name
             # re-exported by the package) say nothing about the member called.
-            oracle = {symbol for symbol in references.get((source, int(line)), set())
+            oracle = {symbol for symbol in owned_references.get((source, int(line), caller), set())
                       if not symbol.endswith(("/", "__init__:"))}
+            wrong_owner = bool(expected & references.get((source, int(line)), set())
+                               and not expected & oracle
+                               and not expected & unknown_ownership.get((source, int(line)), set()))
             if (kind in ("calls", "tests") and name not in {descriptor_name(symbol) for symbol in oracle}
                     and not any(symbol.endswith((").", "#")) for symbol in oracle)):
                 # The compiler resolved no call on this line (only parameters or variables, e.g.
@@ -174,28 +267,35 @@ with open(verdicts_path, "w") as verdicts:
         names = {descriptor_name(symbol) for symbol in oracle}
         # A name read through a package's re-export reaches the compiler only as `pkg/__init__:`, so
         # the other symbols on that line cannot contradict the edge.
-        reexported = any(symbol.endswith("__init__:") for symbol in references.get((source, int(line)), set()))
+        reexported = any(symbol.endswith("__init__:") for symbol in owned_references.get((source, int(line), caller), set()))
         # Without any in-repo reference there, or without a compiler symbol for the target (local
         # functions, CommonJS export objects), the compiler cannot judge the edge.
-        if not oracle or not expected:
+        if not expected or not caller_known:
             verdict = "unknown"
         elif oracle & expected or oracle & dispatch:
             verdict = "correct"
+        elif expected & unknown_ownership.get((source, int(line)), set()):
+            verdict = "unknown"
+        elif reexported:
+            verdict = "unknown"
         elif confidence == "inferred" and name in names:
             # A matching method name alone does not prove a relationship to this candidate.
+            verdict = "unknown"
+        elif wrong_owner:
+            verdict = "incorrect"
+        elif not oracle:
             verdict = "unknown"
         elif name in names and any(symbol.endswith(name + ".") and not symbol.endswith(")." )
                                    for symbol in oracle):
             # Field shorthand (`Struct { name }`): the compiler reports only the field.
-            verdict = "unknown"
-        elif reexported:
             verdict = "unknown"
         else:
             verdict = "incorrect"
         stats[(kind, confidence, verdict)] += 1
         verdicts.write("\t".join([verdict, kind, confidence, source, line, target, target_line, name,
                                   ";".join(sorted(f"{path}:{defined}" for symbol in oracle
-                                                  for path, defined in definitions[symbol]))]) + "\n")
+                                                  for path, defined in definitions[symbol])),
+                                  *fields[7:]]) + "\n")
 
 for kind, confidence in sorted({(k, c) for k, c, _ in stats}):
     correct, incorrect, unknown = (stats[(kind, confidence, v)] for v in ("correct", "incorrect", "unknown"))
@@ -204,10 +304,10 @@ for kind, confidence in sorted({(k, c) for k, c, _ in stats}):
     print(f"{corpus}\t{language}\t{kind}\t{confidence}\t{correct + incorrect + unknown}\t{correct}\t{incorrect}\t{unknown}\t{precision}")
 
 # Recall: compiler references from the corpus to in-repo callables and types, against edges on
-# the same line to the same target (any kind, any confidence).
+# the same source file to the same target (any kind, any confidence).
 edge_targets = collections.defaultdict(set)
 for row in open(edges_path, encoding="utf-8"):
-    kind, confidence, source, line, target, target_line, name = row.rstrip("\n").split("\t")
+    kind, confidence, source, line, target, target_line, name = row.rstrip("\n").split("\t")[:7]
     for symbol in targets_of(target, name, int(target_line)):
         edge_targets[source].add(symbol)
         edge_targets[source].update(implements.get(symbol, ()))
@@ -217,21 +317,29 @@ for (path, line), symbols in references.items():
         if ACCESSOR.search(symbol) or owner(symbol) != symbol:
             continue  # property accessors are not calls; constructors count as their class
         group = "recall-calls" if symbol.endswith(").") else "recall-types" if symbol.endswith("#") else None
-        if group is not None and (path, line) not in definitions[symbol]:
+        if group is not None:
             pairs.add((group, path, symbol))
 recall = collections.Counter()
-with open(verdicts_path.replace(".verdicts.tsv", ".missed.tsv"), "w") as missed:
+with open(verdicts_path.replace(".verdicts.tsv", ".missed.tsv"), "w") as missed, \
+     open(verdicts_path.replace(".verdicts.tsv", ".unknown.tsv"), "w") as unknown:
     for group, path, symbol in sorted(pairs):
         recall[(group, "total")] += 1
-        if symbol in edge_targets.get(path, ()):
+        locations = definitions[symbol]
+        if len(locations) != 1 or not all(targets_of(target, descriptor_name(symbol), line) == {symbol}
+                                           for target, line in locations):
+            recall[(group, "unknown")] += 1
+            unknown.write(f"{group}\t{path}\t{';'.join(f'{target}:{line}' for target, line in sorted(locations))}\t{symbol}\n")
+        elif symbol in edge_targets.get(path, ()):
             recall[(group, "found")] += 1
         else:
             location = min(definitions[symbol])
             missed.write(f"{group}\t{path}\t{location[0]}:{location[1]}\t{symbol}\n")
 for group in ("recall-calls", "recall-types"):
-    total, found = recall[(group, "total")], recall[(group, "found")]
+    total, found, unknown = (recall[(group, value)] for value in ("total", "found", "unknown"))
     if total:
-        print(f"{corpus}\t{language}\t{group}\tall\t{total}\t{found}\t{total - found}\t0\t{100 * found / total:.1f}")
+        judged = total - unknown
+        share = f"{100 * found / judged:.1f}" if judged else "-"
+        print(f"{corpus}\t{language}\t{group}\tall\t{total}\t{found}\t{judged - found}\t{unknown}\t{share}")
 PYTHON
 done
 column -t -s $'\t' "${WORK}/summary.tsv"

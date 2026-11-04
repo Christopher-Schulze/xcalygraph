@@ -1,0 +1,207 @@
+{
+  "provenance": {
+    "generator": "scip-typescript 0.6.1",
+    "source_sha256": {
+      "package.json": "dee01ba6b78e76362edb521bdebbff69a593d60fcdca9dad3dde72d0aa58db70",
+      "tsconfig.json": "48a4c82583da2eae655ad9ae619a33fc9329c23fc2761242d5a9f72bcdaca9e7",
+      "index.ts": "a1bb297acf48c164240669e73acd553423d53b0472e602d5faa7d8392e666c97",
+      "plain.ts": "d374961f08b9122501b2438aee4e7de4808560298aa6df7b70fbc4d510239d62"
+    }
+  },
+  "documents": [
+    {
+      "language": "TypeScript",
+      "relative_path": "index.ts",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            0
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-local-accessor-identities 0.0.0 `index.ts`/",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            2,
+            0
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            0,
+            16,
+            21
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-local-accessor-identities 0.0.0 `index.ts`/first().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            26
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            1,
+            16,
+            21
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-local-accessor-identities 0.0.0 `index.ts`/outer().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            1,
+            0,
+            72
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            1,
+            38,
+            43
+          ],
+          "TypedRange": null,
+          "symbol": "local 2",
+          "symbol_roles": 1,
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            1,
+            48,
+            53
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-local-accessor-identities 0.0.0 `index.ts`/first().",
+          "TypedEnclosingRange": null
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "scip-typescript npm oracle-local-accessor-identities 0.0.0 `index.ts`/",
+          "documentation": [
+            "```ts\nmodule \"index.ts\"\n```"
+          ],
+          "kind": 16
+        },
+        {
+          "symbol": "scip-typescript npm oracle-local-accessor-identities 0.0.0 `index.ts`/first().",
+          "documentation": [
+            "```ts\nfunction first(): void\n```"
+          ],
+          "kind": 17
+        },
+        {
+          "symbol": "scip-typescript npm oracle-local-accessor-identities 0.0.0 `index.ts`/outer().",
+          "documentation": [
+            "```ts\nfunction outer(): { readonly value: number; }\n```"
+          ],
+          "kind": 17
+        },
+        {
+          "symbol": "local 2",
+          "documentation": [
+            "```ts\nget value: number\n```"
+          ],
+          "kind": 18
+        }
+      ]
+    },
+    {
+      "language": "TypeScript",
+      "relative_path": "plain.ts",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            0
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-local-accessor-identities 0.0.0 `plain.ts`/",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            2,
+            0
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            0,
+            16,
+            21
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-local-accessor-identities 0.0.0 `plain.ts`/first().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            26
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            1,
+            16,
+            22
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-local-accessor-identities 0.0.0 `plain.ts`/caller().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            1,
+            0,
+            37
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            1,
+            27,
+            32
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-local-accessor-identities 0.0.0 `plain.ts`/first().",
+          "TypedEnclosingRange": null
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "scip-typescript npm oracle-local-accessor-identities 0.0.0 `plain.ts`/",
+          "documentation": [
+            "```ts\nmodule \"plain.ts\"\n```"
+          ],
+          "kind": 16
+        },
+        {
+          "symbol": "scip-typescript npm oracle-local-accessor-identities 0.0.0 `plain.ts`/first().",
+          "documentation": [
+            "```ts\nfunction first(): void\n```"
+          ],
+          "kind": 17
+        },
+        {
+          "symbol": "scip-typescript npm oracle-local-accessor-identities 0.0.0 `plain.ts`/caller().",
+          "documentation": [
+            "```ts\nfunction caller(): void\n```"
+          ],
+          "kind": 17
+        }
+      ]
+    }
+  ]
+}

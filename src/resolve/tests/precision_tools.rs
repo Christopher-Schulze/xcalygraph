@@ -695,7 +695,8 @@ fn precision_manifest_is_language_stratified_stable_and_identity_bound() -> io::
 
 /// Depth comparison input (`scripts/benchmarks/compare-depth.sh`): writes every edge of the
 /// root in `XCALYGRAPH_DUMP_ROOT` to `XCALYGRAPH_DUMP_FILE` as TSV lines `kind confidence
-/// source_path line target_path target_line target_name`. Development only.
+/// source_path line target_path target_line target_name source_decl_line source_name
+/// source_node_kind`. The first seven columns remain the depth comparison prefix.
 #[test]
 #[ignore = "development tool; needs XCALYGRAPH_DUMP_ROOT and XCALYGRAPH_DUMP_FILE"]
 fn dump_edges() -> Result<(), Box<dyn std::error::Error>> {
@@ -722,16 +723,74 @@ fn dump_edges() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut out = String::new();
     for edge in &graph.edges {
-        let (source_path, _, _) = location(edge.source);
+        let (source_path, source_line, source_name) = location(edge.source);
+        let source_kind = if edge.source < symbols {
+            "symbol"
+        } else {
+            "file"
+        };
         let (target_path, target_line, target_name) = location(edge.target);
         writeln!(
             out,
-            "{}\t{}\t{source_path}\t{}\t{target_path}\t{target_line}\t{target_name}",
+            "{}\t{}\t{source_path}\t{}\t{target_path}\t{target_line}\t{target_name}\t{source_line}\t{source_name}\t{source_kind}",
             edge.kind.id(),
             edge.confidence as u8,
             edge.line
         )?;
     }
-    fs::write(file, out)?;
+    let mut output = OpenOptions::new().write(true).create_new(true).open(file)?;
+    output.write_all(out.as_bytes())?;
+    output.sync_all()?;
+    Ok(())
+}
+
+#[test]
+fn edge_dump_keeps_the_actual_same_line_caller() -> Result<(), Box<dyn std::error::Error>> {
+    let root = crate::infra::testdir::TestDir::new("oracle-caller-dump")?;
+    fs::create_dir(root.path().join("src"))?;
+    fs::write(
+        root.path().join("src/lib.rs"),
+        include_bytes!("../../../tests/fixtures/oracle/caller-identities/src/lib.rs"),
+    )?;
+    let path = root.path().join("edges.tsv");
+    let mut command = std::process::Command::new(std::env::current_exe()?);
+    command
+        .args([
+            "--ignored",
+            "--exact",
+            "resolve::tests::precision_tools::dump_edges",
+        ])
+        .env("XCALYGRAPH_DUMP_ROOT", root.path())
+        .env("XCALYGRAPH_DUMP_FILE", &path);
+    let output = command.output()?;
+    assert!(output.status.success(), "{output:?}");
+    let text = fs::read_to_string(&path)?;
+    assert!(
+        !command.output()?.status.success(),
+        "retained evidence was overwritten"
+    );
+    assert_eq!(fs::read_to_string(path)?, text);
+    let rows: Vec<Vec<&str>> = text
+        .lines()
+        .map(|line| line.split('\t').collect())
+        .collect();
+    assert!(rows.iter().all(|row| row.len() == 10), "{text}");
+    for (target, caller) in [("first", "left"), ("second", "right")] {
+        assert!(
+            rows.iter().any(|row| row[0] == "calls"
+                && row[3] == "3"
+                && row[6] == target
+                && row[7..] == ["3", caller, "symbol"]),
+            "{text}"
+        );
+        let other = if caller == "left" { "right" } else { "left" };
+        assert!(
+            !rows.iter().any(|row| row[0] == "calls"
+                && row[3] == "3"
+                && row[6] == target
+                && row[8] == other),
+            "{text}"
+        );
+    }
     Ok(())
 }
