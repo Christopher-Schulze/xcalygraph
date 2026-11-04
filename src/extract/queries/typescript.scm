@@ -1,13 +1,13 @@
 ; TypeScript facts for the extraction engine (src/extract/engine.rs capture convention).
 
-(program (lexical_declaration (variable_declarator name: (identifier) @name) @definition.constant))
-(program (export_statement (lexical_declaration (variable_declarator name: (identifier) @name) @definition.constant)))
+((lexical_declaration (variable_declarator name: (identifier) @name) @definition.constant) @_top (#parent? @_top "program"))
+((export_statement (lexical_declaration (variable_declarator name: (identifier) @name) @definition.constant)) @_top (#parent? @_top "program"))
 (function_declaration name: (identifier) @name) @definition.function
 (function_declaration return_type: (type_annotation (_) @return.type)) @return
 (generator_function_declaration name: (identifier) @name) @definition.function
 (function_signature name: (identifier) @name) @definition.function
-(program (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function))
-(program (export_statement (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function)))
+((lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function) @_top (#parent? @_top "program"))
+((export_statement (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function)) @_top (#parent? @_top "program"))
 (class_declaration name: (type_identifier) @name) @definition.class
 (abstract_class_declaration name: (type_identifier) @name) @definition.class
 (method_definition name: (property_identifier) @name) @definition.method
@@ -101,8 +101,8 @@
 (required_parameter pattern: (identifier) @local)
 (optional_parameter pattern: (identifier) @local)
 (arrow_function parameter: (identifier) @local)
-(statement_block (lexical_declaration (variable_declarator name: (identifier) @local)))
-(statement_block (variable_declaration (variable_declarator name: (identifier) @local)))
+((lexical_declaration (variable_declarator name: (identifier) @local)) @_top (#parent? @_top "statement_block"))
+((variable_declaration (variable_declarator name: (identifier) @local)) @_top (#parent? @_top "statement_block"))
 ; Destructured parameters and locals (`({text, onResponse}) => ...`, `const [a, b] = ...`).
 (object_pattern (shorthand_property_identifier_pattern) @local)
 (object_pattern (pair_pattern value: (identifier) @local))

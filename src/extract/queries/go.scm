@@ -16,9 +16,9 @@
          (slice_type) (array_type) (channel_type) (generic_type)]) @definition.type
 (type_alias name: (type_identifier) @name) @definition.type
 (interface_type (method_elem name: (field_identifier) @name) @definition.method)
-(source_file (const_declaration (const_spec name: (identifier) @name) @definition.constant))
-(source_file (var_declaration (var_spec name: (identifier) @name) @definition.variable))
-(source_file (var_declaration (var_spec_list (var_spec name: (identifier) @name) @definition.variable)))
+((const_declaration (const_spec name: (identifier) @name) @definition.constant) @_top (#parent? @_top "source_file"))
+((var_declaration (var_spec name: (identifier) @name) @definition.variable) @_top (#parent? @_top "source_file"))
+((var_declaration (var_spec_list (var_spec name: (identifier) @name) @definition.variable)) @_top (#parent? @_top "source_file"))
 
 (import_spec path: (_) @import.path) @import
 (import_spec name: (_) @import.alias path: (_) @import.path) @import
@@ -87,4 +87,4 @@
 (short_var_declaration left: (expression_list (identifier) @local))
 (parameter_declaration name: (identifier) @local)
 (range_clause left: (expression_list (identifier) @local))
-(block (statement_list (var_declaration (var_spec name: (identifier) @local))))
+((var_declaration (var_spec name: (identifier) @local)) @_top (#parent? @_top "statement_list" "block"))

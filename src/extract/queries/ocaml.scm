@@ -1,11 +1,11 @@
 ; OCaml implementation facts for the extraction engine (src/extract/engine.rs capture
 ; convention). Only structure-level `let` bindings are symbols (no locals).
 
-(compilation_unit (value_definition (let_binding pattern: (value_name) @name)) @definition.constant)
+((value_definition (let_binding pattern: (value_name) @name)) @_top @definition.constant (#parent? @_top "compilation_unit"))
 (structure (value_definition (let_binding pattern: (value_name) @name)) @definition.constant)
-(compilation_unit (value_definition (let_binding pattern: (value_name) @name (parameter))) @definition.function)
+((value_definition (let_binding pattern: (value_name) @name (parameter))) @_top @definition.function (#parent? @_top "compilation_unit"))
 (structure (value_definition (let_binding pattern: (value_name) @name (parameter))) @definition.function)
-(compilation_unit (value_definition (let_binding pattern: (value_name) @name body: [(fun_expression) (function_expression)])) @definition.function)
+((value_definition (let_binding pattern: (value_name) @name body: [(fun_expression) (function_expression)])) @_top @definition.function (#parent? @_top "compilation_unit"))
 (structure (value_definition (let_binding pattern: (value_name) @name body: [(fun_expression) (function_expression)])) @definition.function)
 (external (value_name) @name) @definition.function
 (module_definition (module_binding (module_name) @name)) @definition.module

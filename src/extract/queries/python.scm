@@ -6,7 +6,7 @@
 (class_definition superclasses: (argument_list (identifier) @name) @reference.inherit)
 (class_definition
   superclasses: (argument_list (attribute object: (_) @qualifier attribute: (identifier) @name)) @reference.inherit)
-(module (expression_statement (assignment left: (identifier) @name)) @definition.variable)
+((expression_statement (assignment left: (identifier) @name)) @_top @definition.variable (#parent? @_top "module"))
 ; Annotated class attributes (dataclasses, attrs, pydantic, typed classes) are fields.
 (class_definition
   body: (block (expression_statement (assignment left: (identifier) @field.name type: (type) @field.type) @field)))

@@ -19,10 +19,10 @@
 (type_definition declarator: (pointer_declarator declarator: (type_identifier) @name)) @definition.type
 (preproc_def name: (identifier) @name) @definition.macro
 (preproc_function_def name: (identifier) @name) @definition.macro
-(translation_unit (declaration declarator: (init_declarator declarator: (identifier) @name)) @definition.variable)
+((declaration declarator: (init_declarator declarator: (identifier) @name)) @_top @definition.variable (#parent? @_top "translation_unit"))
 (preproc_ifdef (declaration declarator: (init_declarator declarator: (identifier) @name)) @definition.variable)
 (declaration_list (declaration declarator: (init_declarator declarator: (identifier) @name)) @definition.variable)
-(translation_unit (declaration declarator: (identifier) @name) @definition.variable)
+((declaration declarator: (identifier) @name) @_top @definition.variable (#parent? @_top "translation_unit"))
 (preproc_ifdef (declaration declarator: (identifier) @name) @definition.variable)
 (declaration_list (declaration declarator: (identifier) @name) @definition.variable)
 
@@ -31,7 +31,7 @@
 (declaration declarator: (pointer_declarator declarator: (function_declarator declarator: (parenthesized_declarator (identifier) @name)))) @definition.function
 
 ; File-level tables (`static const Reg funcs[] = {...}`): their entries are references.
-(translation_unit (declaration declarator: (init_declarator declarator: (array_declarator declarator: (identifier) @name))) @definition.variable)
+((declaration declarator: (init_declarator declarator: (array_declarator declarator: (identifier) @name))) @_top @definition.variable (#parent? @_top "translation_unit"))
 (preproc_ifdef (declaration declarator: (init_declarator declarator: (array_declarator declarator: (identifier) @name))) @definition.variable)
 (declaration_list (declaration declarator: (init_declarator declarator: (array_declarator declarator: (identifier) @name))) @definition.variable)
 

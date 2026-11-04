@@ -18,6 +18,8 @@ pub mod manifest;
 pub mod markdown;
 mod markup;
 mod prose;
+#[cfg(test)]
+mod query_cost;
 mod routes;
 pub mod sfc;
 mod sql;

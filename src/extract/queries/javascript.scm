@@ -1,37 +1,37 @@
 ; JavaScript facts for the extraction engine (src/extract/engine.rs capture convention).
 
-(program (lexical_declaration (variable_declarator name: (identifier) @name) @definition.constant))
-(program (export_statement (lexical_declaration (variable_declarator name: (identifier) @name) @definition.constant)))
+((lexical_declaration (variable_declarator name: (identifier) @name) @definition.constant) @_top (#parent? @_top "program"))
+((export_statement (lexical_declaration (variable_declarator name: (identifier) @name) @definition.constant)) @_top (#parent? @_top "program"))
 (function_declaration name: (identifier) @name) @definition.function
 (generator_function_declaration name: (identifier) @name) @definition.function
-(program (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function))
-(program (export_statement (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function)))
-(program (variable_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function))
+((lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function) @_top (#parent? @_top "program"))
+((export_statement (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function)) @_top (#parent? @_top "program"))
+((variable_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function) @_top (#parent? @_top "program"))
 (class_declaration name: (identifier) @name) @definition.class
 ; CommonJS and object-member functions: `exports.f = function`, `module.exports.f = ...`,
 ; `app.handle = function handle()`; `Type.prototype.m = function` is a method of `Type`.
-(program (expression_statement (assignment_expression
+((expression_statement (assignment_expression
   left: (member_expression object: (identifier) @_exports property: (property_identifier) @name)
-  right: [(function_expression) (arrow_function)]) @definition.function)
-  (#eq? @_exports "exports"))
+  right: [(function_expression) (arrow_function)]) @definition.function) @_top
+  (#eq? @_exports "exports") (#parent? @_top "program"))
 ; `app.render = function`: a method of the object, not a bare name of the module.
-(program (expression_statement (assignment_expression
+((expression_statement (assignment_expression
   left: (member_expression object: (identifier) @owner property: (property_identifier) @name)
-  right: [(function_expression) (arrow_function)]) @definition.method)
-  (#not-eq? @owner "exports"))
-(program (expression_statement (assignment_expression
+  right: [(function_expression) (arrow_function)]) @definition.method) @_top
+  (#not-eq? @owner "exports") (#parent? @_top "program"))
+((expression_statement (assignment_expression
   left: (member_expression
     object: (member_expression object: (identifier) @_module property: (property_identifier) @_exports)
     property: (property_identifier) @name)
-  right: [(function_expression) (arrow_function)]) @definition.function)
+  right: [(function_expression) (arrow_function)]) @definition.function) @_top
   (#eq? @_module "module")
-  (#eq? @_exports "exports"))
-(program (expression_statement (assignment_expression
+  (#eq? @_exports "exports") (#parent? @_top "program"))
+((expression_statement (assignment_expression
   left: (member_expression
     object: (member_expression object: (identifier) @owner property: (property_identifier) @_prototype)
     property: (property_identifier) @name)
-  right: [(function_expression) (arrow_function)]) @definition.method)
-  (#eq? @_prototype "prototype"))
+  right: [(function_expression) (arrow_function)]) @definition.method) @_top
+  (#eq? @_prototype "prototype") (#parent? @_top "program"))
 (method_definition name: (property_identifier) @name) @definition.method
 ; ECMAScript private methods `#clone()` and their calls `this.#clone()`.
 (method_definition name: (private_property_identifier) @name) @definition.method
@@ -100,8 +100,8 @@
 (formal_parameters (identifier) @local)
 (formal_parameters (assignment_pattern left: (identifier) @local))
 (arrow_function parameter: (identifier) @local)
-(statement_block (lexical_declaration (variable_declarator name: (identifier) @local)))
-(statement_block (variable_declaration (variable_declarator name: (identifier) @local)))
+((lexical_declaration (variable_declarator name: (identifier) @local)) @_top (#parent? @_top "statement_block"))
+((variable_declaration (variable_declarator name: (identifier) @local)) @_top (#parent? @_top "statement_block"))
 ; Destructured parameters and locals (`({text, onResponse}) => ...`, `const [a, b] = ...`).
 (object_pattern (shorthand_property_identifier_pattern) @local)
 (object_pattern (pair_pattern value: (identifier) @local))

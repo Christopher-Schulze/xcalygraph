@@ -5,8 +5,8 @@
 (module name: [(constant) @name (scope_resolution name: (constant) @name)]) @definition.trait
 (method name: (_) @name) @definition.method
 (singleton_method name: (_) @name) @definition.method
-(program (assignment left: (constant) @name) @definition.constant)
-(body_statement (assignment left: (constant) @name) @definition.constant)
+((assignment left: (constant) @name) @definition.constant (#parent? @definition.constant "program"))
+((assignment left: (constant) @name) @definition.constant (#parent? @definition.constant "body_statement"))
 
 (class superclass: (superclass (constant) @name)) @reference.inherit
 (class superclass: (superclass (scope_resolution scope: (_) @qualifier name: (constant) @name))) @reference.inherit

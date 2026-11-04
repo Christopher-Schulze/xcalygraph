@@ -20,7 +20,9 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator};
+use tree_sitter::{
+    Language, Node, Parser, Query, QueryCapture, QueryCursor, QueryPredicateArg, StreamingIterator,
+};
 
 use crate::domain::facts::{
     self, Binding, Coverage, EnvRead, Facts, FieldName, Fields, Import, JuliaCallArgument, Ref,
@@ -253,6 +255,33 @@ pub fn extract_with_post_parse(
     })
 }
 
+/// `(#parent? @capture "kind" "grandparent kind"...)`: a pattern rooted at the declaration with
+/// this check costs a query far less than one rooted at its container, whose open match
+/// follows every child of every container (`scripts/benchmarks/measure-query-cost.sh`).
+fn parents_match(query: &Query, pattern: usize, captures: &[QueryCapture]) -> bool {
+    query.general_predicates(pattern).iter().all(|predicate| {
+        let [QueryPredicateArg::Capture(index), kinds @ ..] = &*predicate.args else {
+            return true;
+        };
+        let Some(capture) = captures.iter().find(|capture| capture.index == *index) else {
+            return true;
+        };
+        let mut node = capture.node;
+        kinds.iter().all(|kind| {
+            let QueryPredicateArg::String(kind) = kind else {
+                return true;
+            };
+            match node.parent() {
+                Some(parent) if parent.kind() == &**kind => {
+                    node = parent;
+                    true
+                }
+                _ => false,
+            }
+        })
+    })
+}
+
 fn failed_parse(capture_identities: bool) -> Parsed {
     Parsed {
         facts: Facts {
@@ -298,6 +327,9 @@ fn collect(
     let mut matches = cursor.matches(query, root, source);
     while let Some(found) = matches.next() {
         let captures = found.captures();
+        if !parents_match(query, found.pattern_index, captures) {
+            continue;
+        }
         for capture in captures
             .iter()
             .filter(|capture| names[capture.index as usize] == "assigned")
