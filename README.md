@@ -16,6 +16,8 @@ Coding agents spend most of their tokens finding things: grepping, opening whole
 
 ## Install
 
+**macOS & Linux**
+
 ```bash
 curl -fsSL https://github.com/Christopher-Schulze/xcalygraph/releases/latest/download/install.sh | bash
 ```
