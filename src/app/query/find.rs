@@ -390,10 +390,10 @@ fn excerpt(index: &Index, root: &Path, node: u32, query: &str) -> Vec<(Option<u3
         return Vec::new();
     };
     // Lines of a PDF or an office document are pages, paragraphs or sheets of a binary file.
-    let binary = matches!(
-        index.file_of(node).file_type(),
-        Some(FileType::Pdf | FileType::Docx | FileType::Xlsx)
-    );
+    let binary = index
+        .file_of(node)
+        .file_type()
+        .is_some_and(FileType::is_binary_document);
     if binary || symbol.end_line <= symbol.line {
         return Vec::new();
     }

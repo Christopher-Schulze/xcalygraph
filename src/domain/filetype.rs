@@ -69,6 +69,11 @@ pub enum FileType {
     Pdf,
     Docx,
     Xlsx,
+    Pptx,
+    OpenDocument,
+    Rtf,
+    LegacyOffice,
+    Csv,
     Image,
     Svg,
     Video,
@@ -111,15 +116,83 @@ pub enum Detection {
 }
 
 /// Every file type in discriminant order (1-based).
-pub const ALL: [FileType; 69] = {
+pub const ALL: [FileType; 74] = {
     use FileType::*;
     [
-        Go, Rust, TypeScript, JavaScript, Vue, Svelte, Astro, Python, Java, Kotlin, Scala, Groovy,
-        CSharp, VbNet, C, Cpp, ObjC, Swift, Ruby, Php, Lua, Zig, Elixir, Erlang, Dart, Julia, R,
-        OCaml, Fortran, Pascal, Lisp, Solidity, PowerShell, Bash, Sql, Terraform, Robot, Apex,
-        Razor, Blade, Ejs, Jinja, Cobol, Xaml, Json, Yaml, Toml, Xml, Ini, Properties, Proto,
-        GraphQl, Dockerfile, Make, EnvExample, Markdown, Text, Rst, Org, AsciiDoc, Tex, Html, Pdf,
-        Docx, Xlsx, Image, Svg, Video, Audio,
+        Go,
+        Rust,
+        TypeScript,
+        JavaScript,
+        Vue,
+        Svelte,
+        Astro,
+        Python,
+        Java,
+        Kotlin,
+        Scala,
+        Groovy,
+        CSharp,
+        VbNet,
+        C,
+        Cpp,
+        ObjC,
+        Swift,
+        Ruby,
+        Php,
+        Lua,
+        Zig,
+        Elixir,
+        Erlang,
+        Dart,
+        Julia,
+        R,
+        OCaml,
+        Fortran,
+        Pascal,
+        Lisp,
+        Solidity,
+        PowerShell,
+        Bash,
+        Sql,
+        Terraform,
+        Robot,
+        Apex,
+        Razor,
+        Blade,
+        Ejs,
+        Jinja,
+        Cobol,
+        Xaml,
+        Json,
+        Yaml,
+        Toml,
+        Xml,
+        Ini,
+        Properties,
+        Proto,
+        GraphQl,
+        Dockerfile,
+        Make,
+        EnvExample,
+        Markdown,
+        Text,
+        Rst,
+        Org,
+        AsciiDoc,
+        Tex,
+        Html,
+        Pdf,
+        Docx,
+        Xlsx,
+        Pptx,
+        OpenDocument,
+        Rtf,
+        LegacyOffice,
+        Csv,
+        Image,
+        Svg,
+        Video,
+        Audio,
     ]
 };
 
@@ -136,6 +209,21 @@ impl FileType {
     }
 
     /// Stable id used in output and in the `-l` filter.
+    /// Documents whose line numbers are pages, slides or paragraphs of a binary file, so their
+    /// source cannot be quoted by line.
+    pub const fn is_binary_document(self) -> bool {
+        matches!(
+            self,
+            Self::Pdf
+                | Self::Docx
+                | Self::Xlsx
+                | Self::Pptx
+                | Self::OpenDocument
+                | Self::Rtf
+                | Self::LegacyOffice
+        )
+    }
+
     pub const fn id(self) -> &'static str {
         use FileType::*;
         match self {
@@ -204,6 +292,11 @@ impl FileType {
             Pdf => "pdf",
             Docx => "docx",
             Xlsx => "xlsx",
+            Pptx => "pptx",
+            OpenDocument => "opendocument",
+            Rtf => "rtf",
+            LegacyOffice => "legacy-office",
+            Csv => "csv",
             Image => "image",
             Svg => "svg",
             Video => "video",
@@ -217,7 +310,8 @@ impl FileType {
             Apex | Razor | Blade | Ejs | Jinja | Cobol | Xaml => Class::Structural,
             Json | Yaml | Toml | Xml | Ini | Properties | Proto | GraphQl | Dockerfile | Make
             | EnvExample => Class::Config,
-            Markdown | Text | Rst | Org | AsciiDoc | Tex | Html | Pdf | Docx | Xlsx => Class::Doc,
+            Markdown | Text | Rst | Org | AsciiDoc | Tex | Html | Pdf | Docx | Xlsx | Pptx
+            | OpenDocument | Rtf | LegacyOffice | Csv => Class::Doc,
             Image | Svg | Video | Audio => Class::Asset,
             _ => Class::Deep,
         }
@@ -303,15 +397,21 @@ pub fn detect(name: &str) -> Detection {
         "dockerfile" => Dockerfile,
         "mk" => Make,
         "md" | "mdx" | "qmd" | "markdown" | "skill" => Markdown,
-        "txt" => Text,
+        "txt" | "text" | "conf" | "cfg" | "cnf" | "config" | "service" | "socket" | "timer"
+        | "rules" => Text,
         "rst" => Rst,
         "org" => Org,
         "adoc" => AsciiDoc,
         "tex" => Tex,
         "html" | "htm" => Html,
         "pdf" => Pdf,
-        "docx" => Docx,
-        "xlsx" => Xlsx,
+        "docx" | "docm" | "dotx" => Docx,
+        "xlsx" | "xlsm" => Xlsx,
+        "pptx" | "pptm" | "potx" => Pptx,
+        "odt" | "ods" | "odp" => OpenDocument,
+        "rtf" => Rtf,
+        "doc" | "xls" | "ppt" => LegacyOffice,
+        "csv" | "tsv" => Csv,
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "ico" => Image,
         "svg" => Svg,
         "mp4" | "mov" | "webm" | "mkv" | "avi" | "m4v" => Video,
@@ -415,7 +515,7 @@ mod tests {
             assert_eq!(FileType::from_u8(file_type as u8), Some(file_type));
         }
         assert_eq!(FileType::from_u8(0), None);
-        assert_eq!(FileType::from_u8(73), None);
+        assert_eq!(FileType::from_u8(ALL.len() as u8 + 1), None);
     }
 
     #[test]

@@ -39,6 +39,8 @@ pub struct FileRecord {
     pub path: u32,
     pub module: u32,
     pub lines: u32,
+    /// Size in KiB, rounded up.
+    pub kib: u32,
     pub first_symbol: u32,
     pub symbol_count: u32,
     pub ambiguous: u32,
@@ -217,6 +219,7 @@ pub fn build(graph: &Graph) -> Vec<u8> {
             path: strings.id(&file.path),
             module: file.module,
             lines: file.lines,
+            kib: file.kib,
             first_symbol: file.first_symbol,
             symbol_count: file.symbol_count,
             ambiguous: file.ambiguous,

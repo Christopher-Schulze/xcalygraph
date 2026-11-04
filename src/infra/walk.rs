@@ -46,10 +46,12 @@ pub fn walk(root: &Path, excluded: &[PathBuf]) -> io::Result<Vec<Stat>> {
         };
         Box::new(move |result| {
             let file = match result {
-                Ok(entry) => match entry.error() {
+                // A rule file that cannot be read costs its rules, not the walk.
+                Ok(entry) => match entry.error().filter(|error| !is_denied(error)) {
                     Some(error) => Err(io::Error::other(error.to_string())),
                     None => walked_file(root, &entry),
                 },
+                Err(error) if is_denied(&error) => Ok(denied_folder(root, &error)),
                 Err(error) => Err(io::Error::other(error)),
             };
             match file {
@@ -133,6 +135,34 @@ fn keep(entry: &DirEntry, excluded: &[PathBuf]) -> bool {
         return false;
     }
     !excluded.iter().any(|dir| dir == path)
+}
+
+fn is_denied(error: &ignore::Error) -> bool {
+    error
+        .io_error()
+        .is_some_and(|error| error.kind() == io::ErrorKind::PermissionDenied)
+}
+
+/// A folder the walk may not enter stays visible as `path/`, an entry without content, so an
+/// answer can say what it did not see.
+fn denied_folder(root: &Path, error: &ignore::Error) -> Option<Stat> {
+    let mut current = error;
+    let path = loop {
+        match current {
+            ignore::Error::WithPath { path, .. } => break path,
+            ignore::Error::WithDepth { err, .. } | ignore::Error::WithLineNumber { err, .. } => {
+                current = err;
+            }
+            _ => return None,
+        }
+    };
+    let relative = path.strip_prefix(root).ok()?;
+    Some(Stat {
+        path: format!("{}/", relative_path(relative)?),
+        size: 0,
+        mtime_ns: 0,
+        identity: None,
+    })
 }
 
 fn walked_file(root: &Path, entry: &DirEntry) -> io::Result<Option<Stat>> {

@@ -8,10 +8,12 @@ use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
 use super::prose::Outline;
-use crate::domain::facts::Facts;
+use crate::domain::facts::{self, Facts};
 
 /// Decompressed content read per PDF page or XML part, against decompression bombs.
 const PART_LIMIT: usize = 16 << 20;
+/// Shortest run of readable characters taken from a legacy binary document.
+const MIN_RUN: usize = 6;
 
 pub fn pdf(content: &[u8]) -> Facts {
     let document = match lopdf::Document::load_mem(content) {
@@ -157,6 +159,352 @@ pub fn xlsx(content: &[u8]) -> Facts {
     let mut facts = outline.finish();
     facts.lines = sheets.len() as u32;
     facts
+}
+
+/// PPTX: slides in order, line = slide; the title placeholder is the heading, all other text and
+/// the speaker notes are its text.
+pub fn pptx(content: &[u8]) -> Facts {
+    let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(content)) else {
+        return unreadable("unreadable PPTX (encrypted or malformed)");
+    };
+    let mut slides: Vec<u32> = archive
+        .file_names()
+        .filter_map(|name| {
+            name.ok()?
+                .strip_prefix("ppt/slides/slide")?
+                .strip_suffix(".xml")?
+                .parse()
+                .ok()
+        })
+        .collect();
+    slides.sort_unstable();
+    let mut outline = Outline::with_text(slides.len() as u32);
+    for (index, slide) in slides.iter().enumerate() {
+        let number = index as u32 + 1;
+        let Some(xml) = part(&mut archive, &format!("ppt/slides/slide{slide}.xml")) else {
+            continue;
+        };
+        let (title, text) = slide_text(&xml);
+        let heading = title.unwrap_or_else(|| format!("Slide {number}"));
+        outline.heading(1, &heading, number);
+        for line in &text {
+            outline.text(line);
+        }
+        let notes = part(
+            &mut archive,
+            &format!("ppt/slides/_rels/slide{slide}.xml.rels"),
+        )
+        .into_iter()
+        .flat_map(|xml| relation_targets(&xml))
+        .find_map(|(_, target)| target.strip_prefix("../notesSlides/").map(str::to_owned));
+        if let Some(xml) =
+            notes.and_then(|name| part(&mut archive, &format!("ppt/notesSlides/{name}")))
+        {
+            for line in slide_text(&xml).1 {
+                outline.text(&line);
+            }
+        }
+    }
+    let mut facts = outline.finish();
+    facts.lines = slides.len() as u32;
+    facts
+}
+
+/// Title placeholder text and the other paragraphs of a slide or notes part.
+fn slide_text(xml: &str) -> (Option<String>, Vec<String>) {
+    let mut reader = Reader::from_str(xml);
+    let mut title = None;
+    let mut text = Vec::new();
+    let mut is_title = false;
+    let mut in_run = false;
+    let mut paragraph = String::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(tag)) if tag.name().as_ref() == "p:sp" => is_title = false,
+            Ok(Event::Start(tag)) | Ok(Event::Empty(tag)) if tag.name().as_ref() == "p:ph" => {
+                is_title = matches!(
+                    attribute(&tag, "type").as_deref(),
+                    Some("title" | "ctrTitle")
+                );
+            }
+            Ok(Event::Start(tag)) if tag.name().as_ref() == "a:t" => in_run = true,
+            Ok(Event::End(tag)) if tag.name().as_ref() == "a:t" => in_run = false,
+            Ok(Event::Text(chunk)) if in_run => paragraph.push_str(&chunk),
+            Ok(Event::GeneralRef(entity)) if in_run => paragraph.push_str(&resolve_entity(&entity)),
+            Ok(Event::End(tag)) if tag.name().as_ref() == "a:p" => {
+                let line = facts::normalize_space(&std::mem::take(&mut paragraph));
+                if line.is_empty() {
+                    continue;
+                }
+                if is_title && title.is_none() {
+                    title = Some(line);
+                } else {
+                    text.push(line);
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    (title, text)
+}
+
+/// OpenDocument text, spreadsheet or presentation: `text:h` and sheet or page names are headings;
+/// line = paragraph in a text document, sheet or page otherwise.
+pub fn opendocument(content: &[u8]) -> Facts {
+    let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(content)) else {
+        return unreadable("unreadable OpenDocument (encrypted or malformed)");
+    };
+    let Some(xml) = part(&mut archive, "content.xml") else {
+        return unreadable("unreadable OpenDocument (encrypted or malformed)");
+    };
+    let blocks = opendocument_blocks(&xml);
+    let mut outline = Outline::with_text(blocks.len() as u32);
+    let mut pages = 0;
+    for (index, (level, page, text)) in blocks.iter().enumerate() {
+        let number = if *page { pages + 1 } else { index as u32 + 1 };
+        match level {
+            Some(level) => {
+                if *page {
+                    pages += 1;
+                }
+                outline.heading(*level, text, if *page { pages } else { number });
+            }
+            None if pages > 0 => outline.text(text),
+            None => outline.prose(text, number),
+        }
+    }
+    let mut facts = outline.finish();
+    facts.lines = if pages > 0 {
+        pages
+    } else {
+        blocks.len() as u32
+    };
+    facts
+}
+
+/// Blocks of `content.xml`: heading level (sheets and pages count as level 1), whether it names a
+/// sheet or page, and the text.
+fn opendocument_blocks(xml: &str) -> Vec<(Option<usize>, bool, String)> {
+    let mut reader = Reader::from_str(xml);
+    let mut blocks = Vec::new();
+    let mut open: Option<Option<usize>> = None;
+    let mut current = String::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(tag)) => match tag.name().as_ref() {
+                "table:table" | "draw:page" => {
+                    if let Some(name) =
+                        attribute(&tag, "table:name").or_else(|| attribute(&tag, "draw:name"))
+                    {
+                        blocks.push((Some(1), true, name));
+                    }
+                }
+                "text:h" => {
+                    let level = attribute(&tag, "text:outline-level")
+                        .and_then(|level| level.parse().ok())
+                        .unwrap_or(1);
+                    open = Some(Some(level));
+                    current.clear();
+                }
+                "text:p" if open.is_none() => {
+                    open = Some(None);
+                    current.clear();
+                }
+                _ => {}
+            },
+            Ok(Event::Text(chunk)) if open.is_some() => current.push_str(&chunk),
+            Ok(Event::GeneralRef(entity)) if open.is_some() => {
+                current.push_str(&resolve_entity(&entity));
+            }
+            Ok(Event::End(tag)) if matches!(tag.name().as_ref(), "text:h" | "text:p") => {
+                if let Some(level) = open.take() {
+                    let text = facts::normalize_space(&current);
+                    if !text.is_empty() {
+                        blocks.push((level, false, text));
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    blocks
+}
+
+/// RTF: the visible text, one line per paragraph; font, color, style and picture groups skipped.
+pub fn rtf(content: &[u8]) -> Facts {
+    if !content.starts_with(b"{\\rtf") {
+        return unreadable("unreadable RTF");
+    }
+    let lines = rtf_lines(content);
+    let mut outline = Outline::with_text(lines.len() as u32);
+    for (index, line) in lines.iter().enumerate() {
+        outline.prose(line, index as u32 + 1);
+    }
+    let mut facts = outline.finish();
+    facts.lines = lines.len() as u32;
+    facts
+}
+
+fn rtf_lines(content: &[u8]) -> Vec<String> {
+    const HIDDEN: [&[u8]; 6] = [
+        b"fonttbl",
+        b"colortbl",
+        b"stylesheet",
+        b"info",
+        b"pict",
+        b"header",
+    ];
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    // Depth at which a hidden group opened.
+    let mut hidden: Option<usize> = None;
+    let mut depth = 0usize;
+    let mut position = 0;
+    while let Some(&byte) = content.get(position) {
+        position += 1;
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                if hidden == Some(depth) {
+                    hidden = None;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            b'\\' => {
+                let start = position;
+                while content.get(position).is_some_and(u8::is_ascii_alphabetic) {
+                    position += 1;
+                }
+                let word = &content[start..position];
+                let number_start = position;
+                while content
+                    .get(position)
+                    .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'-')
+                {
+                    position += 1;
+                }
+                let number = std::str::from_utf8(&content[number_start..position])
+                    .ok()
+                    .and_then(|text| text.parse::<i32>().ok());
+                if word.is_empty() {
+                    // A control symbol: `\\'e4` is a code page byte, others stand for themselves.
+                    let symbol = content.get(position).copied();
+                    position += 1;
+                    if hidden.is_some() {
+                        continue;
+                    }
+                    match symbol {
+                        Some(b'\'') => {
+                            let hex = content.get(position..position + 2);
+                            position += 2;
+                            if let Some(value) = hex
+                                .and_then(|hex| std::str::from_utf8(hex).ok())
+                                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+                            {
+                                line.push(char::from(value));
+                            }
+                        }
+                        Some(b'*') => hidden = hidden.or(Some(depth)),
+                        Some(symbol @ (b'\\' | b'{' | b'}')) => line.push(char::from(symbol)),
+                        // An escaped line break is a paragraph.
+                        Some(b'\n' | b'\r') => {
+                            lines.push(facts::normalize_space(&std::mem::take(&mut line)));
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+                if content.get(position) == Some(&b' ') {
+                    position += 1;
+                }
+                if HIDDEN.contains(&word) {
+                    hidden = hidden.or(Some(depth));
+                }
+                if hidden.is_some() {
+                    continue;
+                }
+                match word {
+                    b"par" | b"line" | b"sect" | b"page" => {
+                        lines.push(facts::normalize_space(&std::mem::take(&mut line)));
+                    }
+                    b"tab" | b"cell" => line.push(' '),
+                    b"u" => {
+                        if let Some(character) = number
+                            .and_then(|code| {
+                                u32::try_from(if code < 0 { code + 65536 } else { code }).ok()
+                            })
+                            .and_then(char::from_u32)
+                        {
+                            line.push(character);
+                        }
+                        // The plain-text fallback after `\\uN`.
+                        if content.get(position) == Some(&b'?') {
+                            position += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            b'\r' | b'\n' => {}
+            _ if hidden.is_none() => line.push(char::from(byte)),
+            _ => {}
+        }
+    }
+    lines.push(facts::normalize_space(&line));
+    lines
+}
+
+/// DOC, XLS, PPT: compound binary files. Their text is recovered as runs of readable characters,
+/// without structure, so the file doc says so.
+pub fn legacy_office(content: &[u8]) -> Facts {
+    if !content.starts_with(&[0xD0, 0xCF, 0x11, 0xE0]) {
+        return unreadable("unreadable legacy Office file");
+    }
+    let mut outline = Outline::with_text(1);
+    for run in readable_runs(content) {
+        outline.text(&run);
+    }
+    let mut facts = outline.finish();
+    facts.doc = "! legacy Office format: text recovered without structure".to_owned();
+    facts.lines = 1;
+    facts
+}
+
+/// Runs of at least [`MIN_RUN`] readable characters, as UTF-16LE and as single bytes.
+fn readable_runs(content: &[u8]) -> Vec<String> {
+    let readable = |ch: char| ch.is_alphanumeric() || " .,;:!?()-/'\"&%".contains(ch);
+    let keep = |run: &mut String, runs: &mut Vec<String>| {
+        let text = facts::normalize_space(&std::mem::take(run));
+        // At least one word: binary noise rarely has three letters in a row.
+        let has_word = text
+            .split(|ch: char| !ch.is_alphabetic())
+            .any(|word| word.chars().count() >= 3);
+        if text.chars().count() >= MIN_RUN && has_word {
+            runs.push(text);
+        }
+    };
+    let mut runs = Vec::new();
+    let mut run = String::new();
+    for pair in content.as_chunks::<2>().0 {
+        let unit = u16::from_le_bytes(*pair);
+        match char::from_u32(u32::from(unit)).filter(|ch| readable(*ch)) {
+            Some(ch) => run.push(ch),
+            None => keep(&mut run, &mut runs),
+        }
+    }
+    keep(&mut run, &mut runs);
+    for &byte in content {
+        let ch = char::from(byte);
+        if byte < 0x80 && readable(ch) {
+            run.push(ch);
+        } else {
+            keep(&mut run, &mut runs);
+        }
+    }
+    keep(&mut run, &mut runs);
+    runs
 }
 
 /// `(name, relationship id)` per `<sheet>` of the workbook.
@@ -526,6 +874,97 @@ mod tests {
             xlsx(&zip_of(&[("other.xml", "<x/>")]))
                 .doc
                 .starts_with("! unreadable XLSX")
+        );
+    }
+
+    fn section_terms(facts: &Facts) -> Vec<(String, u32, String)> {
+        facts
+            .symbols
+            .iter()
+            .map(|symbol| (symbol.name.clone(), symbol.line, symbol.terms.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn pptx_slides_titles_text_and_notes() {
+        let slide = r#"<p:sld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:r><a:t>Quarterly plan</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:txBody><a:p><a:r><a:t>Budget for </a:t></a:r><a:r><a:t>wombats</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:sld>"#;
+        let untitled = r#"<p:sld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Second page body</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:sld>"#;
+        let relations = r#"<Relationships><Relationship Id="rId1" Target="../notesSlides/notesSlide7.xml"/></Relationships>"#;
+        let notes = r#"<p:notes><p:sp><p:txBody><a:p><a:r><a:t>Speaker reminder</a:t></a:r></a:p></p:txBody></p:sp></p:notes>"#;
+        let facts = pptx(&zip_of(&[
+            ("ppt/slides/slide2.xml", untitled),
+            ("ppt/slides/slide1.xml", slide),
+            ("ppt/slides/_rels/slide1.xml.rels", relations),
+            ("ppt/notesSlides/notesSlide7.xml", notes),
+        ]));
+        let terms = section_terms(&facts);
+        assert_eq!(terms[0].0, "Quarterly plan");
+        assert_eq!(terms[0].1, 1);
+        assert!(terms[0].2.contains("wombat"), "{terms:?}");
+        assert!(terms[0].2.contains("speaker"), "{terms:?}");
+        assert_eq!((terms[1].0.as_str(), terms[1].1), ("Slide 2", 2));
+        assert_eq!(facts.lines, 2);
+        assert!(pptx(b"no zip").doc.starts_with("! unreadable PPTX"));
+    }
+
+    #[test]
+    fn opendocument_text_and_spreadsheet() {
+        let text = r#"<office:text><text:h text:outline-level="1">Chapter</text:h><text:p>Opening <text:span>wombat</text:span> line</text:p><text:h text:outline-level="2">Part</text:h><text:p>Second</text:p></office:text>"#;
+        let facts = opendocument(&zip_of(&[("content.xml", text)]));
+        let terms = section_terms(&facts);
+        assert_eq!((terms[0].0.as_str(), terms[0].1), ("Chapter", 1));
+        assert!(terms[0].2.contains("wombat"), "{terms:?}");
+        assert_eq!((terms[1].0.as_str(), terms[1].1), ("Part", 3));
+        assert_eq!(facts.symbols[1].parent, Some(0));
+        let sheets = r#"<office:spreadsheet><table:table table:name="Costs"><table:table-row><table:table-cell><text:p>rent</text:p></table:table-cell></table:table-row></table:table><table:table table:name="Staff"><table:table-row><table:table-cell><text:p>wombat keeper</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet>"#;
+        let facts = opendocument(&zip_of(&[("content.xml", sheets)]));
+        let terms = section_terms(&facts);
+        assert_eq!((terms[0].0.as_str(), terms[0].1), ("Costs", 1));
+        assert_eq!((terms[1].0.as_str(), terms[1].1), ("Staff", 2));
+        assert!(terms[1].2.contains("wombat"), "{terms:?}");
+        assert_eq!(facts.lines, 2);
+    }
+
+    #[test]
+    fn rtf_text_skips_tables_and_decodes_escapes() {
+        let source = br#"{\rtf1\ansi{\fonttbl{\f0 Hidden Font;}}{\*\generator Hidden;}\f0 Gr\'fc\'df wombat\par Next \u8364? line\par}"#;
+        let lines = rtf_lines(source);
+        assert_eq!(lines[0], "Grüß wombat");
+        assert_eq!(lines[1], "Next € line");
+        assert_eq!(rtf_lines(b"{\\rtf1 First\\\nSecond}"), ["First", "Second"]);
+        assert!(!lines.join(" ").contains("Hidden"), "{lines:?}");
+        let facts = rtf(source);
+        assert_eq!(facts.lines, 3);
+        assert!(facts.symbols[0].terms.contains("wombat"), "{facts:?}");
+        assert!(rtf(b"plain").doc.starts_with("! unreadable RTF"));
+    }
+
+    #[test]
+    fn legacy_office_recovers_text_and_says_so() {
+        let mut file = vec![0xD0, 0xCF, 0x11, 0xE0, 0, 0, 0, 0];
+        file.extend(b"Single byte budget wombat\x01\x02\x03");
+        for unit in "Double byte quokka text".encode_utf16() {
+            file.extend(unit.to_le_bytes());
+        }
+        file.extend([0xFF, 0xFE, 0x01, 0x02, 0x03]);
+        let facts = legacy_office(&file);
+        assert!(
+            facts.doc.starts_with("! legacy Office format"),
+            "{}",
+            facts.doc
+        );
+        let terms: String = facts
+            .symbols
+            .iter()
+            .map(|symbol| symbol.terms.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(terms.contains("wombat"), "{terms}");
+        assert!(terms.contains("quokka"), "{terms}");
+        assert!(
+            legacy_office(b"plain")
+                .doc
+                .starts_with("! unreadable legacy")
         );
     }
 }

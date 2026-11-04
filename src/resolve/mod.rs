@@ -39,7 +39,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 101;
+pub const RESOLVE_VERSION: u32 = 102;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -4016,6 +4016,7 @@ impl<'a> Index<'a> {
             let facts = self.input.facts[file].as_ref();
             graph.files.push(GraphFile {
                 path: record.path.clone(),
+                kib: u32::try_from(record.size.div_ceil(1024)).unwrap_or(u32::MAX),
                 role: record.role,
                 file_type: record.file_type,
                 module: self.modules.file_module[file],

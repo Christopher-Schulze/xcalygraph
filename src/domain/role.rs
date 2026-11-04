@@ -125,14 +125,14 @@ pub fn is_sensitive(path: &str) -> bool {
 /// Size limit above which the file is indexed by path only.
 pub fn large_limit(path: &str) -> u64 {
     match filetype::detect(file_name(path)) {
-        Detection::Known(FileType::Pdf | FileType::Docx | FileType::Xlsx) => LARGE_DOCUMENT_LIMIT,
+        Detection::Known(file_type) if file_type.is_binary_document() => LARGE_DOCUMENT_LIMIT,
         _ => LARGE_LIMIT,
     }
 }
 
 /// True when the content is needed to classify or index the file.
 pub fn needs_content(path: &str, size: u64) -> bool {
-    !is_sensitive(path) && size <= large_limit(path)
+    !is_sensitive(path) && !path.ends_with('/') && size <= large_limit(path)
 }
 
 /// Assigns the role and file type; first match in the role precedence wins.
@@ -171,6 +171,10 @@ pub fn classify(file: &FileFacts) -> Classification {
         return with(role);
     };
     if file_type.is_code() {
+        // A bundle or minified file has no declarations worth a parse: its path stays.
+        if is_minified(head) {
+            return with(Role::Other);
+        }
         if is_generated(head) {
             return with(Role::Gen);
         }
@@ -188,6 +192,16 @@ pub fn classify(file: &FileFacts) -> Classification {
     with(role)
 }
 
+/// Line length in the head that marks minified code.
+const MINIFIED_LINE: usize = 4096;
+
+fn is_plain_text(head: &[u8]) -> bool {
+    !head.is_empty()
+        && !head.contains(&0)
+        // The head may end inside a multibyte character.
+        && std::str::from_utf8(head).map_or_else(|error| error.error_len().is_none(), |_| true)
+}
+
 fn detect_type(file: &FileFacts) -> Option<FileType> {
     let head = file.head.unwrap_or_default();
     match filetype::detect(file_name(file.path)) {
@@ -195,7 +209,10 @@ fn detect_type(file: &FileFacts) -> Option<FileType> {
         Detection::Ambiguous(ambiguous) => {
             filetype::resolve_ambiguous(ambiguous, head, file.cpp_sibling)
         }
-        Detection::Shebang => filetype::shebang_type(head),
+        // `ssh_config`, `LICENSE`: without an extension, readable text is searchable text.
+        Detection::Shebang => {
+            filetype::shebang_type(head).or_else(|| is_plain_text(head).then_some(FileType::Text))
+        }
         Detection::Unknown => None,
     }
 }
@@ -257,6 +274,12 @@ fn is_manifest(name: &str) -> bool {
         )
         || SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
         || (name.starts_with("requirements") && name.ends_with(".txt"))
+}
+
+/// One line fills half of the head: nobody writes source like that.
+fn is_minified(head: &[u8]) -> bool {
+    head.split(|byte| *byte == b'\n')
+        .any(|line| line.len() >= MINIFIED_LINE)
 }
 
 fn is_generated(head: &[u8]) -> bool {
@@ -378,7 +401,7 @@ mod tests {
             ("assets/logo.svg", "<svg/>", Role::Asset),
             (".env", "SECRET=1", Role::Sensitive),
             ("blob.bin", "\0\0\u{1}", Role::Binary),
-            ("LICENSE", "MIT License", Role::Other),
+            ("LICENSE", "MIT License", Role::Doc),
         ];
         for (path, content, want) in cases {
             assert_eq!(role(path, content), want, "{path}");
@@ -468,12 +491,27 @@ mod tests {
     }
 
     #[test]
+    fn minified_code_keeps_only_its_path() {
+        let bundle = format!("/* banner */\n{}", "a=b;".repeat(2000));
+        assert_eq!(role("dist/app.js", &bundle), Role::Other);
+        assert_eq!(
+            role("src/app.js", "const a = 1;\nconst b = 2;\n"),
+            Role::Src
+        );
+    }
+
+    #[test]
     fn shebang_and_markers_select_languages() {
         assert_eq!(
             classify_text("bin/deploy", "#!/usr/bin/env bash\nset -e").file_type,
             Some(FileType::Bash)
         );
-        assert_eq!(classify_text("bin/tool", "plain").file_type, None);
+        // Without an extension, readable text is searchable text, bytes are not.
+        assert_eq!(
+            classify_text("bin/tool", "plain").file_type,
+            Some(FileType::Text)
+        );
+        assert_eq!(classify_text("bin/tool", "\0\u{1}").file_type, None);
         assert_eq!(
             classify_text("benchsuite", "#!/usr/bin/env python3\nimport os").file_type,
             Some(FileType::Python)

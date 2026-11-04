@@ -413,18 +413,25 @@ fn areas(index: &Index, filter: &Filter, root: &Path) -> Vec<MapFact> {
     struct Area<'a> {
         files: u32,
         symbols: u32,
+        kib: u64,
         kinds: BTreeMap<&'a str, u32>,
     }
     let mut areas: BTreeMap<&str, Area> = BTreeMap::new();
+    let mut denied: Vec<&str> = Vec::new();
     for file in index.derived.files() {
         if !filter.file(index, file) {
             continue;
         }
         let path = index.string(file.path);
+        if path.ends_with('/') {
+            denied.push(path);
+            continue;
+        }
         let name = path.split_once('/').map_or(".", |(first, _)| first);
         let area = areas.entry(name).or_default();
         area.files += 1;
         area.symbols += file.symbol_count;
+        area.kib += u64::from(file.kib);
         let kind = match file.file_type() {
             Some(file_type) if file.role().is_extracted() => file_type.id(),
             _ => "path-only",
@@ -449,10 +456,13 @@ fn areas(index: &Index, filter: &Filter, root: &Path) -> Vec<MapFact> {
                 name: name.to_owned(),
                 files: area.files,
                 symbols: area.symbols,
-                top: kinds
-                    .iter()
-                    .take(AREA_KINDS)
-                    .map(|(kind, count)| format!("{kind}:{count}"))
+                top: std::iter::once(human_size(area.kib))
+                    .chain(
+                        kinds
+                            .iter()
+                            .take(AREA_KINDS)
+                            .map(|(kind, count)| format!("{kind}:{count}")),
+                    )
                     .collect(),
             }
         })
@@ -460,7 +470,26 @@ fn areas(index: &Index, filter: &Filter, root: &Path) -> Vec<MapFact> {
     if !excluded.is_empty() {
         lines.push(MapFact::Notice(format!("excluded {}", excluded.join(" "))));
     }
+    if !denied.is_empty() {
+        let shown = denied.len().min(AREA_LINES);
+        let more = denied.len() - shown;
+        let mut note = format!("! no permission: {}", denied[..shown].join(" "));
+        if more > 0 {
+            note.push_str(&format!(" +{more}"));
+        }
+        lines.push(MapFact::Notice(note));
+    }
     lines
+}
+
+fn human_size(kib: u64) -> String {
+    if kib >= 1024 * 1024 {
+        format!("{:.1}G", kib as f64 / (1024.0 * 1024.0))
+    } else if kib >= 1024 {
+        format!("{:.1}M", kib as f64 / 1024.0)
+    } else {
+        format!("{kib}K")
+    }
 }
 
 /// Top-level folders without an indexed file: pruned, ignored or empty.

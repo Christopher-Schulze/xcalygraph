@@ -34,7 +34,9 @@ use crate::domain::filetype::{Class, FileType};
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 103;
+/// Rows of a CSV or TSV file that reach search.
+const CSV_INDEXED_ROWS: usize = 2000;
+const EXTRACTION_VERSION: u32 = 106;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -77,6 +79,7 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
         | FileType::Rst
         | FileType::Org
         | FileType::AsciiDoc
+        | FileType::Csv
         | FileType::Tex),
     ) = record.file_type
         && record.role == Role::Doc
@@ -84,7 +87,17 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
         let text = String::from_utf8_lossy(content);
         let mut facts = prose::extract(file_type, &text);
         facts.lines = count_lines(content);
-        sections::index_lines(&mut facts, &text);
+        if file_type == FileType::Csv {
+            // A data table: its first rows say what it holds, the rest would only add sections.
+            let head: String = text
+                .lines()
+                .take(CSV_INDEXED_ROWS)
+                .collect::<Vec<_>>()
+                .join("\n");
+            sections::index_lines(&mut facts, &head);
+        } else {
+            sections::index_lines(&mut facts, &text);
+        }
         return without_identities(facts, capture_identities);
     }
     if let Some(file_type) = record
@@ -99,6 +112,10 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
         Some(FileType::Pdf) => Some(documents::pdf(content)),
         Some(FileType::Docx) => Some(documents::docx(content)),
         Some(FileType::Xlsx) => Some(documents::xlsx(content)),
+        Some(FileType::Pptx) => Some(documents::pptx(content)),
+        Some(FileType::OpenDocument) => Some(documents::opendocument(content)),
+        Some(FileType::Rtf) => Some(documents::rtf(content)),
+        Some(FileType::LegacyOffice) => Some(documents::legacy_office(content)),
         Some(FileType::Image | FileType::Svg | FileType::Video | FileType::Audio) => {
             let mut facts = assets::extract(&record.path, content);
             if record.file_type == Some(FileType::Svg) {

@@ -122,7 +122,7 @@ About 60 languages and formats, each resolved by its own module rules rather tha
 | SQL | tables, views and functions from DDL; `queries` edges from code that names them in SQL strings |
 | Config and env | key paths of JSON, YAML, TOML, XML, INI and properties files; env definitions from `.env.example`, Dockerfiles, compose, GitHub Actions and Kubernetes against code reads (values never stored) |
 | Markdown, reStructuredText, Org, AsciiDoc, LaTeX, HTML, text | headings, links, includes and inline-code mentions resolved to files and symbols (the basis of stale doc detection) |
-| PDF, DOCX, XLSX | outlines, heading styles and sheets as headings; text layer, paragraphs and cell strings searchable through `find` |
+| PDF, Word, Excel, PowerPoint, OpenDocument, RTF, legacy Office, CSV | outlines, heading styles, sheets and slides as headings; all text searchable by section through `find` |
 | Images, SVG, audio, video | dimensions and durations from headers, SVG ids; literal paths in code, templates and config become `references`, so `audit` lists unreferenced assets |
 
 </details>

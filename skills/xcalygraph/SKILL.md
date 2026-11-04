@@ -13,7 +13,7 @@ Indexes the current repository on first use (seconds, nothing to set up) and ref
 - A name you already know: `xcalygraph show NAME` (signature, members, callers, callees, tests); no prefixes or quotes around NAME.
 - New codebase: `map` first.
 - Who breaks if this changes: `impact NAME` or `impact --diff`; route between two symbols: `path FROM TO`; review/cleanup: `audit`.
-- Words inside documents (Markdown, text, PDF, Word, Excel): `find` too, the hit names the section or page.
+- Words inside documents (Markdown, text, PDF, Word, Excel, PowerPoint, OpenDocument): `find` too, the hit names the section or page.
 - Exact text, config values, logs: `rg` or read the file.
 
 Every further call costs far more than a longer answer: stop as soon as the output settles the question; read a cited `path:line` only if it does not.

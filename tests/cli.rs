@@ -4777,10 +4777,10 @@ fn map_lists_every_top_level_area_and_what_is_excluded() -> TestResult {
         .iter()
         .position(|line| *line == "areas")
         .ok_or("no areas")?;
-    assert!(lines[start + 1].starts_with("src 2f 2s go:2"), "{text}");
-    assert!(text.contains("\ndocs 1f 1s markdown:1"), "{text}");
-    assert!(text.contains("\nassets 1f 0s path-only:1"), "{text}");
-    assert!(text.contains("\n. 1f 0s go:1"), "{text}");
+    assert!(lines[start + 1].starts_with("src 2f 2s 2K go:2"), "{text}");
+    assert!(text.contains("\ndocs 1f 1s 1K markdown:1"), "{text}");
+    assert!(text.contains("\nassets 1f 0s 1K path-only:1"), "{text}");
+    assert!(text.contains("\n. 1f 0s 1K go:1"), "{text}");
     assert!(text.contains("\nexcluded node_modules\n"), "{text}");
     // A filtered view cannot claim what is excluded.
     let filtered = map(&["-p", "src/"])?;
@@ -4821,5 +4821,41 @@ fn find_reads_the_whole_text_of_documents() -> TestResult {
     // Beyond the terms of one section, a further section takes over.
     let late = find("filler2900")?;
     assert!(late.starts_with("guide.md\n"), "{late}");
+    Ok(())
+}
+
+#[test]
+fn a_disk_tree_survives_denied_folders_and_searches_its_config_text() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new("disk-tree")?;
+    dir.write("tree/ssh/sshd_config", "PermitRootLogin no\nPort 2222\n")?;
+    dir.write("tree/web/site.conf", "server_name quokka.example\n")?;
+    dir.write("tree/data/blob", "\u{0}\u{0}\u{1}binary")?;
+    let secret = dir.0.join("tree/secret");
+    fs::create_dir(&secret)?;
+    fs::write(secret.join("inner.txt"), "hidden")?;
+    fs::set_permissions(&secret, fs::Permissions::from_mode(0o000))?;
+    let enforced = fs::read_dir(&secret).is_err();
+    let root = dir.0.join("tree").to_string_lossy().into_owned();
+    let run = |args: &[&str]| -> io::Result<Output> {
+        let mut command = support::command(BINARY, &dir.0);
+        command.args(args).args(["-C", &root]);
+        command.output()
+    };
+    let map = run(&["map"]);
+    fs::set_permissions(&secret, fs::Permissions::from_mode(0o755))?;
+    let map = map?;
+    assert_eq!(map.status.code(), Some(0), "{map:?}");
+    let text = String::from_utf8(map.stdout)?;
+    if enforced {
+        assert!(text.contains("! no permission: secret/"), "{text}");
+    }
+    assert!(text.contains("\ndata 1f 0s 1K path-only:1"), "{text}");
+    let find = run(&["find", "PermitRootLogin"])?;
+    let found = String::from_utf8(find.stdout)?;
+    assert!(found.starts_with("ssh/sshd_config\n  1 "), "{found}");
+    let find = run(&["find", "quokka"])?;
+    let found = String::from_utf8(find.stdout)?;
+    assert!(found.starts_with("web/site.conf\n  1 "), "{found}");
     Ok(())
 }

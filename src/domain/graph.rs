@@ -77,6 +77,8 @@ pub struct Edge {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphFile {
     pub path: String,
+    /// Size in KiB, rounded up.
+    pub kib: u32,
     pub role: Role,
     pub file_type: Option<FileType>,
     pub module: u32,

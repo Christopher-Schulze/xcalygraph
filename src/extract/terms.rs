@@ -10,6 +10,13 @@
 use std::collections::HashSet;
 
 use crate::domain::facts::{BODY_TERMS, Facts, SymKind};
+
+/// Bytes of a symbol read at a time for its search terms.
+const SCAN_WINDOW: usize = 64 * 1024;
+/// Bytes of a symbol looked at in total: terms past its nested symbols end here.
+const SCAN_LIMIT: usize = 256 * 1024;
+/// Longest markup tag taken for one, with its attributes.
+const MAX_TAG: usize = 16 * 1024;
 use crate::domain::search;
 
 /// Keywords and literals common to most languages, and markup filler (`className`, `div`,
@@ -264,56 +271,76 @@ fn collect(
     others: &[(usize, usize)],
     seen: &mut HashSet<String>,
 ) -> String {
-    let mut text = content[first..last].to_vec();
-    for &(start, end) in others {
-        if start >= first && end <= last && (start, end) != (first, last) {
-            for byte in &mut text[start - first..end - first] {
-                if *byte != b'\n' {
-                    *byte = b' ';
-                }
-            }
-        }
-    }
-    without_class_lists(&mut text);
     seen.clear();
     let mut terms = String::new();
     let mut count = 0;
     let mut line_words = String::new();
     let mut buffer = String::new();
     let mut lower = String::new();
-    for line in text.split(|byte| *byte == b'\n') {
-        if count >= BODY_TERMS {
-            break;
+    // A bundled file nests whole megabytes per symbol: only as much is read as the terms need.
+    let range_end = last;
+    let last = last.min(first.saturating_add(SCAN_LIMIT));
+    let mut window_start = first;
+    while window_start < last && count < BODY_TERMS {
+        let window_end = (window_start + SCAN_WINDOW).min(last);
+        let mut text = content[window_start..window_end].to_vec();
+        // Nested symbols overlap: merged, each byte is blanked once.
+        let mut inside: Vec<(usize, usize)> = others
+            .iter()
+            .filter(|&&(start, end)| {
+                start >= first && end <= range_end && (start, end) != (first, range_end)
+            })
+            .map(|&(start, end)| (start.max(window_start), end.min(window_end)))
+            .filter(|(start, end)| start < end)
+            .collect();
+        inside.sort_unstable();
+        let mut blanked = window_start;
+        for (start, end) in inside {
+            for byte in
+                &mut text[start.max(blanked) - window_start..end.max(blanked) - window_start]
+            {
+                if *byte != b'\n' {
+                    *byte = b' ';
+                }
+            }
+            blanked = blanked.max(end);
         }
-        // Search tokens of the line's new words (phrases such as `sign in` stay adjacent); a
-        // token shared by several words (`delete` of `deleteUser`, `deleteComment`) repeats, so
-        // its frequency still counts.
-        line_words.clear();
-        for_each_body_word(line, |word| {
-            // Only a new word costs a string: the set owns one copy of it.
-            lower.clear();
-            if word.is_ascii() {
-                lower.push_str(word);
-                lower.make_ascii_lowercase();
-            } else {
-                lower.push_str(&word.to_lowercase());
+        without_class_lists(&mut text);
+        for line in text.split(|byte| *byte == b'\n') {
+            if count >= BODY_TERMS {
+                break;
             }
-            if !KEYWORDS.contains(&lower.as_str()) && !seen.contains(&lower) {
-                seen.insert(lower.clone());
-                line_words.push_str(word);
-                line_words.push(' ');
-            }
-        });
-        search::for_each_token(&line_words, &mut buffer, |token| {
-            if count >= BODY_TERMS || token.len() < 3 {
-                return;
-            }
-            if !terms.is_empty() {
-                terms.push(' ');
-            }
-            terms.push_str(token);
-            count += 1;
-        });
+            // Search tokens of the line's new words (phrases such as `sign in` stay adjacent); a
+            // token shared by several words (`delete` of `deleteUser`, `deleteComment`) repeats,
+            // so its frequency still counts.
+            line_words.clear();
+            for_each_body_word(line, |word| {
+                // Only a new word costs a string: the set owns one copy of it.
+                lower.clear();
+                if word.is_ascii() {
+                    lower.push_str(word);
+                    lower.make_ascii_lowercase();
+                } else {
+                    lower.push_str(&word.to_lowercase());
+                }
+                if !KEYWORDS.contains(&lower.as_str()) && !seen.contains(&lower) {
+                    seen.insert(lower.clone());
+                    line_words.push_str(word);
+                    line_words.push(' ');
+                }
+            });
+            search::for_each_token(&line_words, &mut buffer, |token| {
+                if count >= BODY_TERMS || token.len() < 3 {
+                    return;
+                }
+                if !terms.is_empty() {
+                    terms.push(' ');
+                }
+                terms.push_str(token);
+                count += 1;
+            });
+        }
+        window_start = window_end;
     }
     terms
 }
@@ -381,7 +408,9 @@ fn markup_tag(text: &mut [u8], start: usize) -> Option<usize> {
         return None;
     }
 
-    while index < text.len() {
+    // `a<b` in minified code would otherwise scan to the next `>`, from every `<`.
+    let limit = text.len().min(start.saturating_add(MAX_TAG));
+    while index < limit {
         if text[index].is_ascii_whitespace() {
             index += 1;
             continue;
@@ -390,7 +419,7 @@ fn markup_tag(text: &mut [u8], start: usize) -> Option<usize> {
             b'>' => return Some(index + 1),
             b'/' if text.get(index + 1) == Some(&b'>') => return Some(index + 2),
             b'{' => {
-                index = matching_delimiter(text, index, b'}', text.len())? + 1;
+                index = matching_delimiter(text, index, b'}', limit)? + 1;
             }
             _ => {
                 let name_start = index;
