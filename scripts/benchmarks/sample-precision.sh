@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Retain source- and sampler-bound precision samples for all pinned roots.
 # Usage: scripts/benchmarks/sample-precision.sh
+#        scripts/benchmarks/sample-precision.sh --review RUN_DIRECTORY DECISIONS_JSONL NEW_OUTPUT_DIRECTORY
 # Output stays local under .cache/task192-manifests/; each run is exclusive and retained with .keep.
 set -euo pipefail
 
@@ -9,6 +10,171 @@ REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 readonly SNAPSHOTS="${REPO_ROOT}/.cache/corpus-snapshots"
 readonly WORK_BASE="${REPO_ROOT}/.cache/task192-manifests"
+
+if [[ "${1:-}" == --review ]]; then
+  (( $# == 4 )) || { echo "usage: sample-precision.sh --review RUN_DIRECTORY DECISIONS_JSONL NEW_OUTPUT_DIRECTORY" >&2; exit 2; }
+  python3 -I - "${REPO_ROOT}" "$2" "$3" "$4" <<'PYTHON'
+import collections
+import csv
+import hashlib
+import io
+import itertools
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def main():
+    repo, run, decisions_path, output = map(Path, sys.argv[1:])
+    inputs = {name: (run / name).read_bytes() for name in ("manifest.jsonl", "adjudication.tsv", "roots.tsv")}
+    roots = {}
+    for name, revision, digest, path in csv.reader(io.StringIO(inputs["roots.tsv"].decode()), delimiter="\t"):
+        if name in roots:
+            raise ValueError("duplicate corpus")
+        roots[name] = (revision, digest, Path(path))
+    samples = {}
+    groups = collections.defaultdict(lambda: collections.defaultdict(list))
+    kinds = {"imports", "mentions", "references", "runs", "queries"}
+    for raw in inputs["manifest.jsonl"].splitlines():
+        row = json.loads(raw)
+        if row.get("record_type") != "sample" or row["edge_kind"] not in kinds:
+            continue
+        identity = row["sample_id"]
+        if identity in samples:
+            raise ValueError("duplicate sample")
+        revision, digest, _ = roots[row["corpus"]]
+        if (row["corpus_revision"], row["corpus_snapshot_sha256"]) != (revision, digest):
+            raise ValueError("sample escaped its frozen corpus")
+        samples[identity] = row
+        groups[(row["source_language"], row["edge_kind"], row["confidence"])][row["corpus"]].append(row)
+    ledger_fields = ("corpus", "corpus_revision", "corpus_snapshot_sha256", "source_language", "edge_kind",
+                     "confidence", "source_path", "source_line", "target_path", "target_line")
+    ledger_ids = set()
+    for row in csv.DictReader(io.StringIO(inputs["adjudication.tsv"].decode()), delimiter="\t"):
+        identity = row["sample_id"]
+        if identity not in samples:
+            continue
+        if identity in ledger_ids or row["verdict"] != "pending" or any(
+                str(samples[identity][key]) != row[key] for key in ledger_fields):
+            raise ValueError("original pending ledger does not match the manifest")
+        ledger_ids.add(identity)
+    if ledger_ids != samples.keys() or not samples:
+        raise ValueError("original pending ledger lacks manifest samples")
+    selected = []
+    for key, corpora in sorted(groups.items()):
+        ranked = [sorted(rows, key=lambda row: row["sample_id"]) for _, rows in sorted(corpora.items())]
+        pooled = (row for batch in itertools.zip_longest(*ranked) for row in batch if row is not None)
+        selected.extend(itertools.islice(pooled, 100))
+    selected_ids = {row["sample_id"] for row in selected}
+    decision_bytes = decisions_path.read_bytes()
+    decisions = {}
+    for raw in decision_bytes.splitlines():
+        row = json.loads(raw)
+        identity = row["sample_id"]
+        if (identity not in selected_ids or identity in decisions
+                or row["verdict"] not in {"correct", "incorrect", "unknown"}
+                or not isinstance(row.get("reason"), str) or not row["reason"].strip()):
+            raise ValueError("unknown, duplicate or incomplete review decision")
+        decisions[identity] = row
+    for name in sorted({row["corpus"] for row in selected}):
+        source = roots[name][2]
+        subprocess.run(["bash", str(repo / "scripts/utils/prepare-corpus.sh"), "--verify", str(source)],
+                       check=True, capture_output=True)
+        if json.loads((source.parent / "snapshot.json").read_text())["source_sha256"] != roots[name][1]:
+            raise ValueError("snapshot identity mismatch")
+    files = {}
+    contexts = []
+
+    def evidence(row, prefix):
+        root = roots[row["corpus"]][2]
+        relative = Path(row[prefix + "_path"])
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("evidence path is not corpus-relative")
+        path = root / relative
+        if path not in files:
+            data = path.read_bytes()
+            binary = b"\0" in data
+            if not binary:
+                try:
+                    data.decode()
+                except UnicodeDecodeError:
+                    binary = True
+            files[path] = (sha(data), data.split(b"\n"), len(data), binary)
+        digest, lines, size, binary = files[path]
+        line = row[prefix + "_line"]
+        if not isinstance(line, int) or isinstance(line, bool) or not 1 <= line <= len(lines):
+            raise ValueError("invalid evidence line")
+        if prefix == "source" and sha(lines[line - 1]) != row["source_text_sha256"]:
+            raise ValueError("source-line checksum mismatch")
+        if binary:
+            return digest, f"binary data: {size} bytes", False
+        context = "\n".join(f"{number + 1}: {lines[number].decode(errors='replace')[:1000]}"
+                            for number in range(max(0, line - 3), min(len(lines), line + 2)))
+        truncated = any(len(lines[number].decode(errors="replace")) > 1000
+                        for number in range(max(0, line - 3), min(len(lines), line + 2)))
+        return digest, context, truncated
+
+    rows = []
+    summaries = collections.defaultdict(collections.Counter)
+    for sample in selected:
+        identity = sample["sample_id"]
+        decision = decisions.get(identity, {"verdict": "pending", "reason": ""})
+        source_hash, source_context, source_truncated = evidence(sample, "source")
+        target_hash, target_context, target_truncated = evidence(sample, "target")
+        row = {"sample_id": identity, **{key: sample[key] for key in ledger_fields},
+               "verdict": decision["verdict"], "reason": decision["reason"],
+               "source_file_sha256": source_hash, "target_file_sha256": target_hash}
+        rows.append(row)
+        contexts.append({**sample, "source_context": source_context, "target_context": target_context,
+                         "context_truncated": source_truncated or target_truncated})
+        key = (sample["source_language"], sample["edge_kind"], sample["confidence"])
+        summaries[key][decision["verdict"]] += 1
+    # All inputs and decisions are validated before creating anything; never overwrite a report.
+    output.mkdir(mode=0o700)
+    for name, records in (("selection.jsonl", selected), ("context.jsonl", contexts)):
+        with (output / name).open("x") as stream:
+            for row in records:
+                stream.write(json.dumps(row, sort_keys=True) + "\n")
+    with (output / "adjudication.tsv").open("x", newline="") as stream:
+        writer = csv.DictWriter(stream, ("sample_id", *ledger_fields, "verdict", "reason",
+                                         "source_file_sha256", "target_file_sha256"),
+                                delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+    with (output / "summary.tsv").open("x", newline="") as stream:
+        writer = csv.writer(stream, delimiter="\t", lineterminator="\n")
+        writer.writerow(("language", "kind", "confidence", "available_samples", "selected", "corpora",
+                         "correct", "incorrect", "unknown", "pending", "judged_precision"))
+        for key, counts in sorted(summaries.items()):
+            total = sum(counts.values())
+            judged = counts["correct"] + counts["incorrect"]
+            precision = f'{100 * counts["correct"] / judged:.1f}' if judged else "-"
+            writer.writerow((*key, sum(len(group) for group in groups[key].values()), total, len(groups[key]),
+                             *(counts[verdict] for verdict in ("correct", "incorrect", "unknown", "pending")), precision))
+    with (output / "identity.json").open("x") as stream:
+        json.dump({"inputs_sha256": {name: sha(data) for name, data in inputs.items()},
+                   "decisions_sha256": sha(decision_bytes),
+                   "reviewer_sha256": sha((repo / "scripts/benchmarks/sample-precision.sh").read_bytes()),
+                   "selection": "frozen ID rank per corpus, round-robin across corpus names, at most 100 per stratum",
+                   "limitations": "Explicit source review only; sparse/single-corpus strata and unknowns remain visible. No current-binary or compiler proof is implied."}, stream, indent=2)
+    with (output / ".keep-full").open("x") as stream:
+        stream.write("TASK 048 frozen source review\n")
+    print(f"review: {output}; samples={len(selected)} decisions={len(decisions)} strata={len(groups)}")
+
+
+try:
+    main()
+except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+    print("sample-precision.sh --review: " + str(error), file=sys.stderr)
+    sys.exit(1)
+PYTHON
+  exit
+fi
 
 if (( $# != 0 )); then
   echo "usage: scripts/benchmarks/sample-precision.sh" >&2
