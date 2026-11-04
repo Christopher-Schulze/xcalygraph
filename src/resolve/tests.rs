@@ -489,7 +489,7 @@ fn python_calls_resolve_to_last_same_module_definition() -> io::Result<()> {
 
 /// Scans, extracts and resolves a whole root, as a full index build does.
 fn corpus_graph(root: &Path) -> std::io::Result<Graph> {
-    let changes = crate::infra::scan::scan(root, &[], &[], i64::MAX)?;
+    let changes = crate::infra::scan::scan(root, &[], &[], i64::MAX, None)?;
     let facts: Vec<Option<crate::domain::facts::Facts>> = changes
         .records
         .iter()

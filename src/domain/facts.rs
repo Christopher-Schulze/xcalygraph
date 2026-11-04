@@ -864,6 +864,30 @@ impl Facts {
     }
 }
 
+impl Facts {
+    /// Returns growth slack to the allocator: the facts of every file stay in memory until the
+    /// resolver is done.
+    pub fn shrink_to_fit(&mut self) {
+        self.symbols.shrink_to_fit();
+        for symbol in &mut self.symbols {
+            symbol.terms.shrink_to_fit();
+        }
+        self.imports.shrink_to_fit();
+        self.refs.shrink_to_fit();
+        self.go_embeds.shrink_to_fit();
+        self.julia_builtin_calls.shrink_to_fit();
+        self.julia_call_arguments.shrink_to_fit();
+        self.bindings.shrink_to_fit();
+        self.envs.shrink_to_fit();
+        self.fields.shrink_to_fit();
+        self.env_defs.shrink_to_fit();
+        self.config_keys.shrink_to_fit();
+        self.texts.shrink_to_fit();
+        self.doc.shrink_to_fit();
+        self.terms.shrink_to_fit();
+    }
+}
+
 /// Truncates to at most `max` characters, appending `…` when shortened.
 pub fn clip(text: &str, max: usize) -> String {
     if text.chars().count() <= max {

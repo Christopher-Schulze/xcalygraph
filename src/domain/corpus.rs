@@ -1,5 +1,6 @@
 //! Corpus records and change detection (`docs/spec.md` section 4, Freshness).
 
+use super::facts::Facts;
 use super::filetype::FileType;
 use super::role::Role;
 
@@ -95,6 +96,8 @@ pub struct ChangeSet {
     pub records: Vec<FileRecord>,
     /// Indices into `records` of new files and files whose content or role changed.
     pub changed: Vec<usize>,
+    /// Facts of `changed`, parallel to it, when the scan extracted them from the bytes it hashed.
+    pub facts: Vec<Option<Facts>>,
     /// Paths of stored files that no longer exist.
     pub deleted: Vec<String>,
     /// True when any stored stat record differs from `records` (the file table must be rewritten).

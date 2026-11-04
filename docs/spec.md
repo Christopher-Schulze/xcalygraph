@@ -133,7 +133,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 
 ## 4. Pipeline
 
-walk -> stat diff -> hash candidates -> extract changed files (parallel) -> write changed fact shards -> resolve all facts (parallel per file) -> derive graph, ranks, modules, search index -> write derived data if changed -> answer.
+walk -> stat diff -> read, hash and extract changed files from one buffer (parallel) -> write changed fact shards -> resolve all facts (parallel per file) -> derive graph, ranks, modules, search index -> write derived data if changed -> answer.
 
 Freshness:
 
