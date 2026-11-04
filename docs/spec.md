@@ -273,7 +273,7 @@ Sections in priority order: root line (name, files per language, symbol count) -
 
 ### 7.2 find
 
-Documents: the words of a section (Markdown, text, reStructuredText, Org, AsciiDoc, LaTeX, HTML, PDF, DOCX, XLSX, PPTX, OpenDocument, RTF, legacy DOC, XLS and PPT, first 2,000 rows of CSV and TSV) are the search terms of its heading in a field of their own, up to 256 distinct terms; a longer section or text without headings continues in sections named by their first line. Section symbols count half their role weight.
+Documents: the words of a section (Markdown, text, reStructuredText, Org, AsciiDoc, LaTeX, HTML, PDF, DOCX, XLSX, PPTX, OpenDocument, RTF, legacy DOC, XLS and PPT, first 2,000 rows of CSV and TSV) are the search terms of its heading in a field of their own, up to 256 distinct terms; a longer section or text without headings continues in sections named by their first line, or by their first word when continuing within a line. Every continuation retains the original line locator and heading parent. Section symbols count half their role weight.
 
 First answer: when the top hit's score is at least 1.3 times the runner-up's, its source follows its line (4 spaces, then line number and code, clipped to 100 characters): a body of at most 8 non-empty lines whole, otherwise its first 4 lines and up to 4 lines naming a query word, then `+N lines`; then up to 3 callers and 3 callees (`<`, `>`), up to 2 tests (`t`, `t2`) and one command to run them (`r`). JSON: `source` records with `line` and `text`, `edge` records.
 

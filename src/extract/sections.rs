@@ -1,6 +1,6 @@
 //! Full text search of documents: the words of each section become the search terms of its
 //! heading, so a hit names the section and its line. A long section or text without headings is
-//! split into further sections named by their first line.
+//! split into further sections named by their first line or first word within a long line.
 
 use std::collections::HashSet;
 
@@ -59,10 +59,13 @@ pub fn index_text<'a>(facts: &mut Facts, lines: impl Iterator<Item = (u32, &'a s
             open.start(line, text, owner);
         }
         search::for_each_token(text, &mut buffer, |token| {
-            if token.len() >= 3
-                && open.seen.len() < SECTION_TERMS
-                && open.seen.insert(token.to_owned())
-            {
+            if token.len() >= 3 && open.seen.insert(token.to_owned()) {
+                if open.seen.len() > SECTION_TERMS {
+                    open.last_line = line;
+                    open.flush(facts, line);
+                    open.start(line, token, owner);
+                    open.seen.insert(token.to_owned());
+                }
                 if !open.terms.is_empty() {
                     open.terms.push(' ');
                 }
@@ -117,5 +120,69 @@ impl Section {
         }
         self.first_line = 0;
         self.seen.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_lines_retain_every_term_in_bounded_sections() {
+        let words: Vec<String> = (0..600u32)
+            .map(|index| {
+                format!(
+                    "word{}{}{}",
+                    char::from(b'a' + (index % 26) as u8),
+                    char::from(b'a' + ((index / 26) % 26) as u8),
+                    char::from(b'a' + ((index / 676) % 26) as u8),
+                )
+            })
+            .collect();
+        for heading in [false, true] {
+            let mut facts = Facts {
+                lines: if heading { 2 } else { 1 },
+                ..Facts::default()
+            };
+            if heading {
+                facts.symbols.push(Symbol {
+                    kind: Some(SymKind::Heading),
+                    name: "Long line".to_owned(),
+                    line: 1,
+                    end_line: 2,
+                    ..Symbol::default()
+                });
+            }
+            let prefix = if heading { "# Long line\n" } else { "" };
+            let text = format!("{prefix}{} quokkatailneedle\n", words.join(" "));
+            index_lines(&mut facts, &text);
+            let terms: HashSet<&str> = facts
+                .symbols
+                .iter()
+                .flat_map(|symbol| symbol.terms.split_whitespace())
+                .collect();
+            let required: HashSet<String> = search::tokenize(&text)
+                .into_iter()
+                .filter(|token| token.len() >= 3)
+                .collect();
+            assert!(
+                required.iter().all(|word| terms.contains(word.as_str())),
+                "heading={heading}: missing {} of {} normalized terms",
+                required
+                    .iter()
+                    .filter(|word| !terms.contains(word.as_str()))
+                    .count(),
+                required.len(),
+            );
+            assert_eq!(facts.symbols.len(), 3);
+            for symbol in &facts.symbols {
+                assert!(symbol.terms.split_whitespace().count() <= SECTION_TERMS);
+            }
+            for symbol in &facts.symbols[1..] {
+                assert_eq!(symbol.line, facts.lines);
+                assert_eq!(symbol.end_line, facts.lines);
+                assert_eq!(symbol.parent, heading.then_some(0));
+            }
+        }
     }
 }
