@@ -247,7 +247,9 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
         coverage: Coverage::from_u8(decoder.u8()?).ok_or(DecodeError("coverage"))?,
         ..Facts::default()
     };
-    for _ in 0..decoder.len()? {
+    let count = decoder.len()?;
+    facts.symbols.reserve_exact(count);
+    for _ in 0..count {
         let kind = SymKind::from_u8(decoder.u8()?).ok_or(DecodeError("symbol kind"))?;
         let name = decoder.string()?;
         let parent = read_opt_index(decoder)?;
@@ -273,7 +275,9 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             flags,
         });
     }
-    for _ in 0..decoder.len()? {
+    let count = decoder.len()?;
+    facts.imports.reserve_exact(count);
+    for _ in 0..count {
         facts.imports.push(Import {
             spec: decoder.string()?,
             alias: decoder.opt_string()?,
@@ -282,7 +286,9 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             reexport: decoder.u8()? != 0,
         });
     }
-    for _ in 0..decoder.len()? {
+    let count = decoder.len()?;
+    facts.refs.reserve_exact(count);
+    for _ in 0..count {
         facts.refs.push(Ref {
             kind: RefKind::from_u8(decoder.u8()?).ok_or(DecodeError("ref kind"))?,
             name: decoder.string()?,
@@ -292,7 +298,9 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             arity: decoder.u8()?,
         });
     }
-    for _ in 0..decoder.len()? {
+    let count = decoder.len()?;
+    facts.go_embeds.reserve_exact(count);
+    for _ in 0..count {
         let symbol = decoder.var_u32()?;
         let line = decoder.var_u32()?;
         let length = decoder.len()?;
@@ -314,7 +322,9 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
         });
     }
     let mut previous_builtin = None;
-    for _ in 0..decoder.len()? {
+    let count = decoder.len()?;
+    facts.julia_builtin_calls.reserve_exact(count);
+    for _ in 0..count {
         let reference = decoder.var_u32()?;
         let Some(fact) = facts.refs.get(reference as usize) else {
             return Err(DecodeError("Julia builtin reference"));
@@ -329,7 +339,9 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
         previous_builtin = Some(reference);
     }
     let mut previous_argument = None;
-    for _ in 0..decoder.len()? {
+    let count = decoder.len()?;
+    facts.julia_call_arguments.reserve_exact(count);
+    for _ in 0..count {
         let reference = decoder.var_u32()?;
         let position = decoder.u8()?;
         let binding = decoder.string()?;
@@ -351,7 +363,9 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
         });
         previous_argument = Some(key);
     }
-    for _ in 0..decoder.len()? {
+    let count = decoder.len()?;
+    facts.bindings.reserve_exact(count);
+    for _ in 0..count {
         facts.bindings.push(Binding {
             scope: read_opt_index(decoder)?,
             name: decoder.string()?,
@@ -361,14 +375,18 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             declared: decoder.u8()? != 0,
         });
     }
-    for _ in 0..decoder.len()? {
+    let count = decoder.len()?;
+    facts.envs.reserve_exact(count);
+    for _ in 0..count {
         facts.envs.push(EnvRead {
             name: decoder.string()?,
             scope: read_opt_index(decoder)?,
             line: decoder.var_u32()?,
         });
     }
-    for _ in 0..decoder.len()? {
+    let count = decoder.len()?;
+    facts.fields.reserve_exact(count);
+    for _ in 0..count {
         let owner = decoder.var_u32()?;
         let mut names = Vec::new();
         for _ in 0..decoder.len()? {
@@ -397,21 +415,27 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             types: decoder.strings()?,
         });
     }
-    for _ in 0..decoder.len()? {
+    let count = decoder.len()?;
+    facts.env_defs.reserve_exact(count);
+    for _ in 0..count {
         facts.env_defs.push(EnvDef {
             name: decoder.string()?,
             source: EnvSource::from_u8(decoder.u8()?).ok_or(DecodeError("env source"))?,
             line: decoder.var_u32()?,
         });
     }
-    for _ in 0..decoder.len()? {
+    let count = decoder.len()?;
+    facts.config_keys.reserve_exact(count);
+    for _ in 0..count {
         facts.config_keys.push(ConfigKey {
             path: decoder.string()?,
             kind: ValueKind::from_u8(decoder.u8()?).ok_or(DecodeError("value kind"))?,
             line: decoder.var_u32()?,
         });
     }
-    for _ in 0..decoder.len()? {
+    let count = decoder.len()?;
+    facts.texts.reserve_exact(count);
+    for _ in 0..count {
         facts.texts.push(TextSegment {
             heading: decoder.string()?,
             locator: decoder.var_u32()?,

@@ -55,7 +55,8 @@ pub fn build(kind: Kind, sections: &[&[u8]]) -> Vec<u8> {
         offset = align(offset + section.len());
     }
     table.resize(table_len, 0);
-    let mut image = vec![0u8; HEADER_LEN];
+    let mut image = Vec::with_capacity(offset);
+    image.resize(HEADER_LEN, 0);
     image.extend_from_slice(&table);
     for section in sections {
         image.extend_from_slice(section);

@@ -8,7 +8,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write as IoWrite};
 use std::path::{Path, PathBuf};
 
-use super::{Input, build, static_modifier, swift_source_identity_matches};
+use super::{build, static_modifier, swift_source_identity_matches};
 use crate::domain::corpus::FileRecord;
 use crate::domain::filetype::FileType;
 use crate::domain::graph::{Confidence, Edge, EdgeKind, Graph};
@@ -64,10 +64,7 @@ pub fn graph_of(root: &Path) -> std::io::Result<Graph> {
         );
         files.push(record);
     }
-    Ok(build(&Input {
-        files: &files,
-        facts: &facts,
-    }))
+    Ok(build(&files, facts))
 }
 
 pub fn render(graph: &Graph) -> String {
@@ -504,10 +501,7 @@ fn corpus_graph(root: &Path) -> std::io::Result<Graph> {
             Ok(Some(extract(record, &content)))
         })
         .collect::<std::io::Result<_>>()?;
-    Ok(build(&Input {
-        files: &changes.records,
-        facts: &facts,
-    }))
+    Ok(build(&changes.records, facts))
 }
 
 #[test]

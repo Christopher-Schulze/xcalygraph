@@ -10,7 +10,6 @@ use super::error::AppError;
 use super::workspace::Workspace;
 use crate::domain::corpus::{ChangeSet, FileRecord};
 use crate::domain::facts::{Coverage, Facts};
-use crate::domain::hash::FastMap;
 use crate::extract;
 use crate::infra::lock::{self, WriterLock};
 use crate::infra::scan;
@@ -211,20 +210,22 @@ fn write_derived(workspace: &Workspace, records: &[FileRecord]) -> Result<u64, A
             ))
         })
         .collect::<Vec<_>>();
-    let mut by_path = FastMap::default();
     let mut recovered_bytes = 0;
+    let mut per_shard = Vec::with_capacity(SHARDS);
     for shard in shards {
         let (entries, written) = shard?;
-        by_path.extend(entries);
         recovered_bytes += written;
+        per_shard.push(Vec::into_iter(entries));
     }
+    // Every shard lists its extracted files in the order of `records`.
     let facts: Vec<Option<Facts>> = records
         .iter()
         .map(|record| {
             if !record.role.is_extracted() {
                 return Ok(None);
             }
-            by_path.remove(&record.path).map(Some).ok_or_else(|| {
+            let entry = per_shard[store::shard_of(&record.path)].next();
+            entry.map(|(_, facts)| Some(facts)).ok_or_else(|| {
                 AppError::Invalid(format!(
                     "fact missing for {}; cannot rebuild derived index",
                     record.path
@@ -232,15 +233,9 @@ fn write_derived(workspace: &Workspace, records: &[FileRecord]) -> Result<u64, A
             })
         })
         .collect::<Result<_, _>>()?;
-    let graph = resolve::build(&resolve::Input {
-        files: records,
-        facts: &facts,
-    });
-    // Freeing the facts of every file costs as much as building `derived`: overlap the two.
-    let ((), image) = rayon::join(
-        move || facts.into_par_iter().for_each(drop),
-        || derived::build(&graph),
-    );
+    drop(per_shard);
+    let graph = resolve::build(records, facts);
+    let image = derived::build(&graph);
     let ((), written) = rayon::join(
         move || drop(graph),
         || workspace.store.write_container("derived", &image),

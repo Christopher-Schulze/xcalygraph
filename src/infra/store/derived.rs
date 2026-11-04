@@ -314,49 +314,49 @@ pub fn build(graph: &Graph) -> Vec<u8> {
             count: *count,
         })
         .collect();
-    let mut sections: Vec<Vec<u8>> = vec![Vec::new(); section::COUNT];
-    sections[section::FILES] = bytemuck::cast_slice(&files).to_vec();
-    sections[section::SYMBOLS] = bytemuck::cast_slice(&symbols).to_vec();
-    sections[section::FORWARD_OFFSETS] = bytemuck::cast_slice(&forward_offsets).to_vec();
-    sections[section::FORWARD] = bytemuck::cast_slice(&forward).to_vec();
-    sections[section::REVERSE_OFFSETS] = bytemuck::cast_slice(&reverse_offsets).to_vec();
-    sections[section::REVERSE] = bytemuck::cast_slice(&reverse).to_vec();
-    sections[section::MODULES] = bytemuck::cast_slice(&modules).to_vec();
-    sections[section::MODULE_EDGES] = bytemuck::cast_slice(&module_edges).to_vec();
-    sections[section::EXTERNALS] = bytemuck::cast_slice(&externals).to_vec();
-    sections[section::ENVS] = bytemuck::cast_slice(&envs).to_vec();
-    sections[section::FIELDS] = bytemuck::cast_slice(&fields).to_vec();
-    sections[section::TOKENS] = bytemuck::cast_slice(&tokens).to_vec();
-    sections[section::POSTINGS] = index.postings;
-    sections[section::LENGTHS] = bytemuck::cast_slice(&index.lengths).to_vec();
-    sections[section::AVERAGES] = bytemuck::cast_slice(&index.averages).to_vec();
+    // Views into the records above: the image is the only copy of the section bytes.
+    let mut views: [&[u8]; section::COUNT] = [&[]; section::COUNT];
+    views[section::FILES] = bytemuck::cast_slice(&files);
+    views[section::SYMBOLS] = bytemuck::cast_slice(&symbols);
+    views[section::FORWARD_OFFSETS] = bytemuck::cast_slice(&forward_offsets);
+    views[section::FORWARD] = bytemuck::cast_slice(&forward);
+    views[section::REVERSE_OFFSETS] = bytemuck::cast_slice(&reverse_offsets);
+    views[section::REVERSE] = bytemuck::cast_slice(&reverse);
+    views[section::MODULES] = bytemuck::cast_slice(&modules);
+    views[section::MODULE_EDGES] = bytemuck::cast_slice(&module_edges);
+    views[section::EXTERNALS] = bytemuck::cast_slice(&externals);
+    views[section::ENVS] = bytemuck::cast_slice(&envs);
+    views[section::FIELDS] = bytemuck::cast_slice(&fields);
+    views[section::TOKENS] = bytemuck::cast_slice(&tokens);
+    views[section::POSTINGS] = &index.postings;
+    views[section::LENGTHS] = bytemuck::cast_slice(&index.lengths);
+    views[section::AVERAGES] = bytemuck::cast_slice(&index.averages);
     let members: Vec<[u32; 2]> = graph
         .members
         .iter()
         .map(|&(owner, member)| [owner, member])
         .collect();
-    sections[section::MEMBERS] = bytemuck::cast_slice(&members).to_vec();
+    views[section::MEMBERS] = bytemuck::cast_slice(&members);
     let stale: Vec<[u32; 3]> = graph
         .stale
         .iter()
         .map(|(node, line, text)| [*node, *line, strings.id(text)])
         .collect();
-    sections[section::STALE] = bytemuck::cast_slice(&stale).to_vec();
+    views[section::STALE] = bytemuck::cast_slice(&stale);
     let ambiguous: Vec<u32> = graph
         .ambiguous_names
         .iter()
         .map(|name| strings.id(name))
         .collect();
-    sections[section::AMBIGUOUS] = bytemuck::cast_slice(&ambiguous).to_vec();
+    views[section::AMBIGUOUS] = bytemuck::cast_slice(&ambiguous);
     let interface_groups: Vec<[u32; 2]> = graph
         .interface_groups
         .iter()
         .map(|&(part, canonical)| [part, canonical])
         .collect();
-    sections[section::INTERFACE_GROUPS] = bytemuck::cast_slice(&interface_groups).to_vec();
-    sections[section::STRINGS] = strings.blob;
-    sections[section::STRING_OFFSETS] = bytemuck::cast_slice(&strings.offsets).to_vec();
-    let views: Vec<&[u8]> = sections.iter().map(Vec::as_slice).collect();
+    views[section::INTERFACE_GROUPS] = bytemuck::cast_slice(&interface_groups);
+    views[section::STRINGS] = &strings.blob;
+    views[section::STRING_OFFSETS] = bytemuck::cast_slice(&strings.offsets);
     container::build(Kind::Derived, &views)
 }
 

@@ -139,7 +139,41 @@ struct Resolved {
     externals: Vec<String>,
 }
 
-pub fn build(input: &Input) -> Graph {
+pub fn build(files: &[FileRecord], mut facts: Vec<Option<Facts>>) -> Graph {
+    let mut graph = resolve(&Input {
+        files,
+        facts: &facts,
+    });
+    move_search_text(&mut graph, &mut facts);
+    // Before the caller builds anything from the graph: the facts are the largest allocation.
+    facts.into_par_iter().for_each(drop);
+    graph
+}
+
+/// Moves the text only the search index reads from the facts into the graph, so it exists once
+/// while resolving (symbols keep the order of their file's facts).
+fn move_search_text(graph: &mut Graph, facts: &mut [Option<Facts>]) {
+    for (file, facts) in graph.files.iter_mut().zip(facts) {
+        let Some(facts) = facts else { continue };
+        file.doc = std::mem::take(&mut facts.doc);
+        file.terms = std::mem::take(&mut facts.terms);
+        let first = file.first_symbol as usize;
+        for (symbol, graph_symbol) in facts.symbols.iter_mut().zip(&mut graph.symbols[first..]) {
+            graph_symbol.terms = std::mem::take(&mut symbol.terms);
+            if !is_titled(symbol) {
+                graph_symbol.doc = std::mem::take(&mut symbol.doc);
+            }
+        }
+    }
+}
+
+/// Headings are found by title, routes by kind and path (`GET /api/users`, `action addToCart`);
+/// their file path locates them.
+fn is_titled(symbol: &facts::Symbol) -> bool {
+    symbol.kind() == SymKind::Heading || (symbol.kind() == SymKind::Op && symbol.name.contains(' '))
+}
+
+fn resolve(input: &Input) -> Graph {
     let mut index = Index::new(input);
     let imports: Vec<Imports> = (0..input.files.len())
         .into_par_iter()
@@ -217,7 +251,8 @@ impl<'a> Index<'a> {
             }
         }
         let mut base = Vec::with_capacity(input.files.len());
-        let mut symbols = Vec::new();
+        let symbol_total = input.facts.iter().flatten().map(|f| f.symbols.len()).sum();
+        let mut symbols = Vec::with_capacity(symbol_total);
         for (file, facts) in input.facts.iter().enumerate() {
             base.push(symbols.len() as u32);
             let Some(facts) = facts else { continue };
@@ -238,10 +273,7 @@ impl<'a> Index<'a> {
                     path.insert(0, symbol.owner.as_str());
                 }
                 path.reverse();
-                // Headings are found by title, routes by kind and path (`GET /api/users`,
-                // `action addToCart`); their file path locates them.
-                let route = symbol.kind() == SymKind::Op && symbol.name.contains(' ');
-                if symbol.kind() == SymKind::Heading || route {
+                if is_titled(symbol) {
                     let role = input.files[file].role;
                     symbols.push(GraphSymbol {
                         file: file as u32,
@@ -253,7 +285,7 @@ impl<'a> Index<'a> {
                         end_line: symbol.end_line,
                         signature: String::new(),
                         doc: String::new(),
-                        terms: symbol.terms.clone(),
+                        terms: String::new(),
                         exported: true,
                         flags: if role == Role::Test {
                             facts::FLAG_TEST
@@ -290,8 +322,8 @@ impl<'a> Index<'a> {
                     line: symbol.line,
                     end_line: symbol.end_line,
                     signature: symbol.signature.clone(),
-                    doc: symbol.doc.clone(),
-                    terms: symbol.terms.clone(),
+                    doc: String::new(),
+                    terms: String::new(),
                     exported: symbol.exported,
                     flags,
                     rank: 0.0,
@@ -3984,8 +4016,8 @@ impl<'a> Index<'a> {
                 entry: facts.is_some_and(|facts| facts.entry)
                     || manifest_entries.contains(record.path.as_str()),
                 coverage: facts.map_or(Coverage::Complete, |facts| facts.coverage),
-                doc: facts.map(|facts| facts.doc.clone()).unwrap_or_default(),
-                terms: facts.map(|facts| facts.terms.clone()).unwrap_or_default(),
+                doc: String::new(),
+                terms: String::new(),
                 keys: facts
                     .map(|facts| {
                         let keys = facts.config_keys.iter().map(|key| key.path.as_str());
