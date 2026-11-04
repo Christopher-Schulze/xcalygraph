@@ -6,7 +6,9 @@
 use std::borrow::Cow;
 
 use super::json::{self, Value};
-use crate::domain::facts::{self, Coverage, Facts, NO_ARITY, Ref, RefKind, SymKind, Symbol};
+use crate::domain::facts::{
+    self, Coverage, Facts, NO_ARITY, Ref, RefKind, SymKind, Symbol, ValueKind,
+};
 
 /// Script extensions a command may name.
 const SCRIPT_EXTENSIONS: [&str; 11] = [
@@ -120,9 +122,18 @@ fn is_shell_assignment(word: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
-fn command_index(words: &[&str]) -> usize {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommandSyntax {
+    Shell,
+    Process,
+}
+
+fn command_index(words: &[&str], syntax: CommandSyntax) -> usize {
     let mut index = 0;
     while let Some(word) = words.get(index) {
+        if syntax == CommandSyntax::Process && matches!(*word, "command" | "exec") {
+            return words.len();
+        }
         if (index > 0 && is_shell_assignment(word)) || COMMAND_WRAPPERS.contains(word) {
             index += 1;
         } else if *word == "nyc" {
@@ -283,11 +294,10 @@ fn invoked_script<'a>(program: &str, command: &'a str, args: &'a [&'a str]) -> O
 }
 
 fn task_runner_refs(facts: &mut Facts, scope: Option<u32>, words: &[&str], line: u32) {
-    let index = command_index(words);
-    let Some(program) = words.get(index).copied() else {
+    let Some(program) = words.first().copied() else {
         return;
     };
-    let args = &words[index + 1..];
+    let args = &words[1..];
     let next = args.first().copied().unwrap_or_default();
     match program {
         "make" | "gmake" => {
@@ -343,7 +353,7 @@ fn task_runner_refs(facts: &mut Facts, scope: Option<u32>, words: &[&str], line:
 
 fn bundle_pipeline_script<'a>(pipeline: &[Vec<&'a str>]) -> Option<&'a str> {
     let consumer_words = pipeline.last()?;
-    let consumer_index = command_index(consumer_words);
+    let consumer_index = command_index(consumer_words, CommandSyntax::Shell);
     let consumer_program = command_program(consumer_words.get(consumer_index)?);
     if !matches!(consumer_program, "node" | "bun")
         || consumer_words[consumer_index + 1..]
@@ -353,7 +363,7 @@ fn bundle_pipeline_script<'a>(pipeline: &[Vec<&'a str>]) -> Option<&'a str> {
         return None;
     }
     let producer_words = pipeline.first()?;
-    let producer_index = command_index(producer_words);
+    let producer_index = command_index(producer_words, CommandSyntax::Shell);
     if command_program(producer_words.get(producer_index)?) != "esbuild"
         || !producer_words[producer_index + 1..].contains(&"--bundle")
     {
@@ -392,6 +402,8 @@ pub(super) fn command_runs(facts: &mut Facts, scope: Option<u32>, command: &str,
     }
     let source = command.as_bytes();
     let mut pending = vec![root];
+    #[cfg(feature = "lang-bash")]
+    let mut literals = Facts::default();
     while let Some(node) = pending.pop() {
         for index in (0..node.child_count()).rev() {
             if let Some(child) = node.child(index) {
@@ -400,15 +412,7 @@ pub(super) fn command_runs(facts: &mut Facts, scope: Option<u32>, command: &str,
         }
         if node.kind() == "command" {
             let words = shell_command_words(node, source);
-            task_runner_refs(facts, scope, &words, line);
-            let index = command_index(&words);
-            let Some(command) = words.get(index).copied() else {
-                continue;
-            };
-            let program = command_program(command);
-            if let Some(script) = invoked_script(program, command, &words[index + 1..]) {
-                push_run(facts, scope, script, None, line);
-            }
+            command_words_runs(facts, scope, &words, line, CommandSyntax::Shell);
         } else if node.kind() == "pipeline" {
             let mut cursor = node.walk();
             let pipeline: Vec<Vec<&str>> = node
@@ -419,7 +423,56 @@ pub(super) fn command_runs(facts: &mut Facts, scope: Option<u32>, command: &str,
             if let Some(script) = bundle_pipeline_script(&pipeline) {
                 push_run(facts, scope, script, None, line);
             }
+        } else if matches!(node.kind(), "raw_string" | "string") {
+            #[cfg(feature = "lang-bash")]
+            if let Some(value) = super::lang::bash::literal_value(node, source) {
+                super::assets::literal_paths(value, &mut literals);
+                for mut reference in literals.refs.drain(..) {
+                    if !facts.refs.iter().any(|prior| {
+                        prior.scope == scope
+                            && prior.name == reference.name
+                            && matches!(prior.kind, RefKind::Run | RefKind::Path)
+                    }) {
+                        reference.scope = scope;
+                        reference.line = line;
+                        facts.refs.push(reference);
+                    }
+                }
+            }
         }
+    }
+}
+
+fn command_words_runs(
+    facts: &mut Facts,
+    scope: Option<u32>,
+    words: &[&str],
+    line: u32,
+    syntax: CommandSyntax,
+) {
+    let index = command_index(words, syntax);
+    let Some(command) = words.get(index).copied() else {
+        return;
+    };
+    let program = command_program(command);
+    if syntax == CommandSyntax::Process {
+        if matches!(program, "." | "source") {
+            return;
+        }
+        if matches!(program, "sh" | "bash" | "dash" | "zsh" | "ksh")
+            && words
+                .get(index + 1)
+                .is_some_and(|option| matches!(*option, "-c" | "--command"))
+        {
+            if let Some(source) = words.get(index + 2) {
+                command_runs(facts, scope, source, line);
+            }
+            return;
+        }
+    }
+    task_runner_refs(facts, scope, &words[index..], line);
+    if let Some(script) = invoked_script(program, command, &words[index + 1..]) {
+        push_run(facts, scope, script, None, line);
     }
 }
 
@@ -648,130 +701,34 @@ pub fn dockerfile(text: &str, facts: &mut Facts) {
     }
 }
 
-/// One YAML line: indentation path, key, inline value; block scalar text follows in `block`.
-struct YamlLine<'a> {
-    line: u32,
-    path: Vec<String>,
-    key: &'a str,
-    value: &'a str,
-    block: String,
-    /// Last line of the entry including nested lines.
-    end: u32,
-}
-
-/// Block-mapping lines with their key paths (same indentation rules as the config scanner).
-fn yaml_lines(text: &str) -> Vec<YamlLine<'_>> {
-    let raw: Vec<&str> = text.lines().collect();
-    let mut out: Vec<YamlLine> = Vec::new();
-    let mut stack: Vec<(usize, String)> = Vec::new();
-    let mut index = 0;
-    while index < raw.len() {
-        let line = index as u32 + 1;
-        let content = raw[index].split(" #").next().unwrap_or_default().trim_end();
-        index += 1;
-        let trimmed = content.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed == "---" {
-            if trimmed == "---" {
-                stack.clear();
-            }
-            continue;
-        }
-        let mut indent = content.len() - trimmed.len();
-        let mut body = trimmed;
-        let mut item = false;
-        if let Some(rest) = body
-            .strip_prefix("- ")
-            .or_else(|| (body == "-").then_some(""))
-        {
-            item = true;
-            while stack
-                .last()
-                .is_some_and(|(level, key)| *level > indent || (*level == indent && key == "[]"))
-            {
-                stack.pop();
-            }
-            stack.push((indent, "[]".to_owned()));
-            indent += 2;
-            body = rest.trim_start();
-        }
-        let Some((key, value)) = super::config::split_yaml_key(body) else {
-            if item && !body.is_empty() {
-                let path: Vec<String> = stack.iter().map(|(_, segment)| segment.clone()).collect();
-                out.push(YamlLine {
-                    line,
-                    path,
-                    key: "",
-                    value: body,
-                    block: String::new(),
-                    end: line,
-                });
-            }
-            continue;
-        };
-        while stack.last().is_some_and(|(level, _)| *level >= indent) {
-            stack.pop();
-        }
-        let path: Vec<String> = stack.iter().map(|(_, segment)| segment.clone()).collect();
-        stack.push((indent, key.to_owned()));
-        let mut block = String::new();
-        if matches!(value.trim(), "|" | ">" | "|-" | ">-" | "|+" | ">+") {
-            while index < raw.len() {
-                let next = raw[index];
-                let next_indent = next.len() - next.trim_start().len();
-                if !next.trim().is_empty() && next_indent <= indent {
-                    break;
-                }
-                block.push_str(next.trim());
-                block.push('\n');
-                index += 1;
-            }
-        }
-        out.push(YamlLine {
-            line,
-            path,
-            key,
-            value: value.trim(),
-            block,
-            end: index as u32,
-        });
-    }
-    // Entry end lines: up to the next line at the same or a shallower path.
-    let ends: Vec<u32> = (0..out.len())
-        .map(|position| {
-            let depth = out[position].path.len();
-            out[position + 1..]
-                .iter()
-                .find(|later| later.path.len() <= depth)
-                .map_or_else(
-                    || out.last().map_or(out[position].end, |last| last.end),
-                    |later| later.line.saturating_sub(1),
-                )
-        })
-        .collect();
-    for (entry, end) in out.iter_mut().zip(ends) {
-        entry.end = entry.end.max(end);
-    }
-    out
-}
-
 /// GitHub Actions jobs (`needs`, step `run` commands), compose services (`depends_on`, `build`,
 /// `command`, `entrypoint`) and Kubernetes workloads.
 pub fn yaml(path: &str, text: &str, facts: &mut Facts) {
     let name = path.rsplit('/').next().unwrap_or(path);
     let workflow = path.contains(".github/workflows/");
     let compose = name.starts_with("docker-compose") || name.starts_with("compose.");
-    let kubernetes = text.contains("apiVersion:") && text.contains("kind:");
+    let kubernetes =
+        !workflow && !compose && text.contains("apiVersion:") && text.contains("kind:");
     if !(workflow || compose || kubernetes) {
         return;
     }
-    let lines = yaml_lines(text);
+    let (entries, coverage) = super::yaml::parse(text);
+    facts.coverage = facts.coverage.max(coverage);
     let mut current: Option<u32> = None;
     let mut kind: Option<&str> = None;
-    for entry in &lines {
+    let mut document = 0;
+    let source_lines: Vec<&str> = text.lines().collect();
+    for (position, entry) in entries.iter().enumerate() {
+        if entry.document != document {
+            current = None;
+            kind = None;
+            document = entry.document;
+        }
         let depth = entry.path.len();
         let under = |root: &str| depth >= 1 && entry.path[0] == root;
-        if (workflow && depth == 1 && entry.path[0] == "jobs")
-            || (compose && depth == 1 && entry.path[0] == "services")
+        if entry.kind == Some(ValueKind::Object)
+            && ((workflow && depth == 1 && entry.path[0] == "jobs")
+                || (compose && depth == 1 && entry.path[0] == "services"))
         {
             let symbol_kind = if workflow {
                 SymKind::Task
@@ -782,7 +739,7 @@ pub fn yaml(path: &str, text: &str, facts: &mut Facts) {
             current = Some(push_symbol(
                 facts,
                 symbol_kind,
-                entry.key,
+                &entry.key,
                 format!("{label} {}", entry.key),
                 entry.line,
                 entry.end,
@@ -791,18 +748,21 @@ pub fn yaml(path: &str, text: &str, facts: &mut Facts) {
         }
         if kubernetes {
             if depth == 0 && entry.key == "kind" {
-                kind = Some(entry.value);
+                kind = Some(entry.value.as_str());
             }
-            let workload = matches!(
+            if matches!(
                 kind,
                 Some("Deployment" | "StatefulSet" | "DaemonSet" | "Job" | "CronJob" | "Pod")
-            );
-            if workload && depth == 1 && entry.path[0] == "metadata" && entry.key == "name" {
+            ) && depth == 1
+                && entry.path[0] == "metadata"
+                && entry.key == "name"
+                && entry.kind == Some(ValueKind::String)
+            {
                 let label = kind.unwrap_or_default().to_ascii_lowercase();
                 push_symbol(
                     facts,
                     SymKind::Svc,
-                    entry.value.trim_matches('"'),
+                    &entry.value,
                     format!("{label} {}", entry.value),
                     entry.line,
                     entry.line,
@@ -811,25 +771,11 @@ pub fn yaml(path: &str, text: &str, facts: &mut Facts) {
             continue;
         }
         let Some(scope) = current else { continue };
-        let command = if !entry.block.is_empty() {
-            Cow::Borrowed(entry.block.as_str())
-        } else if matches!(entry.key, "run" | "command" | "entrypoint") {
-            let Some(command) = yaml_command(entry.value) else {
-                facts.coverage = facts.coverage.max(Coverage::ParseErrors);
-                continue;
-            };
-            command
-        } else {
-            Cow::Borrowed(entry.value)
-        };
+        let before = facts.refs.len();
         if workflow && under("jobs") {
-            match entry.key {
-                "needs" => {
-                    for need in entry.value.trim_matches(['[', ']']).split(',') {
-                        push_run(facts, Some(scope), need, None, entry.line);
-                    }
-                }
-                "" if entry.path.last().is_some_and(|last| last == "[]")
+            match entry.key.as_str() {
+                "needs" => push_run(facts, Some(scope), &entry.value, None, entry.line),
+                "" if entry.path.last().is_some_and(|key| key == "[]")
                     && entry
                         .path
                         .iter()
@@ -837,75 +783,99 @@ pub fn yaml(path: &str, text: &str, facts: &mut Facts) {
                         .nth(1)
                         .is_some_and(|key| key == "needs") =>
                 {
-                    push_run(facts, Some(scope), entry.value, None, entry.line);
+                    push_run(facts, Some(scope), &entry.value, None, entry.line);
                 }
-                "run" => command_runs(facts, Some(scope), &command, entry.line),
+                "run" if entry.kind == Some(ValueKind::String) => {
+                    command_runs(facts, Some(scope), &entry.value, entry.line);
+                }
                 _ => {}
             }
         }
         if compose && under("services") {
-            match entry.key {
-                "command" | "entrypoint" => command_runs(
-                    facts,
-                    Some(scope),
-                    &command.replace(['[', ']', ','], " "),
-                    entry.line,
-                ),
-                "build" if !entry.value.is_empty() => push_run(
-                    facts,
-                    Some(scope),
-                    &format!("{}/Dockerfile", entry.value.trim_end_matches('/')),
-                    None,
-                    entry.line,
-                ),
-                "dockerfile" => push_run(facts, Some(scope), entry.value, None, entry.line),
-                "depends_on" if entry.value.starts_with('[') => {
-                    for service in entry.value.trim_matches(['[', ']']).split(',') {
-                        push_run(facts, Some(scope), service, None, entry.line);
-                    }
+            match entry.key.as_str() {
+                "command" | "entrypoint" => {
+                    compose_command_runs(facts, Some(scope), entry, &entries[position + 1..]);
                 }
-                "" if entry
-                    .path
-                    .iter()
-                    .rev()
-                    .nth(1)
-                    .is_some_and(|key| key == "depends_on") =>
+                "build" if entry.kind == Some(ValueKind::String) && !entry.value.is_empty() => {
+                    push_run(
+                        facts,
+                        Some(scope),
+                        &format!("{}/Dockerfile", entry.value.trim_end_matches('/')),
+                        None,
+                        entry.line,
+                    );
+                }
+                "dockerfile" => push_run(facts, Some(scope), &entry.value, None, entry.line),
+                "" if entry.path.last().is_some_and(|key| key == "[]")
+                    && entry
+                        .path
+                        .iter()
+                        .rev()
+                        .nth(1)
+                        .is_some_and(|key| key == "depends_on") =>
                 {
-                    push_run(facts, Some(scope), entry.value, None, entry.line);
+                    push_run(facts, Some(scope), &entry.value, None, entry.line);
                 }
                 key if depth >= 3
-                    && entry.path.last().is_some_and(|last| last == "depends_on")
-                    && !key.is_empty() =>
+                    && !key.is_empty()
+                    && entry.path.last().is_some_and(|key| key == "depends_on") =>
                 {
                     push_run(facts, Some(scope), key, None, entry.line);
                 }
                 _ => {}
             }
         }
-    }
-}
-
-/// Decode the YAML scalar before its contents become shell source.
-fn yaml_command(value: &str) -> Option<Cow<'_, str>> {
-    if let Some(inner) = value.strip_prefix('\'') {
-        let inner = inner.strip_suffix('\'')?;
-        let mut command = String::with_capacity(inner.len());
-        let mut characters = inner.chars();
-        while let Some(character) = characters.next() {
-            command.push(character);
-            if character == '\'' && characters.next() != Some('\'') {
-                return None;
+        for reference in &mut facts.refs[before..] {
+            if reference.kind != RefKind::Path {
+                continue;
+            }
+            let start = entry.line.saturating_sub(1) as usize;
+            let end = (entry.end as usize).min(source_lines.len());
+            if let Some(relative) = source_lines
+                .get(start..end)
+                .and_then(|lines| lines.iter().position(|line| line.contains(&reference.name)))
+            {
+                reference.line = (start + relative + 1) as u32;
             }
         }
-        Some(Cow::Owned(command))
-    } else if value.starts_with('"') {
-        let value = json::parse_strict(value)?;
-        Some(Cow::Owned(value.as_str()?.to_owned()))
-    } else {
-        Some(Cow::Borrowed(value))
     }
 }
 
+fn compose_command_runs(
+    facts: &mut Facts,
+    scope: Option<u32>,
+    entry: &super::yaml::Entry,
+    following: &[super::yaml::Entry],
+) {
+    match entry.kind {
+        Some(ValueKind::String) => {
+            let Some(arguments) = shlex::split(&entry.value) else {
+                facts.coverage = facts.coverage.max(Coverage::ParseErrors);
+                return;
+            };
+            let words: Vec<&str> = arguments.iter().map(String::as_str).collect();
+            command_words_runs(facts, scope, &words, entry.line, CommandSyntax::Process);
+        }
+        Some(ValueKind::Array) => {
+            let mut path = entry.path.clone();
+            path.extend([entry.key.clone(), "[]".to_owned()]);
+            let words: Vec<&str> = following
+                .iter()
+                .take_while(|item| item.document == entry.document && item.path.starts_with(&path))
+                .filter(|item| item.path == path && item.key.is_empty())
+                .map(|item| {
+                    if item.kind == Some(ValueKind::String) {
+                        item.value.as_str()
+                    } else {
+                        ""
+                    }
+                })
+                .collect();
+            command_words_runs(facts, scope, &words, entry.line, CommandSyntax::Process);
+        }
+        _ => {}
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -927,6 +897,7 @@ mod tests {
         let runs = facts
             .refs
             .iter()
+            .filter(|reference| reference.kind == RefKind::Run)
             .map(|reference| {
                 let scope = reference.scope.map_or("-".to_owned(), |scope| {
                     facts.symbols[scope as usize].name.clone()
@@ -1016,6 +987,69 @@ mod tests {
         );
         let (_, runs) = summary(&make);
         assert_eq!(runs, ["4 live -> make:list", "5 live -> ./real.sh"]);
+    }
+
+    #[test]
+    fn yaml_folded_literal_and_quoted_scalars_preserve_shell_commands() {
+        let mut facts = Facts::default();
+        yaml(
+            ".github/workflows/ci.yml",
+            concat!(
+                "jobs:\n",
+                "  folded:\n    steps:\n      - run: >\n",
+                "          echo harmless\n          ./mentioned.sh\n",
+                "  paragraph:\n    steps:\n      - run: >\n",
+                "          echo harmless\n\n          ./paragraph.sh\n",
+                "  literal:\n    steps:\n      - run: |2-\n          ./literal.sh\n",
+                "  quoted:\n    steps:\n      - run: 'echo \" # text\"; ./quoted.sh'\n",
+            ),
+            &mut facts,
+        );
+        let mut runs: Vec<&str> = facts
+            .refs
+            .iter()
+            .map(|reference| reference.name.as_str())
+            .collect();
+        runs.sort_unstable();
+        assert_eq!(runs, ["./literal.sh", "./paragraph.sh", "./quoted.sh"]);
+        assert_eq!(facts.coverage, Coverage::Complete);
+    }
+
+    #[test]
+    fn compose_process_arguments_do_not_execute_shell_operators() {
+        let mut facts = Facts::default();
+        yaml(
+            "compose.yml",
+            concat!(
+                "services:\n",
+                "  inline:\n    command: ./actual.sh && ./mentioned.sh\n",
+                "  vector:\n    entrypoint: [echo, 'note; ./mentioned.sh']\n",
+                "  direct:\n    command: ['./literal, path.sh', ./mentioned.sh]\n",
+                "  shell:\n    command: [sh, '-c', './actual.sh && ./other.sh']\n",
+                "  builtin:\n    command: [source, ./mentioned.sh]\n",
+            ),
+            &mut facts,
+        );
+        let (_, runs) = summary(&facts);
+        assert_eq!(
+            runs,
+            [
+                "3 inline -> ./actual.sh",
+                "7 direct -> ./literal, path.sh",
+                "9 shell -> ./actual.sh",
+                "9 shell -> ./other.sh",
+            ]
+        );
+        assert_eq!(facts.coverage, Coverage::Complete);
+
+        let mut aliases = Facts::default();
+        yaml(
+            "compose.yml",
+            "base: &base ./unknown.sh\nservices:\n  app:\n    command: [*base, ./mentioned.sh]\n",
+            &mut aliases,
+        );
+        assert!(aliases.refs.is_empty());
+        assert_eq!(aliases.coverage, Coverage::NoGrammar);
     }
 
     #[test]
@@ -1167,6 +1201,7 @@ mod tests {
                 "          vitest run --config vitest.config.js --project module\n",
                 "          nyc --reporter=text npm test\n",
                 "          esbuild --bundle src/main.ts | node\n",
+                "          VERSION=$(node -p \"require('./package.json').version\")\n",
             ),
             &mut facts,
         );
@@ -1193,5 +1228,11 @@ mod tests {
         .to_vec();
         expected.sort();
         assert_eq!(runs, expected);
+        assert!(facts.refs.iter().any(|reference| {
+            reference.kind == RefKind::Path
+                && reference.name == "./package.json"
+                && reference.line == 26
+                && reference.scope == Some(0)
+        }));
     }
 }

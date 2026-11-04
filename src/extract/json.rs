@@ -93,6 +93,7 @@ pub fn walk_keys(text: &str, visitor: &mut impl KeyVisitor) -> Option<()> {
 }
 
 fn new_parser(text: &str, allow_jsonc: bool) -> Parser<'_> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     Parser {
         bytes: text.as_bytes(),
         position: 0,

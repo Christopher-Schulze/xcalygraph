@@ -27,6 +27,7 @@ mod sql;
 mod structural;
 mod tasks;
 mod terms;
+mod yaml;
 
 use crate::domain::corpus::FileRecord;
 use crate::domain::facts::{Coverage, Facts};
@@ -36,7 +37,7 @@ use crate::domain::role::{self, Role};
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
 /// Rows of a CSV or TSV file that reach search.
 const CSV_INDEXED_ROWS: usize = 2000;
-const EXTRACTION_VERSION: u32 = 111;
+const EXTRACTION_VERSION: u32 = 112;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -312,7 +313,8 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
     if matches!(
         record.role,
         Role::Src | Role::Test | Role::Gen | Role::Config
-    ) && !(record.role == Role::Config && record.file_type == Some(FileType::Json))
+    ) && !(record.role == Role::Config
+        && matches!(record.file_type, Some(FileType::Json | FileType::Yaml)))
     {
         assets::literal_paths(&String::from_utf8_lossy(content), &mut facts);
     }

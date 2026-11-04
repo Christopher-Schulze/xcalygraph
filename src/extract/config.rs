@@ -72,7 +72,6 @@ fn path_value(facts: &mut Facts, value: &str, line: u32) {
 fn path_literal(facts: &mut Facts, value: &str, line: u32) {
     if value.is_empty()
         || value.contains(['$', '%', '*', '?', '#', '\\', '\n', '\r', '"', '\''])
-        || value.starts_with('/')
         || value.contains("://")
         || value.chars().any(char::is_control)
         || (!value.contains('/')
@@ -393,6 +392,7 @@ impl KeyVisitor for JsonWalk<'_> {
     }
 
     fn key(&mut self, key: &str, line: u32, kind: Kind) {
+        path_literal(self.facts, key, line);
         self.enter(key);
         if self.lengths.len() <= MAX_DEPTH
             && self.seen.len() < MAX_KEYS
@@ -440,133 +440,53 @@ fn scalar_kind(value: &str) -> ValueKind {
 fn yaml(path: &str, text: &str, facts: &mut Facts) {
     let workflow = path.contains(".github/workflows/");
     let kubernetes = text.contains("apiVersion:") && text.contains("kind:");
-    let compose = {
-        let name = path.rsplit('/').next().unwrap_or(path);
-        name.starts_with("docker-compose") || name.starts_with("compose.")
-    };
-    // Stack of (indent, key segment).
-    let mut stack: Vec<(usize, String)> = Vec::new();
-    let mut block_scalar: Option<usize> = None;
-    for (index, raw) in text.lines().enumerate() {
-        let line = index as u32 + 1;
-        let content = raw.split(" #").next().unwrap_or_default().trim_end();
-        let trimmed = content.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed == "---" || trimmed == "..." {
-            continue;
-        }
-        let mut indent = content.len() - trimmed.len();
-        if let Some(scalar_indent) = block_scalar {
-            if indent > scalar_indent {
-                continue;
-            }
-            block_scalar = None;
-        }
-        let mut body = trimmed;
-        let mut item = false;
-        if let Some(rest) = body
-            .strip_prefix("- ")
-            .or_else(|| (body == "-").then_some(""))
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let compose = name.starts_with("docker-compose") || name.starts_with("compose.");
+    let (entries, coverage) = super::yaml::parse(text);
+    facts.coverage = facts.coverage.max(coverage);
+    for entry in entries {
+        if !entry.key.is_empty()
+            && let Some(kind) = entry.kind
         {
-            item = true;
-            // Sequences may sit at their key's indentation (`env:` then `- name: X`): a key at the
-            // same level stays open, a previous item at that level closes.
-            while stack
-                .last()
-                .is_some_and(|(level, key)| *level > indent || (*level == indent && key == "[]"))
-            {
-                stack.pop();
-            }
-            stack.push((indent, "[]".to_owned()));
-            indent += 2;
-            body = rest.trim_start();
-            // `- NAME=value` under compose `environment`.
-            if parent_is_env(&stack[..stack.len() - 1])
-                && (compose || workflow)
-                && !body.contains(": ")
-            {
-                let name = body.split('=').next().unwrap_or_default();
-                push_env(
-                    facts,
-                    name,
-                    if compose {
-                        EnvSource::Compose
-                    } else {
-                        EnvSource::Ci
-                    },
-                    line,
-                );
-            }
-            if body.is_empty() {
-                continue;
-            }
+            let mut segments = entry.path.clone();
+            segments.push(entry.key.clone());
+            push_key(facts, &segments, kind, entry.line);
         }
-        let Some((key, value)) = split_yaml_key(body) else {
-            if item {
-                path_value(facts, body, line);
-            }
-            continue;
+        let sequence = entry.path.last().is_some_and(|key| key == "[]");
+        let parent = if sequence {
+            entry.path.iter().rev().nth(1)
+        } else {
+            entry.path.last()
         };
-        while stack.last().is_some_and(|(level, _)| *level >= indent) {
-            stack.pop();
+        let in_env = parent.is_some_and(|key| matches!(key.as_str(), "environment" | "env"));
+        let execution = (workflow && entry.key == "run")
+            || (compose
+                && (matches!(entry.key.as_str(), "command" | "entrypoint")
+                    || parent.is_some_and(|key| matches!(key.as_str(), "command" | "entrypoint"))));
+        if entry.kind == Some(ValueKind::String) && !execution {
+            path_literal(facts, &entry.value, entry.line);
         }
-        let in_env = parent_is_env(&stack);
-        stack.push((indent, key.to_owned()));
-        let segments: Vec<String> = stack.iter().map(|(_, segment)| segment.clone()).collect();
-        push_key(facts, &segments, scalar_kind(value), line);
-        if !((workflow && key == "run") || (compose && matches!(key, "command" | "entrypoint"))) {
-            path_value(facts, value, line);
-        }
-        if matches!(value.trim(), "|" | ">" | "|-" | ">-" | "|+" | ">+") {
-            block_scalar = Some(indent);
-        }
-        // Map form `environment: {NAME: value}` (compose, workflow) and Kubernetes
-        // `env: [{name: NAME}]`.
-        if in_env && !item && (compose || workflow) {
+        if in_env && (compose || workflow) {
+            let variable = if sequence && entry.key.is_empty() {
+                entry.value.split('=').next().unwrap_or_default()
+            } else {
+                entry.key.as_str()
+            };
             push_env(
                 facts,
-                key,
+                variable,
                 if compose {
                     EnvSource::Compose
                 } else {
                     EnvSource::Ci
                 },
-                line,
+                entry.line,
             );
         }
-        if kubernetes
-            && key == "name"
-            && item
-            && stack.len() >= 3
-            && stack[stack.len() - 3].1 == "env"
-        {
-            push_env(facts, value, EnvSource::Kubernetes, line);
+        if kubernetes && sequence && in_env && entry.key == "name" {
+            push_env(facts, &entry.value, EnvSource::Kubernetes, entry.line);
         }
     }
-}
-
-fn parent_is_env(stack: &[(usize, String)]) -> bool {
-    stack
-        .last()
-        .is_some_and(|(_, key)| matches!(key.as_str(), "environment" | "env"))
-}
-
-/// `key: value` with a plain or quoted key.
-pub(super) fn split_yaml_key(body: &str) -> Option<(&str, &str)> {
-    let (key, value) = if let Some(rest) = body.strip_prefix('"') {
-        let end = rest.find('"')?;
-        (&rest[..end], rest[end + 1..].strip_prefix(':')?)
-    } else if let Some(rest) = body.strip_prefix('\'') {
-        let end = rest.find('\'')?;
-        (&rest[..end], rest[end + 1..].strip_prefix(':')?)
-    } else {
-        let colon = body
-            .find(": ")
-            .or_else(|| body.ends_with(':').then(|| body.len() - 1))?;
-        (&body[..colon], &body[colon + 1..])
-    };
-    let key = key.trim();
-    (!key.is_empty() && !key.contains(' ') && !key.starts_with(['{', '[', '&', '*', '!']))
-        .then_some((key, value))
 }
 
 /// `[table]`, `[[array.of.tables]]` and `key = value` (dotted keys allowed).
@@ -772,17 +692,35 @@ fn shell_variables(command: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn yaml_keys_may_be_quoted_and_unsafe_forms_are_rejected() {
-        use super::split_yaml_key;
-        assert_eq!(split_yaml_key("\"name\": 1"), Some(("name", " 1")));
-        assert_eq!(split_yaml_key("'name': x"), Some(("name", " x")));
-        assert_eq!(split_yaml_key("plain: y"), Some(("plain", " y")));
-        assert_eq!(split_yaml_key("plain:"), Some(("plain", "")));
-        assert_eq!(split_yaml_key("\"open"), None);
-        assert_eq!(split_yaml_key("'open"), None);
-        assert_eq!(split_yaml_key("\"name\" no colon"), None);
-        assert_eq!(split_yaml_key("two words: v"), None);
-        assert_eq!(split_yaml_key("{flow: map}"), None);
+    fn yaml_keys_preserve_valid_forms_and_report_invalid_syntax() {
+        for (text, expected) in [
+            ("\"name\": 1", "1:name:number"),
+            ("'name': x", "1:name:string"),
+            ("plain: y", "1:plain:string"),
+            ("plain:", "1:plain:null"),
+            ("two words: v", "1:two words:string"),
+            ("{flow: map}", "1:flow:string"),
+        ] {
+            let facts = run("app.yml", FileType::Yaml, text);
+            assert_eq!(facts.coverage, Coverage::Complete, "{text}");
+            assert_eq!(keys(&facts), [expected], "{text}");
+        }
+        for text in ["\"open", "'open", "\"name\" no colon"] {
+            assert_eq!(
+                run("app.yml", FileType::Yaml, text).coverage,
+                Coverage::ParseErrors,
+                "{text}"
+            );
+        }
+        for text in [
+            "!custom key: value",
+            "!custom {key: value}",
+            "!custom [one, two]",
+        ] {
+            let facts = run("app.yml", FileType::Yaml, text);
+            assert_eq!(facts.coverage, Coverage::NoGrammar, "{text}");
+            assert!(facts.config_keys.is_empty(), "{text}");
+        }
     }
 
     use super::*;
@@ -869,7 +807,7 @@ mod tests {
         let compose = run(
             "docker-compose.yml",
             FileType::Yaml,
-            "services:\n  api:\n    image: app\n    environment:\n      - DATABASE_URL=postgres://secret\n      DEBUG: \"1\"\n    command: |\n      run --flag: x\n  db:\n    image: pg\n",
+            "services:\n  api:\n    image: app\n    environment:\n      - DATABASE_URL=postgres://secret\n    command: |\n      run --flag: x\n  db:\n    image: pg\n    environment:\n      DEBUG: \"1\"\n",
         );
         assert_eq!(
             keys(&compose),
@@ -877,16 +815,17 @@ mod tests {
                 "1:services:object",
                 "2:services.api:object",
                 "3:services.api.image:string",
-                "4:services.api.environment:object",
-                "6:services.api.environment.DEBUG:string",
-                "7:services.api.command:string",
-                "9:services.db:object",
-                "10:services.db.image:string",
+                "4:services.api.environment:array",
+                "6:services.api.command:string",
+                "8:services.db:object",
+                "9:services.db.image:string",
+                "10:services.db.environment:object",
+                "11:services.db.environment.DEBUG:string",
             ]
         );
         assert_eq!(
             envs(&compose),
-            ["5:DATABASE_URL:compose", "6:DEBUG:compose"]
+            ["5:DATABASE_URL:compose", "11:DEBUG:compose"]
         );
         assert!(!format!("{compose:?}").contains("secret"));
         let workflow = run(

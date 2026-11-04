@@ -60,11 +60,21 @@ fn server_configs_reference_literal_files_without_executing_mentions() -> Result
         root.join("config/app.json"),
         "{\n  // \"ignored.conf\"\n  \"include\": \"child.conf\"\n}\n",
     )?;
+    fs::write(
+        root.join("config/manifest.json"),
+        "{\"/child.conf\": \"/child.conf?revision=1\"}\n",
+    )?;
+    fs::write(
+        root.join("config/bom.json"),
+        "\u{feff}[{\"include\": \"child.conf\"}]\n",
+    )?;
     for source in [
         "config/server.conf",
         "config/app.service",
         "config/app.yaml",
         "config/app.json",
+        "config/manifest.json",
+        "config/bom.json",
     ] {
         let output = support::command(BINARY, &fixture)
             .args(["show", source, "-C"])
