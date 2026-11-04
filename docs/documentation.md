@@ -56,6 +56,7 @@ Implemented commands; the full target surface is `docs/spec.md` section 2. `xcal
 - Exit codes: 0 answer, 1 runtime error, 2 usage error, 3 ambiguous NAME (candidates on stdout), 4 no match, 5 index missing or stale under `--read-only`.
 - Usage errors print one stderr line `xcalygraph: <error>; run 'xcalygraph help'` and nothing on stdout. A reader that closes stdout early (`| head`) is not an error.
 - Analysis coverage: every file has a status (complete, parse errors, match limit, no grammar, failed, unreadable). `! coverage: N of T files incomplete (classes): p1 p2 p3 +M; absence unproven` appears in `audit` whenever a filtered file is incomplete, in `show` for a symbol without incoming edges and in `impact` without dependents (only files of the target's language family count), and in `map` for match limit or worse. Complete repositories print nothing; JSON uses a `note` record.
+- Task and service commands use Bash command nodes for invocation positions: quoted separators, comments and literal here-document bodies do not run scripts; actual command substitutions do. YAML scalar quoting is decoded first; Make dollar escaping and `$(MAKE)` are handled before shell parsing, while other Make expansions stay dynamic. Interpreter and task-runner arguments retain their positions, including quoted paths with spaces. A missing Bash grammar or a parse failure marks command coverage incomplete.
 
 ## Languages
 

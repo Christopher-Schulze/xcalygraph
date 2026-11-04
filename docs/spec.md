@@ -230,6 +230,7 @@ Resolution order for a reference, first hit wins:
 - Docs: backticked identifier with a unique symbol name: inferred; relative path mention or link: exact.
 - Confidence: `exact` or `inferred`. Targets outside the root: external dependency per module (name, use count), no node.
 - Edges are unique per (source, target, kind); exact wins over inferred.
+- Task and service `runs` references follow Bash command nodes and proven literal arguments; separators inside quoted text, comments and literal here-document bodies do not introduce invocations. Decode YAML scalar quoting before parsing; lower Make dollar escaping and the MAKE variable to shell source, retaining other Make values as dynamic expressions. Command substitutions are traversed. Known interpreter and task-runner argument semantics apply after parsing; dynamic arguments preserve their positions without becoming targets. Missing grammar or failed/incomplete parsing records incomplete coverage.
 
 | derived item | definition |
 |--------------|------------|

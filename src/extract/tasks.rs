@@ -3,8 +3,10 @@
 //! `svc` symbols, Dockerfile stages as `task` symbols, with `runs` references to the scripts,
 //! entrypoints and tasks they run.
 
+use std::borrow::Cow;
+
 use super::json::{self, Value};
-use crate::domain::facts::{self, Facts, NO_ARITY, Ref, RefKind, SymKind, Symbol};
+use crate::domain::facts::{self, Coverage, Facts, NO_ARITY, Ref, RefKind, SymKind, Symbol};
 
 /// Script extensions a command may name.
 const SCRIPT_EXTENSIONS: [&str; 11] = [
@@ -121,10 +123,7 @@ fn is_shell_assignment(word: &str) -> bool {
 fn command_index(words: &[&str]) -> usize {
     let mut index = 0;
     while let Some(word) = words.get(index) {
-        if is_shell_assignment(word)
-            || matches!(*word, "do" | "if" | "then" | "!" | "{" | "(")
-            || COMMAND_WRAPPERS.contains(word)
-        {
+        if (index > 0 && is_shell_assignment(word)) || COMMAND_WRAPPERS.contains(word) {
             index += 1;
         } else if *word == "nyc" {
             index += 1;
@@ -291,7 +290,7 @@ fn task_runner_refs(facts: &mut Facts, scope: Option<u32>, words: &[&str], line:
     let args = &words[index + 1..];
     let next = args.first().copied().unwrap_or_default();
     match program {
-        "make" | "$(MAKE)" | "${MAKE}" | "gmake" => {
+        "make" | "gmake" => {
             for target in args
                 .iter()
                 .take_while(|word| !word.starts_with('-') && !word.contains('='))
@@ -342,10 +341,9 @@ fn task_runner_refs(facts: &mut Facts, scope: Option<u32>, words: &[&str], line:
     }
 }
 
-fn bundle_pipeline_script<'a>(pipeline: &'a [&'a str]) -> Option<&'a str> {
-    let consumer = pipeline.last()?;
-    let consumer_words: Vec<&str> = consumer.split_whitespace().collect();
-    let consumer_index = command_index(&consumer_words);
+fn bundle_pipeline_script<'a>(pipeline: &[Vec<&'a str>]) -> Option<&'a str> {
+    let consumer_words = pipeline.last()?;
+    let consumer_index = command_index(consumer_words);
     let consumer_program = command_program(consumer_words.get(consumer_index)?);
     if !matches!(consumer_program, "node" | "bun")
         || consumer_words[consumer_index + 1..]
@@ -354,9 +352,8 @@ fn bundle_pipeline_script<'a>(pipeline: &'a [&'a str]) -> Option<&'a str> {
     {
         return None;
     }
-    let producer = pipeline.first()?;
-    let producer_words: Vec<&str> = producer.split_whitespace().collect();
-    let producer_index = command_index(&producer_words);
+    let producer_words = pipeline.first()?;
+    let producer_index = command_index(producer_words);
     if command_program(producer_words.get(producer_index)?) != "esbuild"
         || !producer_words[producer_index + 1..].contains(&"--bundle")
     {
@@ -371,13 +368,38 @@ fn bundle_pipeline_script<'a>(pipeline: &'a [&'a str]) -> Option<&'a str> {
 /// Scripts, directories run with `go run`, Makefile targets (`make t`) and package scripts
 /// (`npm run t`, `yarn t`, `pnpm t`) named in a shell command.
 pub(super) fn command_runs(facts: &mut Facts, scope: Option<u32>, command: &str, line: u32) {
-    for part in command.split(['&', ';', '\n']) {
-        let pipeline: Vec<&str> = part.split('|').collect();
-        for segment in &pipeline {
-            let words: Vec<&str> = segment.split_whitespace().collect();
-            if words.is_empty() {
-                continue;
+    use crate::domain::filetype::FileType;
+
+    let Some(pack) = super::lang::all_packs()
+        .iter()
+        .find(|pack| pack.file_type == FileType::Bash)
+    else {
+        facts.coverage = facts.coverage.max(Coverage::NoGrammar);
+        return;
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&(pack.language)("")).is_err() {
+        facts.coverage = facts.coverage.max(Coverage::Failed);
+        return;
+    }
+    let Some(tree) = parser.parse(command, None) else {
+        facts.coverage = facts.coverage.max(Coverage::Failed);
+        return;
+    };
+    let root = tree.root_node();
+    if root.has_error() {
+        facts.coverage = facts.coverage.max(Coverage::ParseErrors);
+    }
+    let source = command.as_bytes();
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        for index in (0..node.child_count()).rev() {
+            if let Some(child) = node.child(index) {
+                pending.push(child);
             }
+        }
+        if node.kind() == "command" {
+            let words = shell_command_words(node, source);
             task_runner_refs(facts, scope, &words, line);
             let index = command_index(&words);
             let Some(command) = words.get(index).copied() else {
@@ -387,11 +409,90 @@ pub(super) fn command_runs(facts: &mut Facts, scope: Option<u32>, command: &str,
             if let Some(script) = invoked_script(program, command, &words[index + 1..]) {
                 push_run(facts, scope, script, None, line);
             }
-        }
-        if let Some(script) = bundle_pipeline_script(&pipeline) {
-            push_run(facts, scope, script, None, line);
+        } else if node.kind() == "pipeline" {
+            let mut cursor = node.walk();
+            let pipeline: Vec<Vec<&str>> = node
+                .named_children(&mut cursor)
+                .filter(|child| child.kind() == "command")
+                .map(|child| shell_command_words(child, source))
+                .collect();
+            if let Some(script) = bundle_pipeline_script(&pipeline) {
+                push_run(facts, scope, script, None, line);
+            }
         }
     }
+}
+
+fn shell_command_words<'source>(
+    node: tree_sitter::Node<'_>,
+    source: &'source [u8],
+) -> Vec<&'source str> {
+    let literal = |node: tree_sitter::Node<'_>| {
+        #[cfg(feature = "lang-bash")]
+        {
+            super::lang::bash::literal_value(node, source)
+        }
+        #[cfg(not(feature = "lang-bash"))]
+        {
+            let _ = (node, source);
+            None
+        }
+    };
+    let Some(name) = node.child_by_field_name("name") else {
+        return Vec::new();
+    };
+    let name = name.named_child(0).and_then(literal);
+    let Some(name) = name else { return Vec::new() };
+    let mut words = vec![name];
+    let mut cursor = node.walk();
+    // An unknown argument keeps its slot, so option values cannot become executable positions.
+    words.extend(
+        node.children_by_field_name("argument", &mut cursor)
+            .map(|argument| literal(argument).unwrap_or_default()),
+    );
+    words
+}
+
+/// Make expands before shell quoting: unknown values stay dynamic, never literal targets.
+fn make_shell_source(command: &str) -> Option<Cow<'_, str>> {
+    if !command.contains('$') {
+        return Some(Cow::Borrowed(command));
+    }
+    let mut shell = String::with_capacity(command.len());
+    let mut characters = command.char_indices().peekable();
+    while let Some((_, character)) = characters.next() {
+        if character != '$' {
+            shell.push(character);
+            continue;
+        }
+        match characters.peek().map(|(_, character)| *character) {
+            Some('$') => {
+                characters.next();
+                shell.push('$');
+            }
+            Some(open @ ('(' | '{')) => {
+                let (start, _) = characters.next()?;
+                let close = if open == '(' { ')' } else { '}' };
+                let mut depth = 1;
+                let mut end = None;
+                for (index, character) in characters.by_ref() {
+                    if character == open {
+                        depth += 1;
+                    } else if character == close {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(index);
+                            break;
+                        }
+                    }
+                }
+                let name = &command[start + 1..end?];
+                shell.push_str(if name == "MAKE" { "make" } else { "${_}" });
+            }
+            _ => shell.push('$'),
+        }
+    }
+    Some(Cow::Owned(shell))
 }
 
 /// Makefile targets with prerequisites and the commands of their recipe.
@@ -442,12 +543,12 @@ pub fn makefile(text: &str, facts: &mut Facts) {
                 }
             }
             for (number, command) in &recipe {
-                command_runs(
-                    facts,
-                    Some(scope),
-                    command.trim_start_matches(['@', '-', '+']),
-                    *number,
-                );
+                let Some(command) = make_shell_source(command.trim_start_matches(['@', '-', '+']))
+                else {
+                    facts.coverage = facts.coverage.max(Coverage::ParseErrors);
+                    continue;
+                };
+                command_runs(facts, Some(scope), &command, *number);
             }
         }
         index = end;
@@ -710,10 +811,16 @@ pub fn yaml(path: &str, text: &str, facts: &mut Facts) {
             continue;
         }
         let Some(scope) = current else { continue };
-        let command = if entry.block.is_empty() {
-            entry.value
+        let command = if !entry.block.is_empty() {
+            Cow::Borrowed(entry.block.as_str())
+        } else if matches!(entry.key, "run" | "command" | "entrypoint") {
+            let Some(command) = yaml_command(entry.value) else {
+                facts.coverage = facts.coverage.max(Coverage::ParseErrors);
+                continue;
+            };
+            command
         } else {
-            entry.block.as_str()
+            Cow::Borrowed(entry.value)
         };
         if workflow && under("jobs") {
             match entry.key {
@@ -732,7 +839,7 @@ pub fn yaml(path: &str, text: &str, facts: &mut Facts) {
                 {
                     push_run(facts, Some(scope), entry.value, None, entry.line);
                 }
-                "run" => command_runs(facts, Some(scope), command, entry.line),
+                "run" => command_runs(facts, Some(scope), &command, entry.line),
                 _ => {}
             }
         }
@@ -778,6 +885,27 @@ pub fn yaml(path: &str, text: &str, facts: &mut Facts) {
     }
 }
 
+/// Decode the YAML scalar before its contents become shell source.
+fn yaml_command(value: &str) -> Option<Cow<'_, str>> {
+    if let Some(inner) = value.strip_prefix('\'') {
+        let inner = inner.strip_suffix('\'')?;
+        let mut command = String::with_capacity(inner.len());
+        let mut characters = inner.chars();
+        while let Some(character) = characters.next() {
+            command.push(character);
+            if character == '\'' && characters.next() != Some('\'') {
+                return None;
+            }
+        }
+        Some(Cow::Owned(command))
+    } else if value.starts_with('"') {
+        let value = json::parse_strict(value)?;
+        Some(Cow::Owned(value.as_str()?.to_owned()))
+    } else {
+        Some(Cow::Borrowed(value))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -815,6 +943,79 @@ mod tests {
             })
             .collect();
         (symbols, runs)
+    }
+
+    #[test]
+    fn shell_command_nodes_preserve_literals_and_real_nested_invocations() {
+        let mut facts = Facts::default();
+        command_runs(
+            &mut facts,
+            None,
+            concat!(
+                "echo 'note; ./mentioned.sh'\n",
+                "printf '%s' 'note | ./also-mentioned.sh'\n",
+                "\"if\" ./keyword-argument.sh\n",
+                "\"X=command.sh\" ./assignment-argument.sh\n",
+                "./actual.sh\n",
+                "node 'path with spaces.js'\n",
+                "echo \"$(./substitution.sh)\"\n",
+                "$(./select-command.sh) ignored\n",
+                "esbuild --bundle 'source entry.ts' | node\n",
+                "# ./comment.sh\n",
+                "cat <<'EOF'\n./heredoc.sh\nEOF\n",
+            ),
+            7,
+        );
+        let (_, mut runs) = summary(&facts);
+        runs.sort();
+        assert_eq!(
+            runs,
+            [
+                "7 - -> ./actual.sh",
+                "7 - -> ./select-command.sh",
+                "7 - -> ./substitution.sh",
+                "7 - -> X=command.sh",
+                "7 - -> path with spaces.js",
+                "7 - -> source entry.ts",
+            ]
+        );
+    }
+
+    #[test]
+    fn yaml_scalars_and_make_expansions_preserve_language_boundaries() {
+        let mut workflow = Facts::default();
+        yaml(
+            ".github/workflows/ci.yml",
+            concat!(
+                "jobs:\n  ci:\n    steps:\n",
+                "      - run: '. ./nvm.sh ; npm run lint'\n",
+                "      - run: \"node \\\"scripts/build file.js\\\"\"\n",
+                "      - run: 'echo ''note; ./quoted.sh'''\n",
+            ),
+            &mut workflow,
+        );
+        let (_, mut runs) = summary(&workflow);
+        runs.sort();
+        assert_eq!(
+            runs,
+            [
+                "4 ci -> ./nvm.sh",
+                "4 ci -> npm:lint",
+                "5 ci -> scripts/build file.js",
+            ]
+        );
+
+        let mut make = Facts::default();
+        makefile(
+            concat!(
+                "help:\n\t$(error Please use `make list` or `npm test`)\n",
+                "live:\n\t$(MAKE) list\n\techo \"$$(./real.sh)\"\n",
+                "list:\n\techo list\n",
+            ),
+            &mut make,
+        );
+        let (_, runs) = summary(&make);
+        assert_eq!(runs, ["4 live -> make:list", "5 live -> ./real.sh"]);
     }
 
     #[test]

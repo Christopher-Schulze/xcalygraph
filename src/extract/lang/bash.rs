@@ -365,7 +365,10 @@ fn field_nodes<'tree>(node: Node<'tree>, field: &str) -> Vec<Node<'tree>> {
         .collect()
 }
 
-fn literal_value<'source>(node: Node<'_>, source: &'source [u8]) -> Option<&'source str> {
+pub(in crate::extract) fn literal_value<'source>(
+    node: Node<'_>,
+    source: &'source [u8],
+) -> Option<&'source str> {
     let text = node.utf8_text(source).ok()?;
     match node.kind() {
         "word" => (!text
