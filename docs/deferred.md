@@ -17,6 +17,7 @@ Considered and deliberately not in `docs/spec.md`. Each entry names the evidence
 | Go `//go:embed` pattern resolution to files (directive facts are extracted) | agent questions about embedded assets that `show` on the directive's variable misses |
 | Rust source files declared under several `#[path]` module names | a reference corpus where this pattern produces wrong or missing answers |
 | TypeScript type-system depth beyond declared types (declaration merging across scripts and namespaces, generic substitution, literal key canonicalization) | inferred-edge precision below 85 % or agent-benchmark misses traced to it |
+| Bulk directory attribute walker (`getattrlistbulk` on macOS) replacing the `ignore` crate's walk; measured limit about 13 ms below today's freshness check | agent-visible latency caused by the freshness check, or an owner request |
 | Hand-written tree walks instead of tree-sitter queries for the most used languages (query walk and compile cost, about 30 % of a build's CPU) | a measured refresh or build target that query cost alone misses |
 | Typo-tolerant search | evaluation misses caused by misspelled terms |
 | Search text for text-format documents (Markdown, text, reStructuredText, Org, AsciiDoc, LaTeX, HTML) | evaluation questions about documentation content that `rg` answers worse; indexing it exceeded the index size target and slowed single-file refresh with no gain on code questions |
