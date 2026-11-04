@@ -65,7 +65,15 @@ pub fn render(
         .into_iter()
         .map(|(node, seed, score)| (node, json.then_some(score), seed))
         .collect();
-    Some(find::render_grouped(index, &nodes, json, budget))
+    let seed_nodes: Vec<u32> = seeds.iter().map(|seed| seed.node).collect();
+    Some(find::render_grouped(
+        index,
+        filter,
+        &nodes,
+        &seed_nodes,
+        json,
+        budget,
+    ))
 }
 
 /// Sparse personalized PageRank over the symbol graph in both directions.

@@ -25,6 +25,9 @@ const EXCERPT_WIDTH: usize = 100;
 const DOMINANCE: f32 = 1.3;
 /// Callers and callees of the first answer, each.
 const NEIGHBOURS: usize = 3;
+/// Tests of the first answer and of a context bundle, with one command to run them.
+const TESTS: usize = 2;
+const CARD_INDENT: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hit {
@@ -353,7 +356,7 @@ pub fn render(index: &Index, hits: &[Hit], json: bool, budget: usize) -> String 
         .iter()
         .map(|hit| (hit.node, json.then_some(hit.score), false))
         .collect();
-    render_nodes(index, &nodes, json, budget, false)
+    render_nodes(index, &nodes, json, budget, false, &|_: &mut Writer| {})
 }
 
 /// [`render`] with the first answer: the top hit's source and neighbours follow its line, so
@@ -393,6 +396,7 @@ pub fn render_answer(
                     );
                 }
                 show::neighbours(index, filter, writer, hit.node, NEIGHBOURS);
+                show::verification(index, filter, writer, &[hit.node], TESTS, CARD_INDENT);
             }
         }
     };
@@ -478,11 +482,15 @@ fn clip(line: &str) -> String {
 /// in order of first appearance fits.
 pub fn render_grouped(
     index: &Index,
+    filter: &Filter,
     nodes: &[(u32, Option<f32>, bool)],
+    seeds: &[u32],
     json: bool,
     budget: usize,
 ) -> String {
-    render_nodes(index, nodes, json, budget, true)
+    render_nodes(index, nodes, json, budget, true, &|writer: &mut Writer| {
+        show::verification(index, filter, writer, seeds, TESTS, 0);
+    })
 }
 
 /// Writes the longest prefix of `nodes` that fits; `regroup` gathers each file's nodes under its
@@ -493,6 +501,7 @@ fn render_nodes(
     json: bool,
     budget: usize,
     regroup: bool,
+    tail: &dyn Fn(&mut Writer),
 ) -> String {
     let write = |writer: &mut super::output::Writer, nodes: &[(u32, Option<f32>, bool)]| {
         if regroup {
@@ -502,6 +511,7 @@ fn render_nodes(
                 index.write_symbol(writer, node, score, doc);
             }
         }
+        tail(writer);
     };
     let fits = |count: usize| {
         let mut writer = super::output::Writer::new(json, budget);

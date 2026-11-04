@@ -317,6 +317,44 @@ fn rank_of(index: &Index, node: u32) -> f32 {
 
 /// One related node: `<marker> <label> <path>:<line>[?]`; `site` prints the reference line
 /// instead of the definition line (incoming edges).
+/// Up to `cap` tests of the symbols and one command to run them, so a change can be verified
+/// without a second call.
+pub fn verification(
+    index: &Index,
+    filter: &Filter,
+    writer: &mut Writer,
+    nodes: &[u32],
+    cap: usize,
+    indent: usize,
+) {
+    let mut seen = HashSet::new();
+    let mut found = Vec::new();
+    for &node in nodes {
+        for test in tests_of(index, filter, node) {
+            if seen.insert(test.0.node) {
+                found.push(test);
+            }
+        }
+    }
+    write_tests(index, writer, &found, cap, indent);
+    let reachable = found
+        .iter()
+        .take(cap)
+        .map(|test| (test.0.node, test.2))
+        .collect();
+    if let Some((command, _)) = super::impact::run_lines(index, &reachable).first() {
+        let prefix = "  ".repeat(indent);
+        writer.line(
+            &format!("{prefix}r {command}"),
+            &[
+                ("t", Value::Str("edge")),
+                ("rel", Value::Str("run")),
+                ("name", Value::Str(command)),
+            ],
+        );
+    }
+}
+
 /// Callers and callees of a symbol, at most `cap` of each.
 pub fn neighbours(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: usize) {
     if !matches!(index.node(node), Node::Symbol(_)) {
@@ -522,6 +560,11 @@ fn traverse(
 
 /// Tests reaching the node directly or through one caller (test map, two `calls` hops).
 fn tests(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: usize) {
+    write_tests(index, writer, &tests_of(index, filter, node), cap, 0);
+}
+
+/// Tests of a symbol, direct ones and through a caller: (edge, through a caller, exact).
+fn tests_of<'a>(index: &'a Index, filter: &Filter, node: u32) -> Vec<(&'a EdgeRecord, bool, bool)> {
     let mut found: Vec<(&EdgeRecord, bool, bool)> = Vec::new();
     let mut positions: HashMap<u32, usize> = HashMap::new();
     for edge in index.derived.incoming(node).iter().filter(|edge| {
@@ -562,6 +605,16 @@ fn tests(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: us
             }
         }
     }
+    found
+}
+
+fn write_tests(
+    index: &Index,
+    writer: &mut Writer,
+    found: &[(&EdgeRecord, bool, bool)],
+    cap: usize,
+    indent: usize,
+) {
     for (shown, (edge, indirect, exact)) in found.iter().enumerate() {
         if shown >= cap {
             writer.skip(found.len() - shown);
@@ -576,7 +629,7 @@ fn tests(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: us
                 marker,
                 relation: "test",
                 depth: 0,
-                indent: 0,
+                indent,
                 site: true,
                 exact: *exact,
             },

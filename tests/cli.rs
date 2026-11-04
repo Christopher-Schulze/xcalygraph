@@ -4600,6 +4600,10 @@ fn a_clear_top_hit_answers_with_its_source_and_neighbours() -> TestResult {
         "other.go",
         "package pay\n\nfunc Refund() {}\n\nfunc Rebate() {}\n",
     )?;
+    dir.write(
+        "pay_test.go",
+        "package pay\n\nimport \"testing\"\n\nfunc TestCharge(t *testing.T) {\n    ChargeInvoice()\n}\n",
+    )?;
     let root = dir.0.to_string_lossy().into_owned();
     let find = |terms: &[&str]| -> io::Result<String> {
         let mut args = vec!["find", "-C", &root];
@@ -4619,6 +4623,14 @@ fn a_clear_top_hit_answers_with_its_source_and_neighbours() -> TestResult {
     );
     assert!(clear.contains("    < Checkout pay.go:"), "{clear}");
     assert!(clear.contains("    > audit :"), "{clear}");
+    assert!(clear.contains("    t TestCharge pay_test.go:"), "{clear}");
+    assert!(clear.contains("    r go test"), "{clear}");
+    let output = support::command(BINARY, &dir.0)
+        .args(["ctx", "-C", &root, "ChargeInvoice"])
+        .output()?;
+    let bundle = String::from_utf8_lossy(&output.stdout);
+    assert!(bundle.contains("\nt TestCharge pay_test.go:"), "{bundle}");
+    assert!(bundle.contains("\nr go test"), "{bundle}");
     // Query words pull their lines out of a long body.
     let named = find(&["ChargeInvoice", "step20"])?;
     assert!(named.contains("    24     step20()"), "{named}");

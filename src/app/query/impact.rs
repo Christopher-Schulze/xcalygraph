@@ -1780,7 +1780,7 @@ fn python_selector(index: &Index, node: u32) -> Option<String> {
 /// pytest per node ID, and supported project runners. Unsupported tests stay listed as `t` facts.
 /// Run commands as (precise, package-level): the second is shorter and still correct, running
 /// the whole package, crate, project or suite; it replaces the first when the budget is short.
-fn run_lines(index: &Index, tests: &BTreeMap<u32, bool>) -> Vec<(String, String)> {
+pub(super) fn run_lines(index: &Index, tests: &BTreeMap<u32, bool>) -> Vec<(String, String)> {
     let mut go: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     let mut rust: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut python: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();

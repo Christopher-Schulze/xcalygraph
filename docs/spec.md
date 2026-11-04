@@ -277,7 +277,7 @@ Sections in priority order: root line (name, files per language, symbol count) -
 
 ### 7.2 find
 
-First answer: when the top hit's score is at least 1.3 times the runner-up's, its source follows its line (4 spaces, then line number and code, clipped to 100 characters): a body of at most 8 non-empty lines whole, otherwise its first 4 lines and up to 4 lines naming a query word, then `+N lines`; then up to 3 callers and 3 callees (`<`, `>`). JSON: `source` records with `line` and `text`, `edge` records.
+First answer: when the top hit's score is at least 1.3 times the runner-up's, its source follows its line (4 spaces, then line number and code, clipped to 100 characters): a body of at most 8 non-empty lines whole, otherwise its first 4 lines and up to 4 lines naming a query word, then `+N lines`; then up to 3 callers and 3 callees (`<`, `>`), up to 2 tests (`t`, `t2`) and one command to run them (`r`). JSON: `source` records with `line` and `text`, `edge` records.
 
 An explicit, case-insensitive `exact symbol NAME` cue resolves the following identifier through exact symbol lookup; a missing name returns no hits instead of semantic candidates. `ctx` uses the resolved hits for seed selection before adding related graph context.
 
