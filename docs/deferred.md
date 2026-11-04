@@ -18,9 +18,6 @@ Considered and deliberately not in `docs/spec.md`. Each entry names the evidence
 | Rust source files declared under several `#[path]` module names | a reference corpus where this pattern produces wrong or missing answers |
 | TypeScript type-system depth beyond declared types (declaration merging across scripts and namespaces, generic substitution, literal key canonicalization) | inferred-edge precision below 85 % or agent-benchmark misses traced to it |
 | Smaller index through higher shard compression and block-packed postings (measured about 1.5 MB of 20 MB) | a measured quality gain that needs more index bytes than the limit leaves |
-| Incremental resolution with a patched derived image (one-file refresh about 100 ms instead of 200 ms, fewer bytes written) | a workflow where refresh latency is measurably agent-visible, with a parity proof against fresh builds |
-| Bulk directory attribute walker (`getattrlistbulk` on macOS) replacing the `ignore` crate's walk; measured limit about 13 ms below today's freshness check | agent-visible latency caused by the freshness check, or an owner request |
-| Hand-written tree walks instead of tree-sitter queries for the most used languages (query walk and compile cost, about 30 % of a build's CPU) | a measured refresh or build target that query cost alone misses |
 | Search terms selected by rarity instead of first occurrence (doubling terms per symbol lowered sealed quality, so truncation is not the limit) | a retrieval miss traced to a term beyond the cap |
 | Related-symbol bundle (`ctx`, personalized PageRank; removed because `find` beat it at every budget on the sealed questions) | agent questions whose answer shares no word with the question and is one graph hop from a hit |
 | Typo-tolerant search | evaluation misses caused by misspelled terms |
