@@ -988,16 +988,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tree-sitter-dm"
-version = "0.26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11a7e4bae2d1848862a42102f9a94f4b53053f8bc0cad7dd49cde7c48aa5b65b"
-dependencies = [
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
 name = "tree-sitter-elixir"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1545,7 +1535,6 @@ dependencies = [
  "tree-sitter-commonlisp",
  "tree-sitter-cpp",
  "tree-sitter-dart",
- "tree-sitter-dm",
  "tree-sitter-elixir",
  "tree-sitter-erlang",
  "tree-sitter-fortran",

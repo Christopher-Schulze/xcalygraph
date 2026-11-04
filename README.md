@@ -114,8 +114,8 @@ About 60 languages and formats, each resolved by its own module rules rather tha
 | Julia, R, OCaml | Julia modules, `using`/`include`; R packages from `DESCRIPTION`, `pkg::f`, testthat namespaces; OCaml file modules, `.mli` declarations, `open` |
 | Fortran, Pascal and Delphi, Common Lisp | Fortran modules and `use`; Pascal units, class methods, DFM/LFM form event handlers; Lisp packages, `defpackage` uses, ASDF systems, generic functions |
 | Solidity | Contracts, remappings, modifiers, events, Foundry tests |
-| PowerShell, Robot Framework, DM | PowerShell modules and dot-sourcing; Robot keywords resolved to resources and Python libraries; DM type paths with inheritance |
-| Apex, Razor, Blade, EJS, Jinja, COBOL, XAML, DM resources | structural depth: classes, methods, triggers, components, views, template includes and blocks, COBOL paragraphs and copybooks, XAML handlers to code-behind |
+| PowerShell, Robot Framework | PowerShell modules and dot-sourcing; Robot keywords resolved to resources and Python libraries |
+| Apex, Razor, Blade, EJS, Jinja, COBOL, XAML | structural depth: classes, methods, triggers, components, views, template includes and blocks, COBOL paragraphs and copybooks, XAML handlers to code-behind |
 | Bash | functions, commands as calls, sourced files, env reads, literal `trap` handlers and `getopts` short options with argument and `case` facts |
 | OpenAPI, Protobuf, GraphQL | operations, rpcs and fields matched to the code handlers that implement them |
 | Terraform | resources, data sources, variables, locals, outputs and modules by address, with references and local module imports |

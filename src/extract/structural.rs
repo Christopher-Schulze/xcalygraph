@@ -1,8 +1,7 @@
 //! Structural languages (`docs/spec.md` sections 3 and 5): symbols, includes and calls from line
-//! patterns for Apex, Razor, Blade, EJS, Jinja, COBOL, XAML and DM resources. Includes are path
+//! patterns for Apex, Razor, Blade, EJS, Jinja, COBOL and XAML. Includes are path
 //! references to the included file; calls resolve by unique name (section 6, inferred).
 
-use std::io::Read;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -13,9 +12,6 @@ use crate::domain::facts::{
 use crate::domain::filetype::FileType;
 
 pub fn extract(file_type: FileType, path: &str, content: &[u8]) -> Facts {
-    if file_type == FileType::DmResource && path.to_ascii_lowercase().ends_with(".dmi") {
-        return dmi(content);
-    }
     let text = String::from_utf8_lossy(content);
     let mut facts = match file_type {
         FileType::Apex => apex(&text),
@@ -25,7 +21,6 @@ pub fn extract(file_type: FileType, path: &str, content: &[u8]) -> Facts {
         FileType::Jinja => jinja(&text),
         FileType::Cobol => cobol(&text),
         FileType::Xaml => xaml(path, &text),
-        FileType::DmResource => dm_resource(&text),
         _ => Facts::default(),
     };
     facts.lines = text.lines().count() as u32;
@@ -825,95 +820,6 @@ fn xaml(path: &str, text: &str) -> Facts {
     facts
 }
 
-/// DM interface (`.dmf`) and map (`.dmm`) files: windows and elements as symbols; map tiles
-/// reference the type paths they place.
-fn dm_resource(text: &str) -> Facts {
-    static WINDOW: OnceLock<Option<Regex>> = OnceLock::new();
-    static TYPE_PATH: OnceLock<Option<Regex>> = OnceLock::new();
-    let mut facts = Facts::default();
-    let (Some(window), Some(type_path)) = (
-        regex(&WINDOW, r#"^\s*(window|menu|macro|elem)\s+"([^"]+)""#),
-        regex(&TYPE_PATH, r"(/(?:obj|mob|turf|area|datum|atom)(?:/\w+)+)"),
-    ) else {
-        return facts;
-    };
-    for (index, line) in text.lines().enumerate() {
-        let number = index as u32 + 1;
-        if let Some(found) = window.captures(line) {
-            let kind = if found
-                .get(1)
-                .is_some_and(|keyword| keyword.as_str() == "elem")
-            {
-                SymKind::Var
-            } else {
-                SymKind::Class
-            };
-            if let Some(name) = found.get(2) {
-                let id = push_symbol(&mut facts, kind, name.as_str(), number, line.trim());
-                if kind == SymKind::Class {
-                    facts.symbols[id as usize].end_line = text.lines().count() as u32;
-                }
-            }
-            continue;
-        }
-        for found in type_path.find_iter(line) {
-            push_ref(&mut facts, RefKind::Type, found.as_str(), None, number);
-        }
-    }
-    facts
-}
-
-/// DM icon (`.dmi`, a PNG): icon states from the `Description` text chunk as constants.
-fn dmi(content: &[u8]) -> Facts {
-    let mut facts = Facts::default();
-    let Some(description) = png_text(content, "Description") else {
-        return facts;
-    };
-    for (index, line) in description.lines().enumerate() {
-        if let Some(state) = line.trim().strip_prefix("state = ") {
-            let name = state.trim_matches('"');
-            push_symbol(
-                &mut facts,
-                SymKind::Const,
-                name,
-                index as u32 + 1,
-                line.trim(),
-            );
-        }
-    }
-    facts.lines = description.lines().count() as u32;
-    facts
-}
-
-/// The text of a PNG `tEXt` or `zTXt` chunk with `keyword`.
-fn png_text(content: &[u8], keyword: &str) -> Option<String> {
-    let mut offset = 8;
-    while offset + 8 <= content.len() {
-        let length = u32::from_be_bytes(content.get(offset..offset + 4)?.try_into().ok()?) as usize;
-        let kind = content.get(offset + 4..offset + 8)?;
-        let data = content.get(offset + 8..offset + 8 + length)?;
-        if matches!(kind, b"tEXt" | b"zTXt") {
-            let separator = data.iter().position(|&byte| byte == 0)?;
-            if &data[..separator] == keyword.as_bytes() {
-                return match kind {
-                    b"tEXt" => Some(String::from_utf8_lossy(&data[separator + 1..]).into_owned()),
-                    _ => {
-                        let mut text = String::new();
-                        let compressed = data.get(separator + 2..)?;
-                        flate2::read::ZlibDecoder::new(compressed)
-                            .take(1 << 20)
-                            .read_to_string(&mut text)
-                            .ok()?;
-                        Some(text)
-                    }
-                };
-            }
-        }
-        offset += 12 + length;
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1065,7 +971,7 @@ mod tests {
     }
 
     #[test]
-    fn xaml_and_dm_resources() {
+    fn xaml_handlers_and_paths() {
         let text = "<Window x:Class=\"Store.MainWindow\"\n        Loaded=\"OnLoaded\">\n  <Button x:Name=\"SaveButton\" Click=\"OnSave\"/>\n  <Image Source=\"Assets/logo.png\"/>\n</Window>\n";
         let (symbols, refs) = summary(&xaml("Views/MainWindow.xaml", text));
         assert_eq!(
@@ -1084,37 +990,5 @@ mod tests {
                 "4 Path Assets/logo.png"
             ]
         );
-        let (symbols, refs) = summary(&dm_resource(
-            "window \"main\"\n\telem \"output\"\n\"aa\" = (/obj/item/store{name = \"x\"},/turf/floor,/area/hall)\n",
-        ));
-        assert_eq!(symbols, ["class main 1-3 <- f0", "var output 2-2 <main f0"]);
-        assert_eq!(
-            refs,
-            [
-                "3 Type /obj/item/store",
-                "3 Type /turf/floor",
-                "3 Type /area/hall"
-            ]
-        );
-    }
-
-    #[test]
-    fn dmi_icon_states_from_png_text() {
-        let description = "# BEGIN DMI\nversion = 4.0\nstate = \"open\"\n\tdirs = 4\nstate = \"closed\"\n# END DMI\n";
-        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
-        let mut data = b"Description\0".to_vec();
-        data.extend_from_slice(description.as_bytes());
-        png.extend_from_slice(&(data.len() as u32).to_be_bytes());
-        png.extend_from_slice(b"tEXt");
-        png.extend_from_slice(&data);
-        png.extend_from_slice(&[0, 0, 0, 0]);
-        let facts = dmi(&png);
-        let states: Vec<&str> = facts
-            .symbols
-            .iter()
-            .map(|symbol| symbol.name.as_str())
-            .collect();
-        assert_eq!(states, ["open", "closed"]);
-        assert!(dmi(b"not a png").symbols.is_empty());
     }
 }

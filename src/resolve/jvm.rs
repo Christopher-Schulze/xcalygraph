@@ -47,7 +47,6 @@ pub(super) fn has_implicit_this(file_type: Option<FileType>) -> bool {
                     | FileType::Elixir
                     | FileType::Pascal
                     | FileType::Solidity
-                    | FileType::Dm
                     | FileType::Apex
             )
         )

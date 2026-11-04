@@ -39,7 +39,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 100;
+pub const RESOLVE_VERSION: u32 = 101;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -639,7 +639,7 @@ impl<'a> Index<'a> {
             Some(FileType::Pascal) => self.pascal_imports(file, facts, &mut imports),
             Some(FileType::Lisp) => self.lisp_imports(file, facts, &mut imports),
             Some(FileType::Solidity) => self.solidity_imports(file, facts, &mut imports),
-            Some(FileType::PowerShell | FileType::Robot | FileType::Dm) => {
+            Some(FileType::PowerShell | FileType::Robot) => {
                 self.script_imports(file, facts, &mut imports)
             }
             Some(
@@ -654,7 +654,7 @@ impl<'a> Index<'a> {
         imports
     }
 
-    /// Names a language resolves globally: DM top-level procs
+    /// Names a language resolves globally:
     /// (exact when unique in the root), Robot keywords by normalized name (case, spaces and
     /// underscores ignored) in the file, its resources and its Python libraries.
     fn global_name(&self, file: u32, imports: &Imports, reference: &Ref) -> Option<Outcome> {
@@ -663,19 +663,6 @@ impl<'a> Index<'a> {
             return None;
         }
         let candidates: Vec<u32> = match file_type {
-            FileType::Dm => self
-                .by_name
-                .get(reference.name.as_str())
-                .into_iter()
-                .flatten()
-                .copied()
-                .filter(|&symbol| {
-                    let symbol = &self.symbols[symbol as usize];
-                    self.file_type(symbol.file) == Some(file_type)
-                        && symbol.parent == NONE
-                        && (symbol.kind.is_callable() || symbol.kind == SymKind::Class)
-                })
-                .collect(),
             FileType::Robot => {
                 let wanted = robot_key(&reference.name);
                 let visible: Vec<u32> = std::iter::once(file)
@@ -773,7 +760,7 @@ impl<'a> Index<'a> {
     }
 
     /// Path imports of PowerShell modules and dot-sourced scripts, Robot
-    /// resources and libraries, DM `#include`s: relative to the file, then the root; PowerShell
+    /// resources and libraries: relative to the file, then the root; PowerShell
     /// module names by name anywhere in the root.
     fn script_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
         let file_type = self.file_type(file);

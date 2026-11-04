@@ -103,7 +103,6 @@ pub struct FileContext<'a> {
     feature = "lang-robot",
     feature = "lang-elixir",
     feature = "lang-erlang",
-    feature = "lang-dm",
     feature = "lang-ruby",
     feature = "lang-commonlisp",
     feature = "lang-dart"

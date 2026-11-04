@@ -113,7 +113,6 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | SQL | `sql` | `.sql` | deep | none |
 | Terraform, HCL | `terraform` | `.tf`, `.tfvars`, `.hcl` | deep | `*.tftest.hcl` |
 | Robot Framework | `robot` | `.robot`, `.resource` | deep | test cases of `.robot` files |
-| DM | `dm` | `.dm`, `.dme` | deep | none |
 | Apex | `apex` | `.cls`, `.trigger` | structural | `@isTest` classes and methods |
 | Razor | `razor` | `.razor`, `.cshtml` | structural | none |
 | Blade | `blade` | `.blade.php` | structural | none |
@@ -121,7 +120,6 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | Jinja | `jinja` | `.j2`, `.jinja`, `.jinja2` | structural | none |
 | COBOL | `cobol` | `.cbl`, `.cob`, `.cobol`, `.cpy` | structural | none |
 | XAML | `xaml` | `.xaml` | structural | none |
-| DM resources | `dmres` | `.dmi`, `.dmm`, `.dmf` | structural | none |
 
 - Detection: longest suffix wins (`.blade.php` before `.php`). Ambiguous suffixes are decided by content markers in the first 8 KiB, else role `other`: `.h` (Objective-C on `@interface` or `#import`, C++ on `class`, `namespace`, `template` or a C++ sibling with the same stem, else C; a sibling appearing, disappearing, being renamed or ignored reclassifies the unchanged header, so an update equals a fresh build); `.m` (Objective-C on `#import`, `@interface` or `@implementation`); `.inc`, `.pp` (Pascal on `unit`, `procedure`, `function` or `begin`); `.cl` (Common Lisp on a leading `(`); `.cls` (Apex on `class` or `interface` with an access modifier).
 - Embedded code: HTML inline classic JavaScript (missing/empty `type`, a JavaScript MIME essence, or a legacy `language` value) and module scripts with literal attribute values are parsed per block with function body terms kept on their owning symbols; external `src`, data blocks, comments, declarations, CDATA, inert `<template>` and `<noscript>` contents, classic `nomodule` scripts and unclosed blocks are omitted. Vue, Svelte and Astro `<script>` blocks are extracted in their language; Markdown fenced code contributes mentions only.
@@ -205,7 +203,6 @@ Freshness:
 | SQL | schema object | object names in DDL and DML |
 | Terraform, HCL | module directory | `module` blocks with local `source`; `var.`, `local.`, `module.`, `data.` and resource address references |
 | Robot Framework | file | `Resource` and `Library` imports; keyword calls |
-| DM | type path tree | `#include` order from `.dme`; type paths |
 | Markdown and other docs | file | relative links; backticked identifiers |
 
 Resolution order for a reference, first hit wins:

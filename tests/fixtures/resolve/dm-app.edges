@@ -1,6 +1,0 @@
-code./obj/item/store.open -calls-> code./obj/item/store.count @5
-code./obj/item/store.open -calls-> code.helper @4
-code./obj/item/store/big -inherits-> code./obj/item/store @8
-code./obj/item/store/big.open -calls-> code./obj/item/store.count @9
-file:game.dme -imports-> file:code/store.dm @1
-file:game.dme -imports-> file:code/util.dm @1

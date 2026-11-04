@@ -41,7 +41,6 @@ pub enum FileType {
     Sql,
     Terraform,
     Robot,
-    Dm,
     Apex,
     Razor,
     Blade,
@@ -49,7 +48,6 @@ pub enum FileType {
     Jinja,
     Cobol,
     Xaml,
-    DmResource,
     Json,
     Yaml,
     Toml,
@@ -113,15 +111,15 @@ pub enum Detection {
 }
 
 /// Every file type in discriminant order (1-based).
-pub const ALL: [FileType; 71] = {
+pub const ALL: [FileType; 69] = {
     use FileType::*;
     [
         Go, Rust, TypeScript, JavaScript, Vue, Svelte, Astro, Python, Java, Kotlin, Scala, Groovy,
         CSharp, VbNet, C, Cpp, ObjC, Swift, Ruby, Php, Lua, Zig, Elixir, Erlang, Dart, Julia, R,
-        OCaml, Fortran, Pascal, Lisp, Solidity, PowerShell, Bash, Sql, Terraform, Robot, Dm, Apex,
-        Razor, Blade, Ejs, Jinja, Cobol, Xaml, DmResource, Json, Yaml, Toml, Xml, Ini, Properties,
-        Proto, GraphQl, Dockerfile, Make, EnvExample, Markdown, Text, Rst, Org, AsciiDoc, Tex,
-        Html, Pdf, Docx, Xlsx, Image, Svg, Video, Audio,
+        OCaml, Fortran, Pascal, Lisp, Solidity, PowerShell, Bash, Sql, Terraform, Robot, Apex,
+        Razor, Blade, Ejs, Jinja, Cobol, Xaml, Json, Yaml, Toml, Xml, Ini, Properties, Proto,
+        GraphQl, Dockerfile, Make, EnvExample, Markdown, Text, Rst, Org, AsciiDoc, Tex, Html, Pdf,
+        Docx, Xlsx, Image, Svg, Video, Audio,
     ]
 };
 
@@ -178,7 +176,6 @@ impl FileType {
             Sql => "sql",
             Terraform => "terraform",
             Robot => "robot",
-            Dm => "dm",
             Apex => "apex",
             Razor => "razor",
             Blade => "blade",
@@ -186,7 +183,6 @@ impl FileType {
             Jinja => "jinja",
             Cobol => "cobol",
             Xaml => "xaml",
-            DmResource => "dmres",
             Json => "json",
             Yaml => "yaml",
             Toml => "toml",
@@ -218,7 +214,7 @@ impl FileType {
     pub const fn class(self) -> Class {
         use FileType::*;
         match self {
-            Apex | Razor | Blade | Ejs | Jinja | Cobol | Xaml | DmResource => Class::Structural,
+            Apex | Razor | Blade | Ejs | Jinja | Cobol | Xaml => Class::Structural,
             Json | Yaml | Toml | Xml | Ini | Properties | Proto | GraphQl | Dockerfile | Make
             | EnvExample => Class::Config,
             Markdown | Text | Rst | Org | AsciiDoc | Tex | Html | Pdf | Docx | Xlsx => Class::Doc,
@@ -290,14 +286,12 @@ pub fn detect(name: &str) -> Detection {
         "sql" => Sql,
         "tf" | "tfvars" | "hcl" => Terraform,
         "robot" | "resource" => Robot,
-        "dm" | "dme" => Dm,
         "trigger" => Apex,
         "razor" | "cshtml" => Razor,
         "ejs" => Ejs,
         "j2" | "jinja" | "jinja2" => Jinja,
         "cbl" | "cob" | "cobol" | "cpy" => Cobol,
         "xaml" => Xaml,
-        "dmi" | "dmm" | "dmf" => DmResource,
         "json" | "jsonc" => Json,
         "yaml" | "yml" => Yaml,
         "toml" => Toml,

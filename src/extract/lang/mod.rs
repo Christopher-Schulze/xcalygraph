@@ -14,8 +14,6 @@ pub mod cpp;
 pub mod csharp;
 #[cfg(feature = "lang-dart")]
 pub mod dart;
-#[cfg(feature = "lang-dm")]
-pub mod dm;
 #[cfg(feature = "lang-fortran")]
 pub mod fortran;
 #[cfg(feature = "lang-go")]
@@ -158,8 +156,6 @@ const PACKS: &[&Pack] = &[
     &powershell::PACK,
     #[cfg(feature = "lang-robot")]
     &robot::PACK,
-    #[cfg(feature = "lang-dm")]
-    &dm::PACK,
 ];
 
 /// One lazily compiled query per pack: a refresh compiles only the languages it extracts.
