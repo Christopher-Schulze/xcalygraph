@@ -13,7 +13,6 @@ const RANK_WEIGHT: f32 = 2.0;
 /// BM25 scales by the share of query terms a node matches (coordination): a node covering
 /// three of five terms in its body beats one matching a single term in its name.
 const COORD_EXPONENT: f32 = 1.0;
-const DIVERSITY: f32 = 0.4;
 const EXPANSION_WEIGHT: f32 = 0.5;
 /// Hits below this share of the top score are noise.
 const RELEVANCE_FLOOR: f32 = 0.05;
@@ -124,7 +123,7 @@ fn search_terms(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
         .fold(0.0f32, f32::max)
         .max(f32::EPSILON);
     let track_evidence = terms.len() <= u64::BITS as usize;
-    let mut scores = vec![(0.0f32, 0u32, 0u64, 0u64); candidates.len()];
+    let mut scores = vec![(0.0f32, 0u32, 0u64); candidates.len()];
     for (term_index, (exact, expanded)) in postings.iter().enumerate() {
         let idf = |list: &[PostingRecord]| {
             let df = list.len() as f32;
@@ -186,20 +185,17 @@ fn search_terms(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
             if best > 0.0 {
                 entry.0 += best;
                 entry.1 += 1;
-                if track_evidence {
+                if track_evidence && matched_name {
                     entry.2 |= 1u64 << term_index;
-                    if matched_name {
-                        entry.3 |= 1u64 << term_index;
-                    }
                 }
             }
         }
     }
-    let mut hits: Vec<(Hit, u64, u32)> = candidates
+    let mut hits: Vec<Hit> = candidates
         .into_iter()
         .zip(scores)
         .filter(|(_, score)| score.1 > 0)
-        .map(|(node, (bm25, matched, evidence, name_evidence))| {
+        .map(|(node, (bm25, matched, name_evidence))| {
             let coverage = matched as f32 / terms.len() as f32;
             let mut score = bm25 * coverage.powf(COORD_EXPONENT);
             let mut rank = 0.0;
@@ -228,22 +224,18 @@ fn search_terms(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
                 }
                 rank = (1.0 + symbol.rank * node_count).ln() / max_log_rank;
             }
-            (
-                Hit {
-                    node,
-                    score: score * index.role_weight(node) + RANK_WEIGHT * rank,
-                    name_evidence,
-                },
-                evidence,
-                index.file_index_of(node),
-            )
+            Hit {
+                node,
+                score: score * index.role_weight(node) + RANK_WEIGHT * rank,
+                name_evidence,
+            }
         })
         .collect();
     if !derived.interface_groups().is_empty() {
         let mut positions: HashMap<u32, usize> = HashMap::new();
-        let mut distinct: Vec<(Hit, u64, u32)> = Vec::with_capacity(hits.len());
+        let mut distinct: Vec<Hit> = Vec::with_capacity(hits.len());
         for entry in hits {
-            let node = entry.0.node;
+            let node = entry.node;
             if derived
                 .interface_groups()
                 .binary_search_by_key(&node, |pair| pair[0])
@@ -254,7 +246,7 @@ fn search_terms(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
             }
             let canonical = derived.interface_canonical(node);
             if let Some(&position) = positions.get(&canonical) {
-                if entry.0.score > distinct[position].0.score {
+                if entry.score > distinct[position].score {
                     distinct[position] = entry;
                 }
             } else {
@@ -264,61 +256,17 @@ fn search_terms(index: &Index, filter: &Filter, query: &str) -> Vec<Hit> {
         }
         hits = distinct;
     }
-    // Diversity is independent across file/evidence groups; order only within each group.
-    let order_in_file = |(a, a_evidence, _): &(Hit, u64, u32),
-                         (b, b_evidence, _): &(Hit, u64, u32)| {
-        a_evidence
-            .cmp(b_evidence)
-            .then_with(|| b.score.total_cmp(&a.score))
-            .then_with(|| index.line_of(a.node).cmp(&index.line_of(b.node)))
-            .then_with(|| a.node.cmp(&b.node))
-    };
-    let symbol_end = hits.partition_point(|(hit, _, _)| hit.node < symbol_count);
-    if track_evidence
-        && hits[..symbol_end]
-            .windows(2)
-            .all(|pair| pair[0].2 <= pair[1].2)
-    {
-        // The resolver normally stores symbols by file and candidates remain in node order.
-        for file_hits in hits[..symbol_end].chunk_by_mut(|a, b| a.2 == b.2) {
-            file_hits.sort_by(&order_in_file);
-        }
-    } else {
-        hits.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| order_in_file(a, b)));
-    }
-    // Diversity suppresses siblings matching the same query terms, not distinct evidence in the
-    // same file. A file-only hit must not consume a symbol's slot. For queries over 64 terms,
-    // fall back to file-wide diversity rather than conflate distinct partial masks.
-    let mut previous = None;
-    let mut seen = 0;
-    for (hit, evidence, file) in &mut hits {
-        if track_evidence && hit.node >= symbol_count {
-            continue;
-        }
-        let group = (*file, *evidence);
-        if previous != Some(group) {
-            previous = Some(group);
-            seen = 0;
-        }
-        hit.score *= DIVERSITY.powi(seen);
-        seen += 1;
-    }
     // The final score floor does not depend on order; discard noise before sorting it.
-    if let Some(top) = hits
-        .iter()
-        .map(|(hit, _, _)| hit.score)
-        .max_by(f32::total_cmp)
-    {
-        hits.retain(|(hit, _, _)| hit.score >= top * RELEVANCE_FLOOR);
+    if let Some(top) = hits.iter().map(|hit| hit.score).max_by(f32::total_cmp) {
+        hits.retain(|hit| hit.score >= top * RELEVANCE_FLOOR);
     }
-    hits.sort_by(|(a, _, _), (b, _, _)| {
+    hits.sort_by(|a, b| {
         b.score
             .total_cmp(&a.score)
             .then_with(|| index.path_of(a.node).cmp(index.path_of(b.node)))
             .then_with(|| index.line_of(a.node).cmp(&index.line_of(b.node)))
             .then_with(|| a.node.cmp(&b.node))
     });
-    let mut hits: Vec<Hit> = hits.into_iter().map(|(hit, _, _)| hit).collect();
     // A file hit below one of its own symbols repeats a path already shown.
     let mut shown_files = std::collections::HashSet::new();
     hits.retain(|hit| {

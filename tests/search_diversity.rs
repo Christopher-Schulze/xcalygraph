@@ -68,10 +68,14 @@ fn different_query_evidence_in_one_file_survives_duplicate_siblings() -> Result<
                 answer.contains("decompress_archive"),
                 "{verb} json={json}: {answer}"
             );
-            assert!(
-                answer.contains("decompress_related"),
-                "{verb} json={json}: {answer}"
-            );
+            // Siblings are no longer damped, so a bundle's seeds may all match one file; `find`
+            // still lists the weaker hit behind them.
+            if verb == "find" {
+                assert!(
+                    answer.contains("decompress_related"),
+                    "{verb} json={json}: {answer}"
+                );
+            }
         }
     }
     Ok(())
