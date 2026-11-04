@@ -1,0 +1,285 @@
+{
+  "provenance": {
+    "generator": "scip-typescript 0.6.1",
+    "source_sha256": {
+      "package.json": "d8c7b5d566132d7184b716cf2caaafa7f3648261e3c0784077fcfd0c7edb2c45",
+      "tsconfig.json": "48a4c82583da2eae655ad9ae619a33fc9329c23fc2761242d5a9f72bcdaca9e7",
+      "definitions.ts": "da486300c3728350f54d98928be6b497ae33bba9b69d3fb1ae116e3f0bbb3bf1",
+      "index.ts": "99a0949ae40e4d3a07a3430520de5ecb118703d782767d62cc3128b67ca2cc2b"
+    }
+  },
+  "documents": [
+    {
+      "language": "TypeScript",
+      "relative_path": "definitions.ts",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            0
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `definitions.ts`/",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            1,
+            0
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            0,
+            13,
+            19
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `definitions.ts`/Target#",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            22
+          ],
+          "TypedEnclosingRange": null
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `definitions.ts`/",
+          "documentation": [
+            "```ts\nmodule \"definitions.ts\"\n```"
+          ],
+          "kind": 16
+        },
+        {
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `definitions.ts`/Target#",
+          "documentation": [
+            "```ts\nclass Target\n```"
+          ],
+          "kind": 7
+        }
+      ]
+    },
+    {
+      "language": "TypeScript",
+      "relative_path": "index.ts",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            0
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            4,
+            0
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            0,
+            9,
+            15
+          ],
+          "TypedRange": null,
+          "symbol": "local 0",
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            1,
+            13,
+            18
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/Other#",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            1,
+            0,
+            21
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            16,
+            22
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/caller().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            2,
+            0,
+            72
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            23,
+            28
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/caller().(value)",
+          "symbol_roles": 1,
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            30,
+            35
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/Other#",
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            38,
+            44
+          ],
+          "TypedRange": null,
+          "symbol": "local 0",
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            54,
+            59
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/caller().(value)",
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            63,
+            69
+          ],
+          "TypedRange": null,
+          "symbol": "local 0",
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            3,
+            16,
+            21
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/wrong().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            3,
+            0,
+            60
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            3,
+            22,
+            27
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/wrong().(value)",
+          "symbol_roles": 1,
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            3,
+            29,
+            34
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/Other#",
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            3,
+            37,
+            42
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/Other#",
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            3,
+            52,
+            57
+          ],
+          "TypedRange": null,
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/wrong().(value)",
+          "TypedEnclosingRange": null
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/",
+          "documentation": [
+            "```ts\nmodule \"index.ts\"\n```"
+          ],
+          "kind": 16
+        },
+        {
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/Other#",
+          "documentation": [
+            "```ts\nclass Other\n```"
+          ],
+          "kind": 7
+        },
+        {
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/caller().",
+          "documentation": [
+            "```ts\nfunction caller(value: Other): Target\n```"
+          ],
+          "kind": 17
+        },
+        {
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/caller().(value)",
+          "documentation": [
+            "```ts\n(parameter) value: Other\n```"
+          ],
+          "kind": 37
+        },
+        {
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/wrong().",
+          "documentation": [
+            "```ts\nfunction wrong(value: Other): Other\n```"
+          ],
+          "kind": 17
+        },
+        {
+          "symbol": "scip-typescript npm oracle-opaque-import-identities 0.0.0 `index.ts`/wrong().(value)",
+          "documentation": [
+            "```ts\n(parameter) value: Other\n```"
+          ],
+          "kind": 37
+        }
+      ]
+    }
+  ]
+}

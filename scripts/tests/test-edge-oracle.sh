@@ -104,18 +104,23 @@ with tempfile.TemporaryDirectory(prefix="edge-oracle-regression.", dir=cache) as
     assert actual == expected, f"caller oracle verdicts: {actual}; expected {expected}"
     recall = next(row for row in csv.reader(caller_result.stdout.splitlines(), delimiter="\t") if row[2] == "recall-calls")
     assert recall[4:] == ["5", "3", "0", "2", "100.0"], recall
-    for fixture_name, language, cases in [
-        ("accessor-identities", "typescript", [("index.ts", 3, 1, "first", 2, "Box", "unknown")]),
-        ("local-accessor-identities", "typescript", [
-            ("index.ts", 2, 1, "first", 2, "outer", "unknown"),
-            ("plain.ts", 2, 1, "first", 2, "caller", "correct"),
+    for fixture_name, language, kind, cases in [
+        ("accessor-identities", "typescript", "calls", [("index.ts", 3, "index.ts", 1, "first", 2, "Box", "unknown")]),
+        ("local-accessor-identities", "typescript", "calls", [
+            ("index.ts", 2, "index.ts", 1, "first", 2, "outer", "unknown"),
+            ("plain.ts", 2, "plain.ts", 1, "first", 2, "caller", "correct"),
         ]),
-        ("go-caller-identities", "go", [
-            ("caller.go", 4, 2, "First", 4, "Left", "correct"),
-            ("caller.go", 4, 3, "Second", 4, "Left", "incorrect"),
-            ("caller.go", 4, 2, "First", 4, "Right", "incorrect"),
-            ("caller.go", 4, 3, "Second", 4, "Right", "correct"),
-            ("caller.go", 6, 2, "First", 5, "Multi", "correct"),
+        ("go-caller-identities", "go", "calls", [
+            ("caller.go", 4, "caller.go", 2, "First", 4, "Left", "correct"),
+            ("caller.go", 4, "caller.go", 3, "Second", 4, "Left", "incorrect"),
+            ("caller.go", 4, "caller.go", 2, "First", 4, "Right", "incorrect"),
+            ("caller.go", 4, "caller.go", 3, "Second", 4, "Right", "correct"),
+            ("caller.go", 6, "caller.go", 2, "First", 5, "Multi", "correct"),
+        ]),
+        ("opaque-import-identities", "typescript", "uses", [
+            ("index.ts", 3, "definitions.ts", 1, "Target", 3, "caller", "unknown"),
+            ("index.ts", 4, "definitions.ts", 1, "Target", 4, "wrong", "incorrect"),
+            ("index.ts", 4, "index.ts", 2, "Other", 4, "wrong", "correct"),
         ]),
     ]:
         fixture = repo / "tests/fixtures/oracle" / fixture_name
@@ -126,8 +131,8 @@ with tempfile.TemporaryDirectory(prefix="edge-oracle-regression.", dir=cache) as
         verdicts = work / (fixture_name + ".verdicts.tsv")
         with edges.open("x", newline="") as output:
             writer = csv.writer(output, delimiter="\t", lineterminator="\n")
-            for path, line, target_line, name, caller_line, caller, _ in cases:
-                writer.writerow(("calls", "1", path, line, path, target_line, name, caller_line, caller, "symbol"))
+            for path, line, target, target_line, name, caller_line, caller, _ in cases:
+                writer.writerow((kind, "1", path, line, target, target_line, name, caller_line, caller, "symbol"))
         subprocess.run(
             [sys.executable, "-I", "-", fixture_name, language, str(compiler), str(edges), str(verdicts)],
             input=program, text=True, capture_output=True, env=dict(os.environ, HOME=str(home)), check=True,

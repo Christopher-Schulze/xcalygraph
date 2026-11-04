@@ -54,6 +54,11 @@ index_corpus() {
       # Keep the pinned configuration. Resolve its development dependencies without running
       # lifecycle scripts or changing package.json/lockfiles; never disable a tsconfig.
       command -v bun >/dev/null || { echo "measure-edge-oracle.sh: bun is required for TypeScript dependencies" >&2; return 1; }
+      # The indexer's inference scans node_modules and then disables JavaScript when it finds
+      # a dependency's .d.ts. A JS corpus without a config needs its own explicit default.
+      if [[ "${language}" == javascript && ! -e "${root}/tsconfig.json" && ! -L "${root}/tsconfig.json" ]]; then
+        ( set -o noclobber; printf '%s\n' '{"compilerOptions":{"allowJs":true}}' > "${root}/tsconfig.json" )
+      fi
       ( cd "${root}" && bun install --no-save --ignore-scripts &&
           scip-typescript index --infer-tsconfig --output "${output}" ) ;;
     *) echo "measure-edge-oracle.sh: no indexer for ${language}" >&2; return 1 ;;
@@ -138,9 +143,16 @@ def owner(symbol):
     return match.group(1) if match and match.group(1) in definitions else symbol
 
 references = collections.defaultdict(set)
+opaque_references = set()
 for document in index["documents"]:
+    local_definitions = {o["symbol"] for o in document["occurrences"] or []
+                         if o.get("symbol_roles", 0) & DEFINITION}
     for occurrence in document["occurrences"] or []:
         symbol = occurrence["symbol"]
+        if symbol.startswith("local ") and symbol not in local_definitions:
+            # An unresolved import alias has occurrences but no definition or global identity.
+            # Other resolved names on that line cannot establish which target it means.
+            opaque_references.add((document["relative_path"], start_line(occurrence) + 1))
         if occurrence.get("symbol_roles", 0) & DEFINITION or symbol not in definitions:
             continue
         references[(document["relative_path"], start_line(occurrence) + 1)].update({symbol, owner(symbol)})
@@ -287,6 +299,8 @@ with open(verdicts_path, "w") as verdicts:
             verdict = "unknown"
         elif oracle & expected or oracle & dispatch:
             verdict = "correct"
+        elif kind not in ("inherits", "implements") and (source, int(line)) in opaque_references:
+            verdict = "unknown"
         elif expected & unknown_ownership.get((source, int(line)), set()):
             verdict = "unknown"
         elif reexported:
