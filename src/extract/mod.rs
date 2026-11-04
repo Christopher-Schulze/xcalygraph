@@ -21,6 +21,7 @@ mod prose;
 #[cfg(test)]
 mod query_cost;
 mod routes;
+mod sections;
 pub mod sfc;
 mod sql;
 mod structural;
@@ -33,7 +34,7 @@ use crate::domain::filetype::{Class, FileType};
 use crate::domain::role::{self, Role};
 
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
-const EXTRACTION_VERSION: u32 = 102;
+const EXTRACTION_VERSION: u32 = 103;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -80,8 +81,10 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
     ) = record.file_type
         && record.role == Role::Doc
     {
-        let mut facts = prose::extract(file_type, &String::from_utf8_lossy(content));
+        let text = String::from_utf8_lossy(content);
+        let mut facts = prose::extract(file_type, &text);
         facts.lines = count_lines(content);
+        sections::index_lines(&mut facts, &text);
         return without_identities(facts, capture_identities);
     }
     if let Some(file_type) = record
@@ -109,8 +112,10 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
         return without_identities(facts, capture_identities);
     }
     if record.file_type == Some(FileType::Markdown) {
-        let mut facts = markdown::extract(&String::from_utf8_lossy(content));
+        let text = String::from_utf8_lossy(content);
+        let mut facts = markdown::extract(&text);
         facts.lines = count_lines(content);
+        sections::index_lines(&mut facts, &text);
         return without_identities(facts, capture_identities);
     }
     #[cfg(feature = "lang-groovy")]

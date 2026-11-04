@@ -458,7 +458,12 @@ fn search_index(graph: &Graph) -> SearchIndex {
         fields[search::PARENT] = parent;
         fields[search::SIGNATURE] = &symbol.signature;
         fields[search::DOC] = &symbol.doc;
-        fields[search::BODY] = &symbol.terms;
+        let field = if symbol.kind == SymKind::Heading {
+            search::TEXT
+        } else {
+            search::BODY
+        };
+        fields[field] = &symbol.terms;
         fields[search::USED_BY] = &used_by[node];
         fields
     };
@@ -495,7 +500,7 @@ fn search_index(graph: &Graph) -> SearchIndex {
                         }
                     };
                     // Body terms are stored as normalized tokens (src/extract/terms.rs).
-                    if field == search::BODY {
+                    if field == search::BODY || field == search::TEXT {
                         text.split(' ')
                             .filter(|token| !token.is_empty())
                             .for_each(&mut add);
@@ -543,7 +548,8 @@ fn search_index(graph: &Graph) -> SearchIndex {
         let mut previous = 0;
         for posting in list {
             encoder.var_u32(posting.node - previous);
-            encoder.var_u32(posting.packed);
+            // The text field has the top bits: rotated into the low bits, a varint stays short.
+            encoder.var_u32(posting.packed.rotate_left(4));
             previous = posting.node;
         }
     }
@@ -849,7 +855,10 @@ impl Derived {
                 break;
             };
             node = node.wrapping_add(delta);
-            list.push(PostingRecord { node, packed });
+            list.push(PostingRecord {
+                node,
+                packed: packed.rotate_right(4),
+            });
         }
         list
     }

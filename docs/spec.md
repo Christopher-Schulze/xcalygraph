@@ -273,13 +273,15 @@ Sections in priority order: root line (name, files per language, symbol count) -
 
 ### 7.2 find
 
+Documents: the words of a section (Markdown, text, reStructuredText, Org, AsciiDoc, LaTeX, HTML, PDF, DOCX, XLSX) are the search terms of its heading in a field of their own, up to 256 distinct terms; a longer section or text without headings continues in sections named by their first line. Section symbols count half their role weight.
+
 First answer: when the top hit's score is at least 1.3 times the runner-up's, its source follows its line (4 spaces, then line number and code, clipped to 100 characters): a body of at most 8 non-empty lines whole, otherwise its first 4 lines and up to 4 lines naming a query word, then `+N lines`; then up to 3 callers and 3 callees (`<`, `>`), up to 2 tests (`t`, `t2`) and one command to run them (`r`). JSON: `source` records with `line` and `text`, `edge` records.
 
 An explicit, case-insensitive `exact symbol NAME` cue resolves the following identifier through exact symbol lookup; a missing name returns no hits instead of semantic candidates.
 
 1. Tokenize the query; look up exact names for the raw query and each term. Query-only expansions: `-ization` -> `-iz`, `-ation` -> `-at`, `retriev`/`retrieval` -> `get`, other ASCII terms of at least 4 bytes -> the term plus `iz`; retain the original term.
 2. Candidates = union of the postings.
-3. Score = BM25F (k1 1.2, b 0.75; field weights name 3, body 1.8, parent 1.5, path 1, doc 1, signature 0.5, used by 0.5; tokens stemmed, code abbreviations and synonyms canonicalized: `remove` and `delete`, `sign in` and `login`, `invalidate` and `refresh`; per term use the higher score of its original and 0.5 x its expansion) times the share of query terms the node matches, + exact-name bonus 5 when the whole query names the symbol, multiplied by the role weight (src 1, test 0.3, gen 0.2, doc 0.5, config 0.5, manifest 0.5, asset 0.3), + 2 x normalized log rank.
+3. Score = BM25F (k1 1.2, b 0.75; field weights name 3, body 1.8, parent 1.5, path 1, doc 1, signature 0.5, used by 0.5, document text 1.8; tokens stemmed, code abbreviations and synonyms canonicalized: `remove` and `delete`, `sign in` and `login`, `invalidate` and `refresh`; per term use the higher score of its original and 0.5 x its expansion) times the share of query terms the node matches, + exact-name bonus 5 when the whole query names the symbol, multiplied by the role weight (src 1, test 0.3, gen 0.2, doc 0.5, config 0.5, manifest 0.5, asset 0.3), + 2 x normalized log rank.
 4. Order: score descending, then path, line and node ID; files matched by path tokens appear as file lines, unless one of their symbols ranks higher; output keeps the score order, adjacent hits of one file share its path line.
 
 ### 7.4 show
@@ -401,8 +403,8 @@ Reference: Apple Silicon laptop, warm filesystem cache, corpus of 8,000 tracked 
 | freshness check without changes | max 80 ms |
 | query compute (`find`, `show`) | max 10 ms |
 | refresh after a single-file change | max 250 ms |
-| index size | max 20 MB |
-| bytes written per single-file change | changed fact shard + file table + `derived`; max 15 MB |
+| index size | max 30 MB |
+| bytes written per single-file change | changed fact shard + file table + `derived`; max 20 MB |
 | peak RSS, full build | max 400 MB |
 | skill size | max 1000 tokens |
 

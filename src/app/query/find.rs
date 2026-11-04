@@ -5,6 +5,7 @@ use std::path::Path;
 
 use super::output::{Value, Writer};
 use super::{Filter, Index, Node, show};
+use crate::domain::filetype::FileType;
 use crate::domain::search::{self, B, FIELD_WEIGHTS, FIELDS, K1};
 use crate::infra::store::derived::PostingRecord;
 
@@ -328,10 +329,14 @@ pub fn render_answer(
     json: bool,
     budget: usize,
 ) -> String {
-    let [first, second, ..] = hits else {
+    let Some(first) = hits.first() else {
         return render(index, hits, json, budget);
     };
-    if first.score < second.score * DOMINANCE {
+    // A single hit leads by definition.
+    if hits
+        .get(1)
+        .is_some_and(|second| first.score < second.score * DOMINANCE)
+    {
         return render(index, hits, json, budget);
     }
     let lines = excerpt(index, root, first.node, query);
@@ -384,7 +389,12 @@ fn excerpt(index: &Index, root: &Path, node: u32, query: &str) -> Vec<(Option<u3
     let Node::Symbol(symbol) = index.node(node) else {
         return Vec::new();
     };
-    if symbol.end_line <= symbol.line {
+    // Lines of a PDF or an office document are pages, paragraphs or sheets of a binary file.
+    let binary = matches!(
+        index.file_of(node).file_type(),
+        Some(FileType::Pdf | FileType::Docx | FileType::Xlsx)
+    );
+    if binary || symbol.end_line <= symbol.line {
         return Vec::new();
     }
     let Ok(content) = std::fs::read(root.join(index.path_of(node))) else {

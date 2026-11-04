@@ -3,7 +3,7 @@
 /// Indexed fields of a node, in posting order.
 /// Ordered by posting frequency: term frequencies are packed 4 bits per field into a varint, so
 /// the most common fields take the low bits and most postings encode in one byte.
-pub const FIELDS: usize = 7;
+pub const FIELDS: usize = 8;
 pub const BODY: usize = 0;
 pub const NAME: usize = 1;
 pub const SIGNATURE: usize = 2;
@@ -12,7 +12,10 @@ pub const DOC: usize = 4;
 pub const PATH: usize = 5;
 /// Names of the symbols calling or using this one: a component is described by its users.
 pub const USED_BY: usize = 6;
-pub const FIELD_WEIGHTS: [f32; FIELDS] = [1.8, 3.0, 0.5, 1.5, 1.0, 1.0, 0.5];
+/// Words of a document section; its own field keeps long sections out of the length normalization
+/// of code bodies.
+pub const TEXT: usize = 7;
+pub const FIELD_WEIGHTS: [f32; FIELDS] = [1.8, 3.0, 0.5, 1.5, 1.0, 1.0, 0.5, 1.8];
 pub const K1: f32 = 1.2;
 pub const B: f32 = 0.75;
 

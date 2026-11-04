@@ -245,6 +245,9 @@ pub struct Index {
     pub derived: Derived,
 }
 
+/// Share of the role weight a document section keeps in search.
+const SECTION_WEIGHT: f32 = 0.5;
+
 impl Index {
     pub fn string(&self, id: u32) -> &str {
         self.derived.string(id)
@@ -291,6 +294,9 @@ impl Index {
             Node::Symbol(symbol) if symbol.flags & FLAG_TEST != 0 => {
                 weight.min(Role::Test.weight())
             }
+            // Section text matches many more words than a declaration: it must not push code down
+            // when code answers the question.
+            Node::Symbol(symbol) if symbol.kind() == SymKind::Heading => weight * SECTION_WEIGHT,
             _ => weight,
         }
     }

@@ -28,9 +28,7 @@ pub fn pdf(content: &[u8]) -> Facts {
         while let Some(entry) = entries.next_if(|entry| entry.page as u32 <= page) {
             outline.heading(entry.level, &entry.title, (entry.page as u32).max(1));
         }
-        if outline.text_full() {
-            continue;
-        }
+        outline.at(page);
         if let Ok(text) = document.extract_text_with_limit(&[page], PART_LIMIT) {
             for line in text.lines() {
                 outline.text(line);
@@ -150,9 +148,6 @@ pub fn xlsx(content: &[u8]) -> Facts {
             Some(absolute) => absolute.to_owned(),
             None => format!("xl/{target}"),
         };
-        if outline.text_full() {
-            continue;
-        }
         if let Some(sheet) = part(&mut archive, &path) {
             for text in sheet_strings(&sheet, &shared) {
                 outline.text(&text);
@@ -401,7 +396,13 @@ mod tests {
         assert_eq!(refs, ["Mention Store.open", "Path ../docs/api.md"]);
         assert_eq!(facts.doc, "Call `Store.open` & wait.");
         assert_eq!(facts.lines, 4);
-        assert_eq!(facts.texts[1].text, "Max 10 rows.");
+        assert!(
+            facts
+                .symbols
+                .iter()
+                .any(|symbol| symbol.terms.contains("max")),
+            "{facts:?}"
+        );
     }
 
     #[test]
@@ -424,26 +425,16 @@ mod tests {
             .map(|symbol| symbol.name.as_str())
             .collect();
         assert_eq!(sheets, ["Limits", "Owners"]);
-        let texts: Vec<(String, u32, String)> = facts
-            .texts
+        let terms: Vec<(&str, u32, &str)> = facts
+            .symbols
             .iter()
-            .map(|segment| {
-                (
-                    segment.heading.clone(),
-                    segment.locator,
-                    segment.text.clone(),
-                )
-            })
+            .map(|symbol| (symbol.name.as_str(), symbol.line, symbol.terms.as_str()))
             .collect();
         assert_eq!(
-            texts,
+            terms,
             [
-                (
-                    "Limits".to_owned(),
-                    1,
-                    "max_rows retry budget per job".to_owned()
-                ),
-                ("Owners".to_owned(), 2, "team & ops".to_owned())
+                ("Limits", 1, "max rows retry budget per job"),
+                ("Owners", 2, "team ops")
             ]
         );
     }
@@ -502,22 +493,16 @@ mod tests {
             .collect();
         assert_eq!(headings, ["Intro 1-1", "Limits 2-2"]);
         assert_eq!(facts.lines, 2);
-        let texts: Vec<(String, u32, String)> = facts
-            .texts
+        let terms: Vec<(&str, u32, &str)> = facts
+            .symbols
             .iter()
-            .map(|segment| {
-                (
-                    segment.heading.clone(),
-                    segment.locator,
-                    segment.text.clone(),
-                )
-            })
+            .map(|symbol| (symbol.name.as_str(), symbol.line, symbol.terms.as_str()))
             .collect();
         assert_eq!(
-            texts,
+            terms,
             [
-                ("Intro".to_owned(), 1, "Store design notes".to_owned()),
-                ("Limits".to_owned(), 2, "Limits apply to rows".to_owned())
+                ("Intro", 1, "stor design note"),
+                ("Limits", 2, "limit apply rows")
             ]
         );
         assert_eq!(facts.doc, "Store design notes");

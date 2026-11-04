@@ -1,0 +1,121 @@
+//! Full text search of documents: the words of each section become the search terms of its
+//! heading, so a hit names the section and its line. A long section or text without headings is
+//! split into further sections named by their first line.
+
+use std::collections::HashSet;
+
+use crate::domain::facts::{self, Facts, SymKind, Symbol};
+use crate::domain::search;
+
+/// Distinct search terms per section; a section beyond it continues in a new one.
+const SECTION_TERMS: usize = 256;
+/// Characters of a section's first line used as its name.
+const NAME_CHARS: usize = 60;
+
+/// Indexes a text file line by line.
+pub fn index_lines(facts: &mut Facts, text: &str) {
+    index_text(
+        facts,
+        text.lines()
+            .enumerate()
+            .map(|(index, line)| (index as u32 + 1, line)),
+    );
+}
+
+/// Indexes `(line, text)` pairs in line order under the headings already in `facts`.
+pub fn index_text<'a>(facts: &mut Facts, lines: impl Iterator<Item = (u32, &'a str)>) {
+    let mut headings: Vec<(u32, u32)> = facts
+        .symbols
+        .iter()
+        .enumerate()
+        .filter(|(_, symbol)| symbol.kind == Some(SymKind::Heading))
+        .map(|(index, symbol)| (symbol.line, index as u32))
+        .collect();
+    headings.sort_unstable();
+    let last_line = facts.lines;
+    let mut next_heading = 0;
+    let mut owner: Option<u32> = None;
+    let mut open = Section::default();
+    let mut buffer = String::new();
+    for (line, text) in lines {
+        let text = text.trim();
+        let mut moved = false;
+        while headings
+            .get(next_heading)
+            .is_some_and(|&(start, _)| start <= line)
+        {
+            owner = Some(headings[next_heading].1);
+            next_heading += 1;
+            moved = true;
+        }
+        if moved {
+            open.flush(facts, line.saturating_sub(1));
+            open.heading = owner;
+        }
+        if text.is_empty() {
+            continue;
+        }
+        if open.first_line == 0 {
+            open.start(line, text, owner);
+        }
+        search::for_each_token(text, &mut buffer, |token| {
+            if token.len() >= 3
+                && open.seen.len() < SECTION_TERMS
+                && open.seen.insert(token.to_owned())
+            {
+                if !open.terms.is_empty() {
+                    open.terms.push(' ');
+                }
+                open.terms.push_str(token);
+            }
+        });
+        open.last_line = line;
+        if open.seen.len() >= SECTION_TERMS {
+            open.flush(facts, line);
+        }
+    }
+    open.flush(facts, last_line);
+}
+
+#[derive(Default)]
+struct Section {
+    /// The heading whose terms are still free; `None` once used or without a heading.
+    heading: Option<u32>,
+    parent: Option<u32>,
+    first_line: u32,
+    last_line: u32,
+    name: String,
+    terms: String,
+    seen: HashSet<String>,
+}
+
+impl Section {
+    fn start(&mut self, line: u32, text: &str, owner: Option<u32>) {
+        self.first_line = line;
+        self.last_line = line;
+        self.parent = owner;
+        self.name = facts::clip(&facts::normalize_space(text), NAME_CHARS);
+    }
+
+    /// Hands the collected terms to the heading, or to a new section when it has its terms.
+    fn flush(&mut self, facts: &mut Facts, end_line: u32) {
+        if !self.terms.is_empty() {
+            let terms = std::mem::take(&mut self.terms);
+            match self.heading.take() {
+                Some(heading) => facts.symbols[heading as usize].terms = terms,
+                None => facts.symbols.push(Symbol {
+                    kind: Some(SymKind::Heading),
+                    name: std::mem::take(&mut self.name),
+                    parent: self.parent,
+                    line: self.first_line,
+                    end_line: end_line.max(self.last_line),
+                    terms,
+                    exported: true,
+                    ..Symbol::default()
+                }),
+            }
+        }
+        self.first_line = 0;
+        self.seen.clear();
+    }
+}

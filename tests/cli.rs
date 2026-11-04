@@ -4787,3 +4787,39 @@ fn map_lists_every_top_level_area_and_what_is_excluded() -> TestResult {
     assert!(!filtered.contains("excluded"), "{filtered}");
     Ok(())
 }
+
+#[test]
+fn find_reads_the_whole_text_of_documents() -> TestResult {
+    let dir = TempDir::new("document-text")?;
+    let filler: String = (0..3000).map(|index| format!("filler{index} ")).collect();
+    dir.write(
+        "guide.md",
+        &format!(
+            "# Guide\n\n{filler}\n\n## Setup\n\nInstall the quokka gateway first.\n\n## Other\n\nNothing here.\n"
+        ),
+    )?;
+    dir.write(
+        "notes.txt",
+        "First note without any heading.\n\nThe wombat budget is due in March.\n",
+    )?;
+    dir.write("main.go", "package main\n\nfunc main() {}\n")?;
+    let root = dir.0.to_string_lossy().into_owned();
+    let find = |terms: &str| -> io::Result<String> {
+        let output = support::command(BINARY, &dir.0)
+            .args(["find", "-C", &root, terms])
+            .output()?;
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    };
+    // Far behind the first 2,000 characters: the hit names the section and its line.
+    let section = find("quokka gateway")?;
+    assert!(section.starts_with("guide.md\n  5 "), "{section}");
+    assert!(section.contains("Setup"), "{section}");
+    assert!(section.contains("Install the quokka gateway"), "{section}");
+    // No heading at all: the section is named by its first line.
+    let plain = find("wombat budget")?;
+    assert!(plain.starts_with("notes.txt\n  1 "), "{plain}");
+    // Beyond the terms of one section, a further section takes over.
+    let late = find("filler2900")?;
+    assert!(late.starts_with("guide.md\n"), "{late}");
+    Ok(())
+}

@@ -1,15 +1,12 @@
 //! Prose documents other than Markdown (`docs/spec.md` sections 5 and 6): plain text,
 //! reStructuredText, Org, AsciiDoc, LaTeX and HTML. Headings become symbols, relative links and
 //! includes path references, inline code identifiers and paths mentions. Line scanners: no
-//! grammar, tolerant of malformed input. Text formats keep no search text (`rg` reads them
-//! directly); binary documents (`documents.rs`) share the outline and keep section text.
+//! grammar, tolerant of malformed input. `sections.rs` turns all their text into search terms;
+//! binary documents (`documents.rs`) share the outline.
 
-use crate::domain::facts::{self, Facts, NO_ARITY, Ref, RefKind, SymKind, Symbol, TextSegment};
+use super::sections;
+use crate::domain::facts::{self, Facts, NO_ARITY, Ref, RefKind, SymKind, Symbol};
 use crate::domain::filetype::FileType;
-
-/// Search text kept per section and per file (characters).
-const SEGMENT_CHARS: usize = 600;
-const FILE_TEXT_CHARS: usize = 2000;
 
 pub fn extract(file_type: FileType, text: &str) -> Facts {
     match file_type {
@@ -39,12 +36,10 @@ pub(super) struct Outline {
     line_count: u32,
     paragraph: Vec<String>,
     paragraph_done: bool,
-    /// Whether section text is kept as search segments (binary documents only).
+    /// Text with its locator, for formats that are not read line by line afterwards.
     keep_text: bool,
-    segment: String,
-    segment_heading: String,
-    segment_line: u32,
-    text_chars: usize,
+    body: Vec<(u32, String)>,
+    locator: u32,
 }
 
 impl Outline {
@@ -64,10 +59,8 @@ impl Outline {
             paragraph: Vec::new(),
             paragraph_done: false,
             keep_text: true,
-            segment: String::new(),
-            segment_heading: String::new(),
-            segment_line: 1,
-            text_chars: 0,
+            body: Vec::new(),
+            locator: 1,
         }
     }
 
@@ -76,7 +69,6 @@ impl Outline {
         if title.is_empty() {
             return;
         }
-        self.flush_segment();
         while self
             .open
             .last()
@@ -99,8 +91,7 @@ impl Outline {
         });
         self.open.push((level, id));
         self.paragraph_done |= !self.paragraph.is_empty();
-        self.segment_heading = title;
-        self.segment_line = line;
+        self.locator = line;
     }
 
     fn scope(&self) -> Option<u32> {
@@ -172,24 +163,14 @@ impl Outline {
                 self.paragraph.push(text.to_owned());
             }
         }
-        if !self.keep_text || text.is_empty() || self.text_chars >= FILE_TEXT_CHARS {
-            return;
+        if self.keep_text && !text.is_empty() {
+            self.body.push((self.locator, text.to_owned()));
         }
-        let room = SEGMENT_CHARS.saturating_sub(self.segment.chars().count());
-        if room == 0 {
-            return;
-        }
-        if !self.segment.is_empty() {
-            self.segment.push(' ');
-        }
-        let taken: String = text.chars().take(room).collect();
-        self.text_chars += taken.chars().count();
-        self.segment.push_str(&taken);
     }
 
-    /// Whether the file's search text budget is used up.
-    pub(super) fn text_full(&self) -> bool {
-        self.text_chars >= FILE_TEXT_CHARS
+    /// The page, paragraph or line the following text belongs to.
+    pub(super) fn at(&mut self, locator: u32) {
+        self.locator = locator;
     }
 
     /// Plain line: backticked mentions and text.
@@ -197,23 +178,18 @@ impl Outline {
         for inside in delimited(line, "`", "`") {
             self.mention(inside, number);
         }
+        self.locator = number;
         self.text(line);
     }
 
-    fn flush_segment(&mut self) {
-        let text = facts::normalize_space(&std::mem::take(&mut self.segment));
-        if !text.is_empty() {
-            self.facts.texts.push(TextSegment {
-                heading: self.segment_heading.clone(),
-                locator: self.segment_line,
-                text,
-            });
-        }
-    }
-
     pub(super) fn finish(mut self) -> Facts {
-        self.flush_segment();
         self.facts.doc = facts::clip_space(&self.paragraph.join(" "), 400);
+        self.facts.lines = self.line_count;
+        let body = std::mem::take(&mut self.body);
+        sections::index_text(
+            &mut self.facts,
+            body.iter().map(|(locator, text)| (*locator, text.as_str())),
+        );
         self.facts
     }
 }
@@ -430,6 +406,7 @@ fn strip_tex_comment(line: &str) -> &str {
 /// (script and style contents skipped, `<title>` as the file doc fallback).
 fn html(text: &str) -> Facts {
     let mut outline = Outline::new(text);
+    outline.keep_text = true;
     let mut line = 1u32;
     let mut position = 0;
     let mut visible = String::new();
@@ -503,7 +480,7 @@ fn html(text: &str) -> Facts {
             }
             (Some(_), _, true) | (_, "code", true) => match capture.take() {
                 Some((Capture::Heading(level), start, captured)) => {
-                    flush_visible(&mut outline, &mut visible);
+                    flush_visible(&mut outline, &mut visible, line);
                     outline.heading(level, &captured, start);
                 }
                 Some((Capture::Code, start, captured)) => {
@@ -512,11 +489,11 @@ fn html(text: &str) -> Facts {
                 }
                 None => {}
             },
-            _ if is_block(&name) => flush_visible(&mut outline, &mut visible),
+            _ if is_block(&name) => flush_visible(&mut outline, &mut visible, line),
             _ => {}
         }
     }
-    flush_visible(&mut outline, &mut visible);
+    flush_visible(&mut outline, &mut visible, line);
     let mut facts = outline.finish();
     if facts.doc.is_empty() {
         facts.doc = facts::clip_space(&title, 400);
@@ -529,10 +506,11 @@ enum Capture {
     Code,
 }
 
-fn flush_visible(outline: &mut Outline, visible: &mut String) {
+fn flush_visible(outline: &mut Outline, visible: &mut String, line: u32) {
     let text = facts::normalize_space(visible);
     visible.clear();
     if !text.is_empty() {
+        outline.at(line);
         outline.text(&text);
         // A block ends a paragraph for the file doc.
         outline.text("");
@@ -655,7 +633,6 @@ mod tests {
             ]
         );
         assert_eq!(facts.doc, "Intro with ``Store`` and :func:`store.open`.");
-        assert!(facts.texts.is_empty());
     }
 
     #[test]
@@ -720,25 +697,23 @@ mod tests {
             ]
         );
         assert_eq!(facts.doc, "Call store.Get & see api.");
-        assert!(facts.texts.is_empty());
     }
 
     #[test]
-    fn outline_text_segments_are_bounded() {
+    fn outline_text_becomes_section_terms() {
         let mut outline = Outline::with_text(3);
         outline.heading(1, "Intro", 1);
-        outline.text(&"word ".repeat(400));
+        outline.text("Opening words");
         outline.heading(1, "Next", 2);
-        outline.text("Short.");
+        outline.text("Short closing");
         let facts = outline.finish();
-        assert_eq!(facts.texts.len(), 2);
-        assert!(facts.texts[0].text.chars().count() <= SEGMENT_CHARS);
-        assert_eq!(
-            (facts.texts[1].heading.as_str(), facts.texts[1].locator),
-            ("Next", 2)
-        );
+        let terms: Vec<(&str, &str)> = facts
+            .symbols
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.terms.as_str()))
+            .collect();
+        assert_eq!(terms, [("Intro", "open word"), ("Next", "short clos")]);
         let plain = extract(FileType::Text, "First line.\n\nMore text.\n");
         assert_eq!(plain.doc, "First line.");
-        assert!(plain.texts.is_empty());
     }
 }
