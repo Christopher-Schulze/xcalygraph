@@ -39,7 +39,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 107;
+pub const RESOLVE_VERSION: u32 = 108;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -2995,6 +2995,19 @@ impl<'a> Index<'a> {
                 if count == 1 {
                     return exact(id);
                 }
+                // A local Python definition shadows module globals, including redefinitions.
+                if self.file_type(file) == Some(FileType::Python) && best_depth > 0 {
+                    return if found
+                        .iter()
+                        .filter(|(depth, _)| *depth == best_depth)
+                        .count()
+                        == 1
+                    {
+                        exact(id)
+                    } else {
+                        Outcome::Ambiguous
+                    };
+                }
                 // Rust: same-named items at the same depth are `cfg` variants; each is a target.
                 if self.file_type(file) == Some(FileType::Rust) {
                     let variants: Vec<(u32, Confidence)> = found
@@ -3048,9 +3061,11 @@ impl<'a> Index<'a> {
                 // Function bodies look up module globals at call time, so the last definition
                 // wins. Module and class bodies execute immediately and see only definitions so
                 // far.
-                let function_body = reference
-                    .scope
-                    .is_some_and(|scope| self.symbols[scope as usize].kind.is_callable());
+                let function_body = reference.scope.is_some_and(|scope| {
+                    self.symbols[(self.base[file as usize] + scope) as usize]
+                        .kind
+                        .is_callable()
+                });
                 let latest = same
                     .iter()
                     .copied()

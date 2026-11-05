@@ -610,6 +610,11 @@ fn rust_external_receiver_chains_do_not_fall_back_to_local_methods() -> io::Resu
 #[test]
 fn python_calls_resolve_to_last_same_module_definition() -> io::Result<()> {
     let root = crate::infra::testdir::TestDir::new("python-module-redefinition")?;
+    // Local scope IDs must not read unrelated global symbols: invert both scope kinds.
+    fs::write(
+        root.path().join("a_unrelated.py"),
+        "class First:\n    pass\nclass Second:\n    pass\ndef unrelated():\n    pass\n",
+    )?;
     fs::write(
         root.path().join("index.py"),
         concat!(
@@ -622,6 +627,10 @@ fn python_calls_resolve_to_last_same_module_definition() -> io::Result<()> {
             "    value = normalize('class')\n",
             "def normalize(value):\n",
             "    return value\n",
+            "def local_owner():\n",
+            "    def normalize(value):\n",
+            "        return value\n",
+            "    return normalize('nested')\n",
         ),
     )?;
     let graph = graph_of(root.path())?;
@@ -685,6 +694,23 @@ fn python_calls_resolve_to_last_same_module_definition() -> io::Result<()> {
         targets,
         vec![(1, Confidence::Exact)],
         "definition-time call at line {line} must use the latest prior binding:\n{}",
+        render(&graph)
+    );
+    let local_targets: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == EdgeKind::Calls && edge.line == 13)
+        .filter_map(|edge| {
+            let source = node_location(&graph, edge.source)?;
+            let target = node_location(&graph, edge.target)?;
+            (source.path == "index.py" && source.name.ends_with(".local_owner"))
+                .then_some((target.line, edge.confidence))
+        })
+        .collect();
+    assert_eq!(
+        local_targets,
+        vec![(11, Confidence::Exact)],
+        "a unique local definition must shadow repeated module definitions:\n{}",
         render(&graph)
     );
     Ok(())
