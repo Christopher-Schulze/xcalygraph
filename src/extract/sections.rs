@@ -4,6 +4,8 @@
 
 use std::collections::HashSet;
 
+use xxhash_rust::xxh3::xxh3_64;
+
 use crate::domain::facts::{self, Facts, SymKind, Symbol};
 use crate::domain::search;
 
@@ -60,13 +62,12 @@ pub fn index_text<'a>(facts: &mut Facts, lines: impl Iterator<Item = (u32, &'a s
             open.start(line, text, owner);
         }
         search::for_each_token(text, &mut buffer, |token| {
-            if token.len() >= 3 && !open.seen.contains(token) {
-                open.seen.insert(token.to_owned());
+            if token.len() >= 3 && open.seen.insert(xxh3_64(token.as_bytes())) {
                 if open.seen.len() > SECTION_TERMS {
                     open.last_line = line;
                     open.flush(facts, line);
                     open.start(line, token, owner);
-                    open.seen.insert(token.to_owned());
+                    open.seen.insert(xxh3_64(token.as_bytes()));
                 }
                 if !open.terms.is_empty() {
                     open.terms.push(' ');
@@ -91,7 +92,8 @@ struct Section {
     last_line: u32,
     name: String,
     terms: String,
-    seen: HashSet<String>,
+    /// Hashes of the section's terms: most words repeat, and a copy per word costs millions.
+    seen: HashSet<u64>,
 }
 
 impl Section {

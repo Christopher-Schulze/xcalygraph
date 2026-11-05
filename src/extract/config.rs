@@ -364,7 +364,7 @@ struct JsonWalk<'a> {
     path: String,
     /// Path length before each open segment.
     lengths: Vec<usize>,
-    seen: HashSet<String>,
+    seen: HashSet<u64>,
     facts: &'a mut Facts,
 }
 
@@ -397,9 +397,10 @@ impl KeyVisitor for JsonWalk<'_> {
         self.enter(key);
         if self.lengths.len() <= MAX_DEPTH
             && self.seen.len() < MAX_KEYS
-            && !self.seen.contains(&self.path)
+            && self
+                .seen
+                .insert(xxhash_rust::xxh3::xxh3_64(self.path.as_bytes()))
         {
-            self.seen.insert(self.path.clone());
             self.facts.config_keys.push(ConfigKey {
                 path: self.path.clone(),
                 kind: json_kind(kind),
