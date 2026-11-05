@@ -39,7 +39,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 109;
+pub const RESOLVE_VERSION: u32 = 110;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -3928,11 +3928,14 @@ impl<'a> Index<'a> {
             })
             .max_by_key(|binding| {
                 (
-                    binding.scope.map_or(0, |s| {
-                        scope_chain(facts, scope)
-                            .position(|c| c == s)
-                            .map_or(0, |p| p + 1)
-                    }),
+                    // The chain starts at the nearest scope; file bindings follow all
+                    // lexical bindings. Keep declaration order within the selected scope.
+                    std::cmp::Reverse(
+                        binding
+                            .scope
+                            .and_then(|s| scope_chain(facts, scope).position(|c| c == s))
+                            .unwrap_or(usize::MAX),
+                    ),
                     binding.line,
                 )
             })

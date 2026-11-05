@@ -1395,6 +1395,78 @@ fn rust_methods_do_not_cross_cargo_target_roots() -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(all(
+    feature = "lang-typescript",
+    feature = "lang-python",
+    feature = "lang-rust"
+))]
+#[test]
+fn nested_typed_parameters_override_outer_parameters() -> std::io::Result<()> {
+    let cases = [
+        (
+            "scope.ts",
+            concat!(
+                "class Outer { run(): string { return 'outer'; } }\n",
+                "class Inner { run(): string { return 'inner'; } }\n",
+                "function enclosing(value: Outer) {\n",
+                "  function nested(value: Inner) { value.run(); }\n",
+                "  function sibling(value: Outer) { value.run(); }\n",
+                "  value.run();\n}\n",
+            ),
+        ),
+        (
+            "scope.py",
+            concat!(
+                "class Outer:\n    def run(self): return 'outer'\n",
+                "class Inner:\n    def run(self): return 'inner'\n",
+                "def enclosing(value: Outer):\n",
+                "    def nested(value: Inner): value.run()\n",
+                "    def sibling(value: Outer): value.run()\n",
+                "    value.run()\n",
+            ),
+        ),
+        (
+            "scope.rs",
+            concat!(
+                "struct Outer;\nimpl Outer { fn run(&self) -> u8 { 1 } }\n",
+                "struct Inner;\nimpl Inner { fn run(&self) -> u8 { 2 } }\n",
+                "fn enclosing(value: Outer) {\n",
+                "    fn nested(value: Inner) { value.run(); }\n",
+                "    fn sibling(value: Outer) { value.run(); }\n",
+                "    value.run();\n}\n",
+            ),
+        ),
+    ];
+    for (path, source) in cases {
+        let root = crate::infra::testdir::TestDir::new("nested-typed-parameters")?;
+        root.write(path, source)?;
+        let graph = graph_of(root.path())?;
+        for (caller, owner) in [
+            ("nested", "Inner"),
+            ("sibling", "Outer"),
+            ("enclosing", "Outer"),
+        ] {
+            let found: Vec<_> = graph
+                .edges
+                .iter()
+                .filter(|edge| edge.kind == EdgeKind::Calls)
+                .filter_map(|edge| {
+                    let source = graph.symbols.get(edge.source as usize)?;
+                    let target = graph.symbols.get(edge.target as usize)?;
+                    (source.name == caller && target.name == "run")
+                        .then(|| target.qualified.replace("::", "."))
+                })
+                .collect();
+            assert_eq!(found.len(), 1, "{path} {caller}: {found:?}");
+            assert!(
+                found[0].ends_with(&format!(".{owner}.run")),
+                "{path} {caller}: {found:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn rust_calls_respect_mutually_exclusive_unix_cfg_gates() -> std::io::Result<()> {
     let root = crate::infra::testdir::TestDir::new("rust-cfg-platform-calls")?;
