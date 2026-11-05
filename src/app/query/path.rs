@@ -123,11 +123,15 @@ pub fn shortest(
 }
 
 /// Edge kinds that connect ranked hits: what runs what, what extends what.
-const CHAIN_KINDS: [EdgeKind; 4] = [
+const CHAIN_KINDS: [EdgeKind; 8] = [
     EdgeKind::Calls,
     EdgeKind::Tests,
     EdgeKind::Inherits,
     EdgeKind::Implements,
+    EdgeKind::Mentions,
+    EdgeKind::References,
+    EdgeKind::Runs,
+    EdgeKind::Queries,
 ];
 const CHAIN_DEPTH: usize = 3;
 /// Nodes one search may visit: a query stays within its latency target on any hub.
@@ -225,9 +229,17 @@ pub fn chains(index: &Index, filter: &Filter, hits: &[u32], limit: usize) -> Vec
 
 /// Writes `~ A path:line >site B path:line ...`: `>site` is the relation's line in the node before.
 pub fn write_chain(index: &Index, writer: &mut Writer, start: u32, links: &[Link]) {
-    let name = |node: u32| index.short_label(node).into_owned();
+    // A file node is its path; a symbol shows its name before the location.
+    let name = |node: u32| {
+        let label = index.short_label(node);
+        if label == index.path_of(node) {
+            String::new()
+        } else {
+            format!("{label} ")
+        }
+    };
     let mut last_path = index.path_of(start).to_owned();
-    let mut text = format!("~ {} {last_path}:{}", name(start), index.line_of(start));
+    let mut text = format!("~ {}{last_path}:{}", name(start), index.line_of(start));
     let mut hops = vec![format!(
         "{last_path}:{} {}",
         index.line_of(start),
@@ -242,12 +254,12 @@ pub fn write_chain(index: &Index, writer: &mut Writer, start: u32, links: &[Link
             format!("{path}:{}", index.line_of(link.node))
         };
         text.push_str(&format!(
-            " >{}{mark} {} {location}",
+            " >{}{mark} {}{location}",
             link.site,
             name(link.node)
         ));
         hops.push(format!(
-            "{path}:{} {} site {} {}",
+            "{path}:{} {}site {} {}",
             index.line_of(link.node),
             name(link.node),
             link.site,

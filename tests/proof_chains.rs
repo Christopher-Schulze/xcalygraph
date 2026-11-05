@@ -66,3 +66,30 @@ fn leading_hits_show_their_source_located_connections() -> Result<(), Box<dyn Er
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+fn chains_cross_from_configuration_to_scripts() -> Result<(), Box<dyn Error>> {
+    let root = support::exclusive_dir("proof-chains-artifacts")?;
+    fs::create_dir_all(root.join(".github/workflows"))?;
+    fs::write(
+        root.join(".github/workflows/lint.yml"),
+        "name: ci\non: push\njobs:\n  lint:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: npm run lint\n",
+    )?;
+    fs::write(
+        root.join("package.json"),
+        "{\n  \"name\": \"x\",\n  \"scripts\": {\n    \"lint\": \"eslint .\"\n  }\n}\n",
+    )?;
+    let output = support::command(BINARY, &root)
+        .args(["find", "lint", "script", "workflow", "-C"])
+        .arg(&root)
+        .output()?;
+    let text = String::from_utf8(output.stdout)?;
+    assert!(
+        text.lines().any(|line| line.starts_with("~ ")
+            && line.contains(".github/workflows/lint.yml")
+            && line.contains("package.json")),
+        "{text}"
+    );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

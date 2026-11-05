@@ -1,0 +1,14 @@
+httpx	read proxy settings from the environment	get_environment_proxies
+httpx	load certificate file from environment variable	create_ssl_context
+sqlc	read auth token environment variable	addEnvVars
+cobra	environment variable that enables active help	activeHelpEnvVar
+express	write a cookie on the response	res.cookie
+express	clear a cookie	res.clearCookie
+hono	set a cookie on the context	setCookie
+hono	register a route handler on the app	#addRoute
+express	register a route for a path	app.route
+express	render a template to html	res.render
+sqlc	find table in catalog	getTable
+cobra	register a subcommand	AddCommand
+ky	retry a failed request	_retry
+ripgrep	decide binary file detection	binary_detection
