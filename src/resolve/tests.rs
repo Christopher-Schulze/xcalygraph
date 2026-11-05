@@ -168,8 +168,8 @@ fn derived_bytes_are_identical_across_thread_counts() -> Result<(), Box<dyn std:
             .build()?;
         let mut images = Vec::new();
         for case in cases() {
-            let graph = pool.install(|| graph_of(&case))?;
-            images.push(crate::infra::store::derived::build(&graph));
+            let mut graph = pool.install(|| graph_of(&case))?;
+            images.push(crate::infra::store::derived::build(&mut graph));
         }
         Ok(images)
     };

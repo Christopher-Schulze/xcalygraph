@@ -56,7 +56,11 @@ impl<'a> Index<'a> {
         let key = self.modules.modules[module as usize].key.clone();
         for (symbol_index, symbol) in facts.symbols.iter().enumerate() {
             if symbol.kind() == SymKind::Mod && symbol.end_line == symbol.line {
-                if let Some(reference) = Self::rust_path_reference_index(facts, symbol_index) {
+                if let Some(reference) = self
+                    .rust_path_refs
+                    .get(&(file, symbol_index as u32))
+                    .copied()
+                {
                     if let Some(target) = self.modules.rust_path_target(file, reference)
                         && target != file
                         && !imports.files.contains(&(file, target))
@@ -284,7 +288,7 @@ impl<'a> Index<'a> {
                     && (parent.is_none() || symbol.parent == parent)
             })?;
             parent = Some(found as u32);
-            if let Some(reference) = Self::rust_path_reference_index(facts, found) {
+            if let Some(reference) = self.rust_path_refs.get(&(file, found as u32)).copied() {
                 let Some(module) = self.modules.rust_path_module(file, reference) else {
                     return Some(Vec::new());
                 };
@@ -309,24 +313,6 @@ impl<'a> Index<'a> {
         (!members.is_empty()).then_some(members)
     }
 
-    pub(super) fn rust_path_reference_index(facts: &Facts, symbol_index: usize) -> Option<u32> {
-        let symbol = u32::try_from(symbol_index).ok()?;
-        facts
-            .refs
-            .iter()
-            .enumerate()
-            .find(|(_, reference)| {
-                reference.kind == RefKind::Path
-                    && reference.scope == Some(symbol)
-                    && reference
-                        .qualifier
-                        .as_deref()
-                        .and_then(facts::rust_module_path_ref_context)
-                        .is_some()
-            })
-            .and_then(|(index, _)| u32::try_from(index).ok())
-    }
-
     /// Resolves a Rust function type parameter only through its source-backed trait bounds.
     /// `Some(empty)` means the binding is generic but no local trait target is provable, which
     /// prevents a same-named concrete type elsewhere in the crate from becoming a false target.
@@ -341,12 +327,22 @@ impl<'a> Index<'a> {
             return None;
         }
         let scope = scope?;
-        let key = (file, scope, parameter);
-        if !self.rust_generic_parameters.contains(&key) {
+        let key = (file, scope);
+        if !self
+            .rust_generic_parameters
+            .get(&key)
+            .is_some_and(|parameters| parameters.iter().any(|known| **known == *parameter))
+        {
             return None;
         }
         let mut traits = Vec::new();
-        for bound in self.rust_generic_bounds.get(&key).into_iter().flatten() {
+        for (_, bound) in self
+            .rust_generic_bounds
+            .get(&key)
+            .into_iter()
+            .flatten()
+            .filter(|(known, _)| **known == *parameter)
+        {
             let Some((types, Confidence::Exact)) =
                 self.resolve_type(file, Some(imports), Some(scope), bound)
             else {

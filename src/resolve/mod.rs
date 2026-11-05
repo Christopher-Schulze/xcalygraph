@@ -20,6 +20,7 @@ mod typescript_groups;
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 use crate::domain::hash::FastMap as HashMap;
 use crate::domain::hash::FastSet as HashSet;
@@ -47,6 +48,9 @@ const JULIA_BASE_MODULE: &str = "Base";
 
 pub struct Input<'a> {
     pub files: &'a [FileRecord],
+    /// References parallel to `files`, apart from the facts: each file's resolution takes and
+    /// frees its own, which lowers the peak of a large tree by a third.
+    pub refs: &'a [Mutex<Vec<Ref>>],
     /// Facts parallel to `files`; `None` for files indexed by path only.
     pub facts: &'a [Option<Facts>],
 }
@@ -88,9 +92,11 @@ struct Index<'a> {
     /// Types per (module, name).
     types: HashMap<(u32, &'a str), Vec<u32>>,
     /// Rust function type parameters, keyed by file, function scope and parameter name.
-    rust_generic_parameters: HashSet<(u32, u32, &'a str)>,
+    rust_generic_parameters: HashMap<(u32, u32), Vec<Box<str>>>,
     /// Source-backed trait bounds for Rust function type parameters.
-    rust_generic_bounds: HashMap<(u32, u32, &'a str), Vec<&'a str>>,
+    rust_generic_bounds: HashMap<(u32, u32), Vec<RustGenericBound>>,
+    /// The `#[path]` reference of a Rust `mod` declaration, by file and symbol.
+    rust_path_refs: HashMap<(u32, u32), u32>,
     /// Every symbol per name, for the unique-name fallback.
     by_name: HashMap<&'a str, Vec<u32>>,
     /// Declared result type of callables (bindings named "").
@@ -146,10 +152,25 @@ struct Resolved {
 }
 
 pub fn build(files: &[FileRecord], mut facts: Vec<Option<Facts>>) -> Graph {
-    let mut graph = resolve(&Input {
-        files,
-        facts: &facts,
-    });
+    let modules = modules::assign(files, &facts);
+    let refs: Vec<Mutex<Vec<Ref>>> = facts
+        .iter_mut()
+        .map(|facts| {
+            Mutex::new(
+                facts
+                    .as_mut()
+                    .map_or_else(Vec::new, |facts| std::mem::take(&mut facts.refs)),
+            )
+        })
+        .collect();
+    let mut graph = resolve(
+        &Input {
+            files,
+            refs: &refs,
+            facts: &facts,
+        },
+        modules,
+    );
     move_search_text(&mut graph, &mut facts);
     // Before the caller builds anything from the graph: the facts are the largest allocation.
     facts.into_par_iter().for_each(drop);
@@ -179,8 +200,8 @@ fn is_titled(symbol: &facts::Symbol) -> bool {
     symbol.kind() == SymKind::Heading || (symbol.kind() == SymKind::Op && symbol.name.contains(' '))
 }
 
-fn resolve(input: &Input) -> Graph {
-    let mut index = Index::new(input);
+fn resolve(input: &Input, modules: modules::ModuleMap) -> Graph {
+    let mut index = Index::new(input, modules);
     let imports: Vec<Imports> = (0..input.files.len())
         .into_par_iter()
         .map(|file| index.imports(file as u32))
@@ -228,32 +249,46 @@ impl<'a> Index<'a> {
             .collect();
     }
 
-    fn new(input: &'a Input<'a>) -> Self {
-        let modules = modules::assign(input.files, input.facts);
-        let mut rust_generic_parameters = HashSet::default();
-        let mut rust_generic_bounds = HashMap::default();
+    fn new(input: &'a Input<'a>, modules: modules::ModuleMap) -> Self {
+        let mut rust_generic_parameters: HashMap<(u32, u32), Vec<Box<str>>> = HashMap::default();
+        let mut rust_generic_bounds: HashMap<(u32, u32), Vec<RustGenericBound>> =
+            HashMap::default();
+        let mut rust_path_refs: HashMap<(u32, u32), u32> = HashMap::default();
         for (file, facts) in input.facts.iter().enumerate() {
             if input.files[file].file_type != Some(FileType::Rust) {
                 continue;
             }
-            let Some(facts) = facts else { continue };
-            for reference in &facts.refs {
-                if reference.kind != RefKind::Implement {
-                    continue;
-                }
+            if facts.is_none() {
+                continue;
+            }
+            for (index, reference) in lock(&input.refs[file]).iter().enumerate() {
                 let Some(scope) = reference.scope else {
                     continue;
                 };
-                let file = file as u32;
-                if let Some(parameter) = reference.qualifier.as_deref() {
-                    let bounds = rust_generic_bounds
-                        .entry((file, scope, parameter))
-                        .or_insert_with(Vec::new);
-                    if !bounds.contains(&reference.name.as_str()) {
-                        bounds.push(reference.name.as_str());
+                let key = (file as u32, scope);
+                if reference.kind == RefKind::Path {
+                    if reference
+                        .qualifier
+                        .as_deref()
+                        .and_then(facts::rust_module_path_ref_context)
+                        .is_some()
+                    {
+                        rust_path_refs.entry(key).or_insert(index as u32);
                     }
-                } else {
-                    rust_generic_parameters.insert((file, scope, reference.name.as_str()));
+                } else if reference.kind == RefKind::Implement {
+                    if let Some(parameter) = reference.qualifier.as_deref() {
+                        let bounds = rust_generic_bounds.entry(key).or_default();
+                        if !bounds.iter().any(|(known, bound)| {
+                            **known == *parameter && **bound == *reference.name
+                        }) {
+                            bounds.push((parameter.into(), reference.name.as_str().into()));
+                        }
+                    } else {
+                        rust_generic_parameters
+                            .entry(key)
+                            .or_default()
+                            .push(reference.name.as_str().into());
+                    }
                 }
             }
         }
@@ -428,6 +463,7 @@ impl<'a> Index<'a> {
             types: HashMap::default(),
             rust_generic_parameters,
             rust_generic_bounds,
+            rust_path_refs,
             by_name: HashMap::default(),
             returns: HashMap::default(),
             field_types: HashMap::default(),
@@ -1884,7 +1920,9 @@ impl<'a> Index<'a> {
         let file_node = self.symbols.len() as u32 + file;
         let file_is_test = self.input.files[file as usize].role == Role::Test;
         let mut mention_owner: Option<(u32, u32)> = None;
-        for (reference_index, reference) in facts.refs.iter().enumerate() {
+        // Taken, not borrowed: dropped when this file is done.
+        let references = std::mem::take(&mut *lock(&self.input.refs[file as usize]));
+        for (reference_index, reference) in references.iter().enumerate() {
             let local_reference = u32::try_from(reference_index).ok();
             let source = reference.scope.map_or(file_node, |scope| base + scope);
             let source_rust_cfg = if self.file_type(file) == Some(FileType::Rust)
@@ -1955,6 +1993,7 @@ impl<'a> Index<'a> {
                     },
                     RefKind::Mention => self.resolve_mention(
                         file,
+                        &references,
                         reference.scope,
                         &reference.name,
                         mention_owner
@@ -2433,6 +2472,7 @@ impl<'a> Index<'a> {
     fn resolve_mention(
         &self,
         file: u32,
+        references: &[Ref],
         scope: Option<u32>,
         mention: &str,
         owner: Option<u32>,
@@ -2576,7 +2616,7 @@ impl<'a> Index<'a> {
             Some(symbol)
                 if unqualified
                     && owner != Some(self.symbols[symbol as usize].file)
-                    && !self.mention_has_evidence(file, scope, symbol, plain_word) =>
+                    && !self.mention_has_evidence(file, references, scope, symbol, plain_word) =>
             {
                 Outcome::Unresolved
             }
@@ -2595,6 +2635,7 @@ impl<'a> Index<'a> {
     fn mention_has_evidence(
         &self,
         file: u32,
+        references: &[Ref],
         scope: Option<u32>,
         symbol: u32,
         plain_word: bool,
@@ -2608,18 +2649,29 @@ impl<'a> Index<'a> {
             parent.kind().is_type().then_some(parent.name.as_ref())
         });
         if let Some(member_owner) = member_owner {
-            return self.document_shows(file, scope, member_owner);
+            return self.document_shows(file, references, scope, member_owner);
         }
         if record.kind.is_callable() || !plain_word {
             return true;
         }
         let path = &self.input.files[record.file as usize].path;
         let stem = path.rsplit('/').next().unwrap_or(path);
-        self.document_shows(file, scope, stem.split('.').next().unwrap_or(stem))
+        self.document_shows(
+            file,
+            references,
+            scope,
+            stem.split('.').next().unwrap_or(stem),
+        )
     }
 
     /// `word` appears in the document's path, a heading above the scope or a reference of it.
-    fn document_shows(&self, file: u32, scope: Option<u32>, word: &str) -> bool {
+    fn document_shows(
+        &self,
+        file: u32,
+        references: &[Ref],
+        scope: Option<u32>,
+        word: &str,
+    ) -> bool {
         let Some(document) = self.facts(file) else {
             return true;
         };
@@ -2638,7 +2690,7 @@ impl<'a> Index<'a> {
             }
             heading = section.parent;
         }
-        document.refs.iter().any(|reference| {
+        references.iter().any(|reference| {
             reference.scope == scope
                 && matches!(reference.kind, RefKind::Mention | RefKind::Path)
                 && reference.name != word
@@ -4292,9 +4344,11 @@ impl<'a> Index<'a> {
         let mut inherited: Vec<(u32, u32, Confidence, u32)> = Vec::new();
         let mut pairs: Vec<(u32, u32, Confidence, u32)> = Vec::new();
         for (file, facts) in self.input.facts.iter().enumerate() {
-            let Some(facts) = facts else { continue };
+            if facts.is_none() {
+                continue;
+            }
             let file = file as u32;
-            for reference in &facts.refs {
+            for reference in lock(&self.input.refs[file as usize]).iter() {
                 if reference.kind != RefKind::Implement {
                     continue;
                 }
@@ -4337,7 +4391,7 @@ impl<'a> Index<'a> {
                     }
                 }
             }
-            for reference in &facts.refs {
+            for reference in lock(&self.input.refs[file as usize]).iter() {
                 if reference.kind != RefKind::Inherit {
                     continue;
                 }
@@ -4793,6 +4847,14 @@ impl Iterator for NamedIndices<'_> {
             Self::Sorted(indices) => indices.next().map(|&index| index as usize),
         }
     }
+}
+
+/// A Rust generic parameter and one of its trait bounds.
+type RustGenericBound = (Box<str>, Box<str>);
+
+/// The references of one file; a poisoned lock only means a resolver thread panicked.
+fn lock(refs: &Mutex<Vec<Ref>>) -> std::sync::MutexGuard<'_, Vec<Ref>> {
+    refs.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 thread_local! {

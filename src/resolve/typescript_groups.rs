@@ -295,12 +295,13 @@ impl<'a> Index<'a> {
         }
         let mut child_members = Vec::new();
         let mut base_name = None;
+        let references = super::lock(&self.input.refs[file as usize]);
         for &part in parts {
             let symbol = facts.symbols.get(part as usize)?;
             if symbol.kind != Some(SymKind::Iface) || symbol.exported != first.exported {
                 return None;
             }
-            let mut inherits = facts.refs.iter().filter(|reference| {
+            let mut inherits = references.iter().filter(|reference| {
                 reference.scope == Some(part) && reference.kind == RefKind::Inherit
             });
             let reference = inherits.next()?;

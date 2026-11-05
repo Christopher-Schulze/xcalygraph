@@ -210,7 +210,7 @@ impl Interner {
 }
 
 /// Serializes the graph and its search index.
-pub fn build(graph: &Graph) -> Vec<u8> {
+pub fn build(graph: &mut Graph) -> Vec<u8> {
     let mut strings = Interner::new(graph.files.len() + graph.symbols.len() * 2);
     let files: Vec<FileRecord> = graph
         .files
@@ -307,7 +307,10 @@ pub fn build(graph: &Graph) -> Vec<u8> {
                 .join(",")),
         })
         .collect();
-    let index = search_index(graph);
+    // The search index only needs the names of callers; edges are its peak's largest input.
+    let used_by = used_by_names(graph);
+    graph.edges = Vec::new();
+    let index = search_index(graph, &used_by);
     let tokens: Vec<TokenRecord> = index
         .tokens
         .iter()
@@ -425,8 +428,7 @@ fn token_part(token: &str) -> usize {
         .map_or(0, |byte| usize::from(*byte))
 }
 
-fn search_index(graph: &Graph) -> SearchIndex {
-    let nodes = graph.node_count();
+fn used_by_names(graph: &Graph) -> Vec<String> {
     let symbol_count = graph.symbols.len();
     // Names of the callers and users of each symbol, distinct, at most USED_BY_NAMES.
     let mut used_by: Vec<String> = vec![String::new(); symbol_count];
@@ -449,6 +451,12 @@ fn search_index(graph: &Graph) -> SearchIndex {
             names.push_str(name);
         }
     }
+    used_by
+}
+
+fn search_index(graph: &Graph, used_by: &[String]) -> SearchIndex {
+    let nodes = graph.node_count();
+    let symbol_count = graph.symbols.len();
     // Node texts per field; files first so symbols can take their file's path length.
     let texts = |node: usize| -> [&str; FIELDS] {
         if node >= symbol_count {

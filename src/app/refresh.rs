@@ -249,9 +249,9 @@ fn write_derived(
         .collect::<Result<_, _>>()?;
     drop(per_shard);
     stage("facts");
-    let graph = resolve::build(records, facts);
+    let mut graph = resolve::build(records, facts);
     stage("resolve");
-    let image = derived::build(&graph);
+    let image = derived::build(&mut graph);
     stage("derive");
     let ((), written) = rayon::join(
         move || drop(graph),
