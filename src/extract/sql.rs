@@ -4,8 +4,9 @@
 //! instead of a grammar: robust across dialects and without query compilation.
 
 use crate::domain::facts::{
-    self, Facts, FieldName, Fields, NO_ARITY, Ref, RefKind, SymKind, Symbol,
+    self, Coverage, Facts, FieldName, Fields, NO_ARITY, Ref, RefKind, SymKind, Symbol,
 };
+use tree_sitter::Node;
 
 /// Statement keywords that make a string literal SQL.
 const STATEMENT_KEYWORDS: [&str; 6] = ["select", "insert", "update", "delete", "merge", "with"];
@@ -18,7 +19,13 @@ pub fn objects(text: &str, facts: &mut Facts) {
     // `--` comments blanked (offsets and lines kept).
     let text = &blank_comments(text);
     let lower = text.to_ascii_lowercase();
-    let line_of = |offset: usize| text[..offset].matches('\n').count() as u32 + 1;
+    let line_of = |offset: usize| {
+        text.as_bytes()[..offset]
+            .iter()
+            .filter(|&&byte| byte == b'\n')
+            .count() as u32
+            + 1
+    };
     let mut statement_starts: Vec<(usize, usize)> = Vec::new();
     let mut offset = 0;
     for statement in split_statements(&lower) {
@@ -153,8 +160,8 @@ pub fn objects(text: &str, facts: &mut Facts) {
 
 /// `queries` references from SQL statements inside string literals of a code file; the scope is
 /// the innermost symbol around the literal.
-pub fn embedded_queries(text: &str, facts: &mut Facts) {
-    for (offset, full) in string_literals(text) {
+pub fn embedded_queries(text: &str, root: Option<Node<'_>>, facts: &mut Facts) {
+    for (offset, full) in string_literals(text, root) {
         // Leading `-- name: X :many` lines (sqlc and similar generators) precede the statement.
         let skipped: usize = full
             .split_inclusive('\n')
@@ -221,6 +228,24 @@ pub fn embedded_queries(text: &str, facts: &mut Facts) {
             );
         }
     }
+}
+
+/// Use the already parsed host tree to keep comments out of embedded SQL without copying it.
+pub fn post_parse(
+    source: &[u8],
+    root: Node<'_>,
+    parsed: &mut super::engine::Parsed,
+    capture_identities: bool,
+) {
+    let Ok(text) = std::str::from_utf8(source) else {
+        parsed.facts.coverage = parsed.facts.coverage.max(Coverage::ParseErrors);
+        if capture_identities {
+            parsed.incomplete = true;
+            parsed.identities.fill(None);
+        }
+        return;
+    };
+    embedded_queries(text, Some(root), &mut parsed.facts);
 }
 
 fn push_query(facts: &mut Facts, scope: Option<u32>, name: &str, line: u32) {
@@ -410,12 +435,12 @@ fn split_statements(lower: &str) -> Vec<&str> {
                     quote = None;
                 }
             }
-            None if lower[index..].starts_with("$$") => {
+            None if bytes[index..].starts_with(b"$$") => {
                 dollar = !dollar;
                 index += 1;
             }
             None if dollar => {}
-            None if lower[index..].starts_with("--") => {
+            None if bytes[index..].starts_with(b"--") => {
                 index = lower[index..]
                     .find('\n')
                     .map_or(bytes.len(), |end| index + end);
@@ -438,7 +463,7 @@ fn split_statements(lower: &str) -> Vec<&str> {
 
 /// String literals (`"..."`, `'...'`, `` `...` ``, triple quotes) with the byte offset of their
 /// content; escapes honored, lines kept.
-fn string_literals(text: &str) -> Vec<(usize, &str)> {
+fn string_literals<'a>(text: &'a str, root: Option<Node<'_>>) -> Vec<(usize, &'a str)> {
     let mut literals = Vec::new();
     let bytes = text.as_bytes();
     let mut index = 0;
@@ -446,6 +471,19 @@ fn string_literals(text: &str) -> Vec<(usize, &str)> {
         let byte = bytes[index];
         if !matches!(byte, b'"' | b'\'' | b'`') {
             index += 1;
+            continue;
+        }
+        let mut node = root.and_then(|root| root.descendant_for_byte_range(index, index + 1));
+        let mut comment_end = None;
+        while let Some(current) = node {
+            if current.kind().contains("comment") {
+                comment_end = Some(current.end_byte());
+                break;
+            }
+            node = current.parent();
+        }
+        if let Some(end) = comment_end {
+            index = end;
             continue;
         }
         let triple = bytes[index..].starts_with(&[byte, byte, byte]);
@@ -458,11 +496,7 @@ fn string_literals(text: &str) -> Vec<(usize, &str)> {
                 end += 2;
                 continue;
             }
-            if bytes[end] == byte
-                && (!triple
-                    || text[end..]
-                        .starts_with(&String::from_utf8_lossy(&[byte, byte, byte]).into_owned()))
-            {
+            if bytes[end] == byte && (!triple || bytes[end..].starts_with(&[byte, byte, byte])) {
                 found = Some(end);
                 break;
             }
@@ -546,6 +580,19 @@ mod tests {
     }
 
     #[test]
+    fn unicode_sql_preserves_statement_boundaries_and_source_lines() {
+        let mut facts = Facts::default();
+        objects(
+            "-- café\nCREATE TABLE accounts (id integer);\nSELECT café FROM accounts;\nSELECT 'hé;llo' FROM accounts;\n",
+            &mut facts,
+        );
+        let (symbols, refs) = summary(&facts);
+        assert_eq!(symbols, ["2-2 Table accounts"]);
+        assert_eq!(refs, ["3 - -> accounts"]);
+        objects("SELECT café", &mut facts);
+    }
+
+    #[test]
     fn embedded_sql_in_string_literals_of_code() {
         let mut facts = Facts::default();
         facts.symbols.push(Symbol {
@@ -557,6 +604,7 @@ mod tests {
         });
         embedded_queries(
             "func load() {\n\tdb.Query(\"SELECT id FROM users WHERE id = $1\")\n\tdb.Exec(`-- name: Audit :exec\n\t\tINSERT INTO audit (id) VALUES (1)`)\n\tlog(\"select a seat from the menu\")\n}\n",
+            None,
             &mut facts,
         );
         let (_, refs) = summary(&facts);

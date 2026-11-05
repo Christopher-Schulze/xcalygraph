@@ -37,7 +37,7 @@ use crate::domain::role::{self, Role};
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
 /// Rows of a CSV or TSV file that reach search.
 const CSV_INDEXED_ROWS: usize = 2000;
-const EXTRACTION_VERSION: u32 = 114;
+const EXTRACTION_VERSION: u32 = 115;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -186,16 +186,31 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
     };
     // World of Warcraft `.toc` files list the addon's files; they are no Lua source.
     let toc = record.path.ends_with(".toc");
-    let parsed = record
+    let capture_sql = matches!(record.role, Role::Src | Role::Test | Role::Gen)
+        && record.file_type.is_some_and(FileType::is_code);
+    let grammar = record
         .file_type
         .filter(|_| !toc)
-        .and_then(|file_type| lang::lookup(file_type, &record.path))
+        .and_then(|file_type| lang::lookup(file_type, &record.path));
+    let parsed_with_grammar = grammar.is_some();
+    let parsed = grammar
         .map(|(pack, language, query)| {
+            let post_parse: Option<engine::PostParse> =
+                capture_sql.then_some(sql::post_parse as engine::PostParse);
             #[cfg(feature = "lang-bash")]
-            let post_parse = (pack.file_type == FileType::Bash)
-                .then_some(lang::bash::post_parse as engine::PostParse);
-            #[cfg(not(feature = "lang-bash"))]
-            let post_parse: Option<engine::PostParse> = None;
+            let post_parse = if pack.file_type == FileType::Bash {
+                let hook: engine::PostParse = if capture_sql {
+                    |source, root, parsed, capture_identities| {
+                        lang::bash::post_parse(source, root, parsed, capture_identities);
+                        sql::post_parse(source, root, parsed, capture_identities);
+                    }
+                } else {
+                    lang::bash::post_parse
+                };
+                Some(hook)
+            } else {
+                post_parse
+            };
             engine::extract_with_post_parse(
                 &language,
                 query,
@@ -254,12 +269,8 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
     // SQL objects of `.sql` files; SQL statements in string literals of code.
     if record.file_type == Some(FileType::Sql) {
         sql::objects(&String::from_utf8_lossy(content), &mut facts);
-    } else if matches!(record.role, Role::Src | Role::Test | Role::Gen)
-        && record
-            .file_type
-            .is_some_and(|file_type| file_type.is_code())
-    {
-        sql::embedded_queries(&String::from_utf8_lossy(content), &mut facts);
+    } else if capture_sql && !parsed_with_grammar {
+        sql::embedded_queries(&String::from_utf8_lossy(content), None, &mut facts);
     }
     #[cfg(feature = "lang-vbnet")]
     if record.file_type == Some(FileType::VbNet) {
@@ -508,6 +519,61 @@ mod tests {
                 }
                 depth -= 1;
             }
+        }
+    }
+
+    #[test]
+    fn embedded_sql_uses_host_comment_boundaries() {
+        for (path, file_type, source) in [
+            (
+                "query.go",
+                FileType::Go,
+                "package query\n// \"SELECT id FROM decoy\"\n/* unmatched \" */\nfunc load() { db.Query(\"SELECT id FROM users\") }\n",
+            ),
+            (
+                "query.rs",
+                FileType::Rust,
+                "// \"SELECT id FROM decoy\"\n/* unmatched \" */\nfn load() { let _query = r#\"SELECT id FROM users\"#; }\n",
+            ),
+            (
+                "query.py",
+                FileType::Python,
+                "# \"SELECT id FROM decoy\"\n# unmatched \"\ndef load():\n    return \"SELECT id FROM users\"\n",
+            ),
+            (
+                "query.ts",
+                FileType::TypeScript,
+                "// \"SELECT id FROM decoy\"\n/* unmatched \" */\nfunction load() { return `SELECT id FROM users`; }\n",
+            ),
+            (
+                "query.js",
+                FileType::JavaScript,
+                "// \"SELECT id FROM decoy\"\n/* unmatched \" */\nfunction load() { return 'SELECT id FROM users'; }\n",
+            ),
+            (
+                "query.sh",
+                FileType::Bash,
+                "# \"SELECT id FROM decoy\"\n# unmatched \"\nload() { echo \"SELECT id FROM users\"; }\n",
+            ),
+        ] {
+            let record = FileRecord {
+                path: path.to_owned(),
+                size: source.len() as u64,
+                mtime_ns: 0,
+                identity: None,
+                hash: 0,
+                role: Role::Src,
+                file_type: Some(file_type),
+            };
+            let facts = extract(&record, source.as_bytes());
+            assert_eq!(facts.coverage, Coverage::Complete, "{path}");
+            let queries: Vec<_> = facts
+                .refs
+                .iter()
+                .filter(|reference| reference.kind == crate::domain::facts::RefKind::Query)
+                .map(|reference| reference.name.as_str())
+                .collect();
+            assert_eq!(queries, ["users"], "{path}");
         }
     }
 

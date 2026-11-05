@@ -39,7 +39,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 105;
+pub const RESOLVE_VERSION: u32 = 106;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -2302,6 +2302,18 @@ impl<'a> Index<'a> {
             .collect();
         match nearest.as_slice() {
             [only] => exact(*only),
+            [first, rest @ ..]
+                if best == 0
+                    && rest.iter().any(|&table| {
+                        modules::parent_dir(
+                            &self.input.files[self.symbols[table as usize].file as usize].path,
+                        ) != modules::parent_dir(
+                            &self.input.files[self.symbols[*first as usize].file as usize].path,
+                        )
+                    }) =>
+            {
+                Outcome::Ambiguous
+            }
             several => Outcome::Targets(
                 several
                     .iter()

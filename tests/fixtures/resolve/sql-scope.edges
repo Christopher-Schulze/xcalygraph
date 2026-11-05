@@ -1,0 +1,5 @@
+apps/a.Load -queries-> apps/a.accounts @3
+src.Load -queries-> db.users @4
+src.Migrated -queries?-> migrations.events @6
+src.Migrated -queries?-> migrations.events @6
+ambiguous src/query.go 1
