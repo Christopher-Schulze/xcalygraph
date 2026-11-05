@@ -39,7 +39,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 112;
+pub const RESOLVE_VERSION: u32 = 113;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -3176,6 +3176,37 @@ impl<'a> Index<'a> {
                                     .collect();
                                 pick_members(self, found, Confidence::Exact, reference.arity)
                             }
+                            Receiver::Known(types, Confidence::Inferred)
+                                if self.file_type(file) == Some(FileType::Python)
+                                    && self
+                                        .binding(file, reference.scope, chain[0], reference.line)
+                                        .and_then(|binding| {
+                                            chains::call_binding(&binding.type_name)
+                                        })
+                                        .is_some_and(|(call, _)| {
+                                            call.ends_with(".__enter__")
+                                                || call.ends_with(".__aenter__")
+                                        }) =>
+                            {
+                                let mut found: Vec<u32> = types
+                                    .iter()
+                                    .flat_map(|&type_symbol| {
+                                        self.members(type_symbol, &reference.name)
+                                    })
+                                    .collect();
+                                found.sort_unstable();
+                                found.dedup();
+                                return match found.len() {
+                                    0 => Outcome::Unresolved,
+                                    1 => pick_members(
+                                        self,
+                                        found,
+                                        Confidence::Inferred,
+                                        reference.arity,
+                                    ),
+                                    _ => Outcome::Ambiguous,
+                                };
+                            }
                             _ => Outcome::Unresolved,
                         }
                     }
@@ -3610,6 +3641,24 @@ impl<'a> Index<'a> {
                 };
                 let callee_file = self.symbols[callee as usize].file;
                 let callee_scope = Some(callee - self.base[callee_file as usize]);
+                if self.file_type(callee_file) == Some(FileType::Python)
+                    && matches!(
+                        self.symbols[callee as usize].name.as_str(),
+                        "__enter__" | "__aenter__"
+                    )
+                    && (!result.split('.').all(is_identifier)
+                        || self.facts(callee_file).is_some_and(|facts| {
+                            facts.bindings.iter().any(|binding| {
+                                !binding.name.is_empty()
+                                    && binding.scope == callee_scope
+                                    && binding.declared
+                                    && binding.type_name == result
+                            })
+                        }))
+                {
+                    // Unsupported protocol annotations do not prove an external value.
+                    return false;
+                }
                 self.resolve_result_type(callee_file, callee_scope, result)
                     .is_none()
             }),
@@ -3899,6 +3948,36 @@ impl<'a> Index<'a> {
                 return rust_self();
             };
             let callee_file = self.symbols[callee as usize].file;
+            if self.file_type(callee_file) == Some(FileType::Python)
+                && result == "Self"
+                && self.symbols[callee as usize].kind == SymKind::Method
+                && matches!(
+                    self.symbols[callee as usize].name.as_str(),
+                    "__enter__" | "__aenter__"
+                )
+                && let Some(qualifier) = reference.qualifier.as_deref()
+            {
+                let types = if chains::call_binding(qualifier).is_some() {
+                    // Keep a module-qualified constructor as one call; a module alias is not
+                    // itself a receiver type for the step-by-step chain walker.
+                    let receiver = Binding {
+                        scope,
+                        name: String::new(),
+                        type_name: qualifier.to_owned(),
+                        line: binding.line,
+                        scope_end_line: None,
+                        declared: false,
+                    };
+                    self.binding_type(file, imports, scope, &receiver)
+                        .map(|(types, _)| types)
+                } else {
+                    chains::receiver_steps(qualifier)
+                        .and_then(|steps| self.chain_type(file, imports, &reference, &steps).ok())
+                };
+                if let Some(types) = types {
+                    return Some((types, Confidence::Inferred));
+                }
+            }
             let callee_scope = Some(callee - self.base[callee_file as usize]);
             let (types, _) = self.resolve_result_type(callee_file, callee_scope, result)?;
             return Some((types, Confidence::Inferred));
@@ -5343,4 +5422,4 @@ fn robot_key(name: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

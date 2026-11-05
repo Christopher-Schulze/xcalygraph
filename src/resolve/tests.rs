@@ -411,8 +411,10 @@ fn python_receivers_flow_through_packages_context_managers_and_properties() -> i
     fs::write(root.path().join("pkg/__init__.py"), "from ._m import *\n")?;
     fs::write(
         root.path().join("pkg/_m.py"),
-        "class Url:\n    def path(self):\n        return 1\n\n\
-         class Foo:\n    def run(self) -> Url:\n        return Url()\n\n\
+        "from typing import Self\n\nclass Url:\n    def path(self):\n        return 1\n\n\
+         class Foo:\n    def __enter__(self) -> Self:\n        return self\n\n\
+         \x20   def __exit__(self, kind, value, trace):\n        return False\n\n\
+         \x20   def run(self) -> Url:\n        return Url()\n\n\
          \x20   @property\n    def url(self) -> Url:\n        return Url()\n",
     )?;
     fs::write(

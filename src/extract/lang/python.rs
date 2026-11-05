@@ -21,6 +21,151 @@ pub static PACK: Pack = Pack {
     },
 };
 
+/// Callee whose result is assigned by `with`, rather than the manager expression itself.
+pub(in crate::extract) fn context_manager_callee(
+    item: Node,
+    callee: Node,
+    source: &[u8],
+) -> Option<String> {
+    let statement = item.parent()?.parent()?;
+    if item.kind() != "with_item" || statement.kind() != "with_statement" {
+        return None;
+    }
+    let mut cursor = statement.walk();
+    let asynchronous = statement
+        .children(&mut cursor)
+        .any(|node| node.kind() == "async");
+    let method = if asynchronous {
+        "__aenter__"
+    } else {
+        "__enter__"
+    };
+    let call = callee
+        .parent()
+        .is_some_and(|parent| parent.kind() == "call");
+    let callee = callee.utf8_text(source).ok()?;
+    Some(format!("{callee}{}.{method}", if call { "()" } else { "" }))
+}
+
+/// Keep protocol return annotations intact so unions cannot become their first branch.
+pub(in crate::extract) fn context_manager_result(node: Node, source: &[u8]) -> Option<String> {
+    let function = node.parent()?;
+    if function.kind() != "function_definition"
+        || !matches!(
+            function
+                .child_by_field_name("name")?
+                .utf8_text(source)
+                .ok()?,
+            "__enter__" | "__aenter__"
+        )
+    {
+        return None;
+    }
+    if returned_receiver(function, source).is_some() {
+        return Some("Self".to_owned());
+    }
+    let text = node.utf8_text(source).ok()?;
+    let unquoted = text
+        .strip_prefix('"')
+        .and_then(|text| text.strip_suffix('"'))
+        .or_else(|| {
+            text.strip_prefix('\'')
+                .and_then(|text| text.strip_suffix('\''))
+        })
+        .filter(|text| !text.contains('\\'))
+        .unwrap_or(text);
+    Some(crate::domain::facts::normalize_space(unquoted))
+}
+
+/// A successful exit returns the original receiver: no alternative return or local rebinding.
+fn returned_receiver<'source>(function: Node, source: &'source [u8]) -> Option<&'source str> {
+    if function.has_error() || function.parent()?.parent()?.kind() != "class_definition" {
+        return None;
+    }
+    let parameter = function.child_by_field_name("parameters")?.named_child(0)?;
+    let parameter = match parameter.kind() {
+        "identifier" => parameter,
+        "typed_parameter" => parameter.named_child(0)?,
+        _ => return None,
+    };
+    if parameter.kind() != "identifier" {
+        return None;
+    }
+    let receiver = parameter.utf8_text(source).ok()?;
+    let body = function.child_by_field_name("body")?;
+    let mut cursor = body.walk();
+    if body
+        .named_children(&mut cursor)
+        .filter(|node| node.kind() != "comment")
+        .last()?
+        .kind()
+        != "return_statement"
+    {
+        return None;
+    }
+    let mut cursor = body.walk();
+    loop {
+        let node = cursor.node();
+        match node.kind() {
+            "return_statement" => {
+                let value = node.named_child(0)?;
+                if node.named_child_count() != 1
+                    || value.kind() != "identifier"
+                    || value.utf8_text(source).ok()? != receiver
+                {
+                    return None;
+                }
+            }
+            "function_definition"
+            | "class_definition"
+            | "lambda"
+            | "yield"
+            | "import_statement"
+            | "import_from_statement"
+            | "global_statement"
+            | "nonlocal_statement"
+            | "delete_statement"
+            | "match_statement"
+            | "except_clause" => return None,
+            _ => {}
+        }
+        let target = match node.kind() {
+            "assignment" | "augmented_assignment" | "for_statement" | "for_in_clause" => {
+                node.child_by_field_name("left")
+            }
+            "named_expression" => node.child_by_field_name("name"),
+            "as_pattern_target" => Some(node),
+            _ => None,
+        };
+        if target.is_some_and(|target| target_changes_receiver(target, receiver, source)) {
+            return None;
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return Some(receiver);
+            }
+        }
+    }
+}
+
+fn target_changes_receiver(node: Node, name: &str, source: &[u8]) -> bool {
+    match node.kind() {
+        "identifier" => node.utf8_text(source).ok() == Some(name),
+        "attribute" => {
+            node.child_by_field_name("attribute")
+                .and_then(|attribute| attribute.utf8_text(source).ok())
+                == Some("__class__")
+        }
+        "subscript" => false,
+        _ => node
+            .named_children(&mut node.walk())
+            .any(|child| target_changes_receiver(child, name, source)),
+    }
+}
+
 /// Evidence for conservative structural protocol matching; decorated or dynamic class bodies are
 /// intentionally excluded because their runtime members cannot be established from method names.
 pub(in crate::extract) fn structural_identity(node: Node, source: &[u8]) -> Option<String> {
@@ -298,6 +443,171 @@ fn builtin(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn context_bindings_use_the_protocol_result_instead_of_the_manager() -> std::io::Result<()> {
+        use crate::domain::graph::{Confidence, EdgeKind};
+        use crate::infra::testdir::TestDir;
+
+        let root = TestDir::new("python-context-values")?;
+        root.write("contexts.py", concat!(
+            "from typing import Self, TypeVar\n",
+            "R = TypeVar('R', bound='GenericManager')\nS = TypeVar('S', bound='GenericAsync')\n",
+            "W = TypeVar('W', bound='ReboundManager')\nM = TypeVar('M', bound='MutatingManager')\n",
+            "class Resource:\n    def consume(self): return 1\n",
+            "    @property\n    def closed(self) -> bool: return False\n",
+            "    @property\n    def auth(self) -> str: return self._auth\n",
+            "    @auth.setter\n    def auth(self, value: str): self._auth = value\n",
+            "    def unknown_only(self): return 1\n    def union_only(self): return 1\n",
+            "    def rebound_only(self): return 1\n    def mutated_only(self): return 1\n",
+            "class Manager:\n",
+            "    def __enter__(self) -> Resource: return Resource()\n",
+            "    def __exit__(self, kind, value, trace): return False\n",
+            "    def consume(self): return 2\n",
+            "class Own:\n",
+            "    def __enter__(self) -> Self: return self\n",
+            "    def __exit__(self, kind, value, trace): return False\n",
+            "    def consume(self): return 3\n",
+            "    def union_only(self): return 3\n",
+            "class AsyncManager:\n",
+            "    async def __aenter__(self) -> Resource: return Resource()\n",
+            "    async def __aexit__(self, kind, value, trace): return False\n",
+            "    def consume(self): return 4\n",
+            "class UnknownManager:\n",
+            "    def __enter__(self): return Resource()\n",
+            "    def __exit__(self, kind, value, trace): return False\n",
+            "    def consume(self): return 5\n",
+            "    def unknown_only(self): return 5\n",
+            "class QuotedManager:\n",
+            "    def __enter__(self) -> 'Resource': return Resource()\n",
+            "    def __exit__(self, kind, value, trace): return False\n",
+            "    def consume(self): return 7\n",
+            "class AmbiguousManager:\n",
+            "    def __enter__(self) -> Resource | Own: return Resource()\n",
+            "    def __exit__(self, kind, value, trace): return False\n",
+            "    def consume(self): return 6\n",
+            "    def union_only(self): return 6\n",
+            "class GenericManager:\n",
+            "    def __enter__(this: R) -> R:\n",
+            "        this.state = 1\n        for piece in (1,): this.state += piece\n",
+            "        if this.state < 0: raise ValueError('state')\n        return this\n",
+            "    def __exit__(self, kind, value, trace): return False\n",
+            "    def consume(self): return 8\n",
+            "class Derived(GenericManager):\n    def consume(self): return 9\n",
+            "class GenericAsync:\n",
+            "    async def __aenter__(self: S) -> S:\n        self.state = 1\n        return self\n",
+            "    async def __aexit__(self, kind, value, trace): return False\n",
+            "    def consume(self): return 10\n",
+            "class NominalManager(Resource):\n",
+            "    def __enter__(self: Resource) -> Resource: return Resource()\n",
+            "    def __exit__(self, kind, value, trace): return False\n",
+            "    def consume(self): return 11\n",
+            "class ReboundManager:\n",
+            "    def __enter__(self: W) -> W:\n        self = Resource()\n        return self\n",
+            "    def __exit__(self, kind, value, trace): return False\n",
+            "    def rebound_only(self): return 12\n",
+            "class MutatingManager:\n",
+            "    def __enter__(self: M) -> M:\n        self.__class__ = Resource\n        return self\n",
+            "    def __exit__(self, kind, value, trace): return False\n",
+            "    def mutated_only(self): return 13\n",
+            "class MixedManager:\n",
+            "    def __init__(self): self.alternative = True\n",
+            "    def __enter__(self) -> 'Resource | MixedManager':\n",
+            "        if self.alternative: return Resource()\n        return self\n",
+            "    def __exit__(self, kind, value, trace): return False\n",
+            "    def consume(self): return 14\n",
+            "def acquire() -> Manager: return Manager()\n",
+            "def direct():\n    with Manager() as value: return value.consume()\n",
+            "def factory():\n    with acquire() as value: return value.consume()\n",
+            "def existing(manager: Manager):\n    with manager as value: return value.consume()\n",
+            "def own():\n    with Own() as value: return value.consume()\n",
+            "def quoted():\n    with QuotedManager() as value: return value.consume()\n",
+            "async def asynchronous():\n    async with AsyncManager() as value: return value.consume()\n",
+            "def unknown():\n    with UnknownManager() as value: return value.unknown_only()\n",
+            "def ambiguous():\n    with AmbiguousManager() as value: return value.union_only()\n",
+            "def generic():\n    with GenericManager() as value: return value.consume()\n",
+            "def derived():\n    with Derived() as value: return value.consume()\n",
+            "async def generic_async():\n    async with GenericAsync() as value: return value.consume()\n",
+            "def nominal():\n    with NominalManager() as value: return value.consume()\n",
+            "def rebound():\n    with ReboundManager() as value: return value.rebound_only()\n",
+            "def mutated():\n    with MutatingManager() as value: return value.mutated_only()\n",
+            "def mixed():\n    with MixedManager() as value: return value.consume()\n",
+            "def property_inside():\n    with Manager() as value: return value.closed\n",
+            "def property_after():\n    with Manager() as value: value.consume()\n    return value.closed\n",
+            "def ambiguous_property():\n    with Manager() as value:\n        value.auth = 'updated'\n        return value.auth\n",
+        ))?;
+        root.write("consumer.py", "import contexts as api\ndef qualified():\n    with api.Derived() as value: return value.consume()\n")?;
+        let graph = crate::resolve::tests::graph_of(root.path())?;
+        let mut calls: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Calls)
+            .filter_map(|edge| {
+                let source = graph.symbols.get(edge.source as usize)?;
+                let target = graph.symbols.get(edge.target as usize)?;
+                if !matches!(
+                    target.name.as_str(),
+                    "consume" | "rebound_only" | "mutated_only"
+                ) {
+                    return None;
+                }
+                let owner = graph.symbols.get(target.parent as usize)?;
+                Some((source.name.as_str(), owner.name.as_str(), edge.confidence))
+            })
+            .collect();
+        calls.sort_unstable();
+        for name in [
+            "unknown_only",
+            "union_only",
+            "rebound_only",
+            "mutated_only",
+            "auth",
+        ] {
+            assert!(
+                graph
+                    .ambiguous_names
+                    .iter()
+                    .any(|candidate| candidate == name),
+                "{name}: unresolved context members must remain ambiguous"
+            );
+        }
+        assert_eq!(
+            calls,
+            [
+                ("asynchronous", "Resource", Confidence::Inferred),
+                ("derived", "Derived", Confidence::Inferred),
+                ("direct", "Resource", Confidence::Inferred),
+                ("existing", "Resource", Confidence::Inferred),
+                ("factory", "Resource", Confidence::Inferred),
+                ("generic", "GenericManager", Confidence::Inferred),
+                ("generic_async", "GenericAsync", Confidence::Inferred),
+                ("nominal", "Resource", Confidence::Inferred),
+                ("own", "Own", Confidence::Inferred),
+                ("property_after", "Resource", Confidence::Inferred),
+                ("qualified", "Derived", Confidence::Inferred),
+                ("quoted", "Resource", Confidence::Inferred),
+            ]
+        );
+        let mut properties: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Uses)
+            .filter_map(|edge| {
+                let source = graph.symbols.get(edge.source as usize)?;
+                let target = graph.symbols.get(edge.target as usize)?;
+                (target.name == "closed").then_some((source.name.as_str(), edge.confidence))
+            })
+            .collect();
+        properties.sort_unstable();
+        assert_eq!(
+            properties,
+            [
+                ("property_after", Confidence::Inferred),
+                ("property_inside", Confidence::Inferred),
+            ]
+        );
+        Ok(())
+    }
 
     fn rows(statement: &str) -> Vec<(String, String, Option<String>)> {
         expand_import(statement, 1, false)

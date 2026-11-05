@@ -318,6 +318,12 @@ fn collect(
     let names = query.capture_names();
     let text = |node: Node| node.utf8_text(source).unwrap_or_default();
     let return_type = |node: Node| {
+        #[cfg(feature = "lang-python")]
+        if path.ends_with(".py")
+            && let Some(result) = super::lang::python::context_manager_result(node, source)
+        {
+            return result;
+        }
         if path.ends_with(".rs") {
             facts::normalize_space(text(node))
         } else {
@@ -489,6 +495,12 @@ fn collect(
             };
             reference.line = row(name);
             if let Some(qualifier) = get("qualifier") {
+                #[cfg(feature = "lang-go")]
+                let qualifier = if path.ends_with(".go") {
+                    super::lang::go::composite_receiver_type(qualifier, source).unwrap_or(qualifier)
+                } else {
+                    qualifier
+                };
                 let qualifier_text = {
                     #[cfg(feature = "lang-typescript")]
                     if super::lang::typescript::is_typescript_path(path)
@@ -591,7 +603,15 @@ fn collect(
                     } else if let Some(node) = get("binding.call")
                         && (!path.ends_with(".rs") || !entry.declared)
                     {
-                        entry.type_name = Some(facts::normalize_space(text(node)));
+                        entry.type_name = match (path.ends_with(".py"), primary_node.kind()) {
+                            #[cfg(feature = "lang-python")]
+                            (true, "with_item") => super::lang::python::context_manager_callee(
+                                primary_node,
+                                node,
+                                source,
+                            ),
+                            _ => Some(facts::normalize_space(text(node))),
+                        };
                         entry.call = true;
                         entry.try_result = path.ends_with(".rs")
                             && node

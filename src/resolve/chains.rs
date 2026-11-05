@@ -92,6 +92,9 @@ pub(super) fn receiver_steps(qualifier: &str) -> Option<Vec<Step<'_>>> {
         while bytes.get(position).is_some_and(u8::is_ascii_whitespace) {
             position += 1;
         }
+        if position == bytes.len() {
+            return None;
+        }
     }
     (!steps.is_empty()).then_some(steps)
 }
@@ -138,6 +141,11 @@ impl Index<'_> {
             let (result, _) = self.rust_result(file, scope, result);
             let result = crate::extract::engine::type_name(result);
             self.resolve_type(file, None, scope, &result)
+        } else if self.file_type(file) == Some(FileType::Python)
+            && !result.split('.').all(is_identifier)
+        {
+            // Unsupported unions and generic context results stay unknown.
+            None
         } else {
             self.resolve_type(file, None, scope, result)
         }
@@ -332,7 +340,7 @@ mod tests {
             names("new Hono<Env>().route"),
             Some(vec![("Hono", true), ("route", false)])
         );
-        for rejected in ["a + b", "(a).b", "f(", ""] {
+        for rejected in ["a + b", "(a).b", "f(", "", "foo().", "foo() .  ", "a."] {
             assert_eq!(names(rejected), None, "{rejected}");
         }
     }
