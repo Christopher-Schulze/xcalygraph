@@ -410,6 +410,21 @@ struct Chunk {
     lists: FastMap<String, Vec<PostingRecord>>,
 }
 
+/// A token and its postings before encoding.
+type TokenPostings = (String, Vec<PostingRecord>);
+/// Tokens with start and count, and their encoded postings.
+type EncodedPart = (Vec<(String, u32, u32)>, Vec<u8>);
+
+/// Parts of the token list: one per first byte, so the parts stay in sort order.
+const TOKEN_PARTS: usize = 256;
+
+fn token_part(token: &str) -> usize {
+    token
+        .as_bytes()
+        .first()
+        .map_or(0, |byte| usize::from(*byte))
+}
+
 fn search_index(graph: &Graph) -> SearchIndex {
     let nodes = graph.node_count();
     let symbol_count = graph.symbols.len();
@@ -518,13 +533,10 @@ fn search_index(graph: &Graph) -> SearchIndex {
         })
         .collect();
     let mut lengths: Vec<LengthRecord> = Vec::with_capacity(nodes);
-    let mut merged: FastMap<String, Vec<PostingRecord>> = FastMap::default();
+    let mut chunks = Vec::with_capacity(chunk_results.len());
     for (chunk, chunk_lengths) in chunk_results {
         lengths.extend(chunk_lengths);
-        for (token, list) in chunk.lists {
-            // Chunks cover ascending node ranges, so appending keeps lists sorted by node.
-            merged.entry(token).or_default().extend(list);
-        }
+        chunks.push(chunk);
     }
     for symbol in 0..symbol_count {
         let file_node = symbol_count + graph.symbols[symbol].file as usize;
@@ -542,19 +554,67 @@ fn search_index(graph: &Graph) -> SearchIndex {
             (total as f32 / nodes as f32).max(0.01)
         };
     }
-    let mut sorted: Vec<(String, Vec<PostingRecord>)> = merged.into_iter().collect();
-    sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-    let mut tokens = Vec::with_capacity(sorted.len());
+    // Tokens split by first byte: each part merges, sorts and encodes alone, and the parts
+    // concatenate into one sorted list.
+    let mut parts: Vec<Vec<Vec<TokenPostings>>> = chunks
+        .into_par_iter()
+        .map(|chunk| {
+            let mut part: Vec<Vec<TokenPostings>> = vec![Vec::new(); TOKEN_PARTS];
+            for (token, list) in chunk.lists {
+                part[token_part(&token)].push((token, list));
+            }
+            part
+        })
+        .collect();
+    let by_part: Vec<Vec<Vec<TokenPostings>>> = (0..TOKEN_PARTS)
+        .map(|part| {
+            parts
+                .iter_mut()
+                .map(|chunk| std::mem::take(&mut chunk[part]))
+                .collect()
+        })
+        .collect();
+    drop(parts);
+    let encoded: Vec<EncodedPart> = by_part
+        .into_par_iter()
+        .map(|part| {
+            let mut merged: FastMap<String, Vec<PostingRecord>> = FastMap::default();
+            // Chunks cover ascending node ranges, so appending keeps lists sorted by node.
+            for chunk in part {
+                for (token, list) in chunk {
+                    merged.entry(token).or_default().extend(list);
+                }
+            }
+            let mut sorted: Vec<TokenPostings> = merged.into_iter().collect();
+            sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+            let mut tokens = Vec::with_capacity(sorted.len());
+            let mut encoder = Encoder::default();
+            for (token, list) in sorted {
+                tokens.push((token, encoder.bytes.len() as u32, list.len() as u32));
+                let mut previous = 0;
+                for posting in list {
+                    encoder.var_u32(posting.node - previous);
+                    // The text field has the top bits: rotated into the low bits, a varint
+                    // stays short.
+                    encoder.var_u32(posting.packed.rotate_left(4));
+                    previous = posting.node;
+                }
+            }
+            (tokens, encoder.bytes)
+        })
+        .collect();
+    let mut tokens = Vec::with_capacity(encoded.iter().map(|(tokens, _)| tokens.len()).sum());
     let mut encoder = Encoder::default();
-    for (token, list) in sorted {
-        tokens.push((token, encoder.bytes.len() as u32, list.len() as u32));
-        let mut previous = 0;
-        for posting in list {
-            encoder.var_u32(posting.node - previous);
-            // The text field has the top bits: rotated into the low bits, a varint stays short.
-            encoder.var_u32(posting.packed.rotate_left(4));
-            previous = posting.node;
-        }
+    encoder
+        .bytes
+        .reserve_exact(encoded.iter().map(|(_, bytes)| bytes.len()).sum());
+    for (part, bytes) in encoded {
+        let base = encoder.bytes.len() as u32;
+        tokens.extend(
+            part.into_iter()
+                .map(|(token, start, count)| (token, base + start, count)),
+        );
+        encoder.bytes.extend_from_slice(&bytes);
     }
     SearchIndex {
         tokens,

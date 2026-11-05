@@ -29,7 +29,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | `map` | none | 2500 | orientation (7.1) |
 | `find` | `TERMS...` | 600 | ranked symbols and files, a clear top hit with source and neighbours (7.2) |
 | `show` | `NAME [--all]` | 1200 | symbol card (7.4); `--all` lifts per-section caps |
-| `impact` | `NAME...` or `--diff [REV]` | 1500 | changed and affected symbols, tests, run commands (7.5) |
+| `impact` | `NAME...` or `--diff [REV]` | 1500 | changed and affected symbols, tests, run commands, files that change together (7.5) |
 | `path` | `FROM TO` | 400 | shortest dependency path (7.6) |
 | `audit` | none | 2000 | dead code, cycles, stale doc references, env drift, unreferenced assets, hidden coupling, hotspots (7.7) |
 | `index` | none | none | explicit build or refresh |

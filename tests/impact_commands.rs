@@ -349,3 +349,66 @@ fn nested_swift_packages_get_a_package_path_and_a_test_filter() -> TestResult {
     assert!(found[0].contains("LibTests"), "{found:?}");
     Ok(())
 }
+
+#[test]
+fn impact_names_files_that_change_together_without_an_edge() -> Result<(), Box<dyn Error>> {
+    let root = support::exclusive_dir("impact-cochange")?;
+    let git = |args: &[&str]| -> Result<(), Box<dyn Error>> {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(args)
+            .current_dir(&root)
+            .env_remove("GIT_DIR")
+            .status()?;
+        assert!(status.success());
+        Ok(())
+    };
+    git(&["init", "-q"])?;
+    fs::write(
+        root.join("linked.py"),
+        "import api\n\ndef use():\n    return api.handler()\n",
+    )?;
+    for round in 0..4 {
+        fs::write(
+            root.join("api.py"),
+            format!("def handler():\n    return {round}\n"),
+        )?;
+        fs::write(root.join("config.yaml"), format!("version: {round}\n"))?;
+        fs::write(
+            root.join("linked.py"),
+            format!("import api\n\ndef use():\n    return api.handler() + {round}\n"),
+        )?;
+        git(&["add", "."])?;
+        git(&["commit", "-q", "-m", "change"])?;
+    }
+    fs::write(root.join("rare.py"), "def rare():\n    return 1\n")?;
+    fs::write(root.join("api.py"), "def handler():\n    return 9\n")?;
+    git(&["add", "."])?;
+    git(&["commit", "-q", "-m", "once"])?;
+    let run = |extra: &[&str]| -> Result<String, Box<dyn Error>> {
+        let output = support::command(BINARY, &root)
+            .args(["impact", "handler", "-C"])
+            .arg(&root)
+            .args(extra)
+            .output()?;
+        assert!(output.status.success(), "{output:?}");
+        Ok(String::from_utf8(output.stdout)?)
+    };
+    let text = run(&[])?;
+    assert!(
+        text.lines().any(|line| line == "c config.yaml 4/5"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("c linked.py"),
+        "a static edge needs no hint: {text}"
+    );
+    assert!(
+        !text.contains("rare.py"),
+        "one shared commit proves nothing: {text}"
+    );
+    let json = run(&["--json"])?;
+    assert!(json.contains("\"rel\":\"cochange\""), "{json}");
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

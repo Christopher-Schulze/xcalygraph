@@ -224,12 +224,14 @@ fn run_query(
             Ok(query::show::render(index, filter, node, &show))
         }
         CommandName::Impact => {
+            let history = impact_history(root, &workspace.store, options.read_only);
             let impact = query::impact::ImpactOptions {
                 root,
                 store: &workspace.store,
                 depth: options.depth.unwrap_or(3),
                 json,
                 budget: budget(1500),
+                history: history.as_ref(),
             };
             if options.diff {
                 if args.len() > 1 {
@@ -288,6 +290,19 @@ fn run_query(
 
 /// Git history analyses cached by HEAD and analysis version; computed from the last 1000
 /// non-merge commits on a miss and stored unless read-only. `None` without git.
+/// History for `impact`: read-only never computes it, a cache miss then simply has no hints.
+fn impact_history(
+    root: &std::path::Path,
+    store: &crate::infra::store::Store,
+    read_only: bool,
+) -> Option<crate::domain::history::History> {
+    if read_only {
+        let head = format!("2:{}", crate::infra::git::head(root)?);
+        return store.read_history(&head);
+    }
+    audit_history(root, store, false)
+}
+
 fn audit_history(
     root: &std::path::Path,
     store: &crate::infra::store::Store,

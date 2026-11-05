@@ -120,6 +120,73 @@ pub struct ImpactOptions<'a> {
     pub depth: usize,
     pub json: bool,
     pub budget: usize,
+    /// Git history of this HEAD, when available: files that keep changing with the target.
+    pub history: Option<&'a crate::domain::history::History>,
+}
+
+/// Co-changed files shown per answer.
+const MAX_CO_CHANGED: usize = 5;
+
+/// Files that changed together with a target's file and have no edge to it, most shared commits
+/// first: path, shared commits and the commits touching the target's file.
+fn co_changed(
+    index: &Index,
+    filter: &Filter,
+    targets: &BTreeSet<u32>,
+    history: Option<&crate::domain::history::History>,
+) -> Vec<(String, u32, u32)> {
+    let Some(history) = history else {
+        return Vec::new();
+    };
+    let target_paths: BTreeSet<&str> = targets.iter().map(|&node| index.path_of(node)).collect();
+    let mut linked: BTreeSet<&str> = BTreeSet::new();
+    for &node in targets {
+        let file = index.file_index_of(node);
+        let start = index.symbol_count();
+        let owned = index.derived.files()[file as usize];
+        let first = owned.first_symbol;
+        let nodes = (first..first + owned.symbol_count).chain(std::iter::once(start + file));
+        for member in nodes {
+            for edge in index
+                .derived
+                .outgoing(member)
+                .iter()
+                .chain(index.derived.incoming(member))
+            {
+                linked.insert(index.path_of(edge.node));
+            }
+        }
+    }
+    let files: BTreeSet<&str> = index
+        .derived
+        .files()
+        .iter()
+        .filter(|file| filter.file(index, file))
+        .map(|file| index.string(file.path))
+        .collect();
+    let mut found: BTreeMap<&str, (u32, u32)> = BTreeMap::new();
+    for (left, right, shared) in &history.co_change {
+        for (target, other) in [(left, right), (right, left)] {
+            if target_paths.contains(target.as_str())
+                && !target_paths.contains(other.as_str())
+                && !linked.contains(other.as_str())
+                && files.contains(other.as_str())
+            {
+                let commits = history.churn.get(target).copied().unwrap_or(*shared);
+                let entry = found.entry(other).or_default();
+                if *shared > entry.0 {
+                    *entry = (*shared, commits);
+                }
+            }
+        }
+    }
+    let mut ordered: Vec<(String, u32, u32)> = found
+        .into_iter()
+        .map(|(path, (shared, commits))| (path.to_owned(), shared, commits))
+        .collect();
+    ordered.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    ordered.truncate(MAX_CO_CHANGED);
+    ordered
 }
 
 /// Targets from NAME arguments.
@@ -1530,6 +1597,19 @@ fn render(
                 ("path", Value::Str(path)),
                 ("line", Value::Int(u64::from(line))),
                 ("conf", Value::Str(if exact { "exact" } else { "inferred" })),
+            ],
+        );
+    }
+    for (path, shared, commits) in co_changed(index, filter, &target_nodes, options.history) {
+        writer.line(
+            &format!("c {path} {shared}/{commits}"),
+            &[
+                ("t", Value::Str("edge")),
+                ("rel", Value::Str("cochange")),
+                ("path", Value::Str(&path)),
+                ("count", Value::Int(u64::from(shared))),
+                ("commits", Value::Int(u64::from(commits))),
+                ("conf", Value::Str("inferred")),
             ],
         );
     }
