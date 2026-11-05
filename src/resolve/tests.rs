@@ -16,6 +16,7 @@ use crate::domain::role::{self, FileFacts};
 use crate::extract::extract;
 use sha2::{Digest, Sha256};
 
+mod binding_scope;
 mod precision_tools;
 
 fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, Vec<u8>)>) -> std::io::Result<()> {

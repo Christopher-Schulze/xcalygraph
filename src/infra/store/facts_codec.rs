@@ -122,6 +122,10 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
         encoder.opt_str(reference.qualifier.as_deref());
         opt_index(encoder, reference.scope);
         encoder.var_u32(reference.line);
+        opt_u32(
+            encoder,
+            (reference.byte != crate::domain::facts::NO_BYTE).then_some(reference.byte),
+        );
         encoder.u8(reference.arity);
     }
     encoder.var_usize(facts.go_embeds.len());
@@ -149,7 +153,17 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
         encoder.str(&binding.name);
         encoder.str(&binding.type_name);
         encoder.var_u32(binding.line);
-        opt_u32(encoder, binding.scope_end_line);
+        opt_u32(
+            encoder,
+            binding.visibility.as_ref().map(|range| range.start),
+        );
+        if let Some(range) = &binding.visibility {
+            encoder.var_u32(range.end);
+        }
+        opt_u32(
+            encoder,
+            (binding.value_byte != crate::domain::facts::NO_BYTE).then_some(binding.value_byte),
+        );
         encoder.u8(u8::from(binding.declared));
     }
     encoder.var_usize(facts.envs.len());
@@ -304,6 +318,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             qualifier: decoder.opt_string()?,
             scope: read_opt_index(decoder)?,
             line: decoder.var_u32()?,
+            byte: read_opt_u32(decoder)?.unwrap_or(crate::domain::facts::NO_BYTE),
             arity: decoder.u8()?,
         });
     }
@@ -380,7 +395,17 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             name: decoder.string()?,
             type_name: decoder.string()?,
             line: decoder.var_u32()?,
-            scope_end_line: read_opt_u32(decoder)?,
+            visibility: match read_opt_u32(decoder)? {
+                Some(start) => {
+                    let end = decoder.var_u32()?;
+                    if start >= end {
+                        return Err(DecodeError("binding visibility"));
+                    }
+                    Some(start..end)
+                }
+                None => None,
+            },
+            value_byte: read_opt_u32(decoder)?.unwrap_or(crate::domain::facts::NO_BYTE),
             declared: decoder.u8()? != 0,
         });
     }
@@ -753,6 +778,7 @@ mod tests {
                     qualifier: Some("s.db".to_owned()),
                     scope: Some(1),
                     line: 12,
+                    byte: 140,
                     arity: 2,
                 },
                 Ref {
@@ -761,6 +787,7 @@ mod tests {
                     qualifier: None,
                     scope: Some(1),
                     line: 13,
+                    byte: crate::domain::facts::NO_BYTE,
                     arity: 1,
                 },
             ],
@@ -791,7 +818,8 @@ mod tests {
                 name: "s".to_owned(),
                 type_name: "Store".to_owned(),
                 line: 11,
-                scope_end_line: None,
+                visibility: None,
+                value_byte: crate::domain::facts::NO_BYTE,
                 declared: true,
             }],
             envs: vec![EnvRead {
@@ -959,7 +987,8 @@ mod tests {
             name: "parse".to_owned(),
             type_name: String::new(),
             line: 14,
-            scope_end_line: Some(20),
+            visibility: Some(150..220),
+            value_byte: 140,
             declared: false,
         });
         let mut encoder = Encoder::default();

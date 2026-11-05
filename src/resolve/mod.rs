@@ -39,7 +39,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 114;
+pub const RESOLVE_VERSION: u32 = 115;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -2882,7 +2882,7 @@ impl<'a> Index<'a> {
             && reference.kind == RefKind::Call
             && self.file_type(file) == Some(FileType::Rust)
             && self
-                .binding(file, reference.scope, name, reference.line)
+                .binding(file, reference.scope, name, reference.line, reference.byte)
                 .is_some()
         {
             // A Rust local value shadows items in the call namespace even when its type is
@@ -3149,7 +3149,13 @@ impl<'a> Index<'a> {
         }
         let local_binding = reference.qualifier.is_none()
             && self
-                .binding(file, reference.scope, &reference.name, reference.line)
+                .binding(
+                    file,
+                    reference.scope,
+                    &reference.name,
+                    reference.line,
+                    reference.byte,
+                )
                 .is_some();
         if local_binding {
             return Outcome::External;
@@ -3157,7 +3163,7 @@ impl<'a> Index<'a> {
         let outcome = match reference.qualifier.as_deref() {
             Some(qualifier) => {
                 let shadowed = qualifier.split('.').next().is_some_and(|head| {
-                    self.binding(file, reference.scope, head, reference.line)
+                    self.binding(file, reference.scope, head, reference.line, reference.byte)
                         .is_some()
                 });
                 let qualified = if shadowed {
@@ -3171,13 +3177,7 @@ impl<'a> Index<'a> {
                     // of that type (properties, method values).
                     None if qualifier.split('.').all(is_identifier) => {
                         let chain: Vec<&str> = qualifier.split('.').collect();
-                        match self.receiver_type(
-                            file,
-                            imports,
-                            reference.scope,
-                            &chain,
-                            reference.line,
-                        ) {
+                        match self.receiver_type(file, imports, reference, &chain) {
                             Receiver::Known(types, Confidence::Exact) => {
                                 let found: Vec<u32> = types
                                     .iter()
@@ -3188,7 +3188,13 @@ impl<'a> Index<'a> {
                             Receiver::Known(types, Confidence::Inferred)
                                 if self.file_type(file) == Some(FileType::Python)
                                     && self
-                                        .binding(file, reference.scope, chain[0], reference.line)
+                                        .binding(
+                                            file,
+                                            reference.scope,
+                                            chain[0],
+                                            reference.line,
+                                            reference.byte,
+                                        )
                                         .and_then(|binding| {
                                             chains::call_binding(&binding.type_name)
                                         })
@@ -3306,7 +3312,7 @@ impl<'a> Index<'a> {
         // Rust qualifiers here are paths (`store::load`), which locals cannot shadow.
         let shadowed = !rust
             && self
-                .binding(file, reference.scope, head, reference.line)
+                .binding(file, reference.scope, head, reference.line, reference.byte)
                 .is_some();
         let plain_head = chain.len() == 1 && is_identifier(head) && !shadowed;
         // `this` resolves to its owner type for member lookup, but is an instance value.
@@ -3371,8 +3377,14 @@ impl<'a> Index<'a> {
         // 5a. Receiver that is itself a call (`Service().run()`, `open(x).read()`): the result
         // type of the call, inferred.
         if !rust && let Some(callee) = call_receiver(qualifier) {
-            if self.call_result_is_external(file, imports, reference.scope, reference.line, callee)
-            {
+            if self.call_result_is_external(
+                file,
+                imports,
+                reference.scope,
+                reference.line,
+                reference.byte,
+                callee,
+            ) {
                 return self
                     .extension(file, imports, reference.scope, name, None)
                     .unwrap_or(Outcome::External);
@@ -3382,7 +3394,8 @@ impl<'a> Index<'a> {
                 name: String::new(),
                 type_name: format!("{callee}()"),
                 line: reference.line,
-                scope_end_line: None,
+                visibility: None,
+                value_byte: reference.byte,
                 declared: false,
             };
             if let Some((types, _)) = self.binding_type(file, imports, reference.scope, &binding) {
@@ -3418,8 +3431,7 @@ impl<'a> Index<'a> {
         }
         // 5. Member call: receiver type from self, bindings or fields.
         if chain.iter().all(|segment| is_identifier(segment)) {
-            let receiver =
-                self.receiver_type(file, imports, reference.scope, &chain, reference.line);
+            let receiver = self.receiver_type(file, imports, reference, &chain);
             #[cfg(feature = "lang-typescript")]
             let receiver = match receiver {
                 Receiver::Composite(branches, confidence) => {
@@ -3439,7 +3451,7 @@ impl<'a> Index<'a> {
             };
             // Declared type of a single receiver variable: selects among extension overloads.
             let receiver_name = (chain.len() == 1)
-                .then(|| self.binding(file, reference.scope, head, reference.line))
+                .then(|| self.binding(file, reference.scope, head, reference.line, reference.byte))
                 .flatten()
                 .filter(|binding| binding.declared)
                 .map(|binding| binding.type_name.as_str());
@@ -3542,7 +3554,7 @@ impl<'a> Index<'a> {
         let static_call = chain.len() == 1
             && head.starts_with(|ch: char| ch.is_uppercase())
             && self
-                .binding(file, reference.scope, head, reference.line)
+                .binding(file, reference.scope, head, reference.line, reference.byte)
                 .is_none();
         if !static_call
             && let Some(extension) = self.extension(file, imports, reference.scope, name, None)
@@ -3608,6 +3620,7 @@ impl<'a> Index<'a> {
         imports: &Imports,
         scope: Option<u32>,
         line: u32,
+        byte: u32,
         callee: &str,
     ) -> bool {
         let callee_ref = match split_qualified(callee) {
@@ -3617,6 +3630,7 @@ impl<'a> Index<'a> {
                 qualifier: Some(qualifier.to_owned()),
                 scope,
                 line,
+                byte,
                 arity: facts::NO_ARITY,
             },
             None => Ref {
@@ -3625,6 +3639,7 @@ impl<'a> Index<'a> {
                 qualifier: None,
                 scope,
                 line,
+                byte,
                 arity: facts::NO_ARITY,
             },
         };
@@ -3681,10 +3696,10 @@ impl<'a> Index<'a> {
         &self,
         file: u32,
         imports: &Imports,
-        scope: Option<u32>,
+        reference: &Ref,
         chain: &[&str],
-        line: u32,
     ) -> Receiver {
+        let scope = reference.scope;
         let head = chain[0];
         let objc = self.file_type(file) == Some(FileType::ObjC);
         let start = if matches!(head, "self" | "this" | "Self" | "$this") {
@@ -3709,11 +3724,20 @@ impl<'a> Index<'a> {
                 return Receiver::External;
             }
             Some((self.objc_class_parts(&supers), Confidence::Exact))
-        } else if let Some(binding) = self.binding(file, scope, head, line) {
+        } else if let Some(binding) =
+            self.binding(file, scope, head, reference.line, reference.byte)
+        {
             match self.binding_type(file, imports, scope, binding) {
                 Some(found) => Some(found),
                 None if let Some((callee, _)) = chains::call_binding(&binding.type_name)
-                    && self.call_result_is_external(file, imports, scope, binding.line, callee) =>
+                    && self.call_result_is_external(
+                        file,
+                        imports,
+                        scope,
+                        binding.line,
+                        binding.value_byte,
+                        callee,
+                    ) =>
                 {
                     return Receiver::External;
                 }
@@ -3899,13 +3923,31 @@ impl<'a> Index<'a> {
         }
         if let Some(collection) = binding.type_name.strip_prefix("range:") {
             // The element of a ranged collection: the collection binding's (element) type.
-            let source = self.binding(file, scope, collection, binding.line)?;
+            let source = self.binding(file, scope, collection, binding.line, binding.value_byte)?;
             if std::ptr::eq(source, binding) {
                 return None;
+            }
+            // ECMAScript iterables need a declared element type: a plain value is not its element.
+            if matches!(
+                self.file_type(file),
+                Some(
+                    FileType::JavaScript
+                        | FileType::TypeScript
+                        | FileType::Vue
+                        | FileType::Svelte
+                        | FileType::Astro
+                )
+            ) {
+                let element = source.type_name.strip_prefix("elements:")?;
+                return self.resolve_type(file, Some(imports), scope, element);
             }
             return self
                 .binding_type(file, imports, scope, source)
                 .map(|(types, _)| (types, Confidence::Inferred));
+        }
+        // A declared array is a container, not a value of its element type.
+        if binding.type_name.starts_with("elements:") {
+            return None;
         }
         if let Some((call, _)) = chains::call_binding(&binding.type_name) {
             // Result of a call: resolve the callee, then its declared result type.
@@ -3916,6 +3958,7 @@ impl<'a> Index<'a> {
                     qualifier: Some(qualifier.to_owned()),
                     scope,
                     line: binding.line,
+                    byte: binding.value_byte,
                     arity: facts::NO_ARITY,
                 },
                 None => Ref {
@@ -3924,6 +3967,7 @@ impl<'a> Index<'a> {
                     qualifier: None,
                     scope,
                     line: binding.line,
+                    byte: binding.value_byte,
                     arity: facts::NO_ARITY,
                 },
             };
@@ -3974,7 +4018,8 @@ impl<'a> Index<'a> {
                         name: String::new(),
                         type_name: qualifier.to_owned(),
                         line: binding.line,
-                        scope_end_line: None,
+                        visibility: None,
+                        value_byte: binding.value_byte,
                         declared: false,
                     };
                     self.binding_type(file, imports, scope, &receiver)
@@ -3997,16 +4042,25 @@ impl<'a> Index<'a> {
     }
 
     /// Closest binding of `name` visible from `scope` at `line`.
-    fn binding(&self, file: u32, scope: Option<u32>, name: &str, line: u32) -> Option<&'a Binding> {
+    fn binding(
+        &self,
+        file: u32,
+        scope: Option<u32>,
+        name: &str,
+        line: u32,
+        byte: u32,
+    ) -> Option<&'a Binding> {
         let facts = self.facts(file)?;
         facts
             .bindings
             .iter()
             .filter(|binding| binding.name == name && binding.line <= line)
             .filter(|binding| {
-                binding
-                    .scope_end_line
-                    .is_none_or(|end_line| line <= end_line)
+                byte == facts::NO_BYTE
+                    || binding
+                        .visibility
+                        .as_ref()
+                        .is_none_or(|range| range.contains(&byte))
             })
             .filter(|binding| match binding.scope {
                 None => true,
@@ -4025,6 +4079,7 @@ impl<'a> Index<'a> {
                             .unwrap_or(usize::MAX),
                     ),
                     binding.line,
+                    binding.value_byte,
                 )
             })
     }

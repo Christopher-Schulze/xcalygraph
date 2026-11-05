@@ -200,6 +200,7 @@ pub fn macro_references(source: &[u8], facts: &mut Facts) {
                     scope: u32::try_from(scope).ok(),
                     line: number,
                     arity: NO_ARITY,
+                    byte: crate::domain::facts::NO_BYTE,
                 });
             }
         }

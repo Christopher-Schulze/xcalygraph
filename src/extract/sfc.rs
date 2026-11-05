@@ -65,6 +65,13 @@ pub fn extract(record: &FileRecord, content: &[u8], capture_identities: bool) ->
     // Spans index the blanked text; they match `content` only when decoding kept every byte.
     if blanked.len() != content.len() {
         spans.clear();
+        for reference in &mut facts.refs {
+            reference.byte = crate::domain::facts::NO_BYTE;
+        }
+        for binding in &mut facts.bindings {
+            binding.value_byte = crate::domain::facts::NO_BYTE;
+            binding.visibility = None;
+        }
         if capture_identities {
             identities.fill(None);
             incomplete = true;
@@ -105,6 +112,7 @@ pub fn extract(record: &FileRecord, content: &[u8], capture_identities: bool) ->
             scope: Some(component),
             line,
             arity: crate::domain::facts::NO_ARITY,
+            byte: crate::domain::facts::NO_BYTE,
         });
     }
     if svelte {
@@ -116,6 +124,7 @@ pub fn extract(record: &FileRecord, content: &[u8], capture_identities: bool) ->
                 scope: None,
                 line,
                 arity: crate::domain::facts::NO_ARITY,
+                byte: crate::domain::facts::NO_BYTE,
             });
         }
         facts.refs.retain(|reference| {
@@ -443,6 +452,20 @@ mod tests {
         assert_eq!(
             facts.imports.first().map(|i| i.spec.as_str()),
             Some("./UserCard.vue")
+        );
+        let invalid = [b"\xff".as_slice(), source.as_bytes()].concat();
+        let invalid = extract(
+            &record("src/components/user-page.vue", FileType::Vue),
+            &invalid,
+            false,
+        )
+        .facts;
+        assert!(!invalid.refs.is_empty());
+        assert!(
+            invalid
+                .refs
+                .iter()
+                .all(|reference| reference.byte == crate::domain::facts::NO_BYTE)
         );
     }
 

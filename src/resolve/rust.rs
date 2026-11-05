@@ -338,6 +338,7 @@ impl<'a> Index<'a> {
             scope: reference.scope,
             line: reference.line,
             arity: facts::NO_ARITY,
+            byte: reference.byte,
         };
         let _guard = DepthGuard::enter()?;
         let Outcome::Targets(targets, _) = self.resolve_ref(file, imports, &call) else {

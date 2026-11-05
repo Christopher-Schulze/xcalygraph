@@ -174,6 +174,7 @@ fn trap_reference(
         scope,
         line,
         arity: NO_ARITY,
+        byte: crate::domain::facts::NO_BYTE,
     })
 }
 
@@ -481,6 +482,7 @@ pub fn recover_functions(source: &str, facts: &mut crate::domain::facts::Facts) 
                             scope: Some(scope),
                             line: body_line,
                             arity: NO_ARITY,
+                            byte: crate::domain::facts::NO_BYTE,
                         });
                     }
                 }

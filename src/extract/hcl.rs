@@ -169,6 +169,7 @@ fn push_ref(facts: &mut Facts, scope: Option<u32>, address: &str, line: u32) {
             scope,
             line,
             arity: NO_ARITY,
+            byte: crate::domain::facts::NO_BYTE,
         });
     }
 }

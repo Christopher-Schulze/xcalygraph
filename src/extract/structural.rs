@@ -71,6 +71,7 @@ fn push_ref(facts: &mut Facts, kind: RefKind, name: &str, qualifier: Option<&str
             scope,
             line,
             arity: NO_ARITY,
+            byte: crate::domain::facts::NO_BYTE,
         });
     }
 }

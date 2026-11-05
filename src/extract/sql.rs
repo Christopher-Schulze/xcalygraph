@@ -263,6 +263,7 @@ fn push_query(facts: &mut Facts, scope: Option<u32>, name: &str, line: u32) {
             scope,
             line,
             arity: NO_ARITY,
+            byte: crate::domain::facts::NO_BYTE,
         });
     }
 }

@@ -15,7 +15,7 @@ use crate::infra::store::container::{Container, FORMAT_VERSION, Kind};
 use crate::infra::store::{self, SHARDS, Store};
 
 // Formats with an unchanged envelope and meta encoding for ownership checks.
-const CLEANUP_FORMATS: [u32; 10] = [FORMAT_VERSION, 21, 15, 14, 13, 12, 11, 10, 9, 8];
+const CLEANUP_FORMATS: [u32; 11] = [FORMAT_VERSION, 22, 21, 15, 14, 13, 12, 11, 10, 9, 8];
 
 struct Entry {
     dir: PathBuf,
@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn legacy_indexes_remain_verifiable_for_cleanup() -> Result<(), Box<dyn std::error::Error>> {
-        for version in [21_u32, 11, 9, 8] {
+        for version in [22_u32, 21, 11, 9, 8] {
             let dir = TestDir::new(&format!("indexes-format-{version}"))?;
             let root = dir.path().join("repo");
             fs::create_dir(&root)?;

@@ -97,6 +97,7 @@ fn push_run(facts: &mut Facts, scope: Option<u32>, name: &str, qualifier: Option
             scope,
             line,
             arity: NO_ARITY,
+            byte: crate::domain::facts::NO_BYTE,
         });
     }
 }

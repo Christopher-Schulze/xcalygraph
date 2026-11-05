@@ -45,6 +45,7 @@ fn push_type_ref(facts: &mut Facts, scope: u32, name: &str, line: u32) {
         scope: Some(scope),
         line,
         arity: NO_ARITY,
+        byte: crate::domain::facts::NO_BYTE,
     });
 }
 
@@ -268,6 +269,7 @@ pub fn graphql(text: &str, facts: &mut Facts) {
                         scope: Some(symbol),
                         line,
                         arity: NO_ARITY,
+                        byte: crate::domain::facts::NO_BYTE,
                     });
                 }
             }

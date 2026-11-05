@@ -185,14 +185,20 @@ impl Index<'_> {
             self.call_result_layers(file, imports, reference, first.name)
                 .ok_or(ChainFailure::Unknown)?
         } else if rust {
-            self.binding(file, reference.scope, first.name, reference.line)
-                .and_then(|binding| call_binding(&binding.type_name))
-                .map(|(callee, tries)| {
-                    self.call_result_layers(file, imports, reference, callee)?
-                        .checked_sub(tries)
-                })
-                .unwrap_or(Some(0))
-                .ok_or(ChainFailure::Unknown)?
+            self.binding(
+                file,
+                reference.scope,
+                first.name,
+                reference.line,
+                reference.byte,
+            )
+            .and_then(|binding| call_binding(&binding.type_name))
+            .map(|(callee, tries)| {
+                self.call_result_layers(file, imports, reference, callee)?
+                    .checked_sub(tries)
+            })
+            .unwrap_or(Some(0))
+            .ok_or(ChainFailure::Unknown)?
         } else {
             0
         };
@@ -202,7 +208,8 @@ impl Index<'_> {
                 name: String::new(),
                 type_name: format!("{}()", first.name),
                 line: reference.line,
-                scope_end_line: None,
+                visibility: None,
+                value_byte: reference.byte,
                 declared: false,
             };
             match self.binding_type(file, imports, reference.scope, &binding) {
@@ -212,6 +219,7 @@ impl Index<'_> {
                     imports,
                     reference.scope,
                     reference.line,
+                    reference.byte,
                     first.name,
                 ) =>
                 {
@@ -221,7 +229,7 @@ impl Index<'_> {
             }
         } else {
             let chain = [first.name];
-            match self.receiver_type(file, imports, reference.scope, &chain, reference.line) {
+            match self.receiver_type(file, imports, reference, &chain) {
                 Receiver::Known(types, _) => types,
                 Receiver::External => return Err(ChainFailure::External),
                 _ => return Err(ChainFailure::Unknown),

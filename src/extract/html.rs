@@ -42,8 +42,18 @@ pub(super) fn extract(
                 &mut parsed,
                 script,
                 line_offset(&text, range.start),
+                u32::try_from(range.start).unwrap_or(crate::domain::facts::NO_BYTE),
                 capture_identities,
             );
+        }
+    }
+    if text.len() != content.len() {
+        for reference in &mut parsed.facts.refs {
+            reference.byte = crate::domain::facts::NO_BYTE;
+        }
+        for binding in &mut parsed.facts.bindings {
+            binding.value_byte = crate::domain::facts::NO_BYTE;
+            binding.visibility = None;
         }
     }
     parsed.facts.lines = super::count_lines(content);
@@ -267,20 +277,26 @@ fn merge_script(
     parsed: &mut engine::Parsed,
     mut script: engine::Parsed,
     line_offset: u32,
+    byte_offset: u32,
     capture_identities: bool,
 ) {
     let symbol_count = script.facts.symbols.len();
     if capture_identities {
         script.identities.resize(symbol_count, None);
     }
-    merge_facts(&mut parsed.facts, &mut script.facts, line_offset);
+    merge_facts(
+        &mut parsed.facts,
+        &mut script.facts,
+        line_offset,
+        byte_offset,
+    );
     parsed.incomplete |= script.incomplete;
     if capture_identities {
         parsed.identities.append(&mut script.identities);
     }
 }
 
-fn merge_facts(document: &mut Facts, script: &mut Facts, line_offset: u32) {
+fn merge_facts(document: &mut Facts, script: &mut Facts, line_offset: u32, byte_offset: u32) {
     document.coverage = document.coverage.max(script.coverage);
     let symbol_offset = u32::try_from(document.symbols.len()).unwrap_or(u32::MAX);
     for symbol in &mut script.symbols {
@@ -293,10 +309,15 @@ fn merge_facts(document: &mut Facts, script: &mut Facts, line_offset: u32) {
     }
     for reference in &mut script.refs {
         reference.line = reference.line.saturating_add(line_offset);
+        reference.byte = offset_byte(reference.byte, byte_offset);
         reference.scope = offset_index(reference.scope, symbol_offset);
     }
     for binding in &mut script.bindings {
         binding.line = binding.line.saturating_add(line_offset);
+        binding.value_byte = offset_byte(binding.value_byte, byte_offset);
+        binding.visibility = binding.visibility.take().and_then(|range| {
+            Some(range.start.checked_add(byte_offset)?..range.end.checked_add(byte_offset)?)
+        });
         binding.scope = offset_index(binding.scope, symbol_offset);
     }
     for env in &mut script.envs {
@@ -317,6 +338,11 @@ fn merge_facts(document: &mut Facts, script: &mut Facts, line_offset: u32) {
 
 fn offset_index(index: Option<u32>, offset: u32) -> Option<u32> {
     index.map(|index| index.saturating_add(offset))
+}
+
+fn offset_byte(byte: u32, offset: u32) -> u32 {
+    byte.checked_add(offset)
+        .unwrap_or(crate::domain::facts::NO_BYTE)
 }
 
 fn line_offset(text: &str, byte_offset: usize) -> u32 {
@@ -366,7 +392,33 @@ mod tests {
             .iter()
             .find(|binding| binding.name == "client");
         assert_eq!(binding.map(|binding| binding.line), Some(5));
+        assert_eq!(
+            binding.map(|binding| binding.value_byte as usize),
+            content.find("client ="),
+            "inline binding bytes must address the complete document"
+        );
+        let constructor = facts
+            .refs
+            .iter()
+            .find(|reference| reference.name == "Client");
+        assert_eq!(
+            constructor.map(|reference| reference.byte as usize),
+            content.find("Client()"),
+            "inline reference bytes must address the complete document"
+        );
         let env = facts.envs.iter().find(|env| env.name == "API_KEY");
         assert_eq!(env.map(|env| env.line), Some(6));
+        let invalid = [b"\xff".as_slice(), content.as_bytes()].concat();
+        let invalid = extract(&record, &invalid, false).facts;
+        assert!(!invalid.refs.is_empty() && !invalid.bindings.is_empty());
+        assert!(
+            invalid
+                .refs
+                .iter()
+                .all(|reference| reference.byte == crate::domain::facts::NO_BYTE)
+        );
+        assert!(invalid.bindings.iter().all(|binding| {
+            binding.value_byte == crate::domain::facts::NO_BYTE && binding.visibility.is_none()
+        }));
     }
 }

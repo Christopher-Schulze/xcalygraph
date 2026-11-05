@@ -207,12 +207,17 @@ pub struct Ref {
     /// Enclosing symbol index in the same file.
     pub scope: Option<u32>,
     pub line: u32,
+    /// Exact source byte offset, or [`NO_BYTE`] for a synthesized reference without one.
+    pub byte: u32,
     /// Argument count of a call (overload selection); [`NO_ARITY`] otherwise.
     pub arity: u8,
 }
 
 /// Arity of references that are no calls or whose arguments were not counted.
 pub const NO_ARITY: u8 = u8::MAX;
+
+/// A synthesized fact without an exact source byte offset.
+pub const NO_BYTE: u32 = u32::MAX;
 
 /// Internal qualifier tag for Rust `#[path] mod` facts. The payload is two UTF-8 byte-length
 /// prefixed fields: the declared logical module suffix and the inline path context.
@@ -552,8 +557,10 @@ pub struct Binding {
     pub name: String,
     pub type_name: String,
     pub line: u32,
-    /// Last line in the lexical block, when the extractor records one.
-    pub scope_end_line: Option<u32>,
+    /// Half-open byte range in which the binding is active, when source-proven.
+    pub visibility: Option<std::ops::Range<u32>>,
+    /// Source byte of the declaration, used to resolve its RHS before activation.
+    pub value_byte: u32,
     /// True for declared types; false for factory or constructor results.
     pub declared: bool,
 }

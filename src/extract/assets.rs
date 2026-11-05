@@ -275,6 +275,7 @@ fn svg(text: &str) -> Facts {
                         scope: None,
                         line: tag_line,
                         arity: NO_ARITY,
+                        byte: crate::domain::facts::NO_BYTE,
                     });
                 }
             }
@@ -355,6 +356,7 @@ pub fn literal_paths(text: &str, facts: &mut Facts) {
                     scope,
                     line: number,
                     arity: NO_ARITY,
+                    byte: crate::domain::facts::NO_BYTE,
                 });
             }
         };

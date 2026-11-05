@@ -153,8 +153,8 @@ Freshness:
 |------|--------|
 | symbol | kind, name, parent symbol, line start, line end, signature (one line, whitespace-normalized, body removed, max 160 chars), doc (first sentence of the attached doc comment, max 120 chars; leading shebang directives are excluded), visibility (exported or private), flags (test, entry, generated, Python `NotImplementedError` contract stub) |
 | import | module specifier, alias, imported names, line, re-export flag, explicit type-only flag |
-| ref | name (identifier or last two segments of a member chain), kind (call, type, inherit, implement), enclosing symbol, line, call arity; Rust records function and impl generic parameters and their source-backed trait bounds; Julia also stores sparse positional direct-variable arguments and marks retained unqualified builtins |
-| binding | variable name, declared type as written, enclosing symbol, declaration line and optional lexical-block end line; Rust untyped local names may be retained with an empty type for lexical call shadowing; Julia typed parameters retain their full annotation |
+| ref | name (identifier or last two segments of a member chain), kind (call, type, inherit, implement), enclosing symbol, line, source byte when known, call arity; Rust records function and impl generic parameters and their source-backed trait bounds; Julia also stores sparse positional direct-variable arguments and marks retained unqualified builtins |
+| binding | variable name, declared type as written, enclosing symbol, declaration line, source byte for RHS lookup and optional half-open byte visibility range; captured Rust and ECMAScript locals activate after their initializer, with lexical block/function/closure limits and ECMAScript function-scoped `var`; declared ECMAScript arrays and standard iterables retain their element type for `for...of`; Rust untyped local names may be retained with an empty type for lexical call shadowing; Julia typed parameters retain their full annotation |
 | env | variable name, enclosing symbol, line |
 | fields | owning type, field names (card content only, no graph nodes) |
 | mention | doc heading, backticked identifier or relative path, line |
@@ -381,10 +381,10 @@ Location: `<index-dir>/<root basename>-<XXH3-64 hex of the canonical root path>/
 | `git` | churn, co-change, hotspots keyed by HEAD and analysis version | key changes and git data is requested |
 | `lock` | writer lock | never |
 
-- Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum; fact records include a per-file coverage status, the source XXH3-128 hash, sparse source identities, packed import re-export/type-only flags, optional binding block-end lines and Rust Unix/non-Unix gate flags; derived records include validated sparse TypeScript interface groups; fact shard sections deflated; search postings as delta-varint (node, term frequencies) pairs.
+- Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum; fact records include a per-file coverage status, the source XXH3-128 hash, sparse source identities, packed import re-export/type-only flags, exact reference/declaration byte positions, optional half-open binding visibility ranges and Rust Unix/non-Unix gate flags; derived records include validated sparse TypeScript interface groups; fact shard sections deflated; search postings as delta-varint (node, term frequencies) pairs.
 - Writes: new exclusively created temp file in the same directory (`O_CREAT|O_EXCL`; an existing entry or symlink is skipped, never opened) -> rename; no fsync; unchanged files untouched; install and update use the same primitive. A checksum mismatch or truncation on open rebuilds that file.
 - Reads: memory-mapped, zero-copy.
-- Listing and safe cleanup also recognize format-8 through format-15 and format-21 containers; queries require the current format and writable queries rebuild older indexes.
+- Listing and safe cleanup also recognize format-8 through format-15, format-21 and format-22 containers; queries require the current format and writable queries rebuild older indexes.
 
 ## 10. Skill, install, update
 

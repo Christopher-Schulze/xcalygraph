@@ -103,6 +103,7 @@ fn path_literal(facts: &mut Facts, value: &str, line: u32) {
             scope: None,
             line,
             arity: NO_ARITY,
+            byte: crate::domain::facts::NO_BYTE,
         });
     }
 }

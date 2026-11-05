@@ -80,6 +80,7 @@ pub fn scan_lines(source: &[u8], facts: &mut Facts) {
                             scope,
                             line: number,
                             arity: NO_ARITY,
+                            byte: crate::domain::facts::NO_BYTE,
                         });
                     }
                 }

@@ -445,6 +445,7 @@ fn call(facts: &mut Facts, route: u32, handler: &str, line: u32) {
         scope: Some(route),
         line,
         arity: NO_ARITY,
+        byte: crate::domain::facts::NO_BYTE,
     });
 }
 

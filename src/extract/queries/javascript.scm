@@ -64,6 +64,10 @@
 (variable_declarator name: (identifier) @binding.name value: (call_expression function: (_) @binding.call) (#not-eq? @binding.call "require")) @binding
 (variable_declarator name: (identifier) @binding.name value: (await_expression (call_expression function: (_) @binding.call))) @binding
 
+; A lexical for-of target receives an array element, not the array's own type.
+(for_in_statement kind: ["const" "let"] left: (identifier) @binding.name
+  operator: "of" right: (identifier) @binding.range) @binding
+
 (assignment_expression
   left: (member_expression object: (this) property: (property_identifier) @field.name)
   right: (new_expression constructor: (_) @field.type)) @field

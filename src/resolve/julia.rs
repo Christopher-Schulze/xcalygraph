@@ -57,9 +57,13 @@ impl<'a> Index<'a> {
         }
         let mut arguments = Vec::new();
         for argument in facts.call_arguments_for(reference_index) {
-            let Some(binding) =
-                self.binding(file, reference.scope, &argument.binding, reference.line)
-            else {
+            let Some(binding) = self.binding(
+                file,
+                reference.scope,
+                &argument.binding,
+                reference.line,
+                reference.byte,
+            ) else {
                 continue;
             };
             if !binding.declared {
@@ -225,6 +229,7 @@ impl<'a> Index<'a> {
                 scope,
                 line: 0,
                 arity: facts::NO_ARITY,
+                byte: crate::domain::facts::NO_BYTE,
             };
             let Outcome::Targets(targets, confidence) = self.resolve_ref(file, imports, &reference)
             else {

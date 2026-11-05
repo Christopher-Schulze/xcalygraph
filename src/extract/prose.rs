@@ -122,6 +122,7 @@ impl Outline {
             scope,
             line,
             arity: NO_ARITY,
+            byte: crate::domain::facts::NO_BYTE,
         });
     }
 
@@ -149,6 +150,7 @@ impl Outline {
                 scope,
                 line,
                 arity: NO_ARITY,
+                byte: crate::domain::facts::NO_BYTE,
             });
         }
     }

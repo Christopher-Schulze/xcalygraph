@@ -86,6 +86,7 @@ pub fn extract(text: &str) -> Facts {
                 scope,
                 line: number,
                 arity: facts::NO_ARITY,
+                byte: crate::domain::facts::NO_BYTE,
             });
         }
         for mention in mentions(line) {
@@ -96,6 +97,7 @@ pub fn extract(text: &str) -> Facts {
                 scope,
                 line: number,
                 arity: facts::NO_ARITY,
+                byte: crate::domain::facts::NO_BYTE,
             });
         }
     }

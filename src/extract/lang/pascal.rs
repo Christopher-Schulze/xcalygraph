@@ -144,6 +144,7 @@ pub fn form(path: &str, text: &str) -> Facts {
                     scope: Some(id),
                     line: number,
                     arity: NO_ARITY,
+                    byte: crate::domain::facts::NO_BYTE,
                 });
             }
             open.push(id);
@@ -170,6 +171,7 @@ pub fn form(path: &str, text: &str) -> Facts {
                 scope: open.last().copied(),
                 line: number,
                 arity: NO_ARITY,
+                byte: crate::domain::facts::NO_BYTE,
             });
         }
     }

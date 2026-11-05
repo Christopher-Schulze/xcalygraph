@@ -181,7 +181,7 @@ struct RawBinding {
     try_result: bool,
     position: usize,
     line: u32,
-    scope_end_line: Option<u32>,
+    visibility: Option<std::ops::Range<u32>>,
 }
 
 #[derive(Default)]
@@ -569,16 +569,7 @@ fn collect(
                     let entry = bindings.entry(key).or_default();
                     entry.position = primary_node.start_byte();
                     entry.line = line;
-                    if path.ends_with(".rs") && primary_node.kind() == "let_declaration" {
-                        let mut ancestor = primary_node.parent();
-                        while let Some(node) = ancestor {
-                            if node.kind() == "block" {
-                                entry.scope_end_line = Some(node.end_position().row as u32 + 1);
-                                break;
-                            }
-                            ancestor = node.parent();
-                        }
-                    }
+                    entry.visibility = super::bindings::visibility(path, primary_node);
                     if let Some(node) = get("binding.name") {
                         entry.name = Some(text(node).to_owned());
                     }
@@ -586,6 +577,10 @@ fn collect(
                         let type_text = text(node);
                         entry.type_name = Some(if path.ends_with(".jl") {
                             facts::normalize_space(type_text)
+                        } else if let Some(element) =
+                            super::bindings::declared_element(path, node, source)
+                        {
+                            format!("elements:{}", type_name(text(element)))
                         } else {
                             type_name(type_text)
                         });
@@ -1104,6 +1099,7 @@ fn assemble(assembly: Assembly) -> Parsed {
                     qualifier: raw.qualifier,
                     scope: scope_of(raw.position),
                     line: raw.line,
+                    byte: u32::try_from(raw.position).unwrap_or(facts::NO_BYTE),
                     arity: raw.arity,
                 },
                 identity: raw.source_identity,
@@ -1142,6 +1138,7 @@ fn assemble(assembly: Assembly) -> Parsed {
                     qualifier: Some(target.clone()),
                     scope: None,
                     line: row(*impl_node),
+                    byte: u32::try_from(impl_node.start_byte()).unwrap_or(facts::NO_BYTE),
                     arity: facts::NO_ARITY,
                 },
                 identity: None,
@@ -1270,7 +1267,8 @@ fn assemble(assembly: Assembly) -> Parsed {
                     type_name
                 },
                 line: raw.line,
-                scope_end_line: raw.scope_end_line,
+                visibility: raw.visibility,
+                value_byte: u32::try_from(raw.position).unwrap_or(facts::NO_BYTE),
                 declared: raw.declared,
             })
         })
@@ -1282,7 +1280,8 @@ fn assemble(assembly: Assembly) -> Parsed {
                 name: String::new(),
                 type_name,
                 line: symbols[scope as usize].line,
-                scope_end_line: None,
+                visibility: None,
+                value_byte: facts::NO_BYTE,
                 declared: true,
             });
         }
@@ -1293,7 +1292,8 @@ fn assemble(assembly: Assembly) -> Parsed {
             &a.name,
             &a.type_name,
             a.scope,
-            a.scope_end_line,
+            a.visibility.as_ref().map(|range| (range.start, range.end)),
+            a.value_byte,
             a.declared,
         )
             .cmp(&(
@@ -1301,7 +1301,8 @@ fn assemble(assembly: Assembly) -> Parsed {
                 &b.name,
                 &b.type_name,
                 b.scope,
-                b.scope_end_line,
+                b.visibility.as_ref().map(|range| (range.start, range.end)),
+                b.value_byte,
                 b.declared,
             ))
     });
