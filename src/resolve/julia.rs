@@ -207,7 +207,7 @@ impl<'a> Index<'a> {
         if targets.is_empty() {
             Outcome::External
         } else {
-            Outcome::Targets(targets, Confidence::Inferred)
+            Outcome::Targets(smallvec::SmallVec::from_vec(targets), Confidence::Inferred)
         }
     }
 

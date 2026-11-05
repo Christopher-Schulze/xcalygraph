@@ -65,6 +65,8 @@ struct Index<'a> {
     typescript_declaration_pairs: HashMap<u32, u32>,
     /// Top-level, non-method symbols per (module, name).
     by_module: HashMap<(u32, &'a str), Vec<u32>>,
+    /// Per file with many declarations: local indices sorted by name.
+    named: Vec<FileNames>,
     /// Rust files with `pub use` or `pub extern crate`, per module.
     rust_reexporting: HashMap<u32, Vec<u32>>,
     /// Methods per (method scope, owner type name, method name).
@@ -411,6 +413,15 @@ impl<'a> Index<'a> {
                 }
                 names
             },
+            named: input
+                .facts
+                .par_iter()
+                .map(|facts| {
+                    facts
+                        .as_ref()
+                        .map_or_else(FileNames::default, FileNames::new)
+                })
+                .collect(),
             by_module: HashMap::default(),
             rust_reexporting: HashMap::default(),
             methods: HashMap::default(),
@@ -1423,7 +1434,7 @@ impl<'a> Index<'a> {
                 ) {
                     return None;
                 }
-                let chain: Vec<u32> = scope_chain(facts, scope).collect();
+                let chain: smallvec::SmallVec<[u32; 8]> = scope_chain(facts, scope).collect();
                 if chain.iter().any(|&scope| {
                     facts
                         .symbols
@@ -1433,10 +1444,8 @@ impl<'a> Index<'a> {
                     return None;
                 }
                 for parent in chain.iter().copied().map(Some).chain(std::iter::once(None)) {
-                    let mut local: Vec<u32> = facts
-                        .symbols
-                        .iter()
-                        .enumerate()
+                    let mut local: Vec<u32> = self
+                        .named_symbols(file, facts, name)
                         .filter(|(_, symbol)| {
                             symbol.parent == parent
                                 && symbol.name == name
@@ -1454,10 +1463,8 @@ impl<'a> Index<'a> {
                     }
                 }
             } else {
-                let mut local: Vec<u32> = facts
-                    .symbols
-                    .iter()
-                    .enumerate()
+                let mut local: Vec<u32> = self
+                    .named_symbols(file, facts, name)
                     .filter(|(_, symbol)| symbol.name == name && symbol.kind().is_type())
                     .map(|(local, _)| {
                         self.canonical_interface(self.base[file as usize] + local as u32)
@@ -2255,9 +2262,10 @@ impl<'a> Index<'a> {
                 });
                 match nearest {
                     Some(symbol) if candidates.len() == 1 => exact(symbol),
-                    Some(symbol) => {
-                        Outcome::Targets(vec![(symbol, Confidence::Inferred)], Confidence::Inferred)
-                    }
+                    Some(symbol) => Outcome::Targets(
+                        smallvec::smallvec![(symbol, Confidence::Inferred)],
+                        Confidence::Inferred,
+                    ),
                     None => Outcome::External,
                 }
             }
@@ -2399,7 +2407,10 @@ impl<'a> Index<'a> {
                 && *only != file
             {
                 let node = self.symbols.len() as u32 + only;
-                return Outcome::Targets(vec![(node, Confidence::Inferred)], Confidence::Inferred);
+                return Outcome::Targets(
+                    smallvec::smallvec![(node, Confidence::Inferred)],
+                    Confidence::Inferred,
+                );
             }
         }
         Outcome::Unresolved
@@ -2443,7 +2454,10 @@ impl<'a> Index<'a> {
                 })
                 .collect();
             if let [only] = exact.as_slice() {
-                return Outcome::Targets(vec![(*only, Confidence::Exact)], Confidence::Exact);
+                return Outcome::Targets(
+                    smallvec::smallvec![(*only, Confidence::Exact)],
+                    Confidence::Exact,
+                );
             }
         }
         // `path:name` and `path::name`: a symbol of that file.
@@ -2462,11 +2476,15 @@ impl<'a> Index<'a> {
                         .map(|local| base + local as u32)
                 });
                 return match found {
-                    Some(symbol) => {
-                        Outcome::Targets(vec![(symbol, Confidence::Exact)], Confidence::Exact)
-                    }
+                    Some(symbol) => Outcome::Targets(
+                        smallvec::smallvec![(symbol, Confidence::Exact)],
+                        Confidence::Exact,
+                    ),
                     None => Outcome::Targets(
-                        vec![(self.symbols.len() as u32 + target_file, Confidence::Exact)],
+                        smallvec::smallvec![(
+                            self.symbols.len() as u32 + target_file,
+                            Confidence::Exact
+                        )],
                         Confidence::Exact,
                     ),
                 };
@@ -2480,7 +2498,7 @@ impl<'a> Index<'a> {
         if mention.contains('.') && !named_files.is_empty() {
             return match named_files.as_slice() {
                 [only] if *only != file => Outcome::Targets(
-                    vec![(self.symbols.len() as u32 + *only, Confidence::Inferred)],
+                    smallvec::smallvec![(self.symbols.len() as u32 + *only, Confidence::Inferred)],
                     Confidence::Inferred,
                 ),
                 [_] => Outcome::External,
@@ -2546,7 +2564,7 @@ impl<'a> Index<'a> {
             match (scoped.next(), scoped.next()) {
                 (Some(symbol), None) => {
                     return Outcome::Targets(
-                        vec![(symbol, Confidence::Inferred)],
+                        smallvec::smallvec![(symbol, Confidence::Inferred)],
                         Confidence::Inferred,
                     );
                 }
@@ -2562,9 +2580,10 @@ impl<'a> Index<'a> {
             {
                 Outcome::Unresolved
             }
-            Some(symbol) => {
-                Outcome::Targets(vec![(symbol, Confidence::Inferred)], Confidence::Inferred)
-            }
+            Some(symbol) => Outcome::Targets(
+                smallvec::smallvec![(symbol, Confidence::Inferred)],
+                Confidence::Inferred,
+            ),
             None if candidates.is_empty() => Outcome::Unresolved,
             None => Outcome::Ambiguous,
         }
@@ -2791,7 +2810,7 @@ impl<'a> Index<'a> {
             });
         match resolved {
             Some((types, confidence)) if types.len() == 1 => {
-                Outcome::Targets(vec![(types[0], confidence)], confidence)
+                Outcome::Targets(smallvec::smallvec![(types[0], confidence)], confidence)
             }
             Some((types, confidence)) if reference.arity != facts::NO_ARITY => {
                 // Generic overloads by type parameter count (`IRequest`, `IRequest<T>`).
@@ -2804,7 +2823,9 @@ impl<'a> Index<'a> {
                     })
                     .collect();
                 match matching.as_slice() {
-                    [only] => Outcome::Targets(vec![(*only, confidence)], confidence),
+                    [only] => {
+                        Outcome::Targets(smallvec::smallvec![(*only, confidence)], confidence)
+                    }
                     _ => Outcome::Ambiguous,
                 }
             }
@@ -2864,9 +2885,10 @@ impl<'a> Index<'a> {
             targets.dedup();
             return match targets.as_slice() {
                 [] => Outcome::Unresolved,
-                [only] => {
-                    Outcome::Targets(vec![(*only, Confidence::Inferred)], Confidence::Inferred)
-                }
+                [only] => Outcome::Targets(
+                    smallvec::smallvec![(*only, Confidence::Inferred)],
+                    Confidence::Inferred,
+                ),
                 _ => Outcome::Targets(
                     targets
                         .into_iter()
@@ -2919,9 +2941,9 @@ impl<'a> Index<'a> {
             } else {
                 confidence.max(only.1)
             };
-            return Outcome::Targets(vec![(only.0, confidence)], confidence);
+            return Outcome::Targets(smallvec::smallvec![(only.0, confidence)], confidence);
         }
-        Outcome::Targets(matching, confidence)
+        Outcome::Targets(smallvec::SmallVec::from_vec(matching), confidence)
     }
 
     fn source_identity_of_symbol(&self, symbol: u32) -> Option<&str> {
@@ -3052,10 +3074,10 @@ impl<'a> Index<'a> {
         // 1. Lexical scope: definitions of the file visible from the reference.
         if let Some(facts) = self.facts(file) {
             let base = self.base[file as usize];
-            let chain: Vec<u32> = scope_chain(facts, reference.scope).collect();
+            let chain: smallvec::SmallVec<[u32; 8]> = scope_chain(facts, reference.scope).collect();
             let mut best: Option<(usize, u32)> = None;
             let mut found: Vec<(usize, u32)> = Vec::new();
-            for (local, symbol) in facts.symbols.iter().enumerate() {
+            for (local, symbol) in self.named_symbols(file, facts, name) {
                 let id = base + local as u32;
                 if symbol.name != name || !kind_ok(id) || symbol.kind() == SymKind::Method {
                     continue;
@@ -3115,7 +3137,10 @@ impl<'a> Index<'a> {
                         .filter(|(depth, _)| *depth == best_depth)
                         .map(|&(_, id)| (id, Confidence::Exact))
                         .collect();
-                    return Outcome::Targets(variants, Confidence::Exact);
+                    return Outcome::Targets(
+                        smallvec::SmallVec::from_vec(variants),
+                        Confidence::Exact,
+                    );
                 }
                 // Objective-C: `@interface`, class extensions, categories and `@implementation`
                 // are parts of one class; the first part stands for it.
@@ -3181,7 +3206,7 @@ impl<'a> Index<'a> {
                 } else {
                     Confidence::Exact
                 };
-                return Outcome::Targets(vec![(latest, confidence)], confidence);
+                return Outcome::Targets(smallvec::smallvec![(latest, confidence)], confidence);
             }
             if same.len() > 1
                 && self.file_type(file) == Some(FileType::Go)
@@ -3405,7 +3430,7 @@ impl<'a> Index<'a> {
         } else {
             Cow::Borrowed(qualifier)
         };
-        let chain: Vec<&str> = dotted.split('.').map(str::trim).collect();
+        let chain: smallvec::SmallVec<[&str; 4]> = dotted.split('.').map(str::trim).collect();
         let head = chain[0];
         // 3. Qualified name through imports and the module map; a local binding of the head
         // shadows an import of the same name.
@@ -3505,7 +3530,10 @@ impl<'a> Index<'a> {
                     .map(|member| (member, Confidence::Inferred))
                     .collect();
                 if !targets.is_empty() {
-                    return Outcome::Targets(targets, Confidence::Inferred);
+                    return Outcome::Targets(
+                        smallvec::SmallVec::from_vec(targets),
+                        Confidence::Inferred,
+                    );
                 }
             }
         }
@@ -3522,7 +3550,10 @@ impl<'a> Index<'a> {
                         .map(|member| (member, Confidence::Inferred))
                         .collect();
                     if !targets.is_empty() {
-                        return Outcome::Targets(targets, Confidence::Inferred);
+                        return Outcome::Targets(
+                            smallvec::SmallVec::from_vec(targets),
+                            Confidence::Inferred,
+                        );
                     }
                 }
                 Err(chains::ChainFailure::External) => return Outcome::External,
@@ -3639,7 +3670,7 @@ impl<'a> Index<'a> {
                 targets.sort_unstable();
                 targets.dedup_by_key(|(member, _)| *member);
                 if !targets.is_empty() {
-                    return Outcome::Targets(targets, confidence);
+                    return Outcome::Targets(smallvec::SmallVec::from_vec(targets), confidence);
                 }
                 let owner = types
                     .first()
@@ -3723,26 +3754,7 @@ impl<'a> Index<'a> {
         byte: u32,
         callee: &str,
     ) -> bool {
-        let callee_ref = match split_qualified(callee) {
-            Some((qualifier, name)) => Ref {
-                kind: RefKind::Call,
-                name: name.to_owned(),
-                qualifier: Some(qualifier.to_owned()),
-                scope,
-                line,
-                byte,
-                arity: facts::NO_ARITY,
-            },
-            None => Ref {
-                kind: RefKind::Call,
-                name: callee.to_owned(),
-                qualifier: None,
-                scope,
-                line,
-                byte,
-                arity: facts::NO_ARITY,
-            },
-        };
+        let callee_ref = PooledRef::call(callee, scope, line, byte);
         if self.file_type(file) == Some(FileType::Rust)
             && callee_ref
                 .qualifier
@@ -4053,26 +4065,7 @@ impl<'a> Index<'a> {
         }
         if let Some((call, _)) = chains::call_binding(&binding.type_name) {
             // Result of a call: resolve the callee, then its declared result type.
-            let reference = match split_qualified(call) {
-                Some((qualifier, name)) => Ref {
-                    kind: RefKind::Call,
-                    name: name.to_owned(),
-                    qualifier: Some(qualifier.to_owned()),
-                    scope,
-                    line: binding.line,
-                    byte: binding.value_byte,
-                    arity: facts::NO_ARITY,
-                },
-                None => Ref {
-                    kind: RefKind::Call,
-                    name: call.to_owned(),
-                    qualifier: None,
-                    scope,
-                    line: binding.line,
-                    byte: binding.value_byte,
-                    arity: facts::NO_ARITY,
-                },
-            };
+            let reference = PooledRef::call(call, scope, binding.line, binding.value_byte);
             // Rust constructors by convention (`Type::new()`, `Type::default()`, `Type::with_x()`,
             // `Type::from_x()`): derived or external constructors have no source, yet return
             // `Self`.
@@ -4143,6 +4136,22 @@ impl<'a> Index<'a> {
         Some((types, confidence.max(type_confidence)))
     }
 
+    /// Symbols of a file that may be named `name`, in declaration order.
+    fn named_symbols<'f>(
+        &'f self,
+        file: u32,
+        facts: &'f Facts,
+        name: &'f str,
+    ) -> impl Iterator<Item = (usize, &'f facts::Symbol)> {
+        named_indices(
+            &self.named[file as usize].symbols,
+            &facts.symbols,
+            |symbol| symbol.name.as_str(),
+            name,
+        )
+        .map(|index| (index, &facts.symbols[index]))
+    }
+
     /// Closest binding of `name` visible from `scope` at `line`.
     fn binding(
         &self,
@@ -4153,37 +4162,39 @@ impl<'a> Index<'a> {
         byte: u32,
     ) -> Option<&'a Binding> {
         let facts = self.facts(file)?;
-        facts
-            .bindings
-            .iter()
-            .filter(|binding| binding.name == name && binding.line <= line)
-            .filter(|binding| {
-                byte == facts::NO_BYTE
-                    || binding
-                        .visibility
-                        .as_ref()
-                        .is_none_or(|range| range.contains(&byte))
-            })
-            .filter(|binding| match binding.scope {
-                None => true,
-                Some(binding_scope) => {
-                    scope_chain(facts, scope).any(|local| local == binding_scope)
-                }
-            })
-            .max_by_key(|binding| {
-                (
-                    // The chain starts at the nearest scope; file bindings follow all
-                    // lexical bindings. Keep declaration order within the selected scope.
-                    std::cmp::Reverse(
-                        binding
-                            .scope
-                            .and_then(|s| scope_chain(facts, scope).position(|c| c == s))
-                            .unwrap_or(usize::MAX),
-                    ),
-                    binding.line,
-                    binding.value_byte,
-                )
-            })
+        named_indices(
+            &self.named[file as usize].bindings,
+            &facts.bindings,
+            |binding| binding.name.as_str(),
+            name,
+        )
+        .map(|index| &facts.bindings[index])
+        .filter(|binding| binding.name == name && binding.line <= line)
+        .filter(|binding| {
+            byte == facts::NO_BYTE
+                || binding
+                    .visibility
+                    .as_ref()
+                    .is_none_or(|range| range.contains(&byte))
+        })
+        .filter(|binding| match binding.scope {
+            None => true,
+            Some(binding_scope) => scope_chain(facts, scope).any(|local| local == binding_scope),
+        })
+        .max_by_key(|binding| {
+            (
+                // The chain starts at the nearest scope; file bindings follow all
+                // lexical bindings. Keep declaration order within the selected scope.
+                std::cmp::Reverse(
+                    binding
+                        .scope
+                        .and_then(|s| scope_chain(facts, scope).position(|c| c == s))
+                        .unwrap_or(usize::MAX),
+                ),
+                binding.line,
+                binding.value_byte,
+            )
+        })
     }
 
     fn unique_fallback(
@@ -4244,7 +4255,10 @@ impl<'a> Index<'a> {
             })
             .collect();
         if let Some(symbol) = unique(&imported, |s| self.is_test(s)) {
-            return Outcome::Targets(vec![(symbol, Confidence::Inferred)], Confidence::Inferred);
+            return Outcome::Targets(
+                smallvec::smallvec![(symbol, Confidence::Inferred)],
+                Confidence::Inferred,
+            );
         }
         if let Reach::Imported(_) = reach {
             return if imported.is_empty() {
@@ -4254,9 +4268,10 @@ impl<'a> Index<'a> {
             };
         }
         match unique(&candidates, |s| self.is_test(s)) {
-            Some(symbol) => {
-                Outcome::Targets(vec![(symbol, Confidence::Inferred)], Confidence::Inferred)
-            }
+            Some(symbol) => Outcome::Targets(
+                smallvec::smallvec![(symbol, Confidence::Inferred)],
+                Confidence::Inferred,
+            ),
             None => Outcome::Ambiguous,
         }
     }
@@ -4377,6 +4392,11 @@ impl<'a> Index<'a> {
         // Before the symbols move into the graph.
         let contract_edges = self.contract_edges();
         let members = self.member_pairs();
+        // The peak of a large tree comes next: the lookup tables have served their purpose.
+        self.by_name = HashMap::default();
+        self.by_module = HashMap::default();
+        self.types = HashMap::default();
+        self.file_imports = Vec::new();
         let symbol_count = self.symbols.len() as u32;
         let symbols = std::mem::take(&mut self.symbols);
         let mut graph = Graph {
@@ -4714,21 +4734,142 @@ enum Receiver {
     Unknown,
 }
 
+/// A file's bindings and symbols sorted by name, then position. Only large files need it: a linear
+/// comparison per reference made a resolver with long bundles quadratic.
+#[derive(Default)]
+struct FileNames {
+    bindings: Box<[u32]>,
+    symbols: Box<[u32]>,
+}
+
+/// Records up to which a file is simply scanned.
+const SCANNED_RECORDS: usize = 32;
+
+fn sorted_by_name<'n>(count: usize, name: impl Fn(usize) -> &'n str) -> Box<[u32]> {
+    if count <= SCANNED_RECORDS {
+        return Box::default();
+    }
+    let mut order: Vec<u32> = (0..count as u32).collect();
+    order.sort_by_key(|&index| (name(index as usize), index));
+    order.into_boxed_slice()
+}
+
+impl FileNames {
+    fn new(facts: &Facts) -> Self {
+        Self {
+            bindings: sorted_by_name(facts.bindings.len(), |index| &facts.bindings[index].name),
+            symbols: sorted_by_name(facts.symbols.len(), |index| &facts.symbols[index].name),
+        }
+    }
+}
+
+/// Indices of the records named `name`, in position order; a small file yields all of them.
+fn named_indices<'n, T>(
+    order: &'n [u32],
+    records: &'n [T],
+    name_of: impl Fn(&'n T) -> &'n str,
+    name: &str,
+) -> NamedIndices<'n> {
+    if order.is_empty() {
+        return NamedIndices::All(0..records.len() as u32);
+    }
+    let start = order.partition_point(|&index| name_of(&records[index as usize]) < name);
+    let end =
+        start + order[start..].partition_point(|&index| name_of(&records[index as usize]) == name);
+    NamedIndices::Sorted(order[start..end].iter())
+}
+
+enum NamedIndices<'n> {
+    All(std::ops::Range<u32>),
+    Sorted(std::slice::Iter<'n, u32>),
+}
+
+impl Iterator for NamedIndices<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<usize> {
+        match self {
+            Self::All(range) => range.next().map(|index| index as usize),
+            Self::Sorted(indices) => indices.next().map(|&index| index as usize),
+        }
+    }
+}
+
+thread_local! {
+    static REF_POOL: std::cell::RefCell<Vec<Ref>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A call reference built while typing a receiver, with buffers reused across millions of them.
+struct PooledRef(Option<Ref>);
+
+impl PooledRef {
+    fn call(callee: &str, scope: Option<u32>, line: u32, byte: u32) -> Self {
+        let mut reference = REF_POOL.with_borrow_mut(Vec::pop).unwrap_or_else(|| Ref {
+            kind: RefKind::Call,
+            name: String::new(),
+            qualifier: None,
+            scope: None,
+            line: 0,
+            byte: 0,
+            arity: facts::NO_ARITY,
+        });
+        let (qualifier, name) =
+            split_qualified(callee).map_or((None, callee), |(q, n)| (Some(q), n));
+        reference.name.clear();
+        reference.name.push_str(name);
+        match (qualifier, &mut reference.qualifier) {
+            (Some(new), Some(buffer)) => {
+                buffer.clear();
+                buffer.push_str(new);
+            }
+            (Some(new), slot) => *slot = Some(new.to_owned()),
+            (None, slot) => *slot = None,
+        }
+        reference.scope = scope;
+        reference.line = line;
+        reference.byte = byte;
+        Self(Some(reference))
+    }
+}
+
+impl std::ops::Deref for PooledRef {
+    type Target = Ref;
+
+    fn deref(&self) -> &Ref {
+        // Taken only in `drop`.
+        self.0.as_ref().unwrap_or_else(|| unreachable!())
+    }
+}
+
+impl Drop for PooledRef {
+    fn drop(&mut self) {
+        if let Some(reference) = self.0.take() {
+            REF_POOL.with_borrow_mut(|pool| pool.push(reference));
+        }
+    }
+}
+
+/// Most references have one target: no heap allocation per resolved reference.
+type Targets = smallvec::SmallVec<[(u32, Confidence); 2]>;
+
 enum Outcome {
-    Targets(Vec<(u32, Confidence)>, Confidence),
+    Targets(Targets, Confidence),
     External,
     Ambiguous,
     Unresolved,
 }
 
 fn exact(symbol: u32) -> Outcome {
-    Outcome::Targets(vec![(symbol, Confidence::Exact)], Confidence::Exact)
+    Outcome::Targets(
+        smallvec::smallvec![(symbol, Confidence::Exact)],
+        Confidence::Exact,
+    )
 }
 
 fn pick(candidates: &[u32], confidence: Confidence) -> Outcome {
     match candidates {
         [] => Outcome::Unresolved,
-        [only] => Outcome::Targets(vec![(*only, confidence)], confidence),
+        [only] => Outcome::Targets(smallvec::smallvec![(*only, confidence)], confidence),
         _ => Outcome::Ambiguous,
     }
 }
@@ -4814,7 +4955,7 @@ fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence, arity: u
             .filter(|&s| !index.is_test(s))
             .collect();
         if non_test.len() == 1 {
-            return Outcome::Targets(vec![(non_test[0], confidence)], confidence);
+            return Outcome::Targets(smallvec::smallvec![(non_test[0], confidence)], confidence);
         }
         // Overloads of one owner (parent type, or the `Type::`/extension owner of top-level
         // members): the one taking the argument count, else every candidate inferred.

@@ -34,6 +34,7 @@ office_oxide = { version = "0.1.16", default-features = false }
 quick-xml = "0.42.0"
 rayon = "1.12.0"
 regex = "1.13.1"
+smallvec = "1"
 sha2 = "0.11.1"
 shlex = "2.0.1"
 tar = "0.4.46"

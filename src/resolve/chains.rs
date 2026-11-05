@@ -19,11 +19,11 @@ pub(super) enum ChainFailure {
 /// Splits a receiver expression at its top-level member accesses; `None` for anything else, such
 /// as an index or an operator. Rust try operators are retained; TypeScript's non-null assertion
 /// and optional access do not change the recorded type.
-pub(super) fn receiver_steps(qualifier: &str) -> Option<Vec<Step<'_>>> {
+pub(super) fn receiver_steps(qualifier: &str) -> Option<smallvec::SmallVec<[Step<'_>; 4]>> {
     let text = qualifier.trim();
     let text = text.strip_prefix("new ").map_or(text, str::trim_start);
     let bytes = text.as_bytes();
-    let mut steps = Vec::new();
+    let mut steps: smallvec::SmallVec<[Step<'_>; 4]> = smallvec::SmallVec::new();
     let mut position = 0;
     while position < bytes.len() {
         let start = position;
