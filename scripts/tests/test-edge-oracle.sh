@@ -66,8 +66,8 @@ with tempfile.TemporaryDirectory(prefix="edge-oracle-regression.", dir=cache) as
     summaries = list(csv.reader(result.stdout.splitlines(), delimiter="\t"))
     exact = next(row for row in summaries if row[2:4] == ["calls", "exact"])
     inferred = next(row for row in summaries if row[2:4] == ["calls", "inferred"])
-    assert exact[4:] == ["4", "1", "1", "2", "50.0"], exact
-    assert inferred[4:] == ["2", "0", "0", "2", "-"], inferred
+    assert exact[4:] == ["4", "1", "1", "2", "50.0", "0", "50.0"], exact
+    assert inferred[4:] == ["2", "0", "0", "2", "-", "0", "-"], inferred
 
     caller_fixture = repo / "tests/fixtures/oracle/caller-identities"
     caller_index = caller_fixture / "compiler.json"
@@ -87,7 +87,7 @@ with tempfile.TemporaryDirectory(prefix="edge-oracle-regression.", dir=cache) as
         ("src/lib.rs", 4, "src/lib.rs", 4, "nested", 4, "outer", "correct"),
         # rust-analyzer shares the target identity between two test crates.
         ("tests/a.rs", 1, "tests/b.rs", 3, "target", 1, "repeated", "unknown"),
-        ("src/lib.rs", 3, "src/lib.rs", 1, "first", 3, "missing", "unknown"),
+        ("src/lib.rs", 3, "src/lib.rs", 1, "first", 3, "missing", "target"),
     ]
     with caller_edges.open("x", newline="") as output:
         writer = csv.writer(output, delimiter="\t", lineterminator="\n")
@@ -100,14 +100,14 @@ with tempfile.TemporaryDirectory(prefix="edge-oracle-regression.", dir=cache) as
         input=program, text=True, capture_output=True, env=dict(os.environ, HOME=str(home)), check=True,
     )
     actual = [row[0] for row in csv.reader(caller_verdicts.open(), delimiter="\t")]
-    expected = [case[-1] for case in caller_cases] + ["unknown"]
+    expected = [case[-1] for case in caller_cases] + ["target"]
     assert actual == expected, f"caller oracle verdicts: {actual}; expected {expected}"
     recall = next(row for row in csv.reader(caller_result.stdout.splitlines(), delimiter="\t") if row[2] == "recall-calls")
     assert recall[4:] == ["5", "3", "0", "2", "100.0"], recall
     for fixture_name, language, kind, cases in [
-        ("accessor-identities", "typescript", "calls", [("index.ts", 3, "index.ts", 1, "first", 2, "Box", "unknown")]),
+        ("accessor-identities", "typescript", "calls", [("index.ts", 3, "index.ts", 1, "first", 2, "Box", "target")]),
         ("local-accessor-identities", "typescript", "calls", [
-            ("index.ts", 2, "index.ts", 1, "first", 2, "outer", "unknown"),
+            ("index.ts", 2, "index.ts", 1, "first", 2, "outer", "target"),
             ("plain.ts", 2, "plain.ts", 1, "first", 2, "caller", "correct"),
         ]),
         ("go-caller-identities", "go", "calls", [

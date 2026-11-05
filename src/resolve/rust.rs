@@ -7,6 +7,12 @@ impl<'a> Index<'a> {
         for import in &facts.imports {
             let segments: Vec<&str> = import.spec.split("::").filter(|s| !s.is_empty()).collect();
             let Some(name) = import.names.first() else {
+                // `extern crate name [as alias];` names a crate root.
+                if let Some(module) = self.rust_crate_root(&import.spec) {
+                    let local = import.alias.as_ref().unwrap_or(&import.spec);
+                    imports.modules.push(module);
+                    imports.names.insert(local.clone(), Target::Module(module));
+                }
                 continue;
             };
             let base = if segments.is_empty() {
@@ -116,6 +122,15 @@ impl<'a> Index<'a> {
                 }
             }
             first => {
+                // `extern crate name as alias;` renames the crate within this file.
+                let first = self
+                    .facts(file)
+                    .and_then(|facts| {
+                        facts.imports.iter().find(|import| {
+                            import.names.is_empty() && import.alias.as_deref() == Some(first)
+                        })
+                    })
+                    .map_or(first, |import| import.spec.as_str());
                 if self.rust_crate_root(first).is_some() && first != crate_name {
                     crate_name = first.to_owned();
                     path = Vec::new();
@@ -151,17 +166,21 @@ impl<'a> Index<'a> {
             self.modules
                 .get(&format!("{crate_name}::{}", path.join("::")))?,
         );
+        // A re-export leaves the module tree `path` describes; members follow the target from there.
+        let mut left_tree = false;
         for segment in rest {
             let mut next_path = path.clone();
             next_path.push(segment);
-            if let Some(module) = self
-                .modules
-                .get(&format!("{crate_name}::{}", next_path.join("::")))
+            if !left_tree
+                && let Some(module) = self
+                    .modules
+                    .get(&format!("{crate_name}::{}", next_path.join("::")))
             {
                 path = next_path;
                 target = Target::Module(module);
             } else {
                 target = self.rust_member(file, &target, segment)?;
+                left_tree = true;
             }
         }
         Some(target)
@@ -181,7 +200,10 @@ impl<'a> Index<'a> {
                     .into_iter()
                     .filter(|&symbol| self.symbols[symbol as usize].kind != SymKind::Mod)
                     .collect();
-                (!found.is_empty()).then_some(Target::Symbols(found))
+                if found.is_empty() {
+                    return self.rust_reexport(*module, name);
+                }
+                Some(Target::Symbols(found))
             }
             Target::Symbols(symbols) => {
                 let found: Vec<u32> = symbols
@@ -195,6 +217,44 @@ impl<'a> Index<'a> {
                 Some(Target::External(external.clone()))
             }
         }
+    }
+
+    /// What a module re-exports as `name`: `pub use` items and globs, `pub extern crate`.
+    fn rust_reexport(&self, module: u32, name: &str) -> Option<Target> {
+        let _guard = DepthGuard::enter()?;
+        for &file in self.rust_reexporting.get(&module)? {
+            let Some(facts) = self.facts(file) else {
+                continue;
+            };
+            for import in facts.imports.iter().filter(|import| import.reexport) {
+                let Some(imported) = import.names.first() else {
+                    if import.alias.as_ref().unwrap_or(&import.spec) == name {
+                        return self.rust_root_segment(file, &import.spec);
+                    }
+                    continue;
+                };
+                let glob = imported == "*";
+                if !glob && import.alias.as_ref().unwrap_or(imported) != name {
+                    continue;
+                }
+                let segments: Vec<&str> =
+                    import.spec.split("::").filter(|s| !s.is_empty()).collect();
+                let target = if segments.is_empty() {
+                    self.rust_root_segment(file, imported)
+                } else {
+                    // A glob of an external crate proves nothing about this name.
+                    self.rust_path(file, &segments)
+                        .filter(|base| !glob || !matches!(base, Target::External(_)))
+                        .and_then(|base| {
+                            self.rust_member(file, &base, if glob { name } else { imported })
+                        })
+                };
+                if target.is_some() {
+                    return target;
+                }
+            }
+        }
+        None
     }
 
     // ---------------------------------------------------------------- lookups

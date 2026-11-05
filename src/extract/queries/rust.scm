@@ -62,7 +62,7 @@
 
 (use_declaration (visibility_modifier) @import.reexport argument: (_) @import.tree) @import
 (use_declaration argument: (_) @import.tree) @import
-(extern_crate_declaration name: (identifier) @import.path) @import
+(extern_crate_declaration (visibility_modifier)? @import.reexport name: (identifier) @import.path alias: (identifier)? @import.alias) @import
 
 (call_expression function: (identifier) @name) @reference.call
 (call_expression
@@ -85,6 +85,13 @@
 
 (parameter pattern: (identifier) @binding.name type: (_) @binding.type) @binding
 (let_declaration pattern: (identifier) @binding.name) @binding
+; Names bound by a tuple-struct pattern: unknown type, limited to their arm or consequence.
+(tuple_struct_pattern type: (_) [
+  (identifier) @binding.name @binding.pattern @binding
+  (ref_pattern (identifier) @binding.name @binding.pattern @binding)
+  (mut_pattern (identifier) @binding.name @binding.pattern @binding)
+  (ref_pattern (mut_pattern (identifier) @binding.name @binding.pattern @binding))
+])
 (let_declaration pattern: (identifier) @binding.name type: (_) @binding.type) @binding
 (let_declaration
   pattern: (identifier) @binding.name

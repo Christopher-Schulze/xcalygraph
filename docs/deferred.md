@@ -19,5 +19,6 @@ Considered and deliberately not in `docs/spec.md`. Each entry names the evidence
 | Smaller index through higher shard compression and block-packed postings (measured about 1.5 MB of 20 MB) | a measured quality gain that needs more index bytes than the limit leaves |
 | Search terms selected by rarity instead of first occurrence (doubling terms per symbol lowered sealed quality, so truncation is not the limit) | a retrieval miss traced to a term beyond the cap |
 | Related-symbol bundle (`ctx`, personalized PageRank; removed because `find` beat it at every budget on the sealed questions) | agent questions whose answer shares no word with the question and is one graph hop from a hit |
+| Rust enum variants as graph targets ("where is this variant built or matched?"; they dominate the compiler's type references, `rg` answers this today) | an agent question that `rg` plus `show` on the enum cannot answer within budget |
 | Typo-tolerant search | evaluation misses caused by misspelled terms |
 | Media durations of WebM, Matroska, MP3 and Ogg | agent questions that need these durations (format is reported) |

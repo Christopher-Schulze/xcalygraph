@@ -216,6 +216,13 @@ pub struct Ref {
 /// Arity of references that are no calls or whose arguments were not counted.
 pub const NO_ARITY: u8 = u8::MAX;
 
+/// Qualifier of a path literal below a computed base (`root / "src/main.rs"`): the same-named
+/// repository file is an inference, a missing one proves nothing.
+pub const COMPUTED_BASE: &str = "xcalygraph:computed-base";
+
+/// Binding type of a name bound by a destructuring pattern: its value exists, its type is unknown.
+pub const PATTERN_BINDING: &str = "pattern:";
+
 /// A synthesized fact without an exact source byte offset.
 pub const NO_BYTE: u32 = u32::MAX;
 

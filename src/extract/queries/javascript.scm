@@ -41,6 +41,8 @@
 
 (import_statement) @import.tree @import
 (export_statement source: (string)) @import.tree @import
+; `export { local as Name }` renames a declaration of this file.
+(export_statement !source (export_clause)) @import.tree @import
 (variable_declarator
   name: (identifier) @import.alias
   value: (call_expression function: (identifier) @_require arguments: (arguments . (string) @import.path))

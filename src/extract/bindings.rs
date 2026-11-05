@@ -11,6 +11,9 @@ pub(super) fn visibility(path: &str, binding: Node<'_>) -> Option<Range<u32>> {
     if !rust && !javascript {
         return None;
     }
+    if rust && binding.kind() == "identifier" {
+        return pattern_visibility(binding);
+    }
     if javascript && binding.kind() == "for_in_statement" {
         let start = u32::try_from(binding.child_by_field_name("body")?.start_byte()).ok()?;
         let end = u32::try_from(binding.end_byte()).ok()?;
@@ -47,6 +50,43 @@ pub(super) fn visibility(path: &str, binding: Node<'_>) -> Option<Range<u32>> {
         parent = node.parent();
     }
     None
+}
+
+/// A pattern name lives from the end of its pattern's value to the end of the arm, consequence,
+/// loop body or, for `let ... else`, of the enclosing block.
+fn pattern_visibility(name: Node<'_>) -> Option<Range<u32>> {
+    let mut node = name.parent();
+    let mut scrutinee_end = None;
+    while let Some(current) = node {
+        let limit = match current.kind() {
+            "match_arm" => {
+                let start = name.end_byte();
+                return bytes(start, current.end_byte());
+            }
+            "let_condition" => {
+                scrutinee_end.get_or_insert(current.end_byte());
+                None
+            }
+            "let_declaration" => {
+                scrutinee_end.get_or_insert(current.end_byte());
+                None
+            }
+            "if_expression" => current.child_by_field_name("consequence"),
+            "while_expression" => current.child_by_field_name("body"),
+            "block" if scrutinee_end.is_some() => Some(current),
+            _ => None,
+        };
+        if let (Some(limit), Some(start)) = (limit, scrutinee_end) {
+            return bytes(start, limit.end_byte());
+        }
+        node = current.parent();
+    }
+    None
+}
+
+fn bytes(start: usize, end: usize) -> Option<Range<u32>> {
+    let (start, end) = (u32::try_from(start).ok()?, u32::try_from(end).ok()?);
+    (start < end).then_some(start..end)
 }
 
 fn javascript(path: &str) -> bool {

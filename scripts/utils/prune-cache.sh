@@ -6,8 +6,8 @@
 # Ad-hoc work directories (task*, edge-guard.*, leftovers of failed test fixtures NAME-PID-N) go
 # once nothing in them is younger than the age and no open TASK file names them.
 # Fails above 3 GiB without the frozen corpus snapshots: evidence must not grow unnoticed.
-# Compaction: in evaluation/, task192-manifests/ and edge-oracle/, runs beyond the newest
-# KEEP_RUNS lose every file except top-level regular files up to 8 MiB (reports, identities,
+# Compaction: in evaluation/ and task192-manifests/, runs beyond the newest KEEP_RUNS, in
+# edge-oracle/ beyond the newest one, lose every file except top-level regular files up to 8 MiB (reports, identities,
 # summaries, ledgers); a run containing .keep-full is never compacted.
 set -euo pipefail
 
@@ -99,7 +99,7 @@ prune_work_directories() {
 
 # Keep reports of completed, aged evidence runs, drop their bulky corpora, indexes and builds.
 compact_runs() {
-  local dir="$1" entry file aged
+  local dir="$1" keep="$2" entry file aged
   [[ -d "${dir}" && ! -L "${dir}" ]] || return 0
   local runs=()
   while IFS= read -r -d '' entry; do runs+=("${entry}"); done < <(python3 -I -c '
@@ -112,7 +112,7 @@ for name in sorted(names, key=lambda name: os.stat(os.path.join(base, name)).st_
     sys.stdout.write(os.path.join(base, name) + "\0")
 ' "${dir}")
   local index
-  for (( index = KEEP_RUNS; index < ${#runs[@]}; index++ )); do
+  for (( index = keep; index < ${#runs[@]}; index++ )); do
     entry="${runs[index]}"
     [[ -d "${entry}" && ! -L "${entry}" && ! -e "${entry}/.keep-full" && ! -e "${entry}/.compacted" ]] || continue
     [[ -f "${entry}/${MARKER}" && ! -L "${entry}/${MARKER}" ]] || continue
@@ -131,9 +131,10 @@ for name in sorted(names, key=lambda name: os.stat(os.path.join(base, name)).st_
     compacted=$((compacted + 1))
   done
 }
-compact_runs "${CACHE}/evaluation"
-compact_runs "${CACHE}/task192-manifests"
-compact_runs "${CACHE}/edge-oracle"
+compact_runs "${CACHE}/evaluation" "${KEEP_RUNS}"
+compact_runs "${CACHE}/task192-manifests" "${KEEP_RUNS}"
+# Compiler indexes run to gigabytes; one whole run is the rescoring input.
+compact_runs "${CACHE}/edge-oracle" 1
 
 if ! size_kib="$(du -sk "${CACHE}" | awk 'NR == 1 { print $1 }')"; then
   echo "prune-cache.sh: cannot measure cache size" >&2

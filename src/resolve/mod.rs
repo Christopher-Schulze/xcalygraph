@@ -39,7 +39,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 115;
+pub const RESOLVE_VERSION: u32 = 121;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -65,6 +65,8 @@ struct Index<'a> {
     typescript_declaration_pairs: HashMap<u32, u32>,
     /// Top-level, non-method symbols per (module, name).
     by_module: HashMap<(u32, &'a str), Vec<u32>>,
+    /// Rust files with `pub use` or `pub extern crate`, per module.
+    rust_reexporting: HashMap<u32, Vec<u32>>,
     /// Methods per (method scope, owner type name, method name).
     methods: HashMap<(u32, &'a str, &'a str), Vec<u32>>,
     /// Method scope id per module (modules sharing a crate share one).
@@ -207,6 +209,7 @@ impl<'a> Index<'a> {
     #[cfg(feature = "lang-typescript")]
     fn rebuild_tables_and_imports(&mut self) {
         self.by_module.clear();
+        self.rust_reexporting.clear();
         self.methods.clear();
         self.types.clear();
         self.by_name.clear();
@@ -409,6 +412,7 @@ impl<'a> Index<'a> {
                 names
             },
             by_module: HashMap::default(),
+            rust_reexporting: HashMap::default(),
             methods: HashMap::default(),
             types: HashMap::default(),
             rust_generic_parameters,
@@ -469,6 +473,14 @@ impl<'a> Index<'a> {
             let module = self.modules.file_module[file];
             let scope = self.scope_ids[module as usize];
             let base = self.base[file];
+            if record_type == Some(FileType::Rust)
+                && facts.imports.iter().any(|import| import.reexport)
+            {
+                self.rust_reexporting
+                    .entry(module)
+                    .or_default()
+                    .push(file as u32);
+            }
             for (local, symbol) in facts.symbols.iter().enumerate() {
                 let id = base + local as u32;
                 if self.canonical_interface(id) != id {
@@ -1920,9 +1932,23 @@ impl<'a> Index<'a> {
                             None => Outcome::Unresolved,
                         }
                     }
-                    RefKind::Path => self.resolve_path(file, &reference.name),
+                    RefKind::Path => match self.resolve_path(file, &reference.name) {
+                        Outcome::Targets(targets, _)
+                            if reference.qualifier.as_deref() == Some(facts::COMPUTED_BASE) =>
+                        {
+                            Outcome::Targets(
+                                targets
+                                    .into_iter()
+                                    .map(|(target, _)| (target, Confidence::Inferred))
+                                    .collect(),
+                                Confidence::Inferred,
+                            )
+                        }
+                        outcome => outcome,
+                    },
                     RefKind::Mention => self.resolve_mention(
                         file,
+                        reference.scope,
                         &reference.name,
                         mention_owner
                             .filter(|&(scope, _)| scope == source)
@@ -2393,7 +2419,13 @@ impl<'a> Index<'a> {
 
     /// A backticked mention: a path names a file (exact); an identifier or qualified suffix
     /// names the unique symbol carrying it (inferred).
-    fn resolve_mention(&self, file: u32, mention: &str, owner: Option<u32>) -> Outcome {
+    fn resolve_mention(
+        &self,
+        file: u32,
+        scope: Option<u32>,
+        mention: &str,
+        owner: Option<u32>,
+    ) -> Outcome {
         let mention = strip_line_suffix(mention);
         // A qualified name of the index (`internal/platform.Worker`, `store::Store::open`).
         let mut normalized = mention.replace("::", ".");
@@ -2522,6 +2554,13 @@ impl<'a> Index<'a> {
             }
         }
         match unique(&candidates, |symbol| self.is_test(symbol)) {
+            Some(symbol)
+                if unqualified
+                    && owner != Some(self.symbols[symbol as usize].file)
+                    && !self.mention_shows_member_owner(file, scope, symbol) =>
+            {
+                Outcome::Unresolved
+            }
             Some(symbol) => {
                 Outcome::Targets(vec![(symbol, Confidence::Inferred)], Confidence::Inferred)
             }
@@ -2530,10 +2569,50 @@ impl<'a> Index<'a> {
         }
     }
 
+    /// A bare word such as `items` or `dir` names a type's member only when the document shows
+    /// that type: in its path, a heading above the mention or a mention of the same section.
+    /// Prose uses such words for parameters and concepts as well.
+    fn mention_shows_member_owner(&self, file: u32, scope: Option<u32>, symbol: u32) -> bool {
+        let record = &self.symbols[symbol as usize];
+        let local = (symbol - self.base[record.file as usize]) as usize;
+        let member_owner = self.facts(record.file).and_then(|facts| {
+            let parent = facts
+                .symbols
+                .get(facts.symbols.get(local)?.parent? as usize)?;
+            parent.kind().is_type().then_some(parent.name.as_str())
+        });
+        let (Some(member_owner), Some(document)) = (member_owner, self.facts(file)) else {
+            return true;
+        };
+        let lowercase = member_owner.to_ascii_lowercase();
+        if self.input.files[file as usize]
+            .path
+            .to_ascii_lowercase()
+            .contains(&lowercase)
+        {
+            return true;
+        }
+        let mut heading = scope;
+        while let Some(section) = heading.and_then(|index| document.symbols.get(index as usize)) {
+            if section.name.contains(member_owner) {
+                return true;
+            }
+            heading = section.parent;
+        }
+        document.refs.iter().any(|reference| {
+            reference.scope == scope
+                && matches!(reference.kind, RefKind::Mention | RefKind::Path)
+                && reference.name.contains(member_owner)
+        })
+    }
+
     /// A doc reference that certainly points at nothing: a link or path mention with an
     /// extension or directory that matches no file, or a qualified mention whose head names a
     /// symbol or module of the root while the whole name matches nothing.
     fn is_stale(&self, reference: &Ref) -> bool {
+        if reference.qualifier.as_deref() == Some(facts::COMPUTED_BASE) {
+            return false;
+        }
         let name = strip_line_suffix(&reference.name);
         // URLs, absolute or home paths, globs and ranges are no repository references.
         if name.contains("://")
@@ -3741,7 +3820,9 @@ impl<'a> Index<'a> {
                 {
                     return Receiver::External;
                 }
-                None if chains::call_binding(&binding.type_name).is_some() => {
+                None if chains::call_binding(&binding.type_name).is_some()
+                    || binding.type_name == facts::PATTERN_BINDING =>
+                {
                     return Receiver::Unknown;
                 }
                 None => return Receiver::External,
@@ -4976,24 +5057,56 @@ fn typescript_generic_parameter_may_shadow(symbol: &facts::Symbol, name: &str) -
             && !rest.starts_with("extends ")
             && !rest.starts_with("implements ");
     };
+    // A top-level parameter starts at the list or after a comma; constraints and defaults name
+    // other types. String literals in defaults may hold any bracket.
     let mut depth = 1usize;
+    let mut quote = None;
+    let mut escaped = false;
+    let mut parameter_start = Some(0);
     for (index, ch) in parameters.char_indices() {
+        if let Some(open) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == open {
+                quote = None;
+            }
+            continue;
+        }
         match ch {
-            '\'' | '"' | '`' | '\\' => return true,
-            '<' => depth += 1,
+            '\'' | '"' | '`' => quote = Some(ch),
+            '<' | '(' | '[' | '{' => depth += 1,
             '>' if index > 0 && parameters.as_bytes()[index - 1] == b'=' => {}
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
             '>' => {
                 depth -= 1;
                 if depth == 0 {
-                    return parameters[..index]
-                        .split(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '$'))
-                        .any(|part| part == name);
+                    return parameter_start.is_some_and(|start| {
+                        generic_parameter_is(&parameters[start..index], name)
+                    });
                 }
+            }
+            ',' if depth == 1 => {
+                if parameter_start
+                    .is_some_and(|start| generic_parameter_is(&parameters[start..index], name))
+                {
+                    return true;
+                }
+                parameter_start = Some(index + 1);
             }
             _ => {}
         }
     }
     true
+}
+
+/// The declared name of one generic parameter, past the `const`, `in` and `out` modifiers.
+fn generic_parameter_is(parameter: &str, name: &str) -> bool {
+    parameter
+        .split(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '$'))
+        .find(|word| !word.is_empty() && !matches!(*word, "const" | "in" | "out"))
+        == Some(name)
 }
 
 /// Local indices of `scope` and its enclosing symbols, innermost first.

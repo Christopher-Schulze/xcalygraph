@@ -116,7 +116,12 @@ impl Index<'_> {
                     )
                 })
         };
-        for import in &facts.imports {
+        // An empty spec is a local `export { a as b }`, which binds nothing in this file.
+        for import in facts
+            .imports
+            .iter()
+            .filter(|import| !import.spec.is_empty())
+        {
             let Some(selected) = self.js_import_target(file, &import.spec) else {
                 let package = package_name(&import.spec);
                 if !package.is_empty() {
@@ -345,7 +350,12 @@ impl Index<'_> {
                 if !forwards {
                     continue;
                 }
-                let Some(target) = self.js_module(file as u32, &import.spec) else {
+                let target = if import.spec.is_empty() {
+                    Some(module)
+                } else {
+                    self.js_module(file as u32, &import.spec)
+                };
+                let Some(target) = target else {
                     continue;
                 };
                 let original = import

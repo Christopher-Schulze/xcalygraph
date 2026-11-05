@@ -334,7 +334,7 @@ pub fn literal_paths(text: &str, facts: &mut Facts) {
         if facts.imports.iter().any(|import| import.line == number) {
             continue;
         }
-        let mut path_literal = |literal: &str| {
+        let mut path_literal = |literal: &str, computed: bool| {
             if !is_path_literal(literal) {
                 return;
             }
@@ -352,7 +352,7 @@ pub fn literal_paths(text: &str, facts: &mut Facts) {
                 facts.refs.push(Ref {
                     kind: RefKind::Path,
                     name: literal.to_owned(),
-                    qualifier: None,
+                    qualifier: computed.then(|| crate::domain::facts::COMPUTED_BASE.to_owned()),
                     scope,
                     line: number,
                     arity: NO_ARITY,
@@ -361,26 +361,30 @@ pub fn literal_paths(text: &str, facts: &mut Facts) {
             }
         };
         // Quotes nested in template literals (`` `<img src="a.png">` ``) count too.
-        for_each_quoted(line, |literal| {
+        for_each_quoted(line, |literal, before| {
+            // `root / "src/main.rs"` and `dir.join("src/main.rs")` hang below a computed base:
+            // the same-named repository file is a guess.
+            let before = before.trim_end();
+            let computed = before.ends_with('/') || before.ends_with("join(");
             let literal = literal.trim();
             if is_path_literal(literal) {
-                path_literal(literal);
+                path_literal(literal, computed);
             } else {
-                for_each_quoted(literal, |nested| path_literal(nested.trim()));
+                for_each_quoted(literal, |nested, _| path_literal(nested.trim(), computed));
             }
         });
     }
 }
 
 /// Contents of `"..."`, `'...'`, `` `...` `` and `url(...)` on one line.
-fn for_each_quoted(line: &str, mut emit: impl FnMut(&str)) {
+fn for_each_quoted(line: &str, mut emit: impl FnMut(&str, &str)) {
     let bytes = line.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
         let byte = bytes[index];
         if matches!(byte, b'"' | b'\'' | b'`') {
             if let Some(end) = line[index + 1..].find(byte as char) {
-                emit(&line[index + 1..index + 1 + end]);
+                emit(&line[index + 1..index + 1 + end], &line[..index]);
                 index += end + 2;
                 continue;
             }
@@ -390,7 +394,10 @@ fn for_each_quoted(line: &str, mut emit: impl FnMut(&str)) {
         if bytes[index..].starts_with(b"url(")
             && let Some(end) = line[index + 4..].find(')')
         {
-            emit(line[index + 4..index + 4 + end].trim_matches(['"', '\'']));
+            emit(
+                line[index + 4..index + 4 + end].trim_matches(['"', '\'']),
+                &line[..index],
+            );
             index += end + 5;
             continue;
         }
@@ -498,6 +505,28 @@ mod tests {
                 ("/img/a.svg".to_owned(), 3, Some(0)),
                 ("config/app.yaml".to_owned(), 3, Some(0)),
                 ("../img/bg.webp".to_owned(), 5, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn literal_paths_below_a_computed_base_are_marked() {
+        let mut facts = Facts::default();
+        literal_paths(
+            "(project / \"src/main.rs\").write_text('x')\nroot.join(\"src/lib.rs\");\nopen('src/real.rs')\n",
+            &mut facts,
+        );
+        let names: Vec<_> = facts
+            .refs
+            .iter()
+            .map(|reference| (reference.name.as_str(), reference.qualifier.is_some()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("src/main.rs", true),
+                ("src/lib.rs", true),
+                ("src/real.rs", false)
             ]
         );
     }

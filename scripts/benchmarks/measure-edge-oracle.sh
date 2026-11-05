@@ -9,6 +9,8 @@
 #   scip, scip-go, rust-analyzer, scip-python, scip-typescript.
 #   Output: .cache/edge-oracle/run.*/ with per-corpus edges, oracle references and verdicts, plus
 #   summary.tsv: corpus, language, kind, confidence, edges, correct, incorrect, unknown, precision,
+#   target (the compiler names the target on that line, the caller's ownership stays unproven),
+#   agreement (share of correct plus target among correct, incorrect and target),
 #   and recall rows (recall-calls / recall-types: distinct source-file/target pairs the compiler
 #   references, and how many have an edge; edges are deduplicated per source symbol and target,
 #   so recall is measured per file and target rather than per line).
@@ -69,7 +71,7 @@ mkdir -p "${REPO_ROOT}/.cache/edge-oracle"
 WORK="$(mktemp -d "${REPO_ROOT}/.cache/edge-oracle/run.XXXXXXXX")"
 readonly WORK
 echo "evidence: ${WORK}" >&2
-printf 'corpus\tlanguage\tkind\tconfidence\tedges\tcorrect\tincorrect\tunknown\tprecision\n' > "${WORK}/summary.tsv"
+printf 'corpus\tlanguage\tkind\tconfidence\tedges\tcorrect\tincorrect\tunknown\tprecision\ttarget\tagreement\n' > "${WORK}/summary.tsv"
 bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
 for corpus in "$@"; do
   language="$(language_of "${corpus}")"
@@ -318,6 +320,10 @@ with open(verdicts_path, "w") as verdicts:
             verdict = "unknown"
         else:
             verdict = "incorrect"
+        # The compiler names this target on this line but cannot prove the caller's ownership:
+        # target agreement, weaker than `correct`, stronger than silence.
+        if verdict == "unknown" and expected & references.get((source, int(line)), set()):
+            verdict = "target"
         stats[(kind, confidence, verdict)] += 1
         verdicts.write("\t".join([verdict, kind, confidence, source, line, target, target_line, name,
                                   ";".join(sorted(f"{path}:{defined}" for symbol in oracle
@@ -325,10 +331,12 @@ with open(verdicts_path, "w") as verdicts:
                                   *fields[7:]]) + "\n")
 
 for kind, confidence in sorted({(k, c) for k, c, _ in stats}):
-    correct, incorrect, unknown = (stats[(kind, confidence, v)] for v in ("correct", "incorrect", "unknown"))
+    correct, incorrect, unknown, target = (stats[(kind, confidence, v)]
+                                           for v in ("correct", "incorrect", "unknown", "target"))
     judged = correct + incorrect
     precision = f"{100 * correct / judged:.1f}" if judged else "-"
-    print(f"{corpus}\t{language}\t{kind}\t{confidence}\t{correct + incorrect + unknown}\t{correct}\t{incorrect}\t{unknown}\t{precision}")
+    agreement = f"{100 * (correct + target) / (judged + target):.1f}" if judged + target else "-"
+    print(f"{corpus}\t{language}\t{kind}\t{confidence}\t{correct + incorrect + unknown + target}\t{correct}\t{incorrect}\t{unknown}\t{precision}\t{target}\t{agreement}")
 
 # Recall: compiler references from the corpus to in-repo callables and types, against edges on
 # the same source file to the same target (any kind, any confidence).

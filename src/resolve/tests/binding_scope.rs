@@ -165,3 +165,117 @@ fn rhs(value: Outer) { let value: Inner = value.make(); value.run(); }
     }
     Ok(())
 }
+
+#[test]
+fn es_local_export_aliases_reach_their_declaration() -> std::io::Result<()> {
+    let root = TestDir::new("es-local-export-alias")?;
+    root.write(
+        "base.ts",
+        "class Inner { route() { return 1; } }\nclass Unrelated { route() { return 2; } }\nexport { Inner as Base };\n",
+    )?;
+    root.write(
+        "app.ts",
+        "import { Base } from './base';\nexport class App extends Base {}\n",
+    )?;
+    root.write(
+        "use.ts",
+        "import { App } from './app';\nimport { Base } from './base';\nexport function caller() { new App().route(); new Base().route(); }\n",
+    )?;
+    let graph = super::graph_of(root.path())?;
+    let owners: Vec<_> = graph
+        .edges
+        .iter()
+        .filter_map(|edge| {
+            let source = graph.symbols.get(edge.source as usize)?;
+            let target = graph.symbols.get(edge.target as usize)?;
+            (edge.kind == EdgeKind::Calls && source.name == "caller" && target.name == "route")
+                .then(|| {
+                    graph
+                        .symbols
+                        .get(target.parent as usize)
+                        .map(|owner| owner.name.as_str())
+                })
+                .flatten()
+        })
+        .collect();
+    assert_eq!(owners, ["Inner"], "{}", super::render(&graph));
+    Ok(())
+}
+
+#[test]
+fn es_export_alias_base_may_share_the_subclass_name() -> std::io::Result<()> {
+    let root = TestDir::new("es-local-export-same-name")?;
+    root.write(
+        "base.ts",
+        "class Hono { route() { return 1; } }\nexport { Hono as HonoBase }\n",
+    )?;
+    root.write(
+        "hono.ts",
+        "import { HonoBase } from './base'\nexport class Hono<E extends Env = Blank, P extends string = '/',> extends HonoBase<E> {}\n",
+    )?;
+    root.write(
+        "use.ts",
+        "import { Hono } from './hono'\nexport function caller() { const app = new Hono(); app.route(); }\n",
+    )?;
+    let graph = super::graph_of(root.path())?;
+    let routes = graph
+        .edges
+        .iter()
+        .filter(|edge| {
+            edge.kind == EdgeKind::Calls
+                && graph
+                    .symbols
+                    .get(edge.source as usize)
+                    .is_some_and(|s| s.name == "caller")
+                && graph
+                    .symbols
+                    .get(edge.target as usize)
+                    .is_some_and(|s| s.name == "route")
+        })
+        .count();
+    assert_eq!(routes, 1, "{}", super::render(&graph));
+    Ok(())
+}
+
+#[test]
+fn typescript_generic_parameters_shadow_only_by_their_own_name() -> std::io::Result<()> {
+    for (signature, shadowed) in [
+        ("class C<T> extends B<T>", "T"),
+        ("function f<const T, in out U>(x: T)", "U"),
+    ] {
+        let root = TestDir::new("generic-parameter-shadow")?;
+        root.write(
+            "a.ts",
+            &format!("export class {shadowed} {{ run() {{ return 1; }} }}\nexport {signature} {{ const v: {shadowed} = null as any; v.run(); }}\n"),
+        )?;
+        let graph = super::graph_of(root.path())?;
+        let calls = graph
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.kind == EdgeKind::Calls
+                    && graph
+                        .symbols
+                        .get(edge.target as usize)
+                        .is_some_and(|s| s.name == "run")
+            })
+            .count();
+        assert_eq!(calls, 0, "{signature}: {}", super::render(&graph));
+    }
+    let root = TestDir::new("generic-parameter-constraint")?;
+    root.write(
+        "a.ts",
+        "export class Base { run() { return 1; } }\nexport class Other { run() { return 2; } }\nexport class C<T extends Base = Base, P = '>'> extends Base {}\nexport function f() { new C().run(); }\n",
+    )?;
+    let graph = super::graph_of(root.path())?;
+    let targets: Vec<_> = graph
+        .edges
+        .iter()
+        .filter_map(|edge| {
+            let target = graph.symbols.get(edge.target as usize)?;
+            (edge.kind == EdgeKind::Calls && target.name == "run").then(|| target.qualified.clone())
+        })
+        .collect();
+    assert_eq!(targets, ["a.Base.run"], "{}", super::render(&graph));
+    Ok(())
+}

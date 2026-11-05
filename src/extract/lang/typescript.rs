@@ -1773,6 +1773,33 @@ fn signature_prefix(kind: SymKind, text: &str) -> &'static str {
     }
 }
 
+/// `export { local }` and `export { local as Name }`: an empty spec means this file's declaration.
+fn local_export_aliases(statement: tree_sitter::Node, source: &[u8], line: u32) -> Vec<Import> {
+    let mut imports = Vec::new();
+    let mut clauses = statement.walk();
+    for clause in statement.named_children(&mut clauses) {
+        if clause.kind() != "export_clause" {
+            continue;
+        }
+        let mut specifiers = clause.walk();
+        for specifier in clause.named_children(&mut specifiers) {
+            if specifier.kind() == "export_specifier"
+                && let Some((name, alias, type_only)) = import_specifier(specifier, source)
+            {
+                imports.push(Import {
+                    spec: String::new(),
+                    alias: alias.map(str::to_owned),
+                    names: vec![name.to_owned()],
+                    line,
+                    reexport: true,
+                    type_only,
+                });
+            }
+        }
+    }
+    imports
+}
+
 /// One import per bound name: `import D, {a as b} from "m"`, `import * as ns from "m"`,
 /// `export {x} from "m"`, `export * from "m"`. `names` holds the imported name (`default`
 /// for default imports, `*` for namespaces and star re-exports), `alias` the local name.
@@ -1790,11 +1817,15 @@ fn expand_import(
             .and_then(|child| child.utf8_text(source).ok())
             .map(unquote)
     };
+    let reexport = statement.kind() == "export_statement";
     let Some(spec) = statement.child_by_field_name("source") else {
-        return Vec::new();
+        return if reexport {
+            local_export_aliases(statement, source, line)
+        } else {
+            Vec::new()
+        };
     };
     let spec = unquote(text(spec)).to_owned();
-    let reexport = statement.kind() == "export_statement";
     let statement_type_only = type_only_import(statement);
     let import = |name: &str, alias: Option<&str>, type_only: bool| Import {
         spec: spec.clone(),

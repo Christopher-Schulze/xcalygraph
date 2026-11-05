@@ -595,6 +595,8 @@ fn collect(
                         entry.declared = true;
                     } else if let Some(node) = get("binding.range") {
                         entry.type_name = Some(format!("range:{}", text(node)));
+                    } else if get("binding.pattern").is_some() {
+                        entry.type_name = Some(facts::PATTERN_BINDING.to_owned());
                     } else if let Some(node) = get("binding.call")
                         && (!path.ends_with(".rs") || !entry.declared)
                     {
@@ -1351,6 +1353,32 @@ fn assemble(assembly: Assembly) -> Parsed {
     } else {
         Spans::new()
     };
+    // `export { local }` exports a declaration as firmly as `export class local`.
+    for import in facts_imports
+        .iter()
+        .filter(|import| import.spec.is_empty() && import.reexport)
+    {
+        for name in &import.names {
+            let declared: Vec<usize> = symbols
+                .iter()
+                .enumerate()
+                .filter(|(_, symbol)| symbol.parent.is_none() && symbol.name == *name)
+                .map(|(index, _)| index)
+                .collect();
+            for index in declared {
+                symbols[index].exported = true;
+                for member in &mut symbols {
+                    if member.parent == Some(index as u32)
+                        && !member.name.starts_with('#')
+                        && !member.signature.starts_with("private")
+                        && !member.signature.starts_with("protected")
+                    {
+                        member.exported = true;
+                    }
+                }
+            }
+        }
+    }
     Parsed {
         facts: Facts {
             package,
