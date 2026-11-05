@@ -47,6 +47,12 @@ pub struct JsTables {
     packages: Vec<(String, String, String)>,
 }
 
+/// Physical files behind the existing module lookup, before declaration grouping.
+struct JsImportTarget {
+    value_file: u32,
+    type_file: u32,
+}
+
 pub fn tables(input: &Input) -> JsTables {
     let mut tables = JsTables::default();
     for (record, facts) in input.files.iter().zip(input.facts) {
@@ -99,8 +105,19 @@ pub fn tables(input: &Input) -> JsTables {
 
 impl Index<'_> {
     pub(super) fn js_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
+        let typed_source = self.file_type(file) != Some(FileType::JavaScript);
+        let only_types = |symbols: &[u32]| {
+            typed_source
+                && !symbols.is_empty()
+                && symbols.iter().all(|&symbol| {
+                    matches!(
+                        self.symbols[symbol as usize].kind,
+                        SymKind::Iface | SymKind::Alias
+                    )
+                })
+        };
         for import in &facts.imports {
-            let Some(target) = self.js_module(file, &import.spec) else {
+            let Some(selected) = self.js_import_target(file, &import.spec) else {
                 let package = package_name(&import.spec);
                 if !package.is_empty() {
                     imports.externals.push(package.clone());
@@ -115,12 +132,10 @@ impl Index<'_> {
                 }
                 continue;
             };
+            let target = self.module_of(selected.type_file);
             imports.modules.push(target);
-            for (other, &module) in self.modules.file_module.iter().enumerate() {
-                if module == target {
-                    imports.files.push((file, other as u32));
-                }
-            }
+            let mut type_dependency = import.type_only;
+            let mut value_dependency = !import.type_only && import.names.is_empty();
             // `const util = require("./util")`: the alias names the whole module.
             if import.names.is_empty()
                 && let Some(alias) = &import.alias
@@ -129,6 +144,7 @@ impl Index<'_> {
             }
             for name in &import.names {
                 let local = import.alias.clone().unwrap_or_else(|| name.clone());
+                let mut imported_type_only = false;
                 match name.as_str() {
                     "" => {}
                     "*" if import.alias.is_none() => imports.globs.push(target),
@@ -136,23 +152,47 @@ impl Index<'_> {
                         imports.names.insert(local, Target::Module(target));
                     }
                     "default" => {
-                        let bound = self
-                            .default_export(target, &local)
-                            .map_or(Target::Module(target), Target::Symbols);
+                        let found = self.default_export(target, &local);
+                        imported_type_only =
+                            found.as_ref().is_some_and(|symbols| only_types(symbols));
+                        let bound = found.map_or(Target::Module(target), Target::Symbols);
                         imports.names.insert(local, bound);
                     }
                     name => {
                         let found = self.exported(target, name);
+                        imported_type_only = only_types(&found);
                         if !found.is_empty() {
                             imports.names.insert(local, Target::Symbols(found));
                         }
                     }
                 }
+                if !import.type_only {
+                    type_dependency |= imported_type_only;
+                    value_dependency |= !imported_type_only;
+                }
+            }
+            // TS value imports use the selected declaration for typing as well as
+            // the emitted value file. A plain require call has no ES import binding.
+            let require_binding = import.names.is_empty() && import.alias.is_some();
+            type_dependency |= typed_source
+                && value_dependency
+                && !require_binding
+                && selected.type_file != selected.value_file;
+            if type_dependency {
+                imports.files.push((file, selected.type_file));
+            }
+            if value_dependency && (!type_dependency || selected.value_file != selected.type_file) {
+                imports.files.push((file, selected.value_file));
             }
         }
     }
 
     pub(super) fn js_module(&self, file: u32, spec: &str) -> Option<u32> {
+        self.js_import_target(file, spec)
+            .map(|target| self.module_of(target.type_file))
+    }
+
+    fn js_import_target(&self, file: u32, spec: &str) -> Option<JsImportTarget> {
         let dir = parent_dir(&self.input.files[file as usize].path);
         let typescript = self.file_type(file) != Some(FileType::JavaScript);
         let tables = &self.js_tables;
@@ -197,7 +237,10 @@ impl Index<'_> {
                             | FileType::Astro
                     )
                 ))
-            .then(|| self.module_of(target))
+            .then_some(JsImportTarget {
+                value_file: target,
+                type_file: target,
+            })
         };
         let probe = |stem: &str, extensions: &[&str]| {
             let mut path = String::with_capacity(stem.len() + 12);
@@ -205,7 +248,25 @@ impl Index<'_> {
             extensions.iter().find_map(|extension| {
                 path.truncate(stem.len());
                 path.push_str(extension);
-                module_at(&path)
+                let mut selected = module_at(&path)?;
+                // A declaration selected by extension substitution supplies types;
+                // an existing runtime sibling supplies the value dependency. Explicit
+                // declaration paths reach module_at directly and retain their identity.
+                let runtime = match *extension {
+                    ".d.ts" => &[".js", ".jsx"][..],
+                    ".d.mts" => &[".mjs"][..],
+                    ".d.cts" => &[".cjs"][..],
+                    _ => &[],
+                };
+                for extension in runtime {
+                    path.truncate(stem.len());
+                    path.push_str(extension);
+                    if let Some(found) = module_at(&path) {
+                        selected.value_file = found.value_file;
+                        break;
+                    }
+                }
+                Some(selected)
             })
         };
         bases.iter().find_map(|base| {
@@ -404,6 +465,128 @@ mod tests {
             })
             .collect();
         assert_eq!(targets, [("api.ts", "type"), ("api.ts", "type")]);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "lang-typescript")]
+    fn imports_link_runtime_and_type_files_by_their_declared_role() -> std::io::Result<()> {
+        use crate::domain::graph::EdgeKind;
+        use crate::infra::testdir::TestDir;
+
+        let root = TestDir::new("javascript-import-roles")?;
+        root.write(
+            "api.js",
+            "export function execute() {}\nexport function type() {}\n",
+        )?;
+        root.write(
+            "api.d.ts",
+            "export declare function execute(): void;\nexport declare function type(): void;\nexport interface Api {}\nexport type ApiAlias = Api;\n",
+        )?;
+        root.write(
+            "runtime.js",
+            "import { execute } from './api.js';\nexecute();\n",
+        )?;
+        root.write(
+            "value.ts",
+            "import { execute } from './api.js';\nexecute();\n",
+        )?;
+        root.write(
+            "types.ts",
+            "import type { Api } from './api.js';\nlet value: Api;\n",
+        )?;
+        root.write(
+            "mixed.ts",
+            "import { execute, type Api } from './api.js';\nlet value: Api;\nexecute();\n",
+        )?;
+        root.write(
+            "barrel.ts",
+            "export type { Api } from './api.js';\nexport { execute } from './api.js';\n",
+        )?;
+        for (name, source) in [
+            (
+                "named-type.ts",
+                "import { type as named } from './api.js';\nnamed();\n",
+            ),
+            (
+                "namespace-types.ts",
+                "import type * as api from './api.js';\nlet value: api.Api;\n",
+            ),
+            (
+                "namespace-values.ts",
+                "import * as api from './api.js';\napi.execute();\n",
+            ),
+            (
+                "empty.ts",
+                "import type {} from './api.js'; import {} from './api.js';\n",
+            ),
+            (
+                "decl-path.ts",
+                "import type { Api } from './api.d.ts';\nlet value: Api;\n",
+            ),
+            (
+                "only.ts",
+                "import { Only } from './only-api';\nlet value: Only;\n",
+            ),
+            (
+                "implicit-types.ts",
+                "import { Api } from './api.js';\nlet value: Api;\n",
+            ),
+            (
+                "implicit-alias.ts",
+                "import { ApiAlias } from './api.js';\nlet value: ApiAlias;\n",
+            ),
+            (
+                "implicit-mixed.ts",
+                "import { execute, Api } from './api.js';\nlet value: Api;\nexecute();\n",
+            ),
+        ] {
+            root.write(name, source)?;
+        }
+        root.write("only-api.d.ts", "export interface Only {}\n")?;
+        let graph = super::super::tests::graph_of(root.path())?;
+        let mut imports: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Imports)
+            .map(|edge| {
+                (
+                    graph.files[edge.source as usize - graph.symbols.len()]
+                        .path
+                        .as_str(),
+                    graph.files[edge.target as usize - graph.symbols.len()]
+                        .path
+                        .as_str(),
+                )
+            })
+            .collect();
+        imports.sort_unstable();
+        assert_eq!(
+            imports,
+            [
+                ("barrel.ts", "api.d.ts"),
+                ("barrel.ts", "api.js"),
+                ("decl-path.ts", "api.d.ts"),
+                ("empty.ts", "api.d.ts"),
+                ("empty.ts", "api.js"),
+                ("implicit-alias.ts", "api.d.ts"),
+                ("implicit-mixed.ts", "api.d.ts"),
+                ("implicit-mixed.ts", "api.js"),
+                ("implicit-types.ts", "api.d.ts"),
+                ("mixed.ts", "api.d.ts"),
+                ("mixed.ts", "api.js"),
+                ("named-type.ts", "api.d.ts"),
+                ("named-type.ts", "api.js"),
+                ("namespace-types.ts", "api.d.ts"),
+                ("namespace-values.ts", "api.d.ts"),
+                ("namespace-values.ts", "api.js"),
+                ("only.ts", "only-api.d.ts"),
+                ("runtime.js", "api.js"),
+                ("types.ts", "api.d.ts"),
+                ("value.ts", "api.d.ts"),
+                ("value.ts", "api.js"),
+            ]
+        );
         Ok(())
     }
 

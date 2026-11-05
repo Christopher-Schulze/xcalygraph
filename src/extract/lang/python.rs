@@ -199,6 +199,7 @@ fn expand_import(statement: &str, line: u32, _reexport: bool) -> Vec<Import> {
                     names: vec![name],
                     line,
                     reexport: false,
+                    type_only: false,
                 }
             })
             .collect();
@@ -216,6 +217,7 @@ fn expand_import(statement: &str, line: u32, _reexport: bool) -> Vec<Import> {
                 names: Vec::new(),
                 line,
                 reexport: false,
+                type_only: false,
             }
         })
         .collect()

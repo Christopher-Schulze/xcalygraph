@@ -152,7 +152,7 @@ Freshness:
 | fact | fields |
 |------|--------|
 | symbol | kind, name, parent symbol, line start, line end, signature (one line, whitespace-normalized, body removed, max 160 chars), doc (first sentence of the attached doc comment, max 120 chars; leading shebang directives are excluded), visibility (exported or private), flags (test, entry, generated, Python `NotImplementedError` contract stub) |
-| import | module specifier, alias, imported names, line |
+| import | module specifier, alias, imported names, line, re-export flag, explicit type-only flag |
 | ref | name (identifier or last two segments of a member chain), kind (call, type, inherit, implement), enclosing symbol, line, call arity; Rust records function and impl generic parameters and their source-backed trait bounds; Julia also stores sparse positional direct-variable arguments and marks retained unqualified builtins |
 | binding | variable name, declared type as written, enclosing symbol, declaration line and optional lexical-block end line; Rust untyped local names may be retained with an empty type for lexical call shadowing; Julia typed parameters retain their full annotation |
 | env | variable name, enclosing symbol, line |
@@ -227,6 +227,7 @@ Resolution order for a reference, first hit wins:
 - Julia Base dispatch: an unqualified builtin call can target source-defined `Base.name` methods when a declared concrete nominal argument type equals the method annotation at the same position or is its subtype through declared supertype edges; any known type mismatch rejects that candidate. At least one known position must match. When all direct call argument types and each matching candidate's formal types are known, retain only non-dominated, most-specific signatures; otherwise retain compatible partial matches as inferred. Unsupported types cannot establish a match; untyped calls emit no edge.
 - TypeScript interface identity: source-proven compatible declarations in one file or in the same proven project-wide global scope and namespace path form one logical type; complete headers and supported members establish compatibility, physical declaration locations remain accessible, unproven declarations stay distinct.
 - TypeScript declaration pairing: a top-level exported function in `.d.ts` pairs with one exported `.ts` or `.tsx` implementation only when resolver module identity, callable kind and complete normalized signature-token identity match; only the terminal declaration semicolon is normalized. Both physical symbols remain addressable, and unpaired declarations or overloads stay distinct.
+- Import file dependencies: JavaScript value files and TypeScript metadata remain separate; TypeScript value imports retain their declaration provider and concrete value file when distinct; explicit type-only bindings and resolved interface/type-alias bindings select only metadata. Explicit declaration paths retain their identity; declaration-only modules retain their context.
 - TypeScript composite receiver fields: direct flat unions of uniquely resolved named source types resolve a member call only when every union arm defines that member; direct flat intersections resolve it when any constituent defines the member. Missing or ambiguous names, optional fields and unsupported composite forms stay unresolved.
 - Implementation edges: `impl Trait for Type`, `implements`, `extends`, base and conformance lists, categories and extensions: exact; Go: type method set contains every interface method name with equal parameter count: inferred.
 - Overload identity: Swift calls compare external argument labels in source order and may omit only parameters with defaults; calls with trailing closures retain argument-count matching. Objective-C messages compare the complete selector, including every keyword and colon; `@selector(...)` resolves matching methods as inferred references because it has no receiver type.
@@ -378,10 +379,10 @@ Location: `<index-dir>/<root basename>-<XXH3-64 hex of the canonical root path>/
 | `git` | churn, co-change, hotspots keyed by HEAD and analysis version | key changes and git data is requested |
 | `lock` | writer lock | never |
 
-- Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum; format 16 fact records include a per-file coverage status, the source XXH3-128 hash, sparse source identities, optional binding block-end lines and Rust Unix/non-Unix gate flags; derived records include validated sparse TypeScript interface groups; fact shard sections deflated; search postings as delta-varint (node, term frequencies) pairs.
+- Encoding: little-endian fixed-size records; strings as (offset, length) into string tables; 64-byte aligned sections; header with magic, format version and XXH3-64 checksum; fact records include a per-file coverage status, the source XXH3-128 hash, sparse source identities, packed import re-export/type-only flags, optional binding block-end lines and Rust Unix/non-Unix gate flags; derived records include validated sparse TypeScript interface groups; fact shard sections deflated; search postings as delta-varint (node, term frequencies) pairs.
 - Writes: new exclusively created temp file in the same directory (`O_CREAT|O_EXCL`; an existing entry or symlink is skipped, never opened) -> rename; no fsync; unchanged files untouched; install and update use the same primitive. A checksum mismatch or truncation on open rebuilds that file.
 - Reads: memory-mapped, zero-copy.
-- Listing and safe cleanup also recognize format-8 through format-15 containers; queries require the current format and writable queries rebuild older indexes.
+- Listing and safe cleanup also recognize format-8 through format-15 and format-21 containers; queries require the current format and writable queries rebuild older indexes.
 
 ## 10. Skill, install, update
 

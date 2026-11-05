@@ -231,6 +231,7 @@ fn expand(tree: &str, prefix: &[String], line: u32, reexport: bool, out: &mut Ve
         names: vec![name],
         line,
         reexport,
+        type_only: false,
     });
 }
 

@@ -1217,12 +1217,20 @@ fn assemble(assembly: Assembly) -> Parsed {
                 names: raw.names,
                 line: raw.line,
                 reexport: raw.reexport,
+                type_only: false,
             }],
             (None, None) => Vec::new(),
         })
         .collect();
     facts_imports.sort_by(|a, b| {
-        (a.line, &a.spec, &a.names, &a.alias).cmp(&(b.line, &b.spec, &b.names, &b.alias))
+        (a.line, &a.spec, &a.names, &a.alias, a.reexport, a.type_only).cmp(&(
+            b.line,
+            &b.spec,
+            &b.names,
+            &b.alias,
+            b.reexport,
+            b.type_only,
+        ))
     });
     let mut facts_bindings: Vec<Binding> = bindings
         .into_values()

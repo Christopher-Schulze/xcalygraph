@@ -153,6 +153,8 @@ pub struct Import {
     pub line: u32,
     /// `pub use` and similar re-exports.
     pub reexport: bool,
+    /// An explicit TypeScript type-only import or re-export.
+    pub type_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

@@ -184,6 +184,7 @@ fn import_path(text: &str, line: u32) -> Vec<Import> {
             names: vec![name.to_owned()],
             line,
             reexport: false,
+            type_only: false,
         })
     };
     // Scala selectors: `a.b.{C, D => E, _}`.

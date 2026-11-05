@@ -1795,12 +1795,14 @@ fn expand_import(
     };
     let spec = unquote(text(spec)).to_owned();
     let reexport = statement.kind() == "export_statement";
-    let import = |name: &str, alias: Option<&str>| Import {
+    let statement_type_only = type_only_import(statement);
+    let import = |name: &str, alias: Option<&str>, type_only: bool| Import {
         spec: spec.clone(),
         alias: alias.map(str::to_owned),
         names: vec![name.to_owned()],
         line,
         reexport,
+        type_only: statement_type_only || type_only,
     };
     let mut imports = Vec::new();
     // TypeScript's contextual `type` keyword is unnamed; an imported value literally
@@ -1812,23 +1814,25 @@ fn expand_import(
             "import_clause" | "export_clause" => {
                 for binding in clause.named_children(&mut bindings) {
                     match binding.kind() {
-                        "identifier" => imports.push(import("default", Some(text(binding)))),
+                        "identifier" => {
+                            imports.push(import("default", Some(text(binding)), false));
+                        }
                         "namespace_import" => {
                             if let Some(alias) = namespace_alias(binding) {
-                                imports.push(import("*", Some(alias)));
+                                imports.push(import("*", Some(alias), false));
                             }
                         }
                         "named_imports" => {
                             let mut names = binding.walk();
                             for name in binding.named_children(&mut names) {
                                 if let Some(name) = import_specifier(name, source) {
-                                    imports.push(import(name.0, name.1));
+                                    imports.push(import(name.0, name.1, name.2));
                                 }
                             }
                         }
                         "export_specifier" => {
                             if let Some(name) = import_specifier(binding, source) {
-                                imports.push(import(name.0, name.1));
+                                imports.push(import(name.0, name.1, name.2));
                             }
                         }
                         _ => {}
@@ -1837,7 +1841,7 @@ fn expand_import(
             }
             "namespace_export" => {
                 if let Some(alias) = namespace_alias(clause) {
-                    imports.push(import("*", Some(alias)));
+                    imports.push(import("*", Some(alias), false));
                 }
             }
             _ => {}
@@ -1858,16 +1862,23 @@ fn expand_import(
             },
             line,
             reexport,
+            type_only: statement_type_only,
             ..Import::default()
         });
     }
     imports
 }
 
+fn type_only_import(node: tree_sitter::Node) -> bool {
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| !child.is_named() && child.kind() == "type")
+}
+
 fn import_specifier<'a>(
     node: tree_sitter::Node,
     source: &'a [u8],
-) -> Option<(&'a str, Option<&'a str>)> {
+) -> Option<(&'a str, Option<&'a str>, bool)> {
     if node.has_error() {
         // The TS grammar treats a value re-export `type as alias` as a type
         // modifier followed by an erroneous `as`. Recover only that complete
@@ -1891,6 +1902,7 @@ fn import_specifier<'a>(
             return Some((
                 name.utf8_text(source).ok()?,
                 Some(unquote(alias.utf8_text(source).ok()?)),
+                false,
             ));
         }
         return None;
@@ -1902,6 +1914,7 @@ fn import_specifier<'a>(
         alias
             .and_then(|node| node.utf8_text(source).ok())
             .map(unquote),
+        type_only_import(node),
     ))
 }
 

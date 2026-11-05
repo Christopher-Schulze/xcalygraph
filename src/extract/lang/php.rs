@@ -60,6 +60,7 @@ fn use_import(statement: &str, line: u32, _reexport: bool) -> Vec<Import> {
             names: vec![name.to_owned()],
             line,
             reexport: false,
+            type_only: false,
         })
     };
     let split_alias = |part: &str| -> (String, Option<String>) {

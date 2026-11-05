@@ -157,6 +157,7 @@ pub(super) fn using_import(statement: &str, line: u32, _reexport: bool) -> Vec<I
         names: vec![name.to_owned()],
         line,
         reexport: global,
+        type_only: false,
     };
     if let Some((alias, target)) = text.split_once('=') {
         let target: String = target.split_whitespace().collect();

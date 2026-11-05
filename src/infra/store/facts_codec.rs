@@ -113,7 +113,7 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
         encoder.opt_str(import.alias.as_deref());
         encoder.strs(&import.names);
         encoder.var_u32(import.line);
-        encoder.u8(u8::from(import.reexport));
+        encoder.u8(u8::from(import.reexport) | (u8::from(import.type_only) << 1));
     }
     encoder.var_usize(facts.refs.len());
     for reference in &facts.refs {
@@ -278,12 +278,21 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
     let count = decoder.len()?;
     facts.imports.reserve_exact(count);
     for _ in 0..count {
+        let spec = decoder.string()?;
+        let alias = decoder.opt_string()?;
+        let names = decoder.strings()?;
+        let line = decoder.var_u32()?;
+        let flags = decoder.u8()?;
+        if flags & !3 != 0 {
+            return Err(DecodeError("import flags"));
+        }
         facts.imports.push(Import {
-            spec: decoder.string()?,
-            alias: decoder.opt_string()?,
-            names: decoder.strings()?,
-            line: decoder.var_u32()?,
-            reexport: decoder.u8()? != 0,
+            spec,
+            alias,
+            names,
+            line,
+            reexport: flags & 1 != 0,
+            type_only: flags & 2 != 0,
         });
     }
     let count = decoder.len()?;
@@ -735,6 +744,7 @@ mod tests {
                 names: vec!["Open".to_owned()],
                 line: 2,
                 reexport: true,
+                type_only: true,
             }],
             refs: vec![
                 Ref {
@@ -880,6 +890,46 @@ mod tests {
         let mut corrupt = encoder.bytes.clone();
         corrupt[offset] = 200;
         assert!(decode(&mut Decoder::new(&corrupt)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn import_roles_round_trip_and_reserved_flags_are_rejected() -> DecodeResult<()> {
+        let mut facts = Facts {
+            imports: vec![Import {
+                spec: "./api.js".to_owned(),
+                names: vec!["Api".to_owned()],
+                ..Import::default()
+            }],
+            ..Facts::default()
+        };
+        for (reexport, type_only) in [(false, false), (true, false), (false, true), (true, true)] {
+            facts.imports[0].reexport = reexport;
+            facts.imports[0].type_only = type_only;
+            let mut encoder = Encoder::default();
+            encode(&mut encoder, &facts);
+            assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
+        }
+        facts.imports[0].type_only = false;
+        let mut value = Encoder::default();
+        encode(&mut value, &facts);
+        facts.imports[0].type_only = true;
+        let mut typed = Encoder::default();
+        encode(&mut typed, &facts);
+        assert_eq!(value.bytes.len(), typed.bytes.len());
+        let mut differences = value
+            .bytes
+            .iter()
+            .zip(&typed.bytes)
+            .enumerate()
+            .filter(|(_, (left, right))| left != right);
+        let offset = differences.next().ok_or(DecodeError("import role byte"))?.0;
+        assert!(differences.next().is_none());
+        for reserved in [4, 128, 255] {
+            let mut corrupt = typed.bytes.clone();
+            corrupt[offset] = reserved;
+            assert!(decode(&mut Decoder::new(&corrupt)).is_err());
+        }
         Ok(())
     }
 
