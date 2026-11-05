@@ -39,7 +39,10 @@ pub fn list(options: &Options) -> Result<String, AppError> {
             .root
             .as_ref()
             .map_or_else(|| "?".to_owned(), |root| root.display().to_string());
-        let missing = entry.root.as_ref().is_some_and(|root| !root.is_dir());
+        let missing = entry
+            .root
+            .as_ref()
+            .is_some_and(|root| root_is_missing(root));
         out.push_str(&format!(
             "{root} {} {}{}\n",
             super::progress::byte_count(entry.bytes),
@@ -102,7 +105,7 @@ pub fn clean(options: &Options, roots: &[String]) -> Result<String, AppError> {
             ));
             continue;
         };
-        if options.missing && root.is_dir() {
+        if options.missing && !root_is_missing(&root) {
             continue;
         }
         let bytes = size(&dir);
@@ -130,9 +133,19 @@ pub fn prune_orphans(base: &Path) {
         return;
     };
     for dir in dirs {
-        if owned_root(&dir).is_some_and(|root| !root.is_dir()) {
+        if owned_root(&dir).is_some_and(|root| root_is_missing(&root)) {
             let _ = Store::new(dir).drop_all();
         }
+    }
+}
+
+fn root_is_missing(root: &Path) -> bool {
+    match fs::metadata(root) {
+        Ok(metadata) => !metadata.is_dir(),
+        Err(error) => matches!(
+            error.kind(),
+            io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+        ),
     }
 }
 
@@ -320,6 +333,53 @@ mod tests {
         dir.write("a/meta", "12345")?;
         dir.write("a/facts/00", "123")?;
         assert_eq!(size(&dir.path().join("a")), 8);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_roots_are_not_missing_or_pruned() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TestDir::new("indexes-unreadable-root")?;
+        let parent = dir.path().join("protected");
+        let root = parent.join("repo");
+        fs::create_dir_all(&root)?;
+        let source = dir.write("protected/repo/main.go", "package main\n")?;
+        let base = dir.path().join("indexes");
+        let store = Store::new(store::index_dir(&base, &root));
+        store.create_dirs()?;
+        store.write_meta(&store::Meta {
+            extraction_version: 1,
+            binary_version: "0.2.0".to_owned(),
+            root: root.to_string_lossy().into_owned(),
+            write_time_ns: 1,
+        })?;
+        assert_eq!(owned_root(&store.dir), Some(root));
+        let options = Options {
+            index_dir: Some(base.clone()),
+            missing: true,
+            ..Options::default()
+        };
+        let permissions = fs::metadata(&parent)?.permissions();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o000))?;
+        let listing = list(&options);
+        prune_orphans(&base);
+        let retained_after_prune = store.dir.exists();
+        let cleaned = clean(&options, &[]);
+        let retained_after_clean = store.dir.exists();
+        fs::set_permissions(&parent, permissions)?;
+        assert!(
+            retained_after_prune,
+            "permission errors do not prove root removal"
+        );
+        assert!(
+            retained_after_clean,
+            "clean --missing must preserve inaccessible roots"
+        );
+        assert!(!listing?.contains(" missing\n"));
+        assert_eq!(cleaned?, "nothing to delete\n");
+        assert_eq!(fs::read_to_string(source)?, "package main\n");
         Ok(())
     }
 
