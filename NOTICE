@@ -22,3 +22,9 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
+
+tree-sitter
+Source: https://github.com/tree-sitter/tree-sitter (crate tree-sitter 0.27.1)
+License: MIT, see vendor/tree-sitter/LICENSE
+Vendored in vendor/tree-sitter with one change in src/query.c: Query::new skips the parse-table
+analysis of patterns unless XCALYGRAPH_QUERY_ANALYSIS is set.

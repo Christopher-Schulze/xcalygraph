@@ -11,6 +11,9 @@ publish = false
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2.191"
 
+[patch.crates-io]
+tree-sitter = { path = "vendor/tree-sitter" }
+
 [lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"

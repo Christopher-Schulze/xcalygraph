@@ -194,6 +194,10 @@ mod tests {
 
     #[test]
     fn every_query_compiles() {
+        // The vendored tree-sitter skips its parse-table analysis in production; here it runs and
+        // rejects patterns the grammar can never match. Other tests only get slower queries.
+        // SAFETY: no thread in this test binary mutates the environment, and getenv only reads.
+        unsafe { std::env::set_var("XCALYGRAPH_QUERY_ANALYSIS", "1") };
         for pack in packs() {
             let compiled = Query::new(&(pack.language)(""), pack.query);
             assert!(
