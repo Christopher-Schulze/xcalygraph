@@ -3,7 +3,7 @@
 use super::Pack;
 use super::c::{exported, flags, include_import, signature_prefix};
 use crate::domain::filetype::FileType;
-use crate::extract::engine::Hooks;
+use crate::extract::engine::{Hooks, ImportExpansion};
 
 pub static PACK: Pack = Pack {
     suffixes: &[],
@@ -14,7 +14,7 @@ pub static PACK: Pack = Pack {
         exported,
         signature_prefix,
         flags,
-        expand_import: include_import,
+        expand_import: ImportExpansion::Text(include_import),
         builtin,
     },
 };

@@ -7,7 +7,7 @@ use crate::domain::facts::{
     self, FLAG_DECLARATION, FLAG_TEST, Facts, Import, NO_ARITY, Ref, RefKind, SymKind, Symbol,
 };
 use crate::domain::filetype::FileType;
-use crate::extract::engine::{self, Definition, FileContext, Hooks};
+use crate::extract::engine::{self, Definition, FileContext, Hooks, ImportExpansion};
 
 pub static PACK: Pack = Pack {
     suffixes: &[],
@@ -18,7 +18,7 @@ pub static PACK: Pack = Pack {
         exported: |_| true,
         signature_prefix: |_, _| "",
         flags,
-        expand_import: engine::single_import,
+        expand_import: ImportExpansion::Text(engine::single_import),
         builtin: |name| {
             matches!(
                 name.to_ascii_lowercase().as_str(),

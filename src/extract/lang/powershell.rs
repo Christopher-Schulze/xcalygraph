@@ -3,7 +3,7 @@
 
 use super::Pack;
 use crate::domain::filetype::FileType;
-use crate::extract::engine::{self, Hooks};
+use crate::extract::engine::{self, Hooks, ImportExpansion};
 
 pub static PACK: Pack = Pack {
     suffixes: &[],
@@ -14,7 +14,7 @@ pub static PACK: Pack = Pack {
         exported: |_| true,
         signature_prefix: |_, _| "",
         flags: |_, _| 0,
-        expand_import: engine::single_import,
+        expand_import: ImportExpansion::Text(engine::single_import),
         builtin: |name| {
             let lower = name.to_ascii_lowercase();
             matches!(

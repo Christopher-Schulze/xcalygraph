@@ -4,7 +4,7 @@
 use super::Pack;
 use crate::domain::facts::{FLAG_TEST, Import, SymKind};
 use crate::domain::filetype::FileType;
-use crate::extract::engine::{Definition, FileContext, Hooks};
+use crate::extract::engine::{Definition, FileContext, Hooks, ImportExpansion};
 
 pub static PACK: Pack = Pack {
     suffixes: &[],
@@ -15,7 +15,7 @@ pub static PACK: Pack = Pack {
         exported,
         signature_prefix: |_, _| "",
         flags,
-        expand_import: use_import,
+        expand_import: ImportExpansion::Text(use_import),
         builtin,
     },
 };

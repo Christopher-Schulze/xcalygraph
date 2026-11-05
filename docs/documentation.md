@@ -65,6 +65,8 @@ Every language drops unqualified references to its builtins and prelude names, u
 
 JavaScript and TypeScript class expressions do not produce class nodes or heritage edges attributed to an enclosing symbol; named class declarations retain their heritage edges.
 
+JavaScript and TypeScript ES imports retain each binding and alias through comments, including values literally named `type` and namespace re-exports. Module specifiers retain their literal whitespace; empty re-export clauses carry only a file dependency. TypeScript `import = require(...)` remains unsupported.
+
 Extensionless JavaScript/TypeScript probing does not invent `.cjs`, `.mjs`, `.cts` or `.mts` paths. Explicit module-system extensions keep separate module identities; other existing implementation/declaration groups and proven TypeScript pairs remain unchanged. TypeScript imports retain source/declaration extension substitution, and explicit component and declaration paths remain usable. Workspace entries retain their declared `module`/`main` extension; source-layout fallbacks do not evaluate conditional `exports` maps.
 
 | language | extraction | module unit and imports |

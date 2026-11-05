@@ -4,7 +4,7 @@
 use super::Pack;
 use super::java::{header, jvm_flags, jvm_import};
 use crate::domain::filetype::FileType;
-use crate::extract::engine::{Definition, FileContext, Hooks};
+use crate::extract::engine::{Definition, FileContext, Hooks, ImportExpansion};
 
 pub static PACK: Pack = Pack {
     suffixes: &[],
@@ -15,7 +15,7 @@ pub static PACK: Pack = Pack {
         exported,
         signature_prefix: |_, _| "",
         flags,
-        expand_import: jvm_import,
+        expand_import: ImportExpansion::Text(jvm_import),
         builtin,
     },
 };

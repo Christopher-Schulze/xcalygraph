@@ -7,7 +7,7 @@ use tree_sitter::Node;
 
 use super::Pack;
 use crate::domain::filetype::FileType;
-use crate::extract::engine::{self, Definition, FileContext, Hooks};
+use crate::extract::engine::{self, Definition, FileContext, Hooks, ImportExpansion};
 
 pub static PACK: Pack = Pack {
     file_type: FileType::Bash,
@@ -18,7 +18,7 @@ pub static PACK: Pack = Pack {
         exported: |_| true,
         signature_prefix: |_, _| "",
         flags: |_: &Definition, _: &FileContext| 0,
-        expand_import,
+        expand_import: ImportExpansion::Text(expand_import),
         builtin,
     },
 };

@@ -5,7 +5,7 @@ use crate::domain::facts::{
     FLAG_ENTRY, FLAG_RUST_CFG_NOT_UNIX, FLAG_RUST_CFG_UNIX, FLAG_TEST, Import, SymKind,
 };
 use crate::domain::filetype::FileType;
-use crate::extract::engine::{Definition, FileContext, Hooks};
+use crate::extract::engine::{Definition, FileContext, Hooks, ImportExpansion};
 use tree_sitter::Node;
 
 pub static PACK: Pack = Pack {
@@ -17,7 +17,7 @@ pub static PACK: Pack = Pack {
         exported,
         signature_prefix: |_, _| "",
         flags,
-        expand_import,
+        expand_import: ImportExpansion::Text(expand_import),
         builtin,
     },
 };

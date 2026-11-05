@@ -5,9 +5,9 @@
 use super::Pack;
 use crate::domain::facts::{FLAG_ENTRY, FLAG_TEST, Import, SymKind};
 use crate::domain::filetype::FileType;
-#[cfg(feature = "lang-java")]
-use crate::extract::engine::Hooks;
 use crate::extract::engine::{Definition, FileContext};
+#[cfg(feature = "lang-java")]
+use crate::extract::engine::{Hooks, ImportExpansion};
 
 #[cfg(feature = "lang-java")]
 pub static PACK: Pack = Pack {
@@ -19,7 +19,7 @@ pub static PACK: Pack = Pack {
         exported,
         signature_prefix: |_, _| "",
         flags,
-        expand_import: jvm_import,
+        expand_import: ImportExpansion::Text(jvm_import),
         builtin,
     },
 };

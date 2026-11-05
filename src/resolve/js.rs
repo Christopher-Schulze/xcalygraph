@@ -370,6 +370,43 @@ mod tests {
         assert_eq!(module_key("web/src/index.tsx"), "js:web/src/index");
     }
 
+    #[cfg(feature = "lang-typescript")]
+    #[test]
+    fn typescript_value_import_can_be_named_type() -> std::io::Result<()> {
+        use crate::domain::graph::EdgeKind;
+        use crate::infra::testdir::TestDir;
+
+        let root = TestDir::new("typescript-import-named-type")?;
+        root.write("api.ts", "export function type(): void {}\n")?;
+        root.write(
+            "entry.ts",
+            "import { type as named } from './api.js';\nnamed();\n",
+        )?;
+        root.write(
+            "barrel.ts",
+            "export { type /* alias */ as named } from './api.js';\n",
+        )?;
+        root.write(
+            "consumer.ts",
+            "import { named as forwarded } from './barrel.js';\nforwarded();\n",
+        )?;
+        let graph = super::super::tests::graph_of(root.path())?;
+        let targets: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Calls)
+            .filter_map(|edge| graph.symbols.get(edge.target as usize))
+            .map(|symbol| {
+                (
+                    graph.files[symbol.file as usize].path.as_str(),
+                    symbol.name.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(targets, [("api.ts", "type"), ("api.ts", "type")]);
+        Ok(())
+    }
+
     #[test]
     fn javascript_commonjs_extensions_must_be_named() -> std::io::Result<()> {
         use crate::domain::graph::EdgeKind;

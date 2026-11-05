@@ -6,7 +6,7 @@ use super::Pack;
 use super::java::header;
 use crate::domain::facts::{FLAG_ENTRY, FLAG_TEST, Import, SymKind};
 use crate::domain::filetype::FileType;
-use crate::extract::engine::{Definition, FileContext, Hooks};
+use crate::extract::engine::{Definition, FileContext, Hooks, ImportExpansion};
 
 #[cfg(feature = "lang-csharp")]
 pub static PACK: Pack = Pack {
@@ -18,7 +18,7 @@ pub static PACK: Pack = Pack {
         exported,
         signature_prefix: |_, _| "",
         flags,
-        expand_import: using_import,
+        expand_import: ImportExpansion::Text(using_import),
         builtin,
     },
 };

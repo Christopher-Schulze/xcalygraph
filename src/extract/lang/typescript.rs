@@ -6,7 +6,7 @@ use super::Pack;
 use crate::domain::facts::FieldName;
 use crate::domain::facts::{FLAG_DECLARATION, Import, SymKind};
 use crate::domain::filetype::FileType;
-use crate::extract::engine::{Definition, FileContext, Hooks, unquote};
+use crate::extract::engine::{Definition, FileContext, Hooks, ImportExpansion, unquote};
 
 #[cfg(feature = "lang-typescript")]
 #[path = "typescript_number.rs"]
@@ -16,7 +16,7 @@ pub const HOOKS: Hooks = Hooks {
     exported,
     signature_prefix,
     flags,
-    expand_import,
+    expand_import: ImportExpansion::Tree(expand_import),
     builtin,
 };
 
@@ -1776,18 +1776,25 @@ fn signature_prefix(kind: SymKind, text: &str) -> &'static str {
 /// One import per bound name: `import D, {a as b} from "m"`, `import * as ns from "m"`,
 /// `export {x} from "m"`, `export * from "m"`. `names` holds the imported name (`default`
 /// for default imports, `*` for namespaces and star re-exports), `alias` the local name.
-fn expand_import(statement: &str, line: u32, _reexport: bool) -> Vec<Import> {
-    let text: String = statement.split_whitespace().collect::<Vec<_>>().join(" ");
-    let reexport = text.starts_with("export");
-    let Some(spec) = text
-        .rsplit(" from ")
-        .next()
-        .filter(|_| text.contains(" from "))
-        .or_else(|| text.strip_prefix("import "))
-    else {
+fn expand_import(
+    statement: tree_sitter::Node,
+    source: &[u8],
+    line: u32,
+    _reexport: bool,
+) -> Vec<Import> {
+    let text = |node: tree_sitter::Node| node.utf8_text(source).unwrap_or_default();
+    let namespace_alias = |node: tree_sitter::Node| {
+        let mut cursor = node.walk();
+        node.named_children(&mut cursor)
+            .find(|child| matches!(child.kind(), "identifier" | "string"))
+            .and_then(|child| child.utf8_text(source).ok())
+            .map(unquote)
+    };
+    let Some(spec) = statement.child_by_field_name("source") else {
         return Vec::new();
     };
-    let spec = unquote(spec.trim_end_matches(';').trim()).to_owned();
+    let spec = unquote(text(spec)).to_owned();
+    let reexport = statement.kind() == "export_statement";
     let import = |name: &str, alias: Option<&str>| Import {
         spec: spec.clone(),
         alias: alias.map(str::to_owned),
@@ -1795,55 +1802,107 @@ fn expand_import(statement: &str, line: u32, _reexport: bool) -> Vec<Import> {
         line,
         reexport,
     };
-    let Some((head, _)) = text.split_once(" from ") else {
-        // Side-effect import: `import "./polyfill"`.
-        return vec![Import {
-            spec,
-            line,
-            ..Import::default()
-        }];
-    };
-    let clause = head
-        .trim_start_matches("export")
-        .trim_start()
-        .trim_start_matches("import")
-        .trim_start()
-        .trim_start_matches("type ")
-        .trim();
     let mut imports = Vec::new();
-    let (outside, braces) = match (clause.find('{'), clause.rfind('}')) {
-        (Some(open), Some(close)) if open < close => (
-            format!("{}{}", &clause[..open], &clause[close + 1..]),
-            Some(&clause[open + 1..close]),
-        ),
-        _ => (clause.to_owned(), None),
-    };
-    for part in outside
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-    {
-        if let Some(alias) = part.strip_prefix("* as ") {
-            imports.push(import("*", Some(alias.trim())));
-        } else if part == "*" {
-            imports.push(import("*", None));
-        } else {
-            imports.push(import("default", Some(part)));
+    // TypeScript's contextual `type` keyword is unnamed; an imported value literally
+    // named `type` is the specifier's name field and must not be stripped.
+    let mut clauses = statement.walk();
+    for clause in statement.named_children(&mut clauses) {
+        let mut bindings = clause.walk();
+        match clause.kind() {
+            "import_clause" | "export_clause" => {
+                for binding in clause.named_children(&mut bindings) {
+                    match binding.kind() {
+                        "identifier" => imports.push(import("default", Some(text(binding)))),
+                        "namespace_import" => {
+                            if let Some(alias) = namespace_alias(binding) {
+                                imports.push(import("*", Some(alias)));
+                            }
+                        }
+                        "named_imports" => {
+                            let mut names = binding.walk();
+                            for name in binding.named_children(&mut names) {
+                                if let Some(name) = import_specifier(name, source) {
+                                    imports.push(import(name.0, name.1));
+                                }
+                            }
+                        }
+                        "export_specifier" => {
+                            if let Some(name) = import_specifier(binding, source) {
+                                imports.push(import(name.0, name.1));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "namespace_export" => {
+                if let Some(alias) = namespace_alias(clause) {
+                    imports.push(import("*", Some(alias)));
+                }
+            }
+            _ => {}
         }
     }
-    for part in braces
-        .into_iter()
-        .flat_map(|inner| inner.split(','))
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-    {
-        let part = part.trim_start_matches("type ").trim();
-        match part.split_once(" as ") {
-            Some((name, alias)) => imports.push(import(name.trim(), Some(alias.trim()))),
-            None => imports.push(import(part, None)),
-        }
+    if imports.is_empty() {
+        let mut cursor = statement.walk();
+        let glob = reexport
+            && statement
+                .children(&mut cursor)
+                .any(|child| child.kind() == "*");
+        imports.push(Import {
+            spec,
+            names: if glob {
+                vec!["*".to_owned()]
+            } else {
+                Vec::new()
+            },
+            line,
+            reexport,
+            ..Import::default()
+        });
     }
     imports
+}
+
+fn import_specifier<'a>(
+    node: tree_sitter::Node,
+    source: &'a [u8],
+) -> Option<(&'a str, Option<&'a str>)> {
+    if node.has_error() {
+        // The TS grammar treats a value re-export `type as alias` as a type
+        // modifier followed by an erroneous `as`. Recover only that complete
+        // token sequence, whose names remain explicit in source.
+        let mut cursor = node.walk();
+        let mut children = node
+            .children(&mut cursor)
+            .filter(|child| child.kind() != "comment");
+        let name = children.next()?;
+        let separator = children.next()?;
+        let alias = children.next()?;
+        if node.kind() == "export_specifier"
+            && name.kind() == "type"
+            && separator.kind() == "ERROR"
+            && separator.utf8_text(source).ok()? == "as"
+            && matches!(alias.kind(), "identifier" | "string")
+            && !alias.is_missing()
+            && !alias.has_error()
+            && children.next().is_none()
+        {
+            return Some((
+                name.utf8_text(source).ok()?,
+                Some(unquote(alias.utf8_text(source).ok()?)),
+            ));
+        }
+        return None;
+    }
+    let name = node.child_by_field_name("name")?;
+    let alias = node.child_by_field_name("alias");
+    Some((
+        unquote(name.utf8_text(source).ok()?),
+        alias
+            .and_then(|node| node.utf8_text(source).ok())
+            .map(unquote),
+    ))
 }
 
 fn builtin(name: &str) -> bool {
@@ -2622,7 +2681,29 @@ mod tests {
     }
 
     fn rows(statement: &str) -> Vec<(String, String, Option<String>, bool)> {
-        expand_import(statement, 1, false)
+        use crate::domain::corpus::FileRecord;
+        use crate::domain::role::Role;
+
+        #[cfg(feature = "lang-typescript")]
+        let file_type = FileType::TypeScript;
+        #[cfg(not(feature = "lang-typescript"))]
+        let file_type = FileType::JavaScript;
+        let record = FileRecord {
+            path: if file_type == FileType::TypeScript {
+                "entry.ts"
+            } else {
+                "entry.js"
+            }
+            .to_owned(),
+            size: statement.len() as u64,
+            mtime_ns: 0,
+            identity: None,
+            hash: 0,
+            role: Role::Src,
+            file_type: Some(file_type),
+        };
+        crate::extract::extract(&record, statement.as_bytes())
+            .imports
             .into_iter()
             .map(|import| {
                 (
@@ -2652,11 +2733,11 @@ mod tests {
     #[test]
     fn import_and_export_clauses_expand_per_binding() {
         assert_eq!(
-            rows("import Store, { open as openStore, type Row } from \"./store\";"),
+            rows("import Store, { open as openStore, Row } from \"./store\";"),
             [
+                row("./store", "Row", None, false),
                 row("./store", "default", Some("Store"), false),
-                row("./store", "open", Some("openStore"), false),
-                row("./store", "Row", None, false)
+                row("./store", "open", Some("openStore"), false)
             ]
         );
         assert_eq!(
@@ -2675,5 +2756,55 @@ mod tests {
             rows("import \"./polyfill\";"),
             [row("./polyfill", "", None, false)]
         );
+        assert_eq!(
+            rows("export * as store from './store';"),
+            [row("./store", "*", Some("store"), true)]
+        );
+        assert_eq!(
+            rows("export {} from './empty';"),
+            [row("./empty", "", None, true)]
+        );
+        #[cfg(feature = "lang-typescript")]
+        assert_eq!(
+            rows("import Store, { open as openStore, type Row } from \"./store\";"),
+            [
+                row("./store", "Row", None, false),
+                row("./store", "default", Some("Store"), false),
+                row("./store", "open", Some("openStore"), false)
+            ]
+        );
+    }
+
+    #[test]
+    fn import_syntax_preserves_comments_and_literal_type_names() {
+        assert_eq!(
+            rows(
+                "import /* module */ Store, { open /* alias */ as openStore, type as named } from './ from /store';"
+            ),
+            [
+                row("./ from /store", "default", Some("Store"), false),
+                row("./ from /store", "open", Some("openStore"), false),
+                row("./ from /store", "type", Some("named"), false)
+            ]
+        );
+        assert_eq!(
+            rows("export { type /* alias */ as named } /* source */ from './api';"),
+            [row("./api", "type", Some("named"), true)]
+        );
+        assert_eq!(
+            rows("import * /* alias */ as tools from './tools';"),
+            [row("./tools", "*", Some("tools"), false)]
+        );
+        #[cfg(feature = "lang-typescript")]
+        {
+            assert_eq!(
+                rows("export { type as } from './api';"),
+                [row("./api", "as", None, true)]
+            );
+            assert_eq!(
+                rows("export { type as alias extra } from './api';"),
+                [row("./api", "", None, true)]
+            );
+        }
     }
 }

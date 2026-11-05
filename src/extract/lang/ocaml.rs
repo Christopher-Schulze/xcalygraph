@@ -3,7 +3,7 @@
 use super::Pack;
 use crate::domain::facts::FLAG_DECLARATION;
 use crate::domain::filetype::FileType;
-use crate::extract::engine::{self, Hooks};
+use crate::extract::engine::{self, Hooks, ImportExpansion};
 
 fn builtin(name: &str) -> bool {
     matches!(
@@ -39,7 +39,7 @@ pub static IMPLEMENTATION: Pack = Pack {
         exported: |_| true,
         signature_prefix: |_, _| "",
         flags: |_, _| 0,
-        expand_import: engine::single_import,
+        expand_import: ImportExpansion::Text(engine::single_import),
         builtin,
     },
 };
@@ -53,7 +53,7 @@ pub static INTERFACE: Pack = Pack {
         exported: |_| true,
         signature_prefix: |_, _| "",
         flags: |_, _| FLAG_DECLARATION,
-        expand_import: engine::single_import,
+        expand_import: ImportExpansion::Text(engine::single_import),
         builtin,
     },
 };

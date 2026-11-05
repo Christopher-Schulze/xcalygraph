@@ -4,7 +4,7 @@
 use super::Pack;
 use crate::domain::facts::{FLAG_ENTRY, SymKind};
 use crate::domain::filetype::FileType;
-use crate::extract::engine::{self, Definition, FileContext, Hooks};
+use crate::extract::engine::{self, Definition, FileContext, Hooks, ImportExpansion};
 
 /// Callbacks a behaviour (GenServer, Supervisor, Application, gen_server) calls.
 fn callback(name: &str) -> bool {
@@ -34,7 +34,7 @@ pub static ELIXIR: Pack = Pack {
         exported: |definition| !definition.text.trim_start().starts_with("defp"),
         signature_prefix: |_, _| "",
         flags: elixir_flags,
-        expand_import: engine::single_import,
+        expand_import: ImportExpansion::Text(engine::single_import),
         builtin: elixir_builtin,
     },
 };
@@ -118,7 +118,7 @@ pub static ERLANG: Pack = Pack {
         exported: |_| true,
         signature_prefix: |_, _| "",
         flags: erlang_flags,
-        expand_import: engine::single_import,
+        expand_import: ImportExpansion::Text(engine::single_import),
         builtin: |name| {
             matches!(
                 name,

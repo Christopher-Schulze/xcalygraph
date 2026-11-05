@@ -4,7 +4,7 @@
 use super::Pack;
 use crate::domain::facts::{FLAG_TEST, Import, SymKind};
 use crate::domain::filetype::FileType;
-use crate::extract::engine::{Definition, FileContext, Hooks};
+use crate::extract::engine::{Definition, FileContext, Hooks, ImportExpansion};
 use tree_sitter::Node;
 
 pub static PACK: Pack = Pack {
@@ -16,7 +16,7 @@ pub static PACK: Pack = Pack {
         exported: |definition| !definition.name.starts_with('_'),
         signature_prefix: |_, _| "",
         flags,
-        expand_import,
+        expand_import: ImportExpansion::Text(expand_import),
         builtin,
     },
 };

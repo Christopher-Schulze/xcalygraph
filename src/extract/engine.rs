@@ -38,10 +38,20 @@ pub struct Hooks {
     pub signature_prefix: fn(SymKind, &str) -> &'static str,
     /// Test and entry flags of a definition.
     pub flags: fn(&Definition, &FileContext) -> u8,
-    /// Expands an `@import.tree` capture (Rust use trees) into imports.
-    pub expand_import: fn(&str, u32, bool) -> Vec<Import>,
+    /// Expands an `@import.tree` capture into final imports.
+    pub expand_import: ImportExpansion,
     /// Unqualified names of builtins and prelude items; references to them are dropped.
     pub builtin: fn(&str) -> bool,
+}
+
+pub enum ImportExpansion {
+    #[allow(
+        dead_code,
+        reason = "Text expansion is unused in JS-only or grammar-free builds"
+    )]
+    Text(fn(&str, u32, bool) -> Vec<Import>),
+    #[cfg(any(feature = "lang-typescript", feature = "lang-javascript"))]
+    Tree(for<'tree> fn(Node<'tree>, &[u8], u32, bool) -> Vec<Import>),
 }
 
 /// What hooks may inspect about a definition.
@@ -153,9 +163,9 @@ struct AssembledRef {
 }
 
 #[derive(Default)]
-struct RawImport {
+struct RawImport<'tree> {
     path: Option<String>,
-    tree: Option<String>,
+    tree: Option<Node<'tree>>,
     alias: Option<String>,
     names: Vec<String>,
     reexport: bool,
@@ -525,7 +535,7 @@ fn collect(
                         entry.path = Some(unquote(text(node)).to_owned());
                     }
                     if let Some(node) = get("import.tree") {
-                        entry.tree = Some(text(node).to_owned());
+                        entry.tree = Some(node);
                     }
                     if let Some(node) = get("import.alias") {
                         entry.alias = Some(text(node).to_owned());
@@ -780,7 +790,7 @@ struct Assembly<'a, 'tree> {
     defs: FastMap<usize, RawDef<'tree>>,
     impls: Vec<(Node<'tree>, String, Option<String>)>,
     refs: FastMap<usize, RawRef>,
-    imports: FastMap<usize, RawImport>,
+    imports: FastMap<usize, RawImport<'tree>>,
     bindings: FastMap<usize, RawBinding>,
     returns: Vec<(usize, String)>,
     fields: FastMap<usize, RawField>,
@@ -1196,7 +1206,11 @@ fn assemble(assembly: Assembly) -> Parsed {
     let mut facts_imports: Vec<Import> = imports
         .into_values()
         .flat_map(|raw| match (raw.tree, raw.path) {
-            (Some(tree), _) => (hooks.expand_import)(&tree, raw.line, raw.reexport),
+            (Some(tree), _) => match hooks.expand_import {
+                ImportExpansion::Text(expand) => expand(text(tree), raw.line, raw.reexport),
+                #[cfg(any(feature = "lang-typescript", feature = "lang-javascript"))]
+                ImportExpansion::Tree(expand) => expand(tree, source, raw.line, raw.reexport),
+            },
             (None, Some(path)) => vec![Import {
                 spec: path,
                 alias: raw.alias,
@@ -2547,8 +2561,6 @@ fn strip_comment(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error;
-
     use super::*;
 
     #[test]
@@ -2654,7 +2666,8 @@ mod tests {
         feature = "lang-powershell",
         feature = "lang-robot"
     ))]
-    fn leading_shebang_comments_do_not_displace_real_documentation() -> Result<(), Box<dyn Error>> {
+    fn leading_shebang_comments_do_not_displace_real_documentation()
+    -> Result<(), Box<dyn std::error::Error>> {
         let cases = [
             #[cfg(feature = "lang-bash")]
             (

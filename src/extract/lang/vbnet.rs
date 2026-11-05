@@ -7,7 +7,7 @@ use super::csharp::{attributes, dotnet_flags, using_import};
 use super::java::header;
 use crate::domain::facts::{Facts, NO_ARITY, Ref, RefKind, SymKind};
 use crate::domain::filetype::FileType;
-use crate::extract::engine::{Definition, FileContext, Hooks};
+use crate::extract::engine::{Definition, FileContext, Hooks, ImportExpansion};
 
 pub static PACK: Pack = Pack {
     suffixes: &[],
@@ -18,7 +18,7 @@ pub static PACK: Pack = Pack {
         exported,
         signature_prefix: |_, _| "",
         flags,
-        expand_import: |_, _, _| Vec::new(),
+        expand_import: ImportExpansion::Text(|_, _, _| Vec::new()),
         builtin,
     },
 };

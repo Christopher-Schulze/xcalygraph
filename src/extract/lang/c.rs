@@ -6,7 +6,7 @@ use crate::domain::facts::{
     FLAG_DECLARATION, FLAG_ENTRY, FLAG_TEST, Facts, Import, NO_ARITY, Ref, RefKind, SymKind,
 };
 use crate::domain::filetype::FileType;
-use crate::extract::engine::{Definition, FileContext, Hooks};
+use crate::extract::engine::{Definition, FileContext, Hooks, ImportExpansion};
 
 #[cfg(feature = "lang-c")]
 pub static PACK: Pack = Pack {
@@ -18,7 +18,7 @@ pub static PACK: Pack = Pack {
         exported,
         signature_prefix,
         flags,
-        expand_import: include_import,
+        expand_import: ImportExpansion::Text(include_import),
         builtin,
     },
 };
