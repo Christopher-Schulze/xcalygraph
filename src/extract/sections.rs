@@ -52,7 +52,8 @@ pub fn index_text<'a>(facts: &mut Facts, lines: impl Iterator<Item = (u32, &'a s
             open.flush(facts, line.saturating_sub(1));
             open.heading = owner;
         }
-        if text.is_empty() {
+        // Comment rulers (`##`, `---`) neither name a section nor hold a word.
+        if !text.chars().any(char::is_alphanumeric) {
             continue;
         }
         if open.first_line == 0 {
@@ -126,6 +127,17 @@ impl Section {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rulers_do_not_name_sections() {
+        let mut facts = Facts {
+            lines: 3,
+            ..Facts::default()
+        };
+        index_lines(&mut facts, "##\n# User Database\n##\n");
+        assert_eq!(facts.symbols[0].name, "# User Database");
+        assert_eq!(facts.symbols[0].line, 2);
+    }
 
     #[test]
     fn long_lines_retain_every_term_in_bounded_sections() {

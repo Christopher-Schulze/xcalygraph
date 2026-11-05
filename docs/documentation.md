@@ -136,7 +136,7 @@ Captured Rust and ECMAScript receiver bindings retain source byte positions and 
 
 Rust paths follow `pub use` items and globs, and `extern crate` with its alias, across crates; a glob of an external crate proves nothing about a name. Names bound by a tuple-struct pattern (`Some(x)`, also `ref` and `mut`) have an unknown type and live in their arm, consequence, loop body or, for `let ... else`, the rest of the block. ECMAScript `export { local as Name }` reaches the local declaration.
 
-A path literal below a computed base (`root / "a.rs"`, `dir.join("a.rs")`) is an inferred reference and never stale. A bare doc mention names a type's member only when the document shows that type: in its path, a heading above the mention or a mention of the same section.
+A path literal below a computed or unknown base (`root / "a.rs"`, `dir.join("a.rs")`, a bare `"README.md"`) is an inferred reference and never stale. A bare doc mention names a type's member only when the document shows that type, and a plain lowercase word names anything but a callable only when the document shows the declaring file: in its path, a heading above the mention or another reference of the same section.
 
 Bare doc mentions accept ASCII capitalization variants of lowercase Common Lisp declarations; other languages keep case-sensitive matching and cross-language collisions remain ambiguous.
 
@@ -210,7 +210,7 @@ rm -r ~/.agents/skills/xcalygraph ~/.claude/skills/xcalygraph
 - Relation lines: `<marker> <qualified name> <path>:<line>`; incoming edges cite the reference line, outgoing ones the target definition; edge kinds other than calls and type hierarchy are appended (`uses`, `imports`); a trailing `?` marks an inferred edge. `path` marks each inferred hop (inferred edge or reversed direction) and prefers the equally short path with fewer inferred hops; `impact` marks a dependent inferred unless a shortest chain to a target is all exact, so uncertainty carries to every later depth; `--exact` drops both, and `path` then never falls back to an undirected route.
 - `impact --diff` matches definitions by file, package, kind, lexical parents and receiver before considering evidence-backed cross-file moves; duplicate names in unrelated files do not by themselves hide a removal.
 - Budget: stdout never exceeds `3 x -b` bytes, including truncation, ambiguity candidate lists (at most 600 tokens) and `impact` run commands (reserved before notices and changes, package-level form when the precise one does not fit). Truncation ends with `+<n> more` or JSON `{"t":"more","n":<n>}`; if that cannot fit, text uses `+<n>` or `+`, JSON uses `{"t":"more"}` or `{}`. An empty JSON object always means truncation. Grouping never lets a lower-ranked hit displace a higher-ranked one: the best hits that fit are chosen first, then grouped.
-- `--json` writes JSON Lines with the fields of `docs/spec.md` section 8; empty fields are omitted.
+- `--json` writes JSON Lines with the fields of `docs/spec.md` section 8; empty fields are omitted. Every record repeats its path and full name, so at an equal budget it holds fewer hits than text (sealed: 166 against 195 of 216 at 600 tokens); agents read text.
 - Map JSON keeps file/symbol counts, task targets, API signatures and handlers, cycle/layer members, and environment read locations in typed fields. Audit JSON keeps finding names, source paths and lines separate; drift records also expose direction and status.
 
 ## What an agent sees

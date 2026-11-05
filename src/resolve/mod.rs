@@ -39,7 +39,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 121;
+pub const RESOLVE_VERSION: u32 = 122;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -2489,6 +2489,7 @@ impl<'a> Index<'a> {
         }
         let name = normalized.rsplit('.').next().unwrap_or(&normalized);
         let unqualified = normalized == name;
+        let plain_word = name.bytes().all(|byte| byte.is_ascii_lowercase());
         let mut candidates: Vec<u32> = self
             .by_name
             .get(name)
@@ -2557,7 +2558,7 @@ impl<'a> Index<'a> {
             Some(symbol)
                 if unqualified
                     && owner != Some(self.symbols[symbol as usize].file)
-                    && !self.mention_shows_member_owner(file, scope, symbol) =>
+                    && !self.mention_has_evidence(file, scope, symbol, plain_word) =>
             {
                 Outcome::Unresolved
             }
@@ -2569,10 +2570,16 @@ impl<'a> Index<'a> {
         }
     }
 
-    /// A bare word such as `items` or `dir` names a type's member only when the document shows
-    /// that type: in its path, a heading above the mention or a mention of the same section.
-    /// Prose uses such words for parameters and concepts as well.
-    fn mention_shows_member_owner(&self, file: u32, scope: Option<u32>, symbol: u32) -> bool {
+    /// Prose uses bare words such as `items` or `dir` for parameters and concepts as well. A word
+    /// names a type's member only when the document shows that type, and a plain lowercase word
+    /// names anything but a callable only when the document shows the file declaring it.
+    fn mention_has_evidence(
+        &self,
+        file: u32,
+        scope: Option<u32>,
+        symbol: u32,
+        plain_word: bool,
+    ) -> bool {
         let record = &self.symbols[symbol as usize];
         let local = (symbol - self.base[record.file as usize]) as usize;
         let member_owner = self.facts(record.file).and_then(|facts| {
@@ -2581,10 +2588,23 @@ impl<'a> Index<'a> {
                 .get(facts.symbols.get(local)?.parent? as usize)?;
             parent.kind().is_type().then_some(parent.name.as_str())
         });
-        let (Some(member_owner), Some(document)) = (member_owner, self.facts(file)) else {
+        if let Some(member_owner) = member_owner {
+            return self.document_shows(file, scope, member_owner);
+        }
+        if record.kind.is_callable() || !plain_word {
+            return true;
+        }
+        let path = &self.input.files[record.file as usize].path;
+        let stem = path.rsplit('/').next().unwrap_or(path);
+        self.document_shows(file, scope, stem.split('.').next().unwrap_or(stem))
+    }
+
+    /// `word` appears in the document's path, a heading above the scope or a reference of it.
+    fn document_shows(&self, file: u32, scope: Option<u32>, word: &str) -> bool {
+        let Some(document) = self.facts(file) else {
             return true;
         };
-        let lowercase = member_owner.to_ascii_lowercase();
+        let lowercase = word.to_ascii_lowercase();
         if self.input.files[file as usize]
             .path
             .to_ascii_lowercase()
@@ -2594,7 +2614,7 @@ impl<'a> Index<'a> {
         }
         let mut heading = scope;
         while let Some(section) = heading.and_then(|index| document.symbols.get(index as usize)) {
-            if section.name.contains(member_owner) {
+            if section.name.contains(word) {
                 return true;
             }
             heading = section.parent;
@@ -2602,7 +2622,8 @@ impl<'a> Index<'a> {
         document.refs.iter().any(|reference| {
             reference.scope == scope
                 && matches!(reference.kind, RefKind::Mention | RefKind::Path)
-                && reference.name.contains(member_owner)
+                && reference.name != word
+                && reference.name.contains(word)
         })
     }
 

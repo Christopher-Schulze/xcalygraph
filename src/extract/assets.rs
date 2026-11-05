@@ -362,11 +362,12 @@ pub fn literal_paths(text: &str, facts: &mut Facts) {
         };
         // Quotes nested in template literals (`` `<img src="a.png">` ``) count too.
         for_each_quoted(line, |literal, before| {
-            // `root / "src/main.rs"` and `dir.join("src/main.rs")` hang below a computed base:
-            // the same-named repository file is a guess.
+            // `root / "src/main.rs"`, `dir.join("src/main.rs")` and a bare `"README.md"` hang
+            // below a computed or unknown base: the same-named repository file is a guess.
             let before = before.trim_end();
-            let computed = before.ends_with('/') || before.ends_with("join(");
             let literal = literal.trim();
+            let computed =
+                before.ends_with('/') || before.ends_with("join(") || !literal.contains('/');
             if is_path_literal(literal) {
                 path_literal(literal, computed);
             } else {
@@ -513,7 +514,7 @@ mod tests {
     fn literal_paths_below_a_computed_base_are_marked() {
         let mut facts = Facts::default();
         literal_paths(
-            "(project / \"src/main.rs\").write_text('x')\nroot.join(\"src/lib.rs\");\nopen('src/real.rs')\n",
+            "(project / \"src/main.rs\").write_text('x')\nroot.join(\"src/lib.rs\");\nopen('src/real.rs')\nopen('README.md')\n",
             &mut facts,
         );
         let names: Vec<_> = facts
@@ -526,7 +527,8 @@ mod tests {
             [
                 ("src/main.rs", true),
                 ("src/lib.rs", true),
-                ("src/real.rs", false)
+                ("src/real.rs", false),
+                ("README.md", true)
             ]
         );
     }
