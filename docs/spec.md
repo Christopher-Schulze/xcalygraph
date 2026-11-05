@@ -288,6 +288,8 @@ Sections in priority order: root line (name, files per language, symbol count) -
 
 Documents: the words of a section (Markdown, text, reStructuredText, Org, AsciiDoc, LaTeX, HTML, PDF, DOCX, XLSX, PPTX, OpenDocument, RTF, legacy DOC, XLS and PPT, first 2,000 rows of CSV and TSV) are the search terms of its heading in a field of their own, up to 256 distinct terms; a longer section or text without headings continues in sections named by their first line, or by their first word when continuing within a line. Every continuation retains the original line locator and heading parent. Section symbols count half their role weight.
 
+Connections: without such a top hit, up to two `~` lines come first and show directed `calls`, `tests`, `inherits` and `implements` paths of at most 3 edges between the 6 leading hits, the ones joining most hits first: `~ A path:line >site B path:line`, where `>site` is the relation's line in the node before and `?` marks an inferred edge; search visits at most 512 nodes per hit.
+
 First answer: when the top hit's score is at least 1.3 times the runner-up's, its source follows its line (4 spaces, then line number and code, clipped to 100 characters): a body of at most 8 non-empty lines whole, otherwise its first 4 lines and up to 4 lines naming a query word, then `+N lines`; then up to 3 callers and 3 callees (`<`, `>`), up to 2 tests (`t`, `t2`) and one command to run them (`r`). JSON: `source` records with `line` and `text`, `edge` records.
 
 An explicit, case-insensitive `exact symbol NAME` cue resolves the following identifier through exact symbol lookup; a missing name returns no hits instead of semantic candidates.
@@ -349,7 +351,7 @@ Record-specific fields: `root` uses `n` for files and `symbols` for symbols; `mo
 
 | field | type | description |
 |-------|------|-------------|
-| `t` | string | record type: `sym`, `file`, `source`, `edge`, `sec`, `note`, `more`, `root`, `mod`, `cycle`, `layer`, `ext`, `env` |
+| `t` | string | record type: `sym`, `file`, `source`, `edge`, `chain`, `sec`, `note`, `more`, `root`, `mod`, `cycle`, `layer`, `ext`, `env` |
 | `path` | string | root-relative path |
 | `text` | string | source line (`source` records) |
 | `line`, `end`, `new_line` | int | 1-based source or current line |

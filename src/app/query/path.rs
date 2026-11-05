@@ -122,6 +122,145 @@ pub fn shortest(
     Some(hops)
 }
 
+/// Edge kinds that connect ranked hits: what runs what, what extends what.
+const CHAIN_KINDS: [EdgeKind; 4] = [
+    EdgeKind::Calls,
+    EdgeKind::Tests,
+    EdgeKind::Inherits,
+    EdgeKind::Implements,
+];
+const CHAIN_DEPTH: usize = 3;
+/// Nodes one search may visit: a query stays within its latency target on any hub.
+const CHAIN_VISITS: usize = 512;
+
+/// One link of a chain: the node reached and the line of the relation in the node before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Link {
+    pub node: u32,
+    pub site: u32,
+    pub exact: bool,
+}
+
+/// Directed chains of at most [`CHAIN_DEPTH`] edges between `hits`, the ones joining most hits
+/// first, at most `limit`. Every link is an emitted edge; nothing connects by name or rank.
+pub fn chains(index: &Index, filter: &Filter, hits: &[u32], limit: usize) -> Vec<(u32, Vec<Link>)> {
+    let mut found: Vec<(u32, Vec<Link>)> = Vec::new();
+    for &start in hits {
+        let mut visited = 1;
+        let mut seen = vec![start];
+        let mut layer: Vec<(u32, Vec<Link>)> = vec![(start, Vec::new())];
+        for _ in 0..CHAIN_DEPTH {
+            let mut next = Vec::new();
+            for (node, links) in &layer {
+                for edge in index.derived.outgoing(*node) {
+                    if !CHAIN_KINDS.contains(&edge.kind())
+                        || !filter.edge(edge)
+                        || !filter.includes(index, edge.node)
+                        || seen.contains(&edge.node)
+                        || visited >= CHAIN_VISITS
+                    {
+                        continue;
+                    }
+                    visited += 1;
+                    seen.push(edge.node);
+                    let mut extended = links.clone();
+                    extended.push(Link {
+                        node: edge.node,
+                        site: edge.line,
+                        exact: edge.is_exact(),
+                    });
+                    if hits.contains(&edge.node) {
+                        found.push((start, extended.clone()));
+                    }
+                    next.push((edge.node, extended));
+                }
+            }
+            layer = next;
+        }
+    }
+    let joined = |chain: &(u32, Vec<Link>)| {
+        1 + chain
+            .1
+            .iter()
+            .filter(|link| hits.contains(&link.node))
+            .count()
+    };
+    let rank = |node: u32| {
+        hits.iter()
+            .position(|&hit| hit == node)
+            .unwrap_or(hits.len())
+    };
+    found.sort_by_key(|chain| {
+        (
+            std::cmp::Reverse(joined(chain)),
+            chain.1.len(),
+            chain.1.iter().filter(|link| !link.exact).count(),
+            rank(chain.0),
+            chain.1.iter().map(|link| link.node).collect::<Vec<_>>(),
+        )
+    });
+    let mut chosen: Vec<(u32, Vec<Link>)> = Vec::new();
+    for chain in found {
+        // A chain whose hits another chain already joins adds nothing.
+        let members = |chain: &(u32, Vec<Link>)| -> Vec<u32> {
+            std::iter::once(chain.0)
+                .chain(chain.1.iter().map(|link| link.node))
+                .filter(|node| hits.contains(node))
+                .collect()
+        };
+        let own = members(&chain);
+        if chosen.iter().any(|other| {
+            let shown = members(other);
+            own.iter().all(|node| shown.contains(node))
+        }) {
+            continue;
+        }
+        chosen.push(chain);
+        if chosen.len() == limit {
+            break;
+        }
+    }
+    chosen
+}
+
+/// Writes `~ A path:line >site B path:line ...`: `>site` is the relation's line in the node before.
+pub fn write_chain(index: &Index, writer: &mut Writer, start: u32, links: &[Link]) {
+    let name = |node: u32| index.short_label(node).into_owned();
+    let mut last_path = index.path_of(start).to_owned();
+    let mut text = format!("~ {} {last_path}:{}", name(start), index.line_of(start));
+    let mut hops = vec![format!(
+        "{last_path}:{} {}",
+        index.line_of(start),
+        name(start)
+    )];
+    for link in links {
+        let path = index.path_of(link.node);
+        let mark = if link.exact { "" } else { "?" };
+        let location = if path == last_path {
+            format!(":{}", index.line_of(link.node))
+        } else {
+            format!("{path}:{}", index.line_of(link.node))
+        };
+        text.push_str(&format!(
+            " >{}{mark} {} {location}",
+            link.site,
+            name(link.node)
+        ));
+        hops.push(format!(
+            "{path}:{} {} site {} {}",
+            index.line_of(link.node),
+            name(link.node),
+            link.site,
+            if link.exact { "exact" } else { "inferred" },
+        ));
+        path.clone_into(&mut last_path);
+    }
+    writer.line(
+        &text,
+        &[("t", Value::Str("chain")), ("hops", Value::Strings(&hops))],
+    );
+}
+
 pub fn render(
     index: &Index,
     filter: &Filter,

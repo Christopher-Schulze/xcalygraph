@@ -9,7 +9,7 @@ Indexes the current repository on first use (seconds, nothing to set up) and ref
 
 ## Pick the command
 
-- Behavior described in words ("where is X handled"): `xcalygraph find WORDS`. A clear top hit comes with its source lines and neighbours: answer from it without another call.
+- Behavior described in words ("where is X handled"): `xcalygraph find WORDS`. A clear top hit comes with its source lines and neighbours: answer from it without another call. Otherwise `~` lines show how the leading hits connect (`>line` is the relation's site).
 - A name you already know: `xcalygraph show NAME` (signature, members, callers, callees, tests); no prefixes or quotes around NAME.
 - New codebase: `map` first.
 - Who breaks if this changes: `impact NAME` or `impact --diff`; route between two symbols: `path FROM TO`; review/cleanup: `audit`.

@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use super::output::{Value, Writer};
-use super::{Filter, Index, Node, show};
+use super::{Filter, Index, Node, path, show};
 use crate::domain::filetype::FileType;
 use crate::domain::search::{self, B, FIELD_WEIGHTS, FIELDS, K1};
 use crate::infra::store::derived::PostingRecord;
@@ -23,6 +23,9 @@ const EXCERPT_WIDTH: usize = 100;
 /// The top hit gets its source only when it leads the runner-up by this factor: then it is right
 /// in about 78 % of the sealed questions, below it in about 38 %, and the list serves better.
 const DOMINANCE: f32 = 1.3;
+/// Leading hits searched for connections, and the connections shown.
+const CHAIN_HITS: usize = 6;
+const MAX_CHAINS: usize = 2;
 /// Callers and callees of the first answer, each.
 const NEIGHBOURS: usize = 3;
 /// Tests of the first answer, with one command to run them.
@@ -318,6 +321,45 @@ pub fn render(index: &Index, hits: &[Hit], json: bool, budget: usize) -> String 
     writer.finish()
 }
 
+/// [`render`] without a clear top hit: the edges joining the leading hits come first, because
+/// they answer how the parts of a question connect.
+fn render_connected(
+    index: &Index,
+    filter: &Filter,
+    hits: &[Hit],
+    json: bool,
+    budget: usize,
+) -> String {
+    let leading: Vec<u32> = hits.iter().take(CHAIN_HITS).map(|hit| hit.node).collect();
+    let chains = path::chains(index, filter, &leading, MAX_CHAINS);
+    let write = |writer: &mut Writer, count: usize| {
+        for (start, links) in &chains {
+            path::write_chain(index, writer, *start, links);
+        }
+        for hit in &hits[..count] {
+            index.write_symbol(writer, hit.node, json.then_some(hit.score));
+        }
+    };
+    let fits = |count: usize| {
+        let mut writer = Writer::new(json, budget);
+        write(&mut writer, count);
+        !writer.is_full()
+    };
+    let (mut low, mut high) = (0, hits.len());
+    while low < high {
+        let middle = (low + high).div_ceil(2);
+        if fits(middle) {
+            low = middle
+        } else {
+            high = middle - 1
+        }
+    }
+    let mut writer = Writer::new(json, budget);
+    write(&mut writer, low);
+    writer.skip(hits.len() - low);
+    writer.finish()
+}
+
 /// [`render`] with the first answer: the top hit's source and neighbours follow its line, so
 /// an agent can conclude without a second call (about 20,000 tokens of re-sent context).
 pub fn render_answer(
@@ -337,7 +379,7 @@ pub fn render_answer(
         .get(1)
         .is_some_and(|second| first.score < second.score * DOMINANCE)
     {
-        return render(index, hits, json, budget);
+        return render_connected(index, filter, hits, json, budget);
     }
     let lines = excerpt(index, root, first.node, query);
     let write = |writer: &mut Writer, count: usize| {

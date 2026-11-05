@@ -1,0 +1,12 @@
+httpx	client send handling auth redirects single request	Client._send_handling_auth>Client._send_handling_redirects Client._send_handling_redirects>Client._send_single_request
+httpx	digest auth flow build header challenge	DigestAuth.auth_flow>DigestAuth._parse_challenge DigestAuth.auth_flow>DigestAuth._build_auth_header
+httpx	stream read iter bytes response	Response.read>Response.iter_bytes Response.iter_bytes>Response.iter_raw
+express	res json send response	res.json>res.send
+express	router param handle layer	app.use>app.handle
+ripgrep	search path worker printer	HiArgs::search_worker>SearchWorkerBuilder::build
+hono	app fetch dispatch compose handler	Hono.#dispatch>compose
+cobra	execute command flags parse run	Command.Execute>Command.ExecuteC Command.ExecuteC>Command.Traverse Command.Traverse>Command.ParseFlags
+cobra	execute command required flags validate	Command.ExecuteC>Command.execute Command.execute>Command.ValidateRequiredFlags
+sqlc	generate plugin codegen process	processQuerySets>generator.ProcessResult pluginCodegen>pluginProcess
+sqlc	process query sets generate result	processQuerySets>generator.ProcessResult
+express	create application app handle	createApplication>app.handle

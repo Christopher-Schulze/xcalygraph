@@ -135,7 +135,7 @@ def records(text, form):
                 if match and path:
                     result.append((path, int(match[1]), match[2]))
                     has_symbol = True
-            elif not line.startswith("+"):
+            elif not line.startswith(("+", "~ ")):
                 if path and not has_symbol:
                     result.append((path, 0, ""))
                 path, has_symbol = line or None, False
