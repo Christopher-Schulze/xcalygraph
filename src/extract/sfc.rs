@@ -97,10 +97,10 @@ pub fn extract(record: &FileRecord, content: &[u8], capture_identities: bool) ->
     }
     facts.symbols.push(Symbol {
         kind: Some(SymKind::Class),
-        name: pascal_case(stem),
+        name: pascal_case(stem).into(),
         line: 1,
         end_line: lines.max(1),
-        signature: component_signature,
+        signature: component_signature.into(),
         exported: true,
         ..Symbol::default()
     });
@@ -439,7 +439,7 @@ mod tests {
         let symbols: Vec<(&str, u32)> = facts
             .symbols
             .iter()
-            .map(|s| (s.name.as_str(), s.line))
+            .map(|s| (s.name.as_ref(), s.line))
             .collect();
         assert_eq!(symbols, [("load", 9), ("UserPage", 1)]);
         let calls: Vec<(&str, u32)> = facts
@@ -497,7 +497,7 @@ mod tests {
             let symbols: Vec<(&str, u32)> = facts
                 .symbols
                 .iter()
-                .map(|symbol| (symbol.name.as_str(), symbol.line))
+                .map(|symbol| (symbol.name.as_ref(), symbol.line))
                 .collect();
             for expected in expected_symbols {
                 assert!(symbols.contains(expected), "{path}: missing {expected:?}");
@@ -569,7 +569,7 @@ mod tests {
                 ("user", 12)
             ]
         );
-        let component = facts.symbols.iter().position(|s| s.name == "Page");
+        let component = facts.symbols.iter().position(|s| *s.name == *"Page");
         assert!(
             facts
                 .refs
@@ -582,7 +582,7 @@ mod tests {
             .symbols
             .iter()
             .filter(|s| s.kind == Some(SymKind::Op))
-            .map(|s| s.name.as_str())
+            .map(|s| s.name.as_ref())
             .collect();
         assert_eq!(routes, ["page /items"]);
     }

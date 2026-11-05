@@ -116,20 +116,20 @@ pub const FLAG_RUST_CFG_NOT_UNIX: u8 = 128;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Symbol {
     pub kind: Option<SymKind>,
-    pub name: String,
+    pub name: Box<str>,
     /// Index of the enclosing symbol in the same file.
     pub parent: Option<u32>,
     /// Type a method belongs to when declared outside the type (Go receiver, Rust `impl`).
-    pub owner: String,
+    pub owner: Box<str>,
     pub line: u32,
     pub end_line: u32,
     /// One line, whitespace-normalized, body removed, max 160 chars.
-    pub signature: String,
+    pub signature: Box<str>,
     /// First sentence of the attached doc comment, max 120 chars.
-    pub doc: String,
+    pub doc: Box<str>,
     /// Distinct search tokens of the body outside nested symbols (identifiers, strings,
     /// comments, markup text), normalized, space-separated, max [`BODY_TERMS`]; search only.
-    pub terms: String,
+    pub terms: Box<str>,
     pub exported: bool,
     pub flags: u8,
 }
@@ -561,8 +561,8 @@ pub struct SourceIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
     pub scope: Option<u32>,
-    pub name: String,
-    pub type_name: String,
+    pub name: Box<str>,
+    pub type_name: Box<str>,
     pub line: u32,
     /// Half-open byte range in which the binding is active, when source-proven.
     pub visibility: Option<std::ops::Range<u32>>,
@@ -885,9 +885,6 @@ impl Facts {
     /// resolver is done.
     pub fn shrink_to_fit(&mut self) {
         self.symbols.shrink_to_fit();
-        for symbol in &mut self.symbols {
-            symbol.terms.shrink_to_fit();
-        }
         self.imports.shrink_to_fit();
         self.refs.shrink_to_fit();
         self.go_embeds.shrink_to_fit();

@@ -1132,13 +1132,13 @@ mod tests {
         let sheets: Vec<&str> = facts
             .symbols
             .iter()
-            .map(|symbol| symbol.name.as_str())
+            .map(|symbol| symbol.name.as_ref())
             .collect();
         assert_eq!(sheets, ["Limits", "Owners"]);
         let terms: Vec<(&str, u32, &str)> = facts
             .symbols
             .iter()
-            .map(|symbol| (symbol.name.as_str(), symbol.line, symbol.terms.as_str()))
+            .map(|symbol| (symbol.name.as_ref(), symbol.line, symbol.terms.as_ref()))
             .collect();
         assert_eq!(
             terms,
@@ -1206,7 +1206,7 @@ mod tests {
         let terms: Vec<(&str, u32, &str)> = facts
             .symbols
             .iter()
-            .map(|symbol| (symbol.name.as_str(), symbol.line, symbol.terms.as_str()))
+            .map(|symbol| (symbol.name.as_ref(), symbol.line, symbol.terms.as_ref()))
             .collect();
         assert_eq!(
             terms,
@@ -1243,7 +1243,13 @@ mod tests {
         facts
             .symbols
             .iter()
-            .map(|symbol| (symbol.name.clone(), symbol.line, symbol.terms.clone()))
+            .map(|symbol| {
+                (
+                    symbol.name.to_string(),
+                    symbol.line,
+                    symbol.terms.to_string(),
+                )
+            })
             .collect()
     }
 
@@ -1429,7 +1435,7 @@ mod tests {
         );
         assert_eq!(doc.coverage, Coverage::Complete, "{doc:?}");
         assert_eq!(doc.doc, "Paris");
-        assert!(doc.symbols.iter().any(|symbol| symbol.terms == "paris"));
+        assert!(doc.symbols.iter().any(|symbol| *symbol.terms == *"paris"));
         for (path, bytes) in [
             (
                 "workbook.xls",

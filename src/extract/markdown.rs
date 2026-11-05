@@ -59,7 +59,7 @@ pub fn extract(text: &str) -> Facts {
             let id = facts.symbols.len() as u32;
             facts.symbols.push(Symbol {
                 kind: Some(SymKind::Heading),
-                name: title.to_owned(),
+                name: title.to_owned().into(),
                 parent,
                 line: number,
                 end_line: line_count,
@@ -208,7 +208,7 @@ mod tests {
             .iter()
             .map(|symbol| {
                 (
-                    symbol.name.as_str(),
+                    symbol.name.as_ref(),
                     symbol.line,
                     symbol.end_line,
                     symbol.parent,

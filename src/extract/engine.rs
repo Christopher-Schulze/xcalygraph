@@ -915,6 +915,7 @@ fn assemble(assembly: Assembly) -> Parsed {
                 parent
                     .filter(|&p| kind == SymKind::Method && symbols[p].kind().is_type())
                     .map(|p| symbols[p].name.clone())
+                    .map(Into::into)
             })
             .unwrap_or_default();
         let decorations = decorations(node, source);
@@ -976,14 +977,14 @@ fn assemble(assembly: Assembly) -> Parsed {
         }
         symbols.push(Symbol {
             kind: Some(kind),
-            name: def.name.clone(),
+            name: def.name.clone().into(),
             parent: parent.and_then(|p| u32::try_from(p).ok()),
-            owner,
+            owner: owner.into(),
             line: row(node),
             end_line: def.last_clause.unwrap_or(node).end_position().row as u32 + 1,
-            signature,
-            doc: doc_comment(node, source),
-            terms: String::new(),
+            signature: signature.into(),
+            doc: doc_comment(node, source).into(),
+            terms: String::new().into(),
             exported,
             flags,
         });
@@ -1069,7 +1070,7 @@ fn assemble(assembly: Assembly) -> Parsed {
         })
         .map(|symbol| {
             (
-                symbol.name.as_str(),
+                symbol.name.as_ref(),
                 path.ends_with(".rs") && symbol.kind == Some(SymKind::Macro),
             )
         })
@@ -1262,11 +1263,11 @@ fn assemble(assembly: Assembly) -> Parsed {
             };
             Some(Binding {
                 scope: scope_of(raw.position),
-                name,
+                name: name.into(),
                 type_name: if raw.call {
-                    format!("{type_name}(){}", if raw.try_result { "?" } else { "" })
+                    format!("{type_name}(){}", if raw.try_result { "?" } else { "" }).into()
                 } else {
-                    type_name
+                    type_name.into()
                 },
                 line: raw.line,
                 visibility: raw.visibility,
@@ -1279,8 +1280,8 @@ fn assemble(assembly: Assembly) -> Parsed {
         if let Some(scope) = scope_of(position) {
             facts_bindings.push(Binding {
                 scope: Some(scope),
-                name: String::new(),
-                type_name,
+                name: String::new().into(),
+                type_name: type_name.into(),
                 line: symbols[scope as usize].line,
                 visibility: None,
                 value_byte: facts::NO_BYTE,
@@ -1362,7 +1363,7 @@ fn assemble(assembly: Assembly) -> Parsed {
             let declared: Vec<usize> = symbols
                 .iter()
                 .enumerate()
-                .filter(|(_, symbol)| symbol.parent.is_none() && symbol.name == *name)
+                .filter(|(_, symbol)| symbol.parent.is_none() && *symbol.name == **name)
                 .map(|(index, _)| index)
                 .collect();
             for index in declared {

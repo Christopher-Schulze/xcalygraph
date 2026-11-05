@@ -128,14 +128,14 @@ fn extract_getopts(
         let signature = format!("arg={argument};case={case}");
         facts.symbols.push(crate::domain::facts::Symbol {
             kind: Some(crate::domain::facts::SymKind::Option),
-            name: format!("-{}", option.character),
+            name: format!("-{}", option.character).into(),
             parent: None,
-            owner: String::new(),
+            owner: String::new().into(),
             line: specification_line,
             end_line: specification_line,
-            signature,
-            doc: String::new(),
-            terms: String::new(),
+            signature: signature.into(),
+            doc: String::new().into(),
+            terms: String::new().into(),
             exported: false,
             flags: 0,
         });
@@ -442,7 +442,7 @@ pub fn recover_functions(source: &str, facts: &mut crate::domain::facts::Facts) 
         let parsed = facts
             .symbols
             .iter()
-            .any(|symbol| symbol.name == name && symbol.line == number);
+            .any(|symbol| *symbol.name == *name && symbol.line == number);
         if !parsed {
             // The error region read the header as a command: that is the definition, no call.
             facts
@@ -451,14 +451,19 @@ pub fn recover_functions(source: &str, facts: &mut crate::domain::facts::Facts) 
             let scope = facts.symbols.len() as u32;
             facts.symbols.push(Symbol {
                 kind: Some(SymKind::Fn),
-                name: name.to_owned(),
+                name: name.to_owned().into(),
                 parent: None,
-                owner: String::new(),
+                owner: String::new().into(),
                 line: number,
                 end_line: end as u32 + 1,
-                signature: line.trim().trim_end_matches('{').trim_end().to_owned(),
-                doc: String::new(),
-                terms: String::new(),
+                signature: line
+                    .trim()
+                    .trim_end_matches('{')
+                    .trim_end()
+                    .to_owned()
+                    .into(),
+                doc: String::new().into(),
+                terms: String::new().into(),
                 exported: true,
                 flags: 0,
             });
@@ -653,7 +658,7 @@ mod tests {
         let names: Vec<&str> = facts
             .symbols
             .iter()
-            .map(|symbol| symbol.name.as_str())
+            .map(|symbol| symbol.name.as_ref())
             .collect();
         assert_eq!(names, ["a", "b"]);
         let calls: Vec<(&str, u32)> = facts
@@ -675,7 +680,7 @@ mod tests {
         for (source, expected) in cases {
             let mut facts = crate::domain::facts::Facts::default();
             recover_functions(source, &mut facts);
-            let names: Vec<&str> = facts.symbols.iter().map(|s| s.name.as_str()).collect();
+            let names: Vec<&str> = facts.symbols.iter().map(|s| s.name.as_ref()).collect();
             assert_eq!(names, expected, "{source}");
         }
     }

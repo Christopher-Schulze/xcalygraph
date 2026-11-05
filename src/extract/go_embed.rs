@@ -75,7 +75,7 @@ fn collect_spec(spec: Node<'_>, anchor: Node<'_>, source: &[u8], parsed: &mut Pa
                 && end == spec.end_byte()
                 && parsed.facts.symbols.get(index).is_some_and(|item| {
                     item.kind() == SymKind::Var
-                        && name.utf8_text(source).is_ok_and(|name| item.name == name)
+                        && name.utf8_text(source).is_ok_and(|name| *item.name == *name)
                 }))
             .then(|| u32::try_from(index).ok())
             .flatten()
@@ -254,7 +254,7 @@ mod tests {
             .iter()
             .map(|embed| {
                 (
-                    facts.symbols[embed.symbol as usize].name.as_str(),
+                    facts.symbols[embed.symbol as usize].name.as_ref(),
                     embed.line,
                     embed.pattern.as_slice(),
                 )
@@ -306,7 +306,10 @@ mod tests {
             extract("package p\nimport _ \"em\\x62ed\"\n//go:embed data.txt\nvar _ string\n");
         assert_eq!(facts.go_embeds.len(), 1);
         assert_eq!(facts.go_embeds[0].pattern, b"data.txt");
-        assert_eq!(facts.symbols[facts.go_embeds[0].symbol as usize].name, "_");
+        assert_eq!(
+            facts.symbols[facts.go_embeds[0].symbol as usize].name,
+            "_".into()
+        );
         assert!(
             extract("package p\nimport _ \"embed\"\n//go:embed\tdata.txt\nvar X string\n")
                 .go_embeds
@@ -322,7 +325,7 @@ mod tests {
             .iter()
             .map(|embed| {
                 (
-                    facts.symbols[embed.symbol as usize].name.as_str(),
+                    facts.symbols[embed.symbol as usize].name.as_ref(),
                     embed.line,
                     embed.pattern.as_slice(),
                 )
@@ -348,7 +351,7 @@ mod tests {
             .iter()
             .map(|embed| {
                 (
-                    facts.symbols[embed.symbol as usize].name.as_str(),
+                    facts.symbols[embed.symbol as usize].name.as_ref(),
                     embed.line,
                     embed.pattern.as_slice(),
                 )

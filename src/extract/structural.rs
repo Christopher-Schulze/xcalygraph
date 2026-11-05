@@ -35,11 +35,11 @@ fn push_symbol(facts: &mut Facts, kind: SymKind, name: &str, line: u32, signatur
     let parent = innermost(facts, line);
     facts.symbols.push(Symbol {
         kind: Some(kind),
-        name: name.to_owned(),
+        name: name.to_owned().into(),
         parent,
         line,
         end_line: line,
-        signature: facts::clip_space(signature, 160),
+        signature: facts::clip_space(signature, 160).into(),
         exported: true,
         ..Symbol::default()
     });
@@ -125,7 +125,7 @@ fn c_like_calls(facts: &mut Facts, text: &str, skip_declarations: bool) {
             && facts
                 .symbols
                 .iter()
-                .any(|symbol| symbol.line == line && symbol.name == name);
+                .any(|symbol| symbol.line == line && *symbol.name == *name);
         if C_LIKE_KEYWORDS.contains(&name.to_ascii_lowercase().as_str()) || declared_here {
             continue;
         }
@@ -393,7 +393,7 @@ fn razor(path: &str, text: &str) -> Facts {
                 .trim_end_matches('{'),
         );
         facts.symbols[id as usize].end_line = block_end(text, offset);
-        facts.symbols[id as usize].owner = stem.to_owned();
+        facts.symbols[id as usize].owner = stem.to_owned().into();
     }
     for found in tag.captures_iter(text) {
         let Some(name) = found.get(1) else { continue };
@@ -425,7 +425,7 @@ fn razor(path: &str, text: &str) -> Facts {
             let declared_here = facts
                 .symbols
                 .iter()
-                .any(|symbol| symbol.line == line && symbol.name == name.as_str());
+                .any(|symbol| symbol.line == line && *symbol.name == *name.as_str());
             if !declared_here
                 && !C_LIKE_KEYWORDS.contains(&name.as_str())
                 && name.as_str().chars().next().is_some_and(char::is_uppercase)
@@ -844,9 +844,9 @@ mod tests {
             .symbols
             .iter()
             .map(|symbol| {
-                let parent = symbol
-                    .parent
-                    .map_or("-".to_owned(), |p| facts.symbols[p as usize].name.clone());
+                let parent = symbol.parent.map_or("-".to_owned(), |p| {
+                    facts.symbols[p as usize].name.clone().into_string()
+                });
                 format!(
                     "{} {} {}-{} <{parent} f{}",
                     symbol.kind().id(),

@@ -17,7 +17,7 @@ pub fn render(facts: &Facts) -> String {
     let scope = |index: Option<u32>| {
         index
             .and_then(|index| facts.symbols.get(index as usize))
-            .map_or("-".to_owned(), |symbol| symbol.name.clone())
+            .map_or("-".to_owned(), |symbol| symbol.name.clone().into_string())
     };
     if let Some(package) = &facts.package {
         let _ = writeln!(out, "package {package}");

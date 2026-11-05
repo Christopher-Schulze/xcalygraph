@@ -67,10 +67,10 @@ fn push_symbol(
 ) -> u32 {
     facts.symbols.push(Symbol {
         kind: Some(kind),
-        name: name.to_owned(),
+        name: name.to_owned().into(),
         line,
         end_line: end_line.max(line),
-        signature: facts::clip_space(&signature, 160),
+        signature: facts::clip_space(&signature, 160).into(),
         exported: true,
         flags: facts::FLAG_ENTRY,
         ..Symbol::default()
@@ -901,7 +901,7 @@ mod tests {
             .filter(|reference| reference.kind == RefKind::Run)
             .map(|reference| {
                 let scope = reference.scope.map_or("-".to_owned(), |scope| {
-                    facts.symbols[scope as usize].name.clone()
+                    facts.symbols[scope as usize].name.clone().into_string()
                 });
                 format!(
                     "{} {scope} -> {}{}",
@@ -1064,7 +1064,7 @@ mod tests {
         assert_eq!(symbols, ["1-2 Task build", "3-5 Task base"]);
         assert_eq!(
             facts.symbols[1].signature,
-            "FROM gcr.io/distroless/base EXPOSE 8080"
+            ("FROM gcr.io/distroless/base EXPOSE 8080").into()
         );
         assert_eq!(runs, ["5 base -> /app/start.sh"]);
     }

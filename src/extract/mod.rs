@@ -402,7 +402,7 @@ fn without_identities(facts: Facts, capture_identities: bool) -> engine::Parsed 
             .iter()
             .map(|symbol| {
                 (symbol.kind() == crate::domain::facts::SymKind::Heading)
-                    .then(|| symbol.name.clone())
+                    .then(|| symbol.name.to_string())
             })
             .collect()
     } else {
@@ -790,7 +790,7 @@ mod tests {
             .facts
             .symbols
             .iter()
-            .map(|symbol| (symbol.name.as_str(), symbol.line))
+            .map(|symbol| (symbol.name.as_ref(), symbol.line))
             .collect();
         assert_eq!(
             symbols,
@@ -814,7 +814,7 @@ mod tests {
             .symbols
             .iter()
             .filter(|symbol| symbol.kind() == crate::domain::facts::SymKind::Fn)
-            .map(|symbol| (symbol.name.as_str(), symbol.line, symbol.end_line))
+            .map(|symbol| (symbol.name.as_ref(), symbol.line, symbol.end_line))
             .collect();
         assert_eq!(
             function_lines,
@@ -834,7 +834,7 @@ mod tests {
                     reference.name.as_str(),
                     reference
                         .scope
-                        .map(|index| parsed.facts.symbols[index as usize].name.as_str()),
+                        .map(|index| parsed.facts.symbols[index as usize].name.as_ref()),
                 )
             })
             .collect();
@@ -857,7 +857,7 @@ mod tests {
         ] {
             assert!(
                 parsed.facts.symbols.iter().any(|symbol| {
-                    symbol.name == name
+                    *symbol.name == *name
                         && symbol
                             .terms
                             .split_whitespace()
@@ -904,7 +904,7 @@ mod tests {
                     .get(index)
                     .and_then(Option::as_deref)
                     .ok_or("Bash option has no diff identity")?;
-                Ok((symbol.name.as_str(), symbol.signature.as_str(), identity))
+                Ok((symbol.name.as_ref(), symbol.signature.as_ref(), identity))
             })
             .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
         assert_eq!(

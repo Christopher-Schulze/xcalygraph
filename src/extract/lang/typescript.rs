@@ -728,7 +728,7 @@ pub(in crate::extract) fn interface_groups(
         .iter()
         .filter(|identity| identity.kind == SourceIdentityKind::InterfaceMembers)
         .filter_map(|identity| symbols.get(identity.index as usize))
-        .map(|symbol| symbol.name.as_str())
+        .map(|symbol| symbol.name.as_ref())
         .collect();
 
     let mut namespaces: HashMap<Vec<String>, HashMap<&str, Vec<u32>>> = HashMap::new();
@@ -2026,7 +2026,7 @@ mod tests {
             let local = facts
                 .symbols
                 .iter()
-                .position(|symbol| symbol.name == "make")?;
+                .position(|symbol| *symbol.name == *"make")?;
             facts
                 .source_identity(SourceIdentityKind::Symbol, u32::try_from(local).ok()?)
                 .map(str::to_owned)
@@ -2112,7 +2112,7 @@ mod tests {
         let index = facts
             .symbols
             .iter()
-            .position(|symbol| symbol.name == "Base")
+            .position(|symbol| *symbol.name == *"Base")
             .map(|index| index as u32);
         assert!(index.is_some_and(|index| {
             facts
@@ -2127,7 +2127,7 @@ mod tests {
             .symbols
             .iter()
             .enumerate()
-            .filter(|(_, symbol)| symbol.kind == Some(SymKind::Iface) && symbol.name == "Base")
+            .filter(|(_, symbol)| symbol.kind == Some(SymKind::Iface) && *symbol.name == *"Base")
             .map(|(index, _)| index as u32)
             .collect();
         assert_eq!(interfaces.len(), 2);
@@ -2143,7 +2143,7 @@ mod tests {
         let index = augmented
             .symbols
             .iter()
-            .position(|symbol| symbol.name == "Base")
+            .position(|symbol| *symbol.name == *"Base")
             .map(|index| index as u32);
         assert!(index.is_some_and(|index| {
             augmented.source_identity(SourceIdentityKind::TypeScriptAugmentation, index)
@@ -2248,12 +2248,12 @@ mod tests {
         let config_index = nested_global
             .symbols
             .iter()
-            .position(|symbol| symbol.name == "Config");
+            .position(|symbol| *symbol.name == *"Config");
         assert!(config_index.is_some_and(|index| {
             nested_global.symbols[index]
                 .parent
                 .and_then(|parent| nested_global.symbols.get(parent as usize))
-                .is_some_and(|parent| parent.name == "Space")
+                .is_some_and(|parent| *parent.name == *"Space")
                 && nested_global.source_identity(
                     SourceIdentityKind::TypeScriptGlobalAugmentation,
                     index as u32,
@@ -2332,7 +2332,7 @@ mod tests {
             .iter()
             .filter(|identity| {
                 identity.kind == crate::domain::facts::SourceIdentityKind::InterfaceHeader
-                    && facts.symbols[identity.index as usize].name == "Config"
+                    && *facts.symbols[identity.index as usize].name == *"Config"
                     && facts.symbols[identity.index as usize].parent.is_none()
             })
             .collect();
@@ -2356,7 +2356,7 @@ mod tests {
             .iter()
             .filter(|identity| {
                 identity.kind == crate::domain::facts::SourceIdentityKind::InterfaceMembers
-                    && facts.symbols[identity.index as usize].name == "Config"
+                    && *facts.symbols[identity.index as usize].name == *"Config"
                     && facts.symbols[identity.index as usize].parent.is_none()
             })
             .collect();
@@ -2419,7 +2419,7 @@ mod tests {
             .symbols
             .iter()
             .enumerate()
-            .filter(|(_, symbol)| symbol.kind() == SymKind::Iface && symbol.name == "Mode")
+            .filter(|(_, symbol)| symbol.kind() == SymKind::Iface && *symbol.name == *"Mode")
             .map(|(index, _)| index as u32)
             .collect();
         assert_eq!(owners.len(), 2);
@@ -2477,7 +2477,7 @@ mod tests {
         let numeric = facts
             .fields
             .iter()
-            .find(|fields| facts.symbols[fields.owner as usize].name == "NumericKeys");
+            .find(|fields| *facts.symbols[fields.owner as usize].name == *"NumericKeys");
         assert!(numeric.is_some(), "missing numeric fields: {facts:#?}");
         if let Some(numeric) = numeric {
             assert_eq!(
@@ -2506,7 +2506,7 @@ mod tests {
         let ambiguous = facts
             .fields
             .iter()
-            .find(|fields| facts.symbols[fields.owner as usize].name == "AmbiguousDecimalKey");
+            .find(|fields| *facts.symbols[fields.owner as usize].name == *"AmbiguousDecimalKey");
         assert_eq!(
             ambiguous.map(|fields| fields.names.as_slice()),
             Some([FieldName::Text("safe".to_owned())].as_slice())
@@ -2588,7 +2588,7 @@ mod tests {
         let special = facts
             .fields
             .iter()
-            .find(|fields| facts.symbols[fields.owner as usize].name == "SpecialKeys");
+            .find(|fields| *facts.symbols[fields.owner as usize].name == *"SpecialKeys");
         assert!(special.is_some(), "extracted facts: {facts:#?}");
         if let Some(special) = special {
             assert_eq!(
@@ -2613,7 +2613,7 @@ mod tests {
         let computed = facts
             .fields
             .iter()
-            .find(|fields| facts.symbols[fields.owner as usize].name == "ComputedKey");
+            .find(|fields| *facts.symbols[fields.owner as usize].name == *"ComputedKey");
         assert_eq!(
             computed.map(|fields| fields.names.as_slice()),
             Some([FieldName::Text("regular".to_owned())].as_slice())
@@ -2644,7 +2644,7 @@ mod tests {
             facts
                 .fields
                 .iter()
-                .find(|fields| facts.symbols[fields.owner as usize].name == name)
+                .find(|fields| *facts.symbols[fields.owner as usize].name == *name)
         };
         let config = fields("Config");
         assert!(config.is_some(), "Config properties were not captured");

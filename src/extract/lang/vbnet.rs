@@ -118,7 +118,7 @@ mod tests {
         let mut facts = Facts::default();
         facts.symbols.push(crate::domain::facts::Symbol {
             kind: Some(SymKind::Class),
-            name: "C".to_owned(),
+            name: "C".to_owned().into(),
             line: 3,
             end_line: 6,
             ..crate::domain::facts::Symbol::default()

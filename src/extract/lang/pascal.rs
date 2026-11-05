@@ -124,11 +124,11 @@ pub fn form(path: &str, text: &str) -> Facts {
             let id = facts.symbols.len() as u32;
             facts.symbols.push(Symbol {
                 kind: Some(SymKind::Var),
-                name: name.trim().to_owned(),
+                name: name.trim().to_owned().into(),
                 parent: open.last().copied(),
                 line: number,
                 end_line: line_count,
-                signature: facts::clip_space(trimmed, 160),
+                signature: facts::clip_space(trimmed, 160).into(),
                 exported: true,
                 ..Symbol::default()
             });

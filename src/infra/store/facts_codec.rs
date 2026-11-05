@@ -38,7 +38,7 @@ fn typescript_namespace_path(symbols: &[Symbol], symbol: &Symbol) -> Option<Vec<
         remaining -= 1;
         let module = symbols.get(index as usize)?;
         if module.kind() != SymKind::Mod
-            || module.name == "global"
+            || *module.name == *"global"
             || module.name.starts_with('"')
             || module.name.starts_with('\'')
         {
@@ -277,14 +277,14 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
         let flags = u8::try_from(bits >> 1).map_err(|_| DecodeError("symbol flags overflow"))?;
         facts.symbols.push(Symbol {
             kind: Some(kind),
-            name,
+            name: name.into(),
             parent,
-            owner,
+            owner: owner.into(),
             line,
             end_line,
-            signature,
-            doc,
-            terms,
+            signature: signature.into(),
+            doc: doc.into(),
+            terms: terms.into(),
             exported: bits & 1 != 0,
             flags,
         });
@@ -392,8 +392,8 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
     for _ in 0..count {
         facts.bindings.push(Binding {
             scope: read_opt_index(decoder)?,
-            name: decoder.string()?,
-            type_name: decoder.string()?,
+            name: decoder.string()?.into(),
+            type_name: decoder.string()?.into(),
             line: decoder.var_u32()?,
             visibility: match read_opt_u32(decoder)? {
                 Some(start) => {
@@ -738,27 +738,27 @@ mod tests {
             symbols: vec![
                 Symbol {
                     kind: Some(SymKind::Struct),
-                    name: "Store".to_owned(),
+                    name: "Store".to_owned().into(),
                     parent: None,
-                    owner: String::new(),
+                    owner: String::new().into(),
                     line: 3,
                     end_line: 9,
-                    signature: "type Store struct".to_owned(),
-                    doc: "Store keeps rows.".to_owned(),
-                    terms: "rows mutex insert".to_owned(),
+                    signature: "type Store struct".to_owned().into(),
+                    doc: "Store keeps rows.".to_owned().into(),
+                    terms: "rows mutex insert".to_owned().into(),
                     exported: true,
                     flags: 0,
                 },
                 Symbol {
                     kind: Some(SymKind::Method),
-                    name: "Get".to_owned(),
+                    name: "Get".to_owned().into(),
                     parent: Some(0),
-                    owner: "Store".to_owned(),
+                    owner: "Store".to_owned().into(),
                     line: 11,
                     end_line: 15,
-                    signature: "func (s *Store) Get(id int) Row".to_owned(),
-                    doc: String::new(),
-                    terms: String::new(),
+                    signature: "func (s *Store) Get(id int) Row".to_owned().into(),
+                    doc: String::new().into(),
+                    terms: String::new().into(),
                     exported: true,
                     flags: FLAG_TEST,
                 },
@@ -815,8 +815,8 @@ mod tests {
             ),
             bindings: vec![Binding {
                 scope: Some(1),
-                name: "s".to_owned(),
-                type_name: "Store".to_owned(),
+                name: "s".to_owned().into(),
+                type_name: "Store".to_owned().into(),
                 line: 11,
                 visibility: None,
                 value_byte: crate::domain::facts::NO_BYTE,
@@ -966,7 +966,7 @@ mod tests {
         let facts = Facts {
             symbols: vec![Symbol {
                 kind: Some(SymKind::Fn),
-                name: "platform_call".to_owned(),
+                name: "platform_call".to_owned().into(),
                 exported: true,
                 flags: FLAG_TEST | FLAG_RUST_CFG_UNIX | FLAG_RUST_CFG_NOT_UNIX,
                 ..Symbol::default()
@@ -984,8 +984,8 @@ mod tests {
         let mut facts = sample();
         facts.bindings.push(Binding {
             scope: Some(1),
-            name: "parse".to_owned(),
-            type_name: String::new(),
+            name: "parse".to_owned().into(),
+            type_name: String::new().into(),
             line: 14,
             visibility: Some(150..220),
             value_byte: 140,
@@ -1097,7 +1097,7 @@ mod tests {
         let mut facts = Facts {
             symbols: vec![Symbol {
                 kind: Some(SymKind::Iface),
-                name: "Window".to_owned(),
+                name: "Window".to_owned().into(),
                 ..Symbol::default()
             }],
             source_identities: Some(
@@ -1255,7 +1255,7 @@ mod tests {
         let mut facts = sample();
         facts.symbols[0].kind = Some(SymKind::Iface);
         let mut base = facts.symbols[0].clone();
-        base.name = "Box".to_owned();
+        base.name = "Box".to_owned().into();
         base.exported = false;
         facts.symbols.push(base);
         facts.fields.push(Fields {

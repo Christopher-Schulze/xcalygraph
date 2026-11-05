@@ -41,7 +41,7 @@ impl Index<'_> {
                     })
                     .map(|(index, method)| {
                         Some((
-                            method.name.as_str(),
+                            method.name.as_ref(),
                             facts.source_identity(SourceIdentityKind::Symbol, index as u32)?,
                         ))
                     })
@@ -57,7 +57,7 @@ impl Index<'_> {
                 let id = self.base[file] + local as u32;
                 if self.python_is_direct_protocol(facts, class, class_evidence) {
                     protocols.push((id, methods));
-                } else if class.signature == format!("class {}:", class.name) {
+                } else if *class.signature == *format!("class {}:", class.name) {
                     concrete.push((id, methods));
                 }
             }
@@ -99,7 +99,7 @@ impl Index<'_> {
                 .split(',')
                 .any(|line| line.parse::<u32>() == Ok(import.line))
                 && import.line < class.line
-                && class.signature == format!("class {}({local}):", class.name)
+                && *class.signature == *format!("class {}({local}):", class.name)
                 && !facts.imports.iter().any(|other| {
                     if std::ptr::eq(other, import) || other.line >= class.line {
                         return false;
@@ -114,7 +114,7 @@ impl Index<'_> {
                     bound == Some(local) || other.names.iter().any(|name| name == "*")
                 })
                 && !facts.symbols.iter().any(|symbol| {
-                    symbol.parent.is_none() && symbol.name == local && symbol.line < class.line
+                    symbol.parent.is_none() && *symbol.name == *local && symbol.line < class.line
                 })
         })
     }

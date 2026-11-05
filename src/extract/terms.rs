@@ -142,9 +142,9 @@ pub fn add(content: &[u8], facts: &mut Facts, spans: &[(usize, usize)]) {
             symbol.terms = match &ownership {
                 Some(plan) => {
                     plan.children(index, &mut direct_children);
-                    collect(content, owned[index], &direct_children, &mut seen)
+                    collect(content, owned[index], &direct_children, &mut seen).into()
                 }
-                None => collect(content, owned[index], &owned, &mut seen),
+                None => collect(content, owned[index], &owned, &mut seen).into(),
             };
         }
     }
@@ -827,7 +827,7 @@ mod tests {
             symbols: (0..count)
                 .map(|index| Symbol {
                     kind: Some(SymKind::Fn),
-                    name: format!("function_{index}"),
+                    name: format!("function_{index}").into(),
                     line: 1,
                     end_line: 1,
                     ..Symbol::default()
@@ -843,7 +843,7 @@ mod tests {
         let mut seen = HashSet::new();
         facts.terms = collect(content, (0, content.len()), ranges, &mut seen);
         for (index, symbol) in facts.symbols.iter_mut().enumerate() {
-            symbol.terms = collect(content, ranges[index], ranges, &mut seen);
+            symbol.terms = collect(content, ranges[index], ranges, &mut seen).into();
         }
         facts
     }
@@ -863,7 +863,7 @@ mod tests {
         add(content, &mut actual, &ranges);
 
         assert_eq!(actual, expected);
-        assert_eq!(actual.symbols[4].terms, "");
+        assert_eq!(actual.symbols[4].terms, "".into());
 
         let plan = OwnershipPlan::build(&ranges, (0, content.len()))
             .ok_or_else(|| "expected nested spans".to_owned())?;
@@ -910,14 +910,14 @@ mod tests {
             symbols: vec![
                 Symbol {
                     kind: Some(SymKind::Class),
-                    name: "Session".to_owned(),
+                    name: "Session".to_owned().into(),
                     line: 1,
                     end_line: 6,
                     ..Symbol::default()
                 },
                 Symbol {
                     kind: Some(SymKind::Method),
-                    name: "save".to_owned(),
+                    name: "save".to_owned().into(),
                     parent: Some(0),
                     line: 3,
                     end_line: 5,
@@ -927,8 +927,8 @@ mod tests {
             ..Facts::default()
         };
         add(content, &mut facts, &[]);
-        assert_eq!(facts.symbols[0].terms, "session ttl");
-        assert_eq!(facts.symbols[1].terms, "save cooky set jwt token");
+        assert_eq!(facts.symbols[0].terms, ("session ttl").into());
+        assert_eq!(facts.symbols[1].terms, ("save cooky set jwt token").into());
         assert_eq!(facts.terms, "");
     }
 
@@ -938,7 +938,7 @@ mod tests {
         let mut facts = Facts {
             symbols: vec![Symbol {
                 kind: Some(SymKind::Fn),
-                name: "öffneÜberCache".to_owned(),
+                name: "öffneÜberCache".to_owned().into(),
                 line: 2,
                 end_line: 5,
                 ..Symbol::default()
@@ -1149,7 +1149,7 @@ const ordinary = "className=\"literal-violet-500\"";
         let mut facts = Facts {
             symbols: vec![Symbol {
                 kind: Some(SymKind::Fn),
-                name: "compose".to_owned(),
+                name: "compose".to_owned().into(),
                 line: 5,
                 end_line: 7,
                 ..Symbol::default()
@@ -1157,7 +1157,10 @@ const ordinary = "className=\"literal-violet-500\"";
             ..Facts::default()
         };
         add(content, &mut facts, &[]);
-        assert_eq!(facts.symbols[0].terms, "compos middlewar into one handler");
+        assert_eq!(
+            facts.symbols[0].terms,
+            ("compos middlewar into one handler").into()
+        );
         assert_eq!(facts.terms, "setup app");
     }
 
@@ -1167,7 +1170,7 @@ const ordinary = "className=\"literal-violet-500\"";
         let mut facts = Facts {
             symbols: vec![Symbol {
                 kind: Some(SymKind::Const),
-                name: "base".to_owned(),
+                name: "base".to_owned().into(),
                 line: 1,
                 end_line: 1,
                 ..Symbol::default()
@@ -1176,7 +1179,7 @@ const ordinary = "className=\"literal-violet-500\"";
         };
         add(content, &mut facts, &[]);
         // A one-line symbol owns its line; URLs stay skipped.
-        assert_eq!(facts.symbols[0].terms, "base");
+        assert_eq!(facts.symbols[0].terms, "base".into());
         assert_eq!(facts.terms, "api interceptor use notify");
     }
 }

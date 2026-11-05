@@ -205,8 +205,8 @@ impl Index<'_> {
         let mut types = if first.call {
             let binding = Binding {
                 scope: reference.scope,
-                name: String::new(),
-                type_name: format!("{}()", first.name),
+                name: String::new().into(),
+                type_name: format!("{}()", first.name).into(),
                 line: reference.line,
                 visibility: None,
                 value_byte: reference.byte,

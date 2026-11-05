@@ -95,10 +95,10 @@ pub fn objects(text: &str, facts: &mut Facts) {
                     );
                     facts.symbols.push(Symbol {
                         kind: Some(kind),
-                        name: name.clone(),
+                        name: name.clone().into(),
                         line,
                         end_line,
-                        signature,
+                        signature: signature.into(),
                         exported: true,
                         ..Symbol::default()
                     });
@@ -148,7 +148,7 @@ pub fn objects(text: &str, facts: &mut Facts) {
             let name = object_name(&original[relative..relative + name.len()]);
             // `CREATE TABLE t`: the table's own name is no query.
             if words.first() == Some(&"create")
-                && Some(&name) == skip_own.as_ref()
+                && Some(name.as_str()) == skip_own.as_deref()
                 && scope.is_none()
             {
                 continue;
@@ -590,7 +590,7 @@ mod tests {
             .iter()
             .map(|reference| {
                 let scope = reference.scope.map_or("-".to_owned(), |scope| {
-                    facts.symbols[scope as usize].name.clone()
+                    facts.symbols[scope as usize].name.clone().into_string()
                 });
                 format!("{} {scope} -> {}", reference.line, reference.name)
             })
@@ -646,7 +646,7 @@ mod tests {
         let mut facts = Facts::default();
         facts.symbols.push(Symbol {
             kind: Some(SymKind::Fn),
-            name: "load".to_owned(),
+            name: "load".to_owned().into(),
             line: 1,
             end_line: 6,
             ..Symbol::default()

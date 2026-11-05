@@ -263,6 +263,7 @@ impl Index<'_> {
             })
             .map(|local| local.owner.clone())
             .unwrap_or_default()
+            .into_string()
     }
 
     /// C++ `ns::name`, `Type::member`, `ns::Type::member`: symbols whose qualified name ends with

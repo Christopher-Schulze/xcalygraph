@@ -165,9 +165,9 @@ fn move_search_text(graph: &mut Graph, facts: &mut [Option<Facts>]) {
         file.terms = std::mem::take(&mut facts.terms);
         let first = file.first_symbol as usize;
         for (symbol, graph_symbol) in facts.symbols.iter_mut().zip(&mut graph.symbols[first..]) {
-            graph_symbol.terms = std::mem::take(&mut symbol.terms);
+            graph_symbol.terms = std::mem::take(&mut symbol.terms).into_string();
             if !is_titled(symbol) {
-                graph_symbol.doc = std::mem::take(&mut symbol.doc);
+                graph_symbol.doc = std::mem::take(&mut symbol.doc).into_string();
             }
         }
     }
@@ -271,13 +271,13 @@ impl<'a> Index<'a> {
                 let mut current = symbol.parent;
                 while let Some(index) = current {
                     let enclosing = &facts.symbols[index as usize];
-                    path.push(enclosing.name.as_str());
+                    path.push(enclosing.name.as_ref());
                     current = enclosing.parent;
                 }
                 // The owner of an out-of-line member (`Type::name` inside a namespace) is its
                 // innermost qualifier.
-                if !symbol.owner.is_empty() && path.first() != Some(&symbol.owner.as_str()) {
-                    path.insert(0, symbol.owner.as_str());
+                if !symbol.owner.is_empty() && path.first() != Some(&symbol.owner.as_ref()) {
+                    path.insert(0, symbol.owner.as_ref());
                 }
                 path.reverse();
                 if is_titled(symbol) {
@@ -285,8 +285,8 @@ impl<'a> Index<'a> {
                     symbols.push(GraphSymbol {
                         file: file as u32,
                         kind: symbol.kind(),
-                        name: symbol.name.clone(),
-                        qualified: symbol.name.clone(),
+                        name: symbol.name.clone().into_string(),
+                        qualified: symbol.name.clone().into_string(),
                         parent,
                         line: symbol.line,
                         end_line: symbol.end_line,
@@ -304,7 +304,7 @@ impl<'a> Index<'a> {
                     continue;
                 }
                 let mut qualified = module.name.clone();
-                for part in path.iter().chain(std::iter::once(&symbol.name.as_str())) {
+                for part in path.iter().chain(std::iter::once(&symbol.name.as_ref())) {
                     if !qualified.is_empty() && qualified != "." {
                         qualified.push_str(module.separator);
                     } else {
@@ -323,12 +323,12 @@ impl<'a> Index<'a> {
                 symbols.push(GraphSymbol {
                     file: file as u32,
                     kind: symbol.kind(),
-                    name: symbol.name.clone(),
+                    name: symbol.name.clone().into_string(),
                     qualified,
                     parent,
                     line: symbol.line,
                     end_line: symbol.end_line,
-                    signature: symbol.signature.clone(),
+                    signature: symbol.signature.clone().into_string(),
                     doc: String::new(),
                     terms: String::new(),
                     exported: symbol.exported,
@@ -498,7 +498,7 @@ impl<'a> Index<'a> {
                     continue;
                 }
                 let kind = symbol.kind();
-                let name = symbol.name.as_str();
+                let name = symbol.name.as_ref();
                 self.by_name.entry(name).or_default().push(id);
                 if matches!(kind, SymKind::Table | SymKind::View) {
                     self.tables
@@ -507,13 +507,13 @@ impl<'a> Index<'a> {
                         .push(id);
                 }
                 let owner = if !symbol.owner.is_empty() {
-                    Some(symbol.owner.as_str())
+                    Some(symbol.owner.as_ref())
                 } else {
                     symbol
                         .parent
                         .map(|parent| &facts.symbols[parent as usize])
                         .filter(|parent| parent.kind().is_type())
-                        .map(|parent| parent.name.as_str())
+                        .map(|parent| parent.name.as_ref())
                 };
                 match owner {
                     Some(owner)
@@ -573,7 +573,7 @@ impl<'a> Index<'a> {
                     && let Some(scope) = binding.scope
                 {
                     self.returns
-                        .insert(base + scope, binding.type_name.as_str());
+                        .insert(base + scope, binding.type_name.as_ref());
                 }
             }
             for fields in &facts.fields {
@@ -1448,7 +1448,7 @@ impl<'a> Index<'a> {
                         .named_symbols(file, facts, name)
                         .filter(|(_, symbol)| {
                             symbol.parent == parent
-                                && symbol.name == name
+                                && *symbol.name == *name
                                 && symbol.kind().is_type()
                                 && symbol.flags & facts::FLAG_TYPESCRIPT_AUGMENTATION == 0
                         })
@@ -1465,7 +1465,7 @@ impl<'a> Index<'a> {
             } else {
                 let mut local: Vec<u32> = self
                     .named_symbols(file, facts, name)
-                    .filter(|(_, symbol)| symbol.name == name && symbol.kind().is_type())
+                    .filter(|(_, symbol)| *symbol.name == *name && symbol.kind().is_type())
                     .map(|(local, _)| {
                         self.canonical_interface(self.base[file as usize] + local as u32)
                     })
@@ -1603,14 +1603,14 @@ impl<'a> Index<'a> {
         if let Some(object) = facts
             .symbols
             .iter()
-            .position(|symbol| symbol.parent.is_none() && symbol.name == qualifier)
+            .position(|symbol| symbol.parent.is_none() && *symbol.name == *qualifier)
         {
             let members: Vec<u32> = facts
                 .symbols
                 .iter()
                 .enumerate()
                 .filter(|(_, symbol)| {
-                    symbol.parent == Some(object as u32) && symbol.name == reference.name
+                    symbol.parent == Some(object as u32) && *symbol.name == *reference.name
                 })
                 .map(|(local, _)| base + local as u32)
                 .collect();
@@ -1644,7 +1644,7 @@ impl<'a> Index<'a> {
             .iter()
             .enumerate()
             .filter(|(_, symbol)| {
-                symbol.name == reference.name
+                *symbol.name == *reference.name
                     && owner_of(&symbol.signature, &symbol.name)
                         .is_some_and(|(owner, _)| owner == table)
             })
@@ -1809,9 +1809,9 @@ impl<'a> Index<'a> {
             let head = qualifier.split('.').next().unwrap_or_default();
             if head.starts_with(|ch: char| ch.is_ascii_lowercase())
                 && imports.is_none_or(|imports| !imports.names.contains_key(head))
-                && self
-                    .facts(file)
-                    .is_some_and(|facts| !facts.bindings.iter().any(|binding| binding.name == head))
+                && self.facts(file).is_some_and(|facts| {
+                    !facts.bindings.iter().any(|binding| *binding.name == *head)
+                })
             {
                 return None;
             }
@@ -2296,7 +2296,7 @@ impl<'a> Index<'a> {
                             .symbols
                             .iter()
                             .enumerate()
-                            .filter(|(_, symbol)| symbol.name == name)
+                            .filter(|(_, symbol)| *symbol.name == *name)
                             .map(|(position, _)| base + position as u32)
                             .filter(|&symbol| task_kind(symbol))
                             .collect()
@@ -2472,7 +2472,7 @@ impl<'a> Index<'a> {
                     facts
                         .symbols
                         .iter()
-                        .position(|symbol| symbol.name == name)
+                        .position(|symbol| *symbol.name == *name)
                         .map(|local| base + local as u32)
                 });
                 return match found {
@@ -2605,7 +2605,7 @@ impl<'a> Index<'a> {
             let parent = facts
                 .symbols
                 .get(facts.symbols.get(local)?.parent? as usize)?;
-            parent.kind().is_type().then_some(parent.name.as_str())
+            parent.kind().is_type().then_some(parent.name.as_ref())
         });
         if let Some(member_owner) = member_owner {
             return self.document_shows(file, scope, member_owner);
@@ -2774,7 +2774,7 @@ impl<'a> Index<'a> {
         let local = source - self.base[method.file as usize];
         let owner_name = facts
             .and_then(|facts| facts.symbols.get(local as usize))
-            .map(|symbol| symbol.owner.as_str())
+            .map(|symbol| symbol.owner.as_ref())
             .unwrap_or_default();
         method.kind == SymKind::Method
             && owner.kind.is_type()
@@ -3079,7 +3079,7 @@ impl<'a> Index<'a> {
             let mut found: Vec<(usize, u32)> = Vec::new();
             for (local, symbol) in self.named_symbols(file, facts, name) {
                 let id = base + local as u32;
-                if symbol.name != name || !kind_ok(id) || symbol.kind() == SymKind::Method {
+                if *symbol.name != *name || !kind_ok(id) || symbol.kind() == SymKind::Method {
                     continue;
                 }
                 let depth = match symbol.parent {
@@ -3516,8 +3516,8 @@ impl<'a> Index<'a> {
             }
             let binding = Binding {
                 scope: reference.scope,
-                name: String::new(),
-                type_name: format!("{callee}()"),
+                name: String::new().into(),
+                type_name: format!("{callee}()").into(),
                 line: reference.line,
                 visibility: None,
                 value_byte: reference.byte,
@@ -3585,7 +3585,7 @@ impl<'a> Index<'a> {
                 .then(|| self.binding(file, reference.scope, head, reference.line, reference.byte))
                 .flatten()
                 .filter(|binding| binding.declared)
-                .map(|binding| binding.type_name.as_str());
+                .map(|binding| binding.type_name.as_ref());
             if let Receiver::External = receiver {
                 return self
                     .extension(file, imports, reference.scope, name, receiver_name)
@@ -3788,7 +3788,7 @@ impl<'a> Index<'a> {
                                 !binding.name.is_empty()
                                     && binding.scope == callee_scope
                                     && binding.declared
-                                    && binding.type_name == result
+                                    && *binding.type_name == *result
                             })
                         }))
                 {
@@ -3854,7 +3854,7 @@ impl<'a> Index<'a> {
                     return Receiver::External;
                 }
                 None if chains::call_binding(&binding.type_name).is_some()
-                    || binding.type_name == facts::PATTERN_BINDING =>
+                    || *binding.type_name == *facts::PATTERN_BINDING =>
                 {
                     return Receiver::Unknown;
                 }
@@ -4110,8 +4110,8 @@ impl<'a> Index<'a> {
                     // itself a receiver type for the step-by-step chain walker.
                     let receiver = Binding {
                         scope,
-                        name: String::new(),
-                        type_name: qualifier.to_owned(),
+                        name: String::new().into(),
+                        type_name: qualifier.to_owned().into(),
                         line: binding.line,
                         visibility: None,
                         value_byte: binding.value_byte,
@@ -4146,7 +4146,7 @@ impl<'a> Index<'a> {
         named_indices(
             &self.named[file as usize].symbols,
             &facts.symbols,
-            |symbol| symbol.name.as_str(),
+            |symbol| symbol.name.as_ref(),
             name,
         )
         .map(|index| (index, &facts.symbols[index]))
@@ -4165,11 +4165,11 @@ impl<'a> Index<'a> {
         named_indices(
             &self.named[file as usize].bindings,
             &facts.bindings,
-            |binding| binding.name.as_str(),
+            |binding| binding.name.as_ref(),
             name,
         )
         .map(|index| &facts.bindings[index])
-        .filter(|binding| binding.name == name && binding.line <= line)
+        .filter(|binding| *binding.name == *name && binding.line <= line)
         .filter(|binding| {
             byte == facts::NO_BYTE
                 || binding
@@ -5194,13 +5194,16 @@ fn unique(candidates: &[u32], is_test: impl Fn(u32) -> bool) -> Option<u32> {
 
 /// A clipped or complex generic header cannot prove that a type name is not shadowed.
 fn typescript_generic_parameter_may_shadow(symbol: &facts::Symbol, name: &str) -> bool {
-    let signature = symbol.signature.as_str();
-    let Some((position, _)) = signature.match_indices(&symbol.name).find(|(position, _)| {
-        let before = signature[..*position].chars().next_back();
-        let after = signature[*position + symbol.name.len()..].chars().next();
-        let identifier = |ch: char| ch.is_alphanumeric() || ch == '_' || ch == '$';
-        !before.is_some_and(identifier) && !after.is_some_and(identifier)
-    }) else {
+    let signature = symbol.signature.as_ref();
+    let Some((position, _)) = signature
+        .match_indices(&*symbol.name)
+        .find(|(position, _)| {
+            let before = signature[..*position].chars().next_back();
+            let after = signature[*position + symbol.name.len()..].chars().next();
+            let identifier = |ch: char| ch.is_alphanumeric() || ch == '_' || ch == '$';
+            !before.is_some_and(identifier) && !after.is_some_and(identifier)
+        })
+    else {
         return true;
     };
     let mut rest = signature[position + symbol.name.len()..].trim_start();

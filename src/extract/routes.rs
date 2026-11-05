@@ -149,7 +149,7 @@ pub fn add(path: &str, text: &str, component: Option<u32>, facts: &mut Facts) {
             .filter(|symbol| {
                 symbol.parent.is_none() && symbol.exported && symbol.kind == Some(SymKind::Fn)
             })
-            .map(|symbol| symbol.name.clone())
+            .map(|symbol| symbol.name.to_string())
             .collect();
         for name in actions {
             if let Some((handler, line)) = Exports::default().named(&name, facts) {
@@ -369,9 +369,9 @@ impl Exports {
         if let Some(symbol) = facts
             .symbols
             .iter()
-            .find(|symbol| symbol.parent.is_none() && symbol.exported && symbol.name == name)
+            .find(|symbol| symbol.parent.is_none() && symbol.exported && *symbol.name == *name)
         {
-            return Some((symbol.name.clone(), symbol.line));
+            return Some((symbol.name.clone().into_string(), symbol.line));
         }
         self.renamed
             .iter()
@@ -420,12 +420,12 @@ fn push(facts: &mut Facts, name: String, handler: Option<&str>, line: u32) -> u3
     let (line, end_line) = facts
         .symbols
         .iter()
-        .find(|symbol| symbol.parent.is_none() && Some(symbol.name.as_str()) == handler)
+        .find(|symbol| symbol.parent.is_none() && Some(symbol.name.as_ref()) == handler)
         .map_or((line, line), |symbol| (symbol.line, symbol.end_line));
     let route = facts.symbols.len() as u32;
     facts.symbols.push(Symbol {
         kind: Some(SymKind::Op),
-        name,
+        name: name.into(),
         line,
         end_line,
         exported: true,

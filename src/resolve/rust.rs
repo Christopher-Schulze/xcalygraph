@@ -68,7 +68,7 @@ impl<'a> Index<'a> {
                     {
                         imports
                             .names
-                            .entry(symbol.name.clone())
+                            .entry(symbol.name.clone().into_string())
                             .or_insert(Target::Module(child));
                     }
                     continue;
@@ -81,7 +81,7 @@ impl<'a> Index<'a> {
                 };
                 imports
                     .names
-                    .entry(symbol.name.clone())
+                    .entry(symbol.name.clone().into_string())
                     .or_insert(Target::Module(child));
                 for (other, &other_module) in self.modules.file_module.iter().enumerate() {
                     if other_module == child {
@@ -280,7 +280,7 @@ impl<'a> Index<'a> {
             }
             let found = facts.symbols.iter().position(|symbol| {
                 symbol.kind() == SymKind::Mod
-                    && symbol.name == segment
+                    && *symbol.name == *segment
                     && (parent.is_none() || symbol.parent == parent)
             })?;
             parent = Some(found as u32);
@@ -303,7 +303,7 @@ impl<'a> Index<'a> {
             .symbols
             .iter()
             .enumerate()
-            .filter(|(_, symbol)| symbol.parent == Some(module) && symbol.name == name)
+            .filter(|(_, symbol)| symbol.parent == Some(module) && *symbol.name == *name)
             .map(|(local, _)| base + local as u32)
             .collect();
         (!members.is_empty()).then_some(members)

@@ -302,7 +302,7 @@ impl Index<'_> {
                     let Some(namespace) = namespace_path(facts, local) else {
                         continue;
                     };
-                    blocked.insert((namespace, symbol.name.clone()));
+                    blocked.insert((namespace, symbol.name.to_string()));
                 }
                 continue;
             }
@@ -333,7 +333,7 @@ impl Index<'_> {
                 if !is_global_augmentation && !namespace.is_empty() && !symbol.exported {
                     continue;
                 }
-                let key = (namespace, symbol.name.clone());
+                let key = (namespace, symbol.name.to_string());
                 if symbol.name.contains('\\') {
                     return None;
                 }

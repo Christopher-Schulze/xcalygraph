@@ -21,11 +21,11 @@ fn push_symbol(
 ) -> u32 {
     facts.symbols.push(Symbol {
         kind: Some(kind),
-        name: name.to_owned(),
+        name: name.to_owned().into(),
         parent,
         line,
         end_line: end_line.max(line),
-        signature: facts::clip_space(signature, 160),
+        signature: facts::clip_space(signature, 160).into(),
         exported: true,
         ..Symbol::default()
     });

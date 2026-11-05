@@ -135,11 +135,11 @@ impl<'a> Index<'a> {
                                 .iter()
                                 .filter(|binding| {
                                     binding.scope == target_scope
-                                        && binding.name == formal_name
+                                        && *binding.name == *formal_name
                                         && binding.declared
                                 })
                                 .min_by_key(|binding| binding.line)
-                                .map(|binding| binding.type_name.as_str())
+                                .map(|binding| binding.type_name.as_ref())
                         },
                     );
                 let Some(formal_type_name) = formal_type_name else {

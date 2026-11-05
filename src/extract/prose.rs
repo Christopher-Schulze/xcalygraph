@@ -82,7 +82,7 @@ impl Outline {
         let id = self.facts.symbols.len() as u32;
         self.facts.symbols.push(Symbol {
             kind: Some(SymKind::Heading),
-            name: title.clone(),
+            name: title.clone().into(),
             parent,
             line,
             end_line: self.line_count.max(line),
@@ -630,9 +630,9 @@ mod tests {
             .symbols
             .iter()
             .map(|symbol| {
-                let parent = symbol
-                    .parent
-                    .map_or("-".to_owned(), |p| facts.symbols[p as usize].name.clone());
+                let parent = symbol.parent.map_or("-".to_owned(), |p| {
+                    facts.symbols[p as usize].name.clone().into_string()
+                });
                 format!(
                     "{}-{} {} <{parent}",
                     symbol.line, symbol.end_line, symbol.name
@@ -771,7 +771,7 @@ mod tests {
         let terms: Vec<(&str, &str)> = facts
             .symbols
             .iter()
-            .map(|symbol| (symbol.name.as_str(), symbol.terms.as_str()))
+            .map(|symbol| (symbol.name.as_ref(), symbol.terms.as_ref()))
             .collect();
         assert_eq!(terms, [("Intro", "open word"), ("Next", "short clos")]);
         let plain = extract(FileType::Text, "First line.\n\nMore text.\n");

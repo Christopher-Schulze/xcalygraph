@@ -578,10 +578,10 @@ fn definitions(facts: &Facts, identities: &[Option<String>]) -> Option<Vec<Defin
                 }
                 remaining -= 1;
                 let enclosing = facts.symbols.get(parent as usize)?;
-                parents.push(enclosing.name.as_str());
+                parents.push(enclosing.name.as_ref());
                 current = enclosing.parent;
             }
-            if !symbol.owner.is_empty() && parents.first() != Some(&symbol.owner.as_str()) {
+            if !symbol.owner.is_empty() && parents.first() != Some(&symbol.owner.as_ref()) {
                 parents.insert(0, &symbol.owner);
             }
             parents.reverse();
@@ -898,11 +898,11 @@ fn collect_changes(
                     };
                     let special = symbol.kind() == SymKind::Heading
                         || (symbol.kind() == SymKind::Op && symbol.name.contains(' '));
-                    if index.string(derived.name) != symbol.name
+                    if index.string(derived.name) != &*symbol.name
                         || derived.kind() != symbol.kind()
                         || derived.line != symbol.line
                         || derived.end_line != symbol.end_line
-                        || (!special && index.string(derived.signature) != symbol.signature)
+                        || (!special && index.string(derived.signature) != &*symbol.signature)
                         || Some(derived.parent) != parent
                     {
                         return Err(AppError::Invalid(format!(
@@ -2217,7 +2217,7 @@ mod tests {
             let facts = Facts {
                 symbols: vec![Symbol {
                     kind: Some(SymKind::Fn),
-                    name: "item".to_owned(),
+                    name: "item".to_owned().into(),
                     parent: Some(parent),
                     ..Symbol::default()
                 }],

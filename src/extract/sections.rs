@@ -109,14 +109,14 @@ impl Section {
         if !self.terms.is_empty() {
             let terms = std::mem::take(&mut self.terms);
             match self.heading.take() {
-                Some(heading) => facts.symbols[heading as usize].terms = terms,
+                Some(heading) => facts.symbols[heading as usize].terms = terms.into(),
                 None => facts.symbols.push(Symbol {
                     kind: Some(SymKind::Heading),
-                    name: std::mem::take(&mut self.name),
+                    name: std::mem::take(&mut self.name).into(),
                     parent: self.parent,
                     line: self.first_line,
                     end_line: end_line.max(self.last_line),
-                    terms,
+                    terms: terms.into(),
                     exported: true,
                     ..Symbol::default()
                 }),
@@ -138,7 +138,7 @@ mod tests {
             ..Facts::default()
         };
         index_lines(&mut facts, "##\n# User Database\n##\n");
-        assert_eq!(facts.symbols[0].name, "# User Database");
+        assert_eq!(facts.symbols[0].name, ("# User Database").into());
         assert_eq!(facts.symbols[0].line, 2);
     }
 
@@ -162,7 +162,7 @@ mod tests {
             if heading {
                 facts.symbols.push(Symbol {
                     kind: Some(SymKind::Heading),
-                    name: "Long line".to_owned(),
+                    name: "Long line".to_owned().into(),
                     line: 1,
                     end_line: 2,
                     ..Symbol::default()

@@ -256,10 +256,10 @@ fn svg(text: &str) -> Facts {
         {
             facts.symbols.push(Symbol {
                 kind: Some(SymKind::Const),
-                name: id.to_owned(),
+                name: id.to_owned().into(),
                 line: tag_line,
                 end_line: tag_line,
-                signature: facts::clip_space(tag, 160),
+                signature: facts::clip_space(tag, 160).into(),
                 exported: true,
                 ..Symbol::default()
             });
@@ -485,7 +485,7 @@ mod tests {
     fn literal_paths_in_code_and_css() {
         let mut facts = Facts::default();
         facts.symbols.push(Symbol {
-            name: "render".to_owned(),
+            name: "render".to_owned().into(),
             line: 2,
             end_line: 4,
             ..Symbol::default()
@@ -548,7 +548,7 @@ mod tests {
         let ids: Vec<(String, u32)> = facts
             .symbols
             .iter()
-            .map(|symbol| (symbol.name.clone(), symbol.line))
+            .map(|symbol| (symbol.name.to_string(), symbol.line))
             .collect();
         assert_eq!(ids, [("icon-store".to_owned(), 4)]);
         let refs: Vec<(String, u32)> = facts

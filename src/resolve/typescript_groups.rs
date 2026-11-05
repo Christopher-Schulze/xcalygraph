@@ -329,7 +329,7 @@ impl<'a> Index<'a> {
         if facts
             .symbols
             .iter()
-            .any(|symbol| symbol.parent.is_none() && symbol.name == base_name)
+            .any(|symbol| symbol.parent.is_none() && *symbol.name == *base_name)
         {
             return None;
         }
@@ -361,7 +361,7 @@ impl<'a> Index<'a> {
             || base_facts
                 .symbols
                 .iter()
-                .filter(|candidate| candidate.parent.is_none() && candidate.name == symbol.name)
+                .filter(|candidate| candidate.parent.is_none() && *candidate.name == *symbol.name)
                 .count()
                 != 1
         {

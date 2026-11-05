@@ -175,7 +175,7 @@ pub fn macro_references(source: &[u8], facts: &mut Facts) {
         };
         let name = facts.symbols[scope].name.clone();
         // Skip `#define NAME(params)`: identifiers after the parameter list are the body.
-        let after_name = body.split_once(name.as_str()).map_or("", |(_, rest)| rest);
+        let after_name = body.split_once(name.as_ref()).map_or("", |(_, rest)| rest);
         let body = match after_name.strip_prefix('(') {
             Some(rest) => rest.split_once(')').map_or("", |(_, rest)| rest),
             None => after_name,
@@ -187,7 +187,7 @@ pub fn macro_references(source: &[u8], facts: &mut Facts) {
                 .next()
                 .is_some_and(|ch| ch.is_alphabetic() || ch == '_');
             if identifier
-                && word != name
+                && word != &*name
                 && !seen.contains(&word)
                 && !builtin(word)
                 && !is_c_keyword(word)

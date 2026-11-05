@@ -23,7 +23,7 @@ pub(super) fn extract(
             .facts
             .symbols
             .iter()
-            .map(|symbol| (symbol.kind() == SymKind::Heading).then(|| symbol.name.clone()))
+            .map(|symbol| (symbol.kind() == SymKind::Heading).then(|| symbol.name.to_string()))
             .collect();
     }
     if let Some((pack, language, query)) = lang::lookup(FileType::JavaScript, &record.path) {
@@ -385,12 +385,12 @@ mod tests {
             file_type: Some(FileType::Html),
         };
         let facts = extract(&record, content.as_bytes(), false).facts;
-        let run = facts.symbols.iter().find(|symbol| symbol.name == "run");
+        let run = facts.symbols.iter().find(|symbol| *symbol.name == *"run");
         assert_eq!(run.map(|symbol| symbol.line), Some(4));
         let binding = facts
             .bindings
             .iter()
-            .find(|binding| binding.name == "client");
+            .find(|binding| *binding.name == *"client");
         assert_eq!(binding.map(|binding| binding.line), Some(5));
         assert_eq!(
             binding.map(|binding| binding.value_byte as usize),
