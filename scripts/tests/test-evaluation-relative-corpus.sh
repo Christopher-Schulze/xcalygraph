@@ -23,7 +23,9 @@ with tempfile.TemporaryDirectory(prefix="evaluation-relative-corpus.", dir=repo 
                       caller / "relative", home, target):
         directory.mkdir(parents=True)
     (root / "Cargo.toml").write_text('[package]\nname="xcalygraph"\nversion="0.0.0"\nedition="2024"\n')
-    (root / "src/main.rs").write_text('compile_error!("evaluation reached debug build");\n')
+    (root / "src/main.rs").write_text(
+        '#[cfg(debug_assertions)]\ncompile_error!("evaluation reached debug build");\n'
+        '#[cfg(not(debug_assertions))]\ncompile_error!("evaluation reached release build");\n')
     (root / "scripts/benchmarks/questions/private/corpora.tsv").write_text("fixture\trelative\n")
     (root / "scripts/benchmarks/questions/private/fixture.tsv").write_text("question\texpected\nFind Create\tmain.go::Create\n")
     script = root / "scripts/benchmarks/run-evaluation.sh"
@@ -43,8 +45,9 @@ with tempfile.TemporaryDirectory(prefix="evaluation-relative-corpus.", dir=repo 
     subprocess.run(["df", "-h", "/"], check=True, stdout=subprocess.DEVNULL)
     assert shutil.disk_usage(work).free > 2 * 1024**3 + 128 * 1024**2
     result = subprocess.run(["bash", str(script), "--no-upstream", "fixture"], cwd=caller, env=environment, capture_output=True)
-    assert result.returncode != 0 and b"evaluation reached debug build" in result.stderr, result.stderr
+    assert result.returncode != 0 and b"error: evaluation reached release build" in result.stderr, result.stderr
+    assert b"error: evaluation reached debug build" not in result.stderr, result.stderr
     assert b"missing corpus or questions" not in result.stderr
     assert not (root / "relative").exists() and (caller / "relative").is_dir()
-    print("PASS: real source guard preserves the caller-relative corpus through re-entry before the debug build")
+    print("PASS: real source guard preserves the caller-relative corpus and selects the release compiler profile")
 PYTHON

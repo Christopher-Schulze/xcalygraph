@@ -139,7 +139,7 @@ fi
 cd "${REPO_ROOT}"
 build_binary() {
   bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
-  RUSTFLAGS="-Dwarnings" cargo build --locked --bin xcalygraph --message-format=json -q \
+  RUSTFLAGS="-Dwarnings" cargo build --release --locked --bin xcalygraph --message-format=json -q \
     | bash "${REPO_ROOT}/scripts/utils/cargo-artifact.sh"
 }
 

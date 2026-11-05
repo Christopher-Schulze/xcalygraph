@@ -210,7 +210,7 @@ with tempfile.TemporaryDirectory(prefix="benchmark-output-writer.", dir=repo / "
     old_build = (
         'build_binary() {\n'
         '  bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"\n'
-        '  RUSTFLAGS="-Dwarnings" cargo build --locked --bin xcalygraph --message-format=json -q \\\n'
+        '  RUSTFLAGS="-Dwarnings" cargo build --release --locked --bin xcalygraph --message-format=json -q \\\n'
         '    | bash "${REPO_ROOT}/scripts/utils/cargo-artifact.sh"\n'
         '}\n'
     )
