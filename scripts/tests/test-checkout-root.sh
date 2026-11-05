@@ -32,6 +32,18 @@ with tempfile.TemporaryDirectory(prefix="checkout-root.", dir=repo / ".cache") a
                        RUSTUP_HOME=os.environ.get("RUSTUP_HOME", str(Path.home() / ".rustup")),
                        CARGO_HOME=os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")),
                        GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    # Keep the real ShellCheck regression in the script tier: Rust tests must not start --all.
+    gate = work / "script-gate"
+    for relative in ("scripts/tests/test.sh", "scripts/utils/prune-cache.sh"):
+        destination = gate / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(repo / relative, destination)
+    (gate / "Cargo.toml").write_text("not a valid manifest\n")
+    (gate / "scripts/utils/invalid.sh").write_text("#!/usr/bin/env bash\necho $UNQUOTED\n")
+    checked = subprocess.run(["bash", str(gate / "scripts/tests/test.sh"), "--all"],
+                             env=environment, capture_output=True, text=True)
+    diagnostics = checked.stdout + checked.stderr
+    assert checked.returncode != 0 and "SC2086" in diagnostics, diagnostics
     files = ["scripts/audits/check-publication.sh", "scripts/build/build-release.sh",
              "scripts/tests/test-verification-target.sh", "scripts/tests/test-benchmark-inputs.sh",
              "scripts/benchmarks/run-benchmarks.sh", "scripts/benchmarks/run-evaluation.sh"]
@@ -95,5 +107,5 @@ with tempfile.TemporaryDirectory(prefix="checkout-root.", dir=repo / ".cache") a
         identity = hashlib.sha256(os.fsencode(root.resolve())).hexdigest()
         assert (target / ".xcalygraph-verification" / identity).is_dir()
         assert sentinel.read_text() == "preserve\n" and list(decoy.iterdir()) == [sentinel]
-    print("PASS: exact newline-ending checkout roots for audit, maintenance, tests and real guarded debug builds")
+    print("PASS: exact newline-ending checkout roots, real guarded debug builds and script-tier ShellCheck failures")
 PYTHON

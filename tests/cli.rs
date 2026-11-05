@@ -945,26 +945,23 @@ fn gate_refuses_blessing_before_running_checks() -> TestResult {
 }
 
 #[test]
-fn gate_propagates_real_shellcheck_findings() -> TestResult {
+fn product_gate_leaves_shellcheck_to_the_script_tier() -> TestResult {
     let (fixture, root) = gate_fixture("gate-shellcheck")?;
     fs::write(
         root.join("scripts/utils/invalid.sh"),
         "#!/usr/bin/env bash\necho $UNQUOTED\n",
     )?;
-    let output = support::command("bash", &fixture.0)
-        .arg(root.join("scripts/tests/test.sh"))
-        .arg("--all")
-        .output()?;
-    assert!(!output.status.success());
-    let diagnostics = String::from_utf8_lossy(&output.stdout).to_string()
-        + &String::from_utf8_lossy(&output.stderr);
-    assert!(diagnostics.contains("SC2086"), "{diagnostics}");
-    // The product gate leaves script checks to --all.
+    // Script-tier failure propagation is checked by test-checkout-root.sh under --all.
     let product = support::command("bash", &fixture.0)
         .arg(root.join("scripts/tests/test.sh"))
         .output()?;
     let diagnostics = String::from_utf8_lossy(&product.stdout).to_string()
         + &String::from_utf8_lossy(&product.stderr);
+    assert!(!product.status.success());
+    assert!(
+        diagnostics.contains("scripts/utils/verification-target.sh"),
+        "the product gate must reach Rust preparation: {diagnostics}"
+    );
     assert!(!diagnostics.contains("SC2086"), "{diagnostics}");
     Ok(())
 }

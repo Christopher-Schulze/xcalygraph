@@ -27,12 +27,5 @@ jobs:
             target
           key: gate-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
           restore-keys: gate-${{ runner.os }}-
-      # The gate's own regression test runs `test.sh --all` in a fixture, which checks these tools.
-      - name: Tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes hyperfine jq pipx rsync shellcheck
-          pipx install --python python3 "graphifyy==0.9.97"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Gate
         run: scripts/tests/test.sh
