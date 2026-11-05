@@ -341,7 +341,7 @@ pub fn is_test_path(file_type: FileType, path: &str) -> bool {
                 || stem.ends_with("Test")
         }
         Php => name.ends_with("Test.php") || has_dir(&["tests"]),
-        Lua => name.ends_with("_spec.lua") || has_dir(&["spec"]),
+        Lua => name.ends_with("_spec.lua") || has_dir(&["spec", "test", "tests"]),
         Elixir => name.ends_with("_test.exs") || has_dir(&["test"]),
         Erlang => {
             name.ends_with("_SUITE.erl") || name.ends_with("_tests.erl") || has_dir(&["test"])
@@ -471,6 +471,9 @@ mod tests {
             (FileType::Cpp, "src/parser_unittest.cc"),
             (FileType::Swift, "Tests/AppTests/AppTests.swift"),
             (FileType::Ruby, "spec/models/user_spec.rb"),
+            (FileType::Lua, "tests/test-config.lua"),
+            (FileType::Lua, "test/parser.lua"),
+            (FileType::Lua, "spec/parser_spec.lua"),
             (FileType::R, "tests/testthat/test-model.R"),
             (FileType::Solidity, "src/Token.t.sol"),
             (FileType::PowerShell, "Module.Tests.ps1"),
@@ -485,6 +488,8 @@ mod tests {
             (FileType::Python, "pkg/testing.py"),
             (FileType::Go, "pkg/test.go"),
             (FileType::TypeScript, "src/helper/testing/index.ts"),
+            (FileType::Lua, "lua/pl/test.lua"),
+            (FileType::Lua, "src/testing/parser.lua"),
         ];
         for (file_type, path) in sources {
             assert!(!is_test_path(file_type, path), "{path}");

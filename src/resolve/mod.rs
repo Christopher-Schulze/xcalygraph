@@ -39,7 +39,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 106;
+pub const RESOLVE_VERSION: u32 = 107;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -2396,7 +2396,7 @@ impl<'a> Index<'a> {
     fn resolve_mention(&self, file: u32, mention: &str, owner: Option<u32>) -> Outcome {
         let mention = strip_line_suffix(mention);
         // A qualified name of the index (`internal/platform.Worker`, `store::Store::open`).
-        let normalized = mention.replace("::", ".");
+        let mut normalized = mention.replace("::", ".");
         if normalized.contains('.')
             && let Some(name) = normalized.rsplit('.').next()
         {
@@ -2455,47 +2455,58 @@ impl<'a> Index<'a> {
                 _ => Outcome::External,
             };
         }
-        let normalized = mention.replace("::", ".");
         let name = normalized.rsplit('.').next().unwrap_or(&normalized);
-        let candidates: Vec<u32> = self
+        let unqualified = normalized == name;
+        let mut candidates: Vec<u32> = self
             .by_name
             .get(name)
             .into_iter()
             .flatten()
             .copied()
-            .filter(|&symbol| {
-                let qualified = self.symbols[symbol as usize].qualified.replace("::", ".");
-                normalized == name
-                    || qualified == normalized
-                    || graph::has_qualified_suffix(&qualified, &normalized)
-            })
-            .filter(|&symbol| self.symbols[symbol as usize].kind != SymKind::Heading)
+            .collect();
+        if unqualified && normalized.bytes().any(|byte| byte.is_ascii_uppercase()) {
+            normalized.make_ascii_lowercase();
+            candidates.extend(
+                self.by_name
+                    .get(normalized.as_str())
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|&symbol| {
+                        self.file_type(self.symbols[symbol as usize].file) == Some(FileType::Lisp)
+                    }),
+            );
+        }
+        candidates.retain(|&symbol| {
+            let record = &self.symbols[symbol as usize];
+            if record.kind == SymKind::Heading {
+                return false;
+            }
+            if !unqualified {
+                let qualified = record.qualified.replace("::", ".");
+                if qualified != normalized && !graph::has_qualified_suffix(&qualified, &normalized)
+                {
+                    return false;
+                }
+            }
             // File-level test classification is not evidence that prose names a fixture.
             // Keep named tests and helpers under a preceding file anchor of this section.
-            .filter(|&symbol| {
-                if normalized != name || !self.is_test(symbol) {
-                    return true;
-                }
-                let record = &self.symbols[symbol as usize];
-                if owner == Some(record.file) {
-                    return true;
-                }
-                self.facts(record.file)
-                    .and_then(|facts| {
-                        facts
-                            .symbols
-                            .get((symbol - self.base[record.file as usize]) as usize)
-                    })
-                    .is_some_and(|declaration| {
-                        declaration.flags & facts::FLAG_TEST != 0
-                            && (declaration.parent.is_none()
-                                || declaration.flags & facts::FLAG_ENTRY != 0)
-                    })
-            })
-            .collect();
-        if normalized == name
-            && let Some(owner) = owner
-        {
+            if !unqualified || !self.is_test(symbol) || owner == Some(record.file) {
+                return true;
+            }
+            self.facts(record.file)
+                .and_then(|facts| {
+                    facts
+                        .symbols
+                        .get((symbol - self.base[record.file as usize]) as usize)
+                })
+                .is_some_and(|declaration| {
+                    declaration.flags & facts::FLAG_TEST != 0
+                        && (declaration.parent.is_none()
+                            || declaration.flags & facts::FLAG_ENTRY != 0)
+                })
+        });
+        if unqualified && let Some(owner) = owner {
             let mut scoped = candidates.iter().copied().filter(|&symbol| {
                 self.symbols[symbol as usize].file == owner && self.is_test(symbol)
             });

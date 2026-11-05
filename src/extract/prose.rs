@@ -429,7 +429,13 @@ fn html(text: &str) -> Facts {
             let chunk = &text[position..end];
             let decoded = decode_entities(chunk);
             match &mut capture {
-                Some((_, _, captured)) => captured.push_str(&decoded),
+                Some((kind, _, captured)) => {
+                    if let Capture::Code(code) = kind {
+                        code.non_variable_text |=
+                            code.variable_depth == 0 && !decoded.trim().is_empty();
+                    }
+                    captured.push_str(&decoded);
+                }
                 None if in_title => title.push_str(&decoded),
                 None => visible.push_str(&decoded),
             }
@@ -450,6 +456,16 @@ fn html(text: &str) -> Facts {
         position = end;
         let name = tag_name(tag);
         let closing = tag.starts_with("</");
+        if matches!(name.as_str(), "i" | "var")
+            && let Some((Capture::Code(code), _, _)) = &mut capture
+        {
+            if closing {
+                code.variable_depth = code.variable_depth.saturating_sub(1);
+            } else {
+                code.variable = true;
+                code.variable_depth = code.variable_depth.saturating_add(1);
+            }
+        }
         if !closing {
             for attribute in ["href", "src"] {
                 if let Some(value) = attribute_value(tag, attribute) {
@@ -476,15 +492,24 @@ fn html(text: &str) -> Facts {
                 capture = Some((Capture::Heading(level), tag_line, String::new()));
             }
             (_, "code", false) if capture.is_none() => {
-                capture = Some((Capture::Code, tag_line, String::new()));
+                capture = Some((
+                    Capture::Code(CodeCapture::default()),
+                    tag_line,
+                    String::new(),
+                ));
             }
             (Some(_), _, true) | (_, "code", true) => match capture.take() {
                 Some((Capture::Heading(level), start, captured)) => {
                     flush_visible(&mut outline, &mut visible, line);
                     outline.heading(level, &captured, start);
                 }
-                Some((Capture::Code, start, captured)) => {
-                    outline.mention(&captured, start);
+                Some((Capture::Code(code), start, captured)) => {
+                    if !code.variable
+                        || code.non_variable_text
+                        || captured.chars().any(|ch| matches!(ch, '.' | ':' | '/'))
+                    {
+                        outline.mention(&captured, start);
+                    }
                     visible.push_str(&captured);
                 }
                 None => {}
@@ -503,7 +528,14 @@ fn html(text: &str) -> Facts {
 
 enum Capture {
     Heading(usize),
-    Code,
+    Code(CodeCapture),
+}
+
+#[derive(Default)]
+struct CodeCapture {
+    variable: bool,
+    variable_depth: usize,
+    non_variable_text: bool,
 }
 
 fn flush_visible(outline: &mut Outline, visible: &mut String, line: u32) {
@@ -697,6 +729,33 @@ mod tests {
             ]
         );
         assert_eq!(facts.doc, "Call store.Get & see api.");
+    }
+
+    #[test]
+    fn html_variable_spans_are_text_not_global_symbol_names() {
+        let facts = html(concat!(
+            "<h1>API</h1>\n",
+            "<p>Call <code><a href=\"api.html\">fetch</a></code> with <code><i>request</i></code>.</p>\n",
+            "<p><code><var>context</var></code> and <code><i><var>session</var></i></code> are parameters.</p>\n",
+            "<p><code><i>Store.read</i></code> and <code><i>render</i>()</code> are named APIs.</p>\n",
+        ));
+        let (_, refs) = summary(&facts);
+        assert_eq!(
+            refs,
+            [
+                "2 Path api.html",
+                "2 Mention fetch",
+                "4 Mention Store.read",
+                "4 Mention render"
+            ]
+        );
+        let terms = &facts.symbols[0].terms;
+        for name in ["request", "context", "session"] {
+            assert!(
+                terms.split_whitespace().any(|term| term == name),
+                "{name}: {terms}"
+            );
+        }
     }
 
     #[test]

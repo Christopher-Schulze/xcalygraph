@@ -66,10 +66,10 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | `fixture` | path segment `testdata`, `fixtures`, `__fixtures__` or `__snapshots__` | path only |
 | `manifest` | `go.mod`, `go.work`, `Cargo.toml`, `package.json`, `pnpm-workspace.yaml`, `pyproject.toml`, `requirements*.txt`, `pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts`, `*.csproj`, `*.fsproj`, `*.vbproj`, `*.sln`, `*.slnx`, `Gemfile`, `*.gemspec`, `composer.json`, `Package.swift`, `pubspec.yaml`, `mix.exs`, `rebar.config`, `Project.toml`, `DESCRIPTION`, `dune-project`, `build.zig`, `build.zig.zon`, `foundry.toml`, `remappings.txt`, `CMakeLists.txt`, `compile_commands.json`, `tsconfig.json`, `jsconfig.json` | module metadata, dependencies, workspace members, source roots, include directories, entrypoints |
 | `config` | `.json`, `.jsonc`, `.yaml`, `.yml`, `.toml`, `.xml`, `.ini`, `.properties`, `.proto`, `.graphql`, `.gql`; `.conf`, `.cfg`, `.cnf`, `.config`, `.service`, `.socket`, `.timer`, `.rules`, extensionless `config` and names ending in `_config`; `Dockerfile`, `*.dockerfile`, `Makefile`, `*.mk`; `.env.example` | key paths and schema facts (section 5); server text retains full-text search |
-| `doc` | `.md`, `.mdx`, `.qmd`, `.markdown`, `.skill`, `.txt`, `.rst`, `.org`, `.adoc`, `.tex`, `.html`, `.htm`, `.pdf`, `.docx`, `.xlsx` | headings, links, mentions, searchable text |
+| `doc` | text and document formats in the language table | headings, links, mentions, searchable text |
 | `asset` | `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.ico`, `.mp4`, `.mov`, `.webm`, `.mkv`, `.avi`, `.m4v`, `.mp3`, `.wav`, `.m4a`, `.ogg` | header metadata; SVG ids and text; incoming references |
 | `sensitive` | `.env*` except `.env.example`; `*.pem`, `*.key`, `*.p12`, `id_rsa*`, `id_ed25519*`; anything under `.ssh/`, `.aws/`, `.gnupg/` | path only; content never read |
-| `large` | size > 8 MiB; `.pdf`, `.docx`, `.xlsx` > 64 MiB | path only |
+| `large` | size > 8 MiB; PDF, OOXML, OpenDocument, RTF and legacy Office > 64 MiB | path only |
 | `binary` | NUL byte in the first 8 KiB of a file without another role | path only |
 | `other` | everything else | path only |
 
@@ -96,7 +96,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | Swift | `swift` | `.swift` | deep | files under `Tests/`, `*Tests.swift`; `XCTestCase` subclasses, `@Test` functions |
 | Ruby | `ruby` | `.rb`, `.rake` | deep | `*_spec.rb`, `*_test.rb`, `test_*.rb`, files under `spec/`, `test/` |
 | PHP | `php` | `.php` | deep | `*Test.php`, files under `tests/`; PHPUnit `test*` methods, Pest `test()`, `it()` |
-| Lua | `lua` | `.lua`, `.luau`, `.toc` | deep | `*_spec.lua`, files under `spec/` |
+| Lua | `lua` | `.lua`, `.luau`, `.toc` | deep | `*_spec.lua`, files under `spec/`, `test/`, `tests/` |
 | Zig | `zig` | `.zig` | deep | `test` blocks |
 | Elixir | `elixir` | `.ex`, `.exs` | deep | `*_test.exs`, files under `test/` |
 | Erlang | `erlang` | `.erl`, `.hrl`, `.escript` | deep | `*_SUITE.erl`, `*_tests.erl`, files under `test/` |
@@ -233,6 +233,8 @@ Resolution order for a reference, first hit wins:
 - Contract edges: OpenAPI `operationId`, Protobuf rpc and GraphQL field -> handler whose name matches within the implementing type or module: `implements`, inferred.
 - Edge kinds: `calls`, `uses` (value or type reference, including resolved Go `T(x)` conversions), `inherits`, `implements`, `imports` (file -> file or module), `mentions` (doc -> symbol or file), `tests` (test symbol -> symbol it calls), `references` (code, doc, template or config -> file or asset), `runs` (task -> script, entrypoint or task), `queries` (symbol -> SQL object named in a string literal with an SQL keyword).
 - Docs: backticked identifier with a unique symbol name: inferred; bare test-only targets need a named test declaration or a preceding file anchor in the same heading scope naming their file; qualified and file-bound names remain eligible; relative path mention or link: exact.
+- HTML inline code wholly styled as a variable with `i` or `var` retains searchable text but no bare symbol mention; qualified names, call forms and links remain eligible.
+- Bare doc names accept ASCII capitalization variants of lowercase Common Lisp declaration names; matches from other languages remain case-sensitive, collisions remain ambiguous.
 - SQL query literals exclude comments identified by the parsed host tree. Table names resolve to their nearest directory definition; multiple candidates with no shared source directory prefix require co-located definitions, otherwise remain ambiguous.
 - Confidence: `exact` or `inferred`. Targets outside the root: external dependency per module (name, use count), no node.
 - Edges are unique per (source, target, kind); exact wins over inferred.
