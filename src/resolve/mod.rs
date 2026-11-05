@@ -39,7 +39,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 111;
+pub const RESOLVE_VERSION: u32 = 112;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -3986,7 +3986,16 @@ impl<'a> Index<'a> {
             .copied()
             .filter(|&s| {
                 let module = self.module_of(self.symbols[s as usize].file);
-                imports.modules.contains(&module) || reach == Reach::Imported(module)
+                imports.modules.contains(&module)
+                    || reach == Reach::Imported(module)
+                    // A runtime module's declarations constrain uncertain API lookup; they
+                    // are context, not another structural import in the module graph.
+                    || (self.file_type(self.symbols[s as usize].file)
+                        == Some(FileType::TypeScript)
+                        && (imports.modules.iter().any(|&visible| {
+                            self.js_declaration_module(visible) == Some(module)
+                        }) || matches!(reach, Reach::Imported(visible)
+                            if self.js_declaration_module(visible) == Some(module))))
             })
             .collect();
         if let Some(symbol) = unique(&imported, |s| self.is_test(s)) {

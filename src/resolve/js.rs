@@ -15,10 +15,10 @@ const STRIP: [&str; 14] = [
     ".astro", ".json", ".node",
 ];
 
-/// Explicit module-system extensions never collapse into an extensionless path. Other
-/// implementation/declaration grouping retains its existing contract.
+/// Runtime files have physical module identities. TypeScript implementation/declaration
+/// grouping retains its separately verified pairing contract.
 pub fn module_key(path: &str) -> String {
-    let path = if [".mjs", ".cjs", ".mts", ".cts"]
+    let path = if [".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]
         .iter()
         .any(|extension| path.ends_with(extension))
     {
@@ -307,18 +307,28 @@ impl Index<'_> {
     /// Exported symbols `name` of a module, following `export { name } from` and
     /// `export * from` re-exports (depth max 8).
     fn exported(&self, module: u32, name: &str) -> Vec<u32> {
-        self.exported_at(module, name, 0)
+        self.exported_at(module, name, 0, true)
     }
 
     pub(super) fn js_exported(&self, module: u32, name: &str) -> Vec<u32> {
-        self.exported_at(module, name, 0)
+        self.exported_at(module, name, 0, true)
     }
 
-    fn exported_at(&self, module: u32, name: &str, depth: usize) -> Vec<u32> {
+    fn exported_at(&self, module: u32, name: &str, depth: usize, declarations: bool) -> Vec<u32> {
         // TypeScript namespaces are module symbols that importers name.
         let own: Vec<u32> = self.module_symbol(module, name, None);
-        if !own.is_empty() || depth >= 8 {
+        if !own.is_empty() {
             return own;
+        }
+        if depth >= 8 {
+            return if declarations {
+                self.js_declaration_module(module)
+                    .map_or_else(Vec::new, |declaration| {
+                        self.module_symbol(declaration, name, None)
+                    })
+            } else {
+                own
+            };
         }
         for (file, &file_module) in self.modules.file_module.iter().enumerate() {
             if file_module != module {
@@ -343,19 +353,48 @@ impl Index<'_> {
                     .iter()
                     .find(|imported| import.alias.as_deref().unwrap_or(imported) == name)
                     .map_or(name, String::as_str);
-                let found = self.exported_at(target, original, depth + 1);
+                let found = self.exported_at(target, original, depth + 1, declarations);
                 if !found.is_empty() {
                     return found;
                 }
             }
         }
-        Vec::new()
+        declarations
+            .then(|| self.js_declaration_module(module))
+            .flatten()
+            .map_or_else(Vec::new, |declaration| {
+                // Declaration context is not another re-export hop.
+                self.exported_at(declaration, name, depth, false)
+            })
     }
 
-    /// The default export: a symbol named like the local binding, else the module's only
-    /// exported class or function.
+    /// Declaration context for a concrete runtime file, never another runtime sibling.
+    pub(super) fn js_declaration_module(&self, module: u32) -> Option<u32> {
+        let key = self.modules.modules[module as usize].key.as_str();
+        let path = key.strip_prefix("js:")?;
+        let (stem, declaration) = if let Some(stem) = path.strip_suffix(".js") {
+            self.modules.get(key.strip_suffix(".js")?)?;
+            (stem, ".d.ts")
+        } else if let Some(stem) = path.strip_suffix(".jsx") {
+            self.modules.get(key.strip_suffix(".jsx")?)?;
+            (stem, ".d.ts")
+        } else if let Some(stem) = path.strip_suffix(".mjs") {
+            (stem, ".d.mts")
+        } else {
+            (path.strip_suffix(".cjs")?, ".d.cts")
+        };
+        let mut path = String::with_capacity(stem.len() + declaration.len());
+        path.push_str(stem);
+        path.push_str(declaration);
+        let &file = self.path_index.get(path.as_str())?;
+        let record = &self.input.files[file as usize];
+        (record.role.is_extracted() && record.file_type == Some(FileType::TypeScript))
+            .then(|| self.module_of(file))
+    }
+
+    /// Prefer a concrete default candidate before consulting its declaration context.
     fn default_export(&self, module: u32, local: &str) -> Option<Vec<u32>> {
-        let named = self.exported(module, local);
+        let named = self.exported_at(module, local, 0, false);
         if !named.is_empty() {
             return Some(named);
         }
@@ -371,7 +410,13 @@ impl Index<'_> {
             })
             .map(|(id, _)| id as u32)
             .collect();
-        (candidates.len() == 1).then_some(candidates)
+        match candidates.len() {
+            1 => Some(candidates),
+            0 => self
+                .js_declaration_module(module)
+                .and_then(|declaration| self.default_export(declaration, local)),
+            _ => None,
+        }
     }
 }
 
@@ -429,6 +474,139 @@ mod tests {
     #[test]
     fn module_keys_drop_extensions() {
         assert_eq!(module_key("web/src/index.tsx"), "js:web/src/index");
+    }
+
+    #[test]
+    #[cfg(feature = "lang-typescript")]
+    fn runtime_symbols_do_not_merge_with_siblings_but_keep_api_context() -> std::io::Result<()> {
+        use crate::domain::graph::EdgeKind;
+        use crate::infra::testdir::TestDir;
+
+        let root = TestDir::new("javascript-runtime-symbols")?;
+        root.write(
+            "api.js",
+            "export function execute() {}\nfunction factory() { return { contract() {} }; }\nconst { contract } = factory();\nexport { contract };\n",
+        )?;
+        root.write("api.jsx", "export function execute() {}\n")?;
+        root.write(
+            "api.d.ts",
+            "export declare function execute(): void;\nexport declare function contract(): void;\n",
+        )?;
+        root.write("api.mjs", "export function execute() {}\n")?;
+        root.write("api.cjs", "exports.execute = function execute() {};\n")?;
+        root.write("default.js", "export default class Runtime {}\n")?;
+        root.write("default.d.ts", "export default class Declared {}\n")?;
+        root.write("view.js", "export class Failure { serialize() {} }\n")?;
+        root.write(
+            "view.d.ts",
+            "export declare class Failure { serialize(): string; }\nexport declare class Headers { serialize(): string; }\n",
+        )?;
+        root.write(
+            "barrel.js",
+            "export { execute as forwarded } from './api.js';\n",
+        )?;
+        for depth in 0..=8 {
+            let target = if depth == 0 {
+                "api.js".to_owned()
+            } else {
+                format!("deep-{}.js", depth - 1)
+            };
+            root.write(
+                &format!("deep-{depth}.js"),
+                &format!("export * from './{target}';\n"),
+            )?;
+        }
+        for (name, source) in [
+            (
+                "client-direct.js",
+                "import { execute } from './api.js';\nexecute();\n",
+            ),
+            (
+                "client-namespace.js",
+                "import * as api from './api.js';\napi.execute();\n",
+            ),
+            (
+                "client-forwarded.js",
+                "import { forwarded } from './barrel.js';\nforwarded();\n",
+            ),
+            (
+                "client-contract.js",
+                "import * as api from './api.js';\napi.contract();\n",
+            ),
+            (
+                "client-default.js",
+                "import Declared from './default.js';\nnew Declared();\n",
+            ),
+            (
+                "client-jsx.js",
+                "import { execute } from './api.jsx';\nexecute();\n",
+            ),
+            (
+                "client-unknown.js",
+                "import { Failure } from './view.js';\nresponse.serialize();\n",
+            ),
+            (
+                "client-deep.js",
+                "import { contract } from './deep-7.js';\ncontract();\n",
+            ),
+            (
+                "client-too-deep.js",
+                "import { contract } from './deep-8.js';\ncontract();\n",
+            ),
+        ] {
+            root.write(name, source)?;
+        }
+        let graph = super::super::tests::graph_of(root.path())?;
+        let mut calls: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Calls)
+            .filter(|edge| {
+                edge.source as usize >= graph.symbols.len()
+                    && graph.files[edge.source as usize - graph.symbols.len()]
+                        .path
+                        .starts_with("client-")
+            })
+            .map(|edge| {
+                let target = &graph.symbols[edge.target as usize];
+                (
+                    graph.files[target.file as usize].path.as_str(),
+                    target.name.as_str(),
+                )
+            })
+            .collect();
+        calls.sort_unstable();
+        assert_eq!(
+            calls,
+            [
+                ("api.d.ts", "contract"),
+                ("api.d.ts", "contract"),
+                ("api.js", "execute"),
+                ("api.js", "execute"),
+                ("api.js", "execute"),
+                ("api.jsx", "execute"),
+                ("default.js", "Runtime"),
+            ]
+        );
+        let clients: Vec<_> = graph
+            .files
+            .iter()
+            .filter(|file| file.path.starts_with("client-"))
+            .map(|file| file.module)
+            .collect();
+        let declarations: Vec<_> = graph
+            .files
+            .iter()
+            .filter(|file| file.path.ends_with(".d.ts"))
+            .map(|file| file.module)
+            .collect();
+        assert!(
+            !graph
+                .module_edges
+                .iter()
+                .any(|edge| clients.contains(&edge.source) && declarations.contains(&edge.target))
+        );
+        Ok(())
     }
 
     #[cfg(feature = "lang-typescript")]
@@ -598,6 +776,8 @@ mod tests {
         let root = TestDir::new("javascript-commonjs-extensions")?;
         root.write("helper.cjs", "exports.work = function work() {};\n")?;
         root.write("helper.mjs", "export function work() {}\n")?;
+        root.write("helper.d.cts", "export declare function work(): void;\n")?;
+        root.write("helper.d.mts", "export declare function work(): void;\n")?;
         root.write(
             "omitted.cjs",
             "const helper = require('./helper');\nhelper.work();\n",
