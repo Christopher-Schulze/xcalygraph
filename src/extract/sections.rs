@@ -60,7 +60,8 @@ pub fn index_text<'a>(facts: &mut Facts, lines: impl Iterator<Item = (u32, &'a s
             open.start(line, text, owner);
         }
         search::for_each_token(text, &mut buffer, |token| {
-            if token.len() >= 3 && open.seen.insert(token.to_owned()) {
+            if token.len() >= 3 && !open.seen.contains(token) {
+                open.seen.insert(token.to_owned());
                 if open.seen.len() > SECTION_TERMS {
                     open.last_line = line;
                     open.flush(facts, line);
