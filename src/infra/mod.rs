@@ -9,3 +9,5 @@ pub mod store;
 #[cfg(test)]
 pub mod testdir;
 pub mod walk;
+#[cfg(target_os = "macos")]
+mod walk_bulk;

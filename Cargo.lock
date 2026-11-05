@@ -1582,6 +1582,7 @@ dependencies = [
  "flate2",
  "ignore",
  "imagesize",
+ "libc",
  "lopdf",
  "memchr",
  "memmap2",

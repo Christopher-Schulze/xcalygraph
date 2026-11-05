@@ -10,7 +10,7 @@ use ignore::{DirEntry, WalkBuilder, WalkState};
 use crate::domain::corpus::{FileIdentity, Stat};
 
 /// Directory names never descended into.
-const PRUNED_NAMES: [&str; 6] = [
+pub(super) const PRUNED_NAMES: [&str; 6] = [
     ".git",
     ".hg",
     ".svn",
@@ -22,6 +22,14 @@ const PRUNED_NAMES: [&str; 6] = [
 /// Walks `root` in parallel and returns its files sorted by path. `excluded` directories (for
 /// example an index directory inside the root) are pruned.
 pub fn walk(root: &Path, excluded: &[PathBuf]) -> io::Result<Vec<Stat>> {
+    #[cfg(target_os = "macos")]
+    if let Some(files) = super::walk_bulk::walk(root, excluded) {
+        return Ok(files);
+    }
+    walk_portable(root, excluded)
+}
+
+fn walk_portable(root: &Path, excluded: &[PathBuf]) -> io::Result<Vec<Stat>> {
     let excluded: Arc<Vec<PathBuf>> = Arc::new(excluded.to_vec());
     let mut builder = WalkBuilder::new(root);
     builder
@@ -261,6 +269,93 @@ mod tests {
                 "sub/kept.go"
             ]
         );
+        Ok(())
+    }
+
+    /// Both routes see the same files with the same stat records, the identity included.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bulk_walk_agrees_with_the_portable_walker() -> std::io::Result<()> {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let dir = TestDir::new("walk-routes")?;
+        dir.write(".gitignore", "*.log\nbuild/\n!keep.log\n/anchored.go\n")?;
+        dir.write(".xcalygraphignore", "keep.log\nsecret/\n")?;
+        for path in [
+            "a.log",
+            "keep.log",
+            "build/out.go",
+            "secret/x.go",
+            "anchored.go",
+            "sub/anchored.go",
+            "sub/local.go",
+            "sub/kept.go",
+            ".hidden/visible.go",
+            "main.go",
+            "ünï/cöde.go",
+            "cache/CACHEDIR.TAG",
+            "cache/x.go",
+            "venv/pyvenv.cfg",
+            "venv/y.go",
+            "gomod/go.mod",
+            "gomod/vendor/modules.txt",
+            "gomod/vendor/v.go",
+            "other/vendor/o.go",
+            "node_modules/m.js",
+            ".git/info/exclude",
+            "excluded/e.go",
+            "sub/deep/er/z.go",
+            "open/visible.go",
+        ] {
+            dir.write(path, "x")?;
+        }
+        dir.write("sub/.gitignore", "local.go\n!a.log\n")?;
+        dir.write(".git/info/exclude", "only-excluded.go\n")?;
+        dir.write("only-excluded.go", "")?;
+        symlink(dir.path().join("main.go"), dir.path().join("link.go"))?;
+        std::fs::create_dir(dir.path().join("closed"))?;
+        std::fs::set_permissions(
+            dir.path().join("closed"),
+            std::fs::Permissions::from_mode(0o000),
+        )?;
+        let excluded = [dir.path().join("excluded")];
+        let bulk = crate::infra::walk_bulk::walk(dir.path(), &excluded)
+            .ok_or_else(|| std::io::Error::other("bulk route declined"))?;
+        let portable = walk_portable(dir.path(), &excluded)?;
+        std::fs::set_permissions(
+            dir.path().join("closed"),
+            std::fs::Permissions::from_mode(0o700),
+        )?;
+        assert_eq!(bulk, portable);
+        assert!(bulk.iter().any(|file| file.path == "closed/"));
+        Ok(())
+    }
+
+    /// A `.git` file (linked work tree) goes to the portable walker.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bulk_walk_declines_a_linked_work_tree() -> std::io::Result<()> {
+        let dir = TestDir::new("walk-linked")?;
+        dir.write(".git", "gitdir: elsewhere\n")?;
+        dir.write("main.go", "")?;
+        assert!(crate::infra::walk_bulk::walk(dir.path(), &[]).is_none());
+        Ok(())
+    }
+
+    /// Compares both routes on a real tree: `XCALYGRAPH_WALK_ROOT=path`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "development tool; needs XCALYGRAPH_WALK_ROOT"]
+    fn walk_routes_agree_on_a_tree() -> std::io::Result<()> {
+        let root = PathBuf::from(std::env::var_os("XCALYGRAPH_WALK_ROOT").unwrap_or_default());
+        let bulk = crate::infra::walk_bulk::walk(&root, &[])
+            .ok_or_else(|| std::io::Error::other("bulk route declined"))?;
+        let portable = walk_portable(&root, &[])?;
+        let first = bulk
+            .iter()
+            .zip(&portable)
+            .find(|(left, right)| left != right);
+        assert_eq!(first, None, "{root:?}");
+        assert_eq!(bulk.len(), portable.len(), "{root:?}");
         Ok(())
     }
 

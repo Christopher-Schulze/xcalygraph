@@ -90,6 +90,9 @@ pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError> {
     };
     let derived_valid = derived_is_valid(workspace);
     if changes.is_empty() && !rebuilt && derived_valid {
+        // The process ends soon: freeing thousands of records would only delay the answer.
+        std::mem::forget(changes);
+        std::mem::forget(stored);
         return Ok(report);
     }
     let meta = Meta {

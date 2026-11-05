@@ -46,7 +46,12 @@ pub fn scan(
 ) -> io::Result<ChangeSet> {
     let walked = walk::walk(root, excluded)?;
     let (decisions, deleted) = corpus::compare(stored, &walked, write_time_ns);
-    let paths: HashSet<&str> = walked.iter().map(|stat| stat.path.as_str()).collect();
+    // Only C headers ask for their siblings.
+    let paths: HashSet<&str> = if walked.iter().any(|stat| stat.path.ends_with(".h")) {
+        walked.iter().map(|stat| stat.path.as_str()).collect()
+    } else {
+        HashSet::new()
+    };
     let hashed: Vec<io::Result<(FileRecord, bool, Option<Facts>)>> = decisions
         .par_iter()
         .zip(walked.par_iter())

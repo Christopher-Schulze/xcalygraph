@@ -7,7 +7,7 @@
 # once nothing in them is younger than the age and no open TASK file names them.
 # Fails above 3 GiB without the frozen corpus snapshots: evidence must not grow unnoticed.
 # Compaction: in evaluation/ and task192-manifests/, runs beyond the newest KEEP_RUNS, in
-# edge-oracle/ beyond the newest one, lose every file except top-level regular files up to 8 MiB (reports, identities,
+# edge-oracle/ beyond the newest one, lose every file except top-level regular files up to 1 MiB (reports, identities,
 # summaries, ledgers); a run containing .keep-full is never compacted.
 set -euo pipefail
 
@@ -19,7 +19,7 @@ readonly AGE_HOURS="${1:-24}"
 readonly LIMIT_KIB=$((3 * 1024 * 1024))
 readonly MARKER=".xcalygraph-disposable"
 readonly KEEP_RUNS=2
-readonly SMALL_KIB=$((8 * 1024))
+readonly SMALL_KIB=1024
 
 (( $# <= 1 )) || { echo "usage: prune-cache.sh [AGE_HOURS]" >&2; exit 2; }
 [[ "${AGE_HOURS}" =~ ^[0-9]{1,8}$ ]] || { echo "usage: prune-cache.sh [AGE_HOURS]" >&2; exit 2; }
