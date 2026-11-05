@@ -417,7 +417,6 @@ Reference: Apple Silicon laptop, warm filesystem cache, corpus of 8,000 tracked 
 | full index build | max 3 s |
 | freshness check without changes | max 30 ms |
 | query compute (`find`, `show`) | max 10 ms |
-| refresh after a single-file change | max 250 ms |
 | index size | max 30 MB |
 | bytes written per single-file change | changed fact shard + file table + `derived`; max 20 MB |
 | peak RSS, full build | max 400 MB |
