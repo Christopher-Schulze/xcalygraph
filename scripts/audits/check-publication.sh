@@ -114,7 +114,9 @@ for commit in "${commits[@]}"; do
     echo "${short}: local-only file tracked" >&2
     findings=1
   fi
-  scan "${short}: private content scan" git grep -q -a -i -E -f "${patterns}" "${commit}" -- ':(top)' || exit 1
+  # The vendored Unicode license is verbatim third-party text and may contain a common word.
+  scan "${short}: private content scan" git grep -q -a -i -E -f "${patterns}" "${commit}" -- ':(top)' \
+    ':(top,exclude)vendor/tree-sitter/src/unicode/LICENSE' || exit 1
   private_match="${scan_status}"
   scan "${short}: home path content scan" git grep -q -a -E -f "${home_patterns}" "${commit}" -- ':(top)' || exit 1
   tree_match=0
