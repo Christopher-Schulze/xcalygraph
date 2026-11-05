@@ -117,6 +117,8 @@ lang-robot = ["dep:tree-sitter-robot"]
 # Index integrity checks hash the full derived image in development too.
 [profile.release]
 strip = true
+lto = "fat"
+codegen-units = 1
 
 [profile.dev.package.xxhash-rust]
 opt-level = 3

@@ -21,5 +21,6 @@ Considered and deliberately not in `docs/spec.md`. Each entry names the evidence
 | Related-symbol bundle (`ctx`, personalized PageRank; removed because `find` beat it at every budget on the sealed questions) | agent questions whose answer shares no word with the question and is one graph hop from a hit |
 | Rust enum variants as graph targets ("where is this variant built or matched?"; they dominate the compiler's type references, `rg` answers this today) | an agent question that `rg` plus `show` on the enum cannot answer within budget |
 | Exact confidence for uniquely resolved call results with a declared return (uniform rule today: call results are inferred; the oracle's inferred strata are at least 98.3 % correct) | agent traces showing follow-up reads caused by the inferred marker |
+| Profile-guided optimization of the release binaries (Rust-only PGO on seven training corpora: 65.2 against 67.1 G instructions on the reference corpus, 2 to 3 % wall; 11 MB profile per target, C parsers uninstrumented) | a toolchain that instruments the C grammars with one profile format and a measured gain above 10 % |
 | Typo-tolerant search | evaluation misses caused by misspelled terms |
 | Media durations of WebM, Matroska, MP3 and Ogg | agent questions that need these durations (format is reported) |

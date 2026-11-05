@@ -17,7 +17,9 @@ readonly ROOTS="$1" BASELINE="$2" OUTPUT="$3"
 
 cd "${REPO_ROOT}"
 bash scripts/utils/check-build-space.sh
-producer="$(cargo test --locked --release --no-run --bin xcalygraph --message-format=json 2>/dev/null |
+# Facts do not depend on link-time optimization; the guard keeps its quick build.
+producer="$(CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+  cargo test --locked --release --no-run --bin xcalygraph --message-format=json 2>/dev/null |
   jq -r 'select(.reason == "compiler-artifact" and .target.name == "xcalygraph" and .executable != null
     and (.target.kind | index("bin")) and .profile.test) | .executable' | tail -n 1)"
 [[ -x "${producer}" ]] || { echo "compare-edge-dumps.sh: no test binary" >&2; exit 1; }
