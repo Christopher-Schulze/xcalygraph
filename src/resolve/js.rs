@@ -6,6 +6,7 @@
 use super::modules::parent_dir;
 use super::{Imports, Index, Input, Target};
 use crate::domain::facts::{Facts, SymKind};
+use crate::domain::filetype::FileType;
 use crate::domain::role;
 
 /// Extensions a specifier may omit or name with a `.js` stand-in.
@@ -14,9 +15,18 @@ const STRIP: [&str; 14] = [
     ".astro", ".json", ".node",
 ];
 
-/// Module key of a file: `js:` plus its path without extension.
+/// Explicit module-system extensions never collapse into an extensionless path. Other
+/// implementation/declaration grouping retains its existing contract.
 pub fn module_key(path: &str) -> String {
-    format!("js:{}", strip_extension(path))
+    let path = if [".mjs", ".cjs", ".mts", ".cts"]
+        .iter()
+        .any(|extension| path.ends_with(extension))
+    {
+        path
+    } else {
+        strip_extension(path)
+    };
+    format!("js:{path}")
 }
 
 pub fn strip_extension(path: &str) -> &str {
@@ -33,7 +43,7 @@ pub struct JsTables {
     aliases: Vec<(String, String)>,
     /// Root-relative `baseUrl` directories.
     base_dirs: Vec<String>,
-    /// (package name, root-relative entry without extension, package directory).
+    /// (package name, root-relative entry as declared, package directory).
     packages: Vec<(String, String, String)>,
 }
 
@@ -75,11 +85,7 @@ pub fn tables(input: &Input) -> JsTables {
                         || join(dir, "src/index"),
                         |main| normalize(&join(dir, main)),
                     );
-                    tables.packages.push((
-                        name.clone(),
-                        strip_extension(&entry).to_owned(),
-                        dir.to_owned(),
-                    ));
+                    tables.packages.push((name.clone(), entry, dir.to_owned()));
                 }
             }
             _ => {}
@@ -93,9 +99,8 @@ pub fn tables(input: &Input) -> JsTables {
 
 impl Index<'_> {
     pub(super) fn js_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
-        let dir = parent_dir(&self.input.files[file as usize].path).to_owned();
         for import in &facts.imports {
-            let Some(target) = self.js_module(&dir, &import.spec) else {
+            let Some(target) = self.js_module(file, &import.spec) else {
                 let package = package_name(&import.spec);
                 if !package.is_empty() {
                     imports.externals.push(package.clone());
@@ -147,7 +152,9 @@ impl Index<'_> {
         }
     }
 
-    pub(super) fn js_module(&self, dir: &str, spec: &str) -> Option<u32> {
+    pub(super) fn js_module(&self, file: u32, spec: &str) -> Option<u32> {
+        let dir = parent_dir(&self.input.files[file as usize].path);
+        let typescript = self.file_type(file) != Some(FileType::JavaScript);
         let tables = &self.js_tables;
         let mut bases: Vec<String> = Vec::new();
         if spec.starts_with('.') {
@@ -176,11 +183,63 @@ impl Index<'_> {
                 }
             }
         }
+        let module_at = |path: &str| {
+            let &target = self.path_index.get(path)?;
+            let record = &self.input.files[target as usize];
+            (record.role.is_extracted()
+                && matches!(
+                    record.file_type,
+                    Some(
+                        FileType::JavaScript
+                            | FileType::TypeScript
+                            | FileType::Vue
+                            | FileType::Svelte
+                            | FileType::Astro
+                    )
+                ))
+            .then(|| self.module_of(target))
+        };
+        let probe = |stem: &str, extensions: &[&str]| {
+            let mut path = String::with_capacity(stem.len() + 12);
+            path.push_str(stem);
+            extensions.iter().find_map(|extension| {
+                path.truncate(stem.len());
+                path.push_str(extension);
+                module_at(&path)
+            })
+        };
         bases.iter().find_map(|base| {
-            let base = strip_extension(base);
-            self.modules
-                .get(&format!("js:{base}"))
-                .or_else(|| self.modules.get(&format!("js:{base}/index")))
+            // Probe concrete files while retaining TypeScript's source/declaration substitution.
+            // Module-system extensions are never guessed by the extensionless route below.
+            for (extension, typed) in [
+                (".js", &[".ts", ".tsx", ".d.ts"][..]),
+                (".mjs", &[".mts", ".d.mts"][..]),
+                (".cjs", &[".cts", ".d.cts"][..]),
+            ] {
+                if let Some(stem) = base.strip_suffix(extension) {
+                    return if typescript {
+                        probe(stem, typed).or_else(|| module_at(base))
+                    } else {
+                        module_at(base).or_else(|| {
+                            // Source trees may hold the implementation before compilation.
+                            probe(stem, &typed[..typed.len() - 1])
+                        })
+                    };
+                }
+            }
+            if strip_extension(base) != base {
+                return module_at(base);
+            }
+            let extensions = if typescript {
+                &[
+                    ".ts", ".tsx", ".d.ts", ".js", ".jsx", ".vue", ".svelte", ".astro",
+                ][..]
+            } else {
+                &[".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".astro"][..]
+            };
+            module_at(base)
+                .or_else(|| probe(base, extensions))
+                .or_else(|| probe(&format!("{base}/index"), extensions))
         })
     }
 
@@ -207,7 +266,6 @@ impl Index<'_> {
             let Some(facts) = self.input.facts[file].as_ref() else {
                 continue;
             };
-            let dir = parent_dir(&self.input.files[file].path).to_owned();
             for import in facts.imports.iter().filter(|import| import.reexport) {
                 let forwards = import.names.iter().any(|imported| {
                     let exposed = import.alias.as_deref().unwrap_or(imported);
@@ -216,7 +274,7 @@ impl Index<'_> {
                 if !forwards {
                     continue;
                 }
-                let Some(target) = self.js_module(&dir, &import.spec) else {
+                let Some(target) = self.js_module(file as u32, &import.spec) else {
                     continue;
                 };
                 let original = import
@@ -310,5 +368,59 @@ mod tests {
     #[test]
     fn module_keys_drop_extensions() {
         assert_eq!(module_key("web/src/index.tsx"), "js:web/src/index");
+    }
+
+    #[test]
+    fn javascript_commonjs_extensions_must_be_named() -> std::io::Result<()> {
+        use crate::domain::graph::EdgeKind;
+        use crate::infra::testdir::TestDir;
+
+        let root = TestDir::new("javascript-commonjs-extensions")?;
+        root.write("helper.cjs", "exports.work = function work() {};\n")?;
+        root.write("helper.mjs", "export function work() {}\n")?;
+        root.write(
+            "omitted.cjs",
+            "const helper = require('./helper');\nhelper.work();\n",
+        )?;
+        root.write(
+            "explicit.cjs",
+            "const helper = require('./helper.cjs');\nhelper.work();\n",
+        )?;
+        root.write("esm.mjs", "import { work } from './helper.mjs';\nwork();\n")?;
+        let graph = super::super::tests::graph_of(root.path())?;
+        let imports: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Imports)
+            .map(|edge| {
+                (
+                    graph.files[edge.source as usize - graph.symbols.len()]
+                        .path
+                        .as_str(),
+                    graph.files[edge.target as usize - graph.symbols.len()]
+                        .path
+                        .as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            imports,
+            [("esm.mjs", "helper.mjs"), ("explicit.cjs", "helper.cjs")]
+        );
+        let callers: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Calls)
+            .map(|edge| {
+                let source = if let Some(symbol) = graph.symbols.get(edge.source as usize) {
+                    symbol.file as usize
+                } else {
+                    edge.source as usize - graph.symbols.len()
+                };
+                graph.files[source].path.as_str()
+            })
+            .collect();
+        assert_eq!(callers, ["esm.mjs", "explicit.cjs"]);
+        Ok(())
     }
 }

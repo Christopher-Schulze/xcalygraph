@@ -138,10 +138,8 @@ impl Index<'_> {
                     project.complete = false;
                     break;
                 };
-                let directory = modules::parent_dir(&record.path);
                 if facts.imports.iter().any(|import| {
-                    import.spec.starts_with('.')
-                        && self.js_module(directory, &import.spec).is_none()
+                    import.spec.starts_with('.') && self.js_module(file, &import.spec).is_none()
                 }) {
                     project.complete = false;
                     break;

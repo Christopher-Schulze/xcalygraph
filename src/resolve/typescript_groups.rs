@@ -107,7 +107,7 @@ impl<'a> Index<'a> {
                         _ => depth += 1,
                     }
                 }
-                let module = self.js_module(directory, &identity.identity)?;
+                let module = self.js_module(file as u32, &identity.identity)?;
                 let mut candidates = Vec::new();
                 for (other, &other_module) in self.modules.file_module.iter().enumerate() {
                     if other_module != module {

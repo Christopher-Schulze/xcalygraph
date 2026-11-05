@@ -65,6 +65,8 @@ Every language drops unqualified references to its builtins and prelude names, u
 
 JavaScript and TypeScript class expressions do not produce class nodes or heritage edges attributed to an enclosing symbol; named class declarations retain their heritage edges.
 
+Extensionless JavaScript/TypeScript probing does not invent `.cjs`, `.mjs`, `.cts` or `.mts` paths. Explicit module-system extensions keep separate module identities; other existing implementation/declaration groups and proven TypeScript pairs remain unchanged. TypeScript imports retain source/declaration extension substitution, and explicit component and declaration paths remain usable. Workspace entries retain their declared `module`/`main` extension; source-layout fallbacks do not evaluate conditional `exports` maps.
+
 | language | extraction | module unit and imports |
 |----------|-----------|-------------------------|
 | Go | tree-sitter query (`src/extract/queries/go.scm`): functions, methods with receiver, structs, interfaces and their methods, type aliases, top-level const and var, calls, type uses, embedding (struct and interface), bindings, fields, method values (`f := rw.Read`), locals and parameters shadowing package names, `os.Getenv`/`LookupEnv` | package directory; import paths from `go.mod` (nested modules supported), aliases and dot imports; unqualified names never leave the package; resolved `T(x)` type conversions are `uses`, not `calls`; interfaces satisfied by method sets (inferred) |
