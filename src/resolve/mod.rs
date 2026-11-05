@@ -39,7 +39,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 113;
+pub const RESOLVE_VERSION: u32 = 114;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -3156,7 +3156,16 @@ impl<'a> Index<'a> {
         }
         let outcome = match reference.qualifier.as_deref() {
             Some(qualifier) => {
-                match self.qualified_symbols(file, Some(imports), qualifier, &reference.name) {
+                let shadowed = qualifier.split('.').next().is_some_and(|head| {
+                    self.binding(file, reference.scope, head, reference.line)
+                        .is_some()
+                });
+                let qualified = if shadowed {
+                    None
+                } else {
+                    self.qualified_symbols(file, Some(imports), qualifier, &reference.name)
+                };
+                match qualified {
                     Some(found) => pick_members(self, found, Confidence::Exact, reference.arity),
                     // `user.display`, `rw.Read` with the receiver's type declared: the member
                     // of that type (properties, method values).

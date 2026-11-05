@@ -212,6 +212,7 @@ Resolution order for a reference, first hit wins:
 
 1. Lexical scope of the file: enclosing and nested definitions -> exact; Rust local bindings shadow item names through the end of their containing block.
 2. Name bound by an import, use, include or require -> exported symbol of the resolved module -> exact.
+   Captured local value receivers shadow same-named imports for member values and calls; an unknown receiver type does not restore the hidden import.
 3. Qualified name (`pkg.Name`, `Type::name`, `Namespace.Type`, `Module:fun`) through the module map -> exact; JavaScript and TypeScript calls through a resolved class name consider only static methods on that class or its supertypes.
 4. Same module unit visible without import (Go package, Java package, C# namespace, Swift module, Ruby and PHP autoload roots) -> exact; for Python calls, repeated module-level definitions use the final runtime binding in function bodies (inferred) and the latest prior definition in module- or class-body code (exact).
 5. Member call `x.m()`: receiver type from `self`, `this`, `super`; declared types of parameters, fields and variables; constructor and factory expressions (`new T`, `T(...)`, `T::new`, `T.init`, functions with a declared return type) -> method of the type or its supertypes; exact for declared types, inferred for factory return types. JavaScript and TypeScript instance receivers exclude static methods. A receiver call or binding whose result is proven external cannot fall through to same-name method matching.

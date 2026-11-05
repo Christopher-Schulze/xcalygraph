@@ -1526,3 +1526,79 @@ fn rust_calls_respect_mutually_exclusive_unix_cfg_gates() -> std::io::Result<()>
     );
     Ok(())
 }
+
+#[test]
+fn member_values_respect_local_import_shadowing() -> std::io::Result<()> {
+    let cases: &[(&str, &[(&str, &str)])] = &[
+        (
+            "python",
+            &[
+                ("api.py", "def callback(): return 1\n"),
+                (
+                    "consumer.py",
+                    concat!(
+                        "import api\n",
+                        "class Local:\n    def callback(self): return 2\n",
+                        "def imported(): return api.callback\n",
+                        "def shadowed(api: Local): return api.callback\n",
+                        "def unknown(api: object): return api.callback\n",
+                    ),
+                ),
+            ],
+        ),
+        (
+            "go",
+            &[
+                ("go.mod", "module example\n\ngo 1.25\n"),
+                (
+                    "api/api.go",
+                    "package api\nfunc Callback() int { return 1 }\n",
+                ),
+                (
+                    "consumer.go",
+                    concat!(
+                        "package example\nimport \"example/api\"\n",
+                        "type Local struct{}\nfunc (value Local) Callback() int { return 2 }\n",
+                        "func imported() func() int { callback := api.Callback; return callback }\n",
+                        "func shadowed(api Local) func() int { callback := api.Callback; return callback }\n",
+                        "func unknown(api interface{ Callback() int }) func() int { callback := api.Callback; return callback }\n",
+                    ),
+                ),
+            ],
+        ),
+    ];
+    for (language, files) in cases {
+        let root = crate::infra::testdir::TestDir::new("member-value-shadowing")?;
+        for (path, source) in *files {
+            root.write(path, source)?;
+        }
+        let graph = graph_of(root.path())?;
+        let mut values: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Uses)
+            .filter_map(|edge| {
+                let source = graph.symbols.get(edge.source as usize)?;
+                let target = graph.symbols.get(edge.target as usize)?;
+                if !target.name.eq_ignore_ascii_case("callback") {
+                    return None;
+                }
+                let local = graph.members.iter().any(|&(owner, member)| {
+                    member == edge.target && graph.symbols[owner as usize].name == "Local"
+                });
+                Some((source.name.as_str(), local, edge.confidence))
+            })
+            .collect();
+        values.sort_unstable();
+        assert_eq!(
+            values,
+            [
+                ("imported", false, Confidence::Exact),
+                ("shadowed", true, Confidence::Exact),
+            ],
+            "{language}: {}",
+            render(&graph)
+        );
+    }
+    Ok(())
+}
