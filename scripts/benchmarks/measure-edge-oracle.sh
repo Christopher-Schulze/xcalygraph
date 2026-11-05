@@ -11,7 +11,7 @@
 #   summary.tsv: corpus, language, kind, confidence, edges, correct, incorrect, unknown, precision,
 #   target (the compiler names the target on that line, the caller's ownership stays unproven),
 #   agreement (share of correct plus target among correct, incorrect and target),
-#   and recall rows (recall-calls / recall-types: distinct source-file/target pairs the compiler
+#   and recall rows (recall-calls / recall-types / recall-variants: distinct source-file/target pairs the compiler
 #   references, and how many have an edge; edges are deduplicated per source symbol and target,
 #   so recall is measured per file and target rather than per line).
 # Verdict per edge: unknown when the compiler has no symbol for the target; correct when the
@@ -352,6 +352,10 @@ for (path, line), symbols in references.items():
         if ACCESSOR.search(symbol) or owner(symbol) != symbol:
             continue  # property accessors are not calls; constructors count as their class
         group = "recall-calls" if symbol.endswith(").") else "recall-types" if symbol.endswith("#") else None
+        # rust-analyzer names an enum variant `Type#Variant#`; the graph has no variant nodes
+        # (docs/deferred.md), so variants report apart from the types an edge can reach.
+        if group == "recall-types" and language == "rust" and symbol.count("#") >= 2:
+            group = "recall-variants"
         if group is not None:
             pairs.add((group, path, symbol))
 recall = collections.Counter()
@@ -369,7 +373,7 @@ with open(verdicts_path.replace(".verdicts.tsv", ".missed.tsv"), "w") as missed,
         else:
             location = min(definitions[symbol])
             missed.write(f"{group}\t{path}\t{location[0]}:{location[1]}\t{symbol}\n")
-for group in ("recall-calls", "recall-types"):
+for group in ("recall-calls", "recall-types", "recall-variants"):
     total, found, unknown = (recall[(group, value)] for value in ("total", "found", "unknown"))
     if total:
         judged = total - unknown

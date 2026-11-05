@@ -439,7 +439,7 @@ Reference corpora: xcalygraph itself, the upstream Graphify clone at the pinned 
 | rg baseline | tokens of `rg` output plus the file reads an agent needs to reach the expected location |
 | upstream baseline | hit@5 and tokens of `graphify query` on the same corpus |
 | edge precision | share of judged emitted edges a compiler index confirms (`scripts/benchmarks/measure-edge-oracle.sh`, per corpus, language, edge kind and confidence); kinds without a compiler oracle use source inspection of sampled strata |
-| edge recall | share of compiler-resolved in-repo references (distinct source file and callable or type target) that have an edge |
+| edge recall | share of compiler-resolved in-repo references (distinct source file and callable or type target) that have an edge; Rust enum variants report apart as `recall-variants` |
 | agent success | share of questions a headless Codex run (`codex exec`, `gpt-6-luna`, reasoning effort `max`) answers with the expected location and symbol; arms: no tool (`rg` and reads), Graphify skill, xcalygraph skill; 3 runs per question and arm |
 | agent cost | tokens (input, output, reasoning), tool calls and wall time per agent run, from the `--json` trace |
 
