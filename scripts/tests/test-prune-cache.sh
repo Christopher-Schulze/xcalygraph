@@ -139,6 +139,40 @@ with tempfile.TemporaryDirectory(prefix="prune-regression.", dir=base) as tempor
     root_keep.unlink()
     assert run("0").returncode == 0 and not category_run.exists() and not root_run.exists()
 
+    # Work directories: age, .keep and open TASK references protect them; symlinks stay.
+    (root / "docs/tasks").mkdir(parents=True)
+    (root / "docs/tasks/123-open.md").write_text("evidence in .cache/task123-named.abc\n")
+    old_work = artifact("task900-old.abc", None)
+    (old_work / "log").write_text("old")
+    old_fixture = artifact("some-test-4711-0", None)
+    named_work = artifact("task123-named.abc", None)
+    kept_work = artifact("task901-kept.abc", None)
+    (kept_work / ".keep").write_text("")
+    fresh_work = artifact("task902-fresh.abc", None)
+    (fresh_work / "log").write_text("running")
+    linked_work = cache / "task903-link"
+    linked_work.symlink_to(outside, target_is_directory=True)
+    for path in (old_work, old_work / "log", old_fixture, named_work, kept_work, kept_work / ".keep"):
+        os.utime(path, (past, past))
+    result = run("24")
+    assert result.returncode == 0, result.stderr
+    assert not old_work.exists() and not old_fixture.exists(), result.stdout
+    assert named_work.is_dir() and kept_work.is_dir() and fresh_work.is_dir(), result.stdout
+    assert linked_work.is_symlink() and (outside / "keep").read_text() == "foreign"
+
+    # Evidence above the limit fails the gate; frozen snapshots do not count.
+    limit_script = root / "scripts/utils/limit-prune.sh"
+    limit_script.write_text(script.read_text().replace("LIMIT_KIB=$((3 * 1024 * 1024))", "LIMIT_KIB=2048"))
+    (snapshot / "frozen.bin").write_bytes(b"0" * (8 * 1024 * 1024))
+    ok = subprocess.run(["bash", str(limit_script), "24"], env=environment, text=True, capture_output=True)
+    assert ok.returncode == 0, ok.stderr
+    (foreign / "bulk.bin").write_bytes(b"0" * (4 * 1024 * 1024))
+    over = subprocess.run(["bash", str(limit_script), "24"], env=environment, text=True, capture_output=True)
+    assert over.returncode == 1 and "exceeds 3 GiB" in over.stderr, over.stderr
+    (foreign / "bulk.bin").unlink()
+    (snapshot / "frozen.bin").unlink()
+    limit_script.unlink()
+
     linked_project = Path(temporary) / "linked-project"
     linked_script = linked_project / "scripts/utils/prune-cache.sh"
     linked_script.parent.mkdir(parents=True)

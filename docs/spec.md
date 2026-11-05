@@ -71,7 +71,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | `sensitive` | `.env*` except `.env.example`; `*.pem`, `*.key`, `*.p12`, `id_rsa*`, `id_ed25519*`; anything under `.ssh/`, `.aws/`, `.gnupg/` | path only; content never read |
 | `large` | size > 8 MiB; PDF, OOXML, OpenDocument, RTF and legacy Office > 64 MiB | path only |
 | `binary` | NUL byte in the first 8 KiB of a file without another role | path only |
-| `other` | everything else | path only |
+| `other` | everything else; JavaScript whose lines of at least 4 KiB hold 90 % of its bytes (bundles) | path only |
 
 - Role precedence, first match wins: `sensitive`, `fixture`, `large`, `manifest`, `gen`, `test`, `src`, `config`, `doc`, `asset`, `binary`, `other`.
 - Depth `deep`: grammar-based facts (section 5), module-aware import resolution and the full resolution order (section 6), test map, run lines where section 7.5 defines them. Depth `structural`: symbols, includes and calls from grammar or line patterns; imports by literal path; calls by unique name, inferred.

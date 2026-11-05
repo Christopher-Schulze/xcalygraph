@@ -45,7 +45,7 @@ pub fn graph_of(root: &Path) -> std::io::Result<Graph> {
         let classification = role::classify(&FileFacts {
             path,
             size: content.len() as u64,
-            head: Some(&content[..content.len().min(role::HEAD_LEN)]),
+            content: Some(content),
             cpp_sibling: false,
         });
         let record = FileRecord {

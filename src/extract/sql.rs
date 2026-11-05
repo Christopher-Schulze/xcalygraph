@@ -161,6 +161,9 @@ pub fn objects(text: &str, facts: &mut Facts) {
 /// `queries` references from SQL statements inside string literals of a code file; the scope is
 /// the innermost symbol around the literal.
 pub fn embedded_queries(text: &str, root: Option<Node<'_>>, facts: &mut Facts) {
+    if !may_quote_a_statement(text.as_bytes()) {
+        return;
+    }
     for (offset, full) in string_literals(text, root) {
         // Leading `-- name: X :many` lines (sqlc and similar generators) precede the statement.
         let skipped: usize = full
@@ -464,9 +467,55 @@ fn split_statements(lower: &str) -> Vec<&str> {
 
 /// String literals (`"..."`, `'...'`, `` `...` ``, triple quotes) with the byte offset of their
 /// content; escapes honored, lines kept.
+/// False when no quote is followed by a statement keyword or a leading SQL comment: no literal can
+/// hold a query, wherever comments and strings begin. Most source files end here.
+fn may_quote_a_statement(bytes: &[u8]) -> bool {
+    memchr::memchr3_iter(b'"', b'\'', b'`', bytes).any(|quote| {
+        let rest = &bytes[quote + 1..];
+        let start = rest
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace() && !matches!(byte, b'"' | b'\'' | b'`'))
+            .unwrap_or(rest.len());
+        let rest = &rest[start..];
+        rest.starts_with(b"--")
+            || STATEMENT_KEYWORDS.iter().any(|keyword| {
+                rest.get(..keyword.len())
+                    .is_some_and(|word| word.eq_ignore_ascii_case(keyword.as_bytes()))
+            })
+    })
+}
+
+/// Source ranges of the comments in ascending order; each node kind is tested once.
+fn comment_ranges(root: Node<'_>) -> Vec<std::ops::Range<usize>> {
+    let mut comment_kinds = vec![None; root.language().node_kind_count()];
+    let mut ranges = Vec::new();
+    let mut cursor = root.walk();
+    loop {
+        let node = cursor.node();
+        // Error nodes carry a kind id outside the language's table.
+        let comment = comment_kinds
+            .get_mut(usize::from(node.kind_id()))
+            .is_some_and(|kind: &mut Option<bool>| {
+                *kind.get_or_insert_with(|| node.kind().contains("comment"))
+            });
+        if comment {
+            ranges.push(node.byte_range());
+        } else if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return ranges;
+            }
+        }
+    }
+}
+
 fn string_literals<'a>(text: &'a str, root: Option<Node<'_>>) -> Vec<(usize, &'a str)> {
     let mut literals = Vec::new();
     let bytes = text.as_bytes();
+    let comments = root.map_or_else(Vec::new, comment_ranges);
+    let mut next_comment = 0;
     let mut index = 0;
     while index < bytes.len() {
         let byte = bytes[index];
@@ -474,17 +523,16 @@ fn string_literals<'a>(text: &'a str, root: Option<Node<'_>>) -> Vec<(usize, &'a
             index += 1;
             continue;
         }
-        let mut node = root.and_then(|root| root.descendant_for_byte_range(index, index + 1));
-        let mut comment_end = None;
-        while let Some(current) = node {
-            if current.kind().contains("comment") {
-                comment_end = Some(current.end_byte());
-                break;
-            }
-            node = current.parent();
+        while comments
+            .get(next_comment)
+            .is_some_and(|comment| comment.end <= index)
+        {
+            next_comment += 1;
         }
-        if let Some(end) = comment_end {
-            index = end;
+        if let Some(comment) = comments.get(next_comment)
+            && comment.start <= index
+        {
+            index = comment.end;
             continue;
         }
         let triple = bytes[index..].starts_with(&[byte, byte, byte]);

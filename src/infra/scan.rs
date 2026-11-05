@@ -12,7 +12,7 @@ use xxhash_rust::xxh3::xxh3_128;
 
 use crate::domain::corpus::{self, ChangeSet, Decision, FileRecord, Stat};
 use crate::domain::facts::Facts;
-use crate::domain::role::{self, FileFacts, HEAD_LEN};
+use crate::domain::role::{self, FileFacts};
 use crate::infra::walk;
 
 /// C++ suffixes that make a same-stem `.h` file C++.
@@ -151,15 +151,15 @@ fn inspect(root: &Path, stat: &Stat, cpp_sibling: bool) -> io::Result<(FileRecor
     } else {
         (0, Content::NotRead)
     };
-    let head = match &content {
-        Content::Read(bytes) => Some(&bytes[..bytes.len().min(HEAD_LEN)]),
+    let bytes = match &content {
+        Content::Read(bytes) => Some(&bytes[..]),
         Content::Denied => Some(&[][..]),
         Content::NotRead => None,
     };
     let classification = role::classify(&FileFacts {
         path: &stat.path,
         size: stat.size,
-        head,
+        content: bytes,
         cpp_sibling,
     });
     let record = FileRecord {

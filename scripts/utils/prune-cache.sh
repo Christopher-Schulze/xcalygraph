@@ -3,6 +3,9 @@
 # runs and report total size. Compaction uses the same age and completion requirements.
 # Usage: scripts/utils/prune-cache.sh [AGE_HOURS]  (default 24; 0 selects all marked runs)
 # Unknown entries, candidate symlinks, incomplete runs, snapshots and .keep-protected runs stay.
+# Ad-hoc work directories (task*, edge-guard.*, leftovers of failed test fixtures NAME-PID-N) go
+# once nothing in them is younger than the age and no open TASK file names them.
+# Fails above 3 GiB without the frozen corpus snapshots: evidence must not grow unnoticed.
 # Compaction: in evaluation/, task192-manifests/ and edge-oracle/, runs beyond the newest
 # KEEP_RUNS lose every file except top-level regular files up to 8 MiB (reports, identities,
 # summaries, ledgers); a run containing .keep-full is never compacted.
@@ -13,7 +16,7 @@ REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 readonly CACHE="${REPO_ROOT}/.cache"
 readonly AGE_HOURS="${1:-24}"
-readonly WARN_KIB=$((3 * 1024 * 1024))
+readonly LIMIT_KIB=$((3 * 1024 * 1024))
 readonly MARKER=".xcalygraph-disposable"
 readonly KEEP_RUNS=2
 readonly SMALL_KIB=$((8 * 1024))
@@ -71,6 +74,29 @@ if [[ ! -e "${CACHE}/.keep" && ! -L "${CACHE}/.keep" ]]; then
   prune_children "${CACHE}/evaluation" 'run.*' 'sealed.*'
 fi
 
+# Work directories have no completion marker: age, .keep and open TASK references protect them.
+prune_work_directories() {
+  local entry protected fresh
+  while IFS= read -r -d '' entry; do
+    if ! protected="$(find "${entry}" -name .keep -print -quit 2>/dev/null)"; then
+      echo "prune-cache.sh: cannot inspect ${entry}; preserving it" >&2
+      continue
+    fi
+    [[ -z "${protected}" ]] || continue
+    if (( age_hours > 0 )); then
+      fresh="$(find "${entry}" -mmin "-$((age_hours * 60))" -print -quit)" || continue
+      [[ -z "${fresh}" ]] || continue
+    fi
+    if [[ -d "${REPO_ROOT}/docs/tasks" ]] && grep -qsF -- "$(basename "${entry}")" "${REPO_ROOT}"/docs/tasks/*.md; then
+      continue
+    fi
+    rm -rf -- "${entry}"
+    removed=$((removed + 1))
+  done < <(find "${CACHE}" -mindepth 1 -maxdepth 1 -type d \
+    \( -name 'task*' -o -name 'edge-guard.*' -o -name '*-[0-9]*-[0-9]*' \) -print0)
+}
+[[ -e "${CACHE}/.keep" || -L "${CACHE}/.keep" ]] || prune_work_directories
+
 # Keep reports of completed, aged evidence runs, drop their bulky corpora, indexes and builds.
 compact_runs() {
   local dir="$1" entry file aged
@@ -114,8 +140,13 @@ if ! size_kib="$(du -sk "${CACHE}" | awk 'NR == 1 { print $1 }')"; then
   exit 1
 fi
 echo "prune-cache.sh: removed ${removed} entries, compacted ${compacted} runs, .cache is $((size_kib / 1024)) MiB"
-if (( size_kib > WARN_KIB )); then
-  echo "prune-cache.sh: .cache exceeds 3 GiB; largest entries:" >&2
+snapshot_kib=0
+if [[ -d "${CACHE}/corpus-snapshots" ]]; then
+  snapshot_kib="$(du -sk "${CACHE}/corpus-snapshots" | awk 'NR == 1 { print $1 }')"
+fi
+if (( size_kib - snapshot_kib > LIMIT_KIB )); then
+  echo "prune-cache.sh: evidence in .cache exceeds 3 GiB; largest entries:" >&2
   du -sk "${CACHE}"/* "${CACHE}"/*/* 2>/dev/null | sort -rn \
     | awk 'NR <= 5 { printf "  %d MiB %s\n", $1 / 1024, $2 }' >&2
+  exit 1
 fi

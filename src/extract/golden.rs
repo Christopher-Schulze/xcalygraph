@@ -156,7 +156,7 @@ fn golden_facts_match() -> Result<(), Box<dyn std::error::Error>> {
         let classification = role::classify(&FileFacts {
             path,
             size: content.len() as u64,
-            head: Some(&content[..content.len().min(role::HEAD_LEN)]),
+            content: Some(&content),
             cpp_sibling: false,
         });
         let record = FileRecord {

@@ -40,8 +40,10 @@ if len(executables) != 1:
 print(executables[0])
 PYTHON
 )"
+bash "${REPO_ROOT}/scripts/benchmarks/check-instructions.sh" "${binary}"
 [[ "${mode}" == all ]] || exit 0
 bash "${REPO_ROOT}/scripts/tests/test-prune-cache.sh"
+bash "${REPO_ROOT}/scripts/tests/test-instruction-guard.sh"
 bash "${REPO_ROOT}/scripts/tests/test-edge-oracle.sh"
 bash "${REPO_ROOT}/scripts/tests/test-precision-review.sh"
 bash "${REPO_ROOT}/scripts/tests/test-agent-benchmark-safety.sh" "${binary}"

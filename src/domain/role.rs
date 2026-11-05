@@ -5,7 +5,7 @@ use super::filetype::{self, Class, Detection, FileType};
 pub const LARGE_LIMIT: u64 = 8 * 1024 * 1024;
 pub const LARGE_DOCUMENT_LIMIT: u64 = 64 * 1024 * 1024;
 /// Bytes of content inspected for markers, generated headers and NUL bytes.
-pub const HEAD_LEN: usize = 8 * 1024;
+const HEAD_LEN: usize = 8 * 1024;
 const GENERATED_HEAD_LEN: usize = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -94,8 +94,8 @@ pub struct FileFacts<'a> {
     /// Root-relative path with `/` separators.
     pub path: &'a str,
     pub size: u64,
-    /// First bytes of the content (up to [`HEAD_LEN`]); `None` when content may not be read.
-    pub head: Option<&'a [u8]>,
+    /// The content; `None` when it may not be read.
+    pub content: Option<&'a [u8]>,
     /// True when a C++ source with the same stem exists in the same directory.
     pub cpp_sibling: bool,
 }
@@ -156,9 +156,10 @@ pub fn classify(file: &FileFacts) -> Classification {
     if file.size > large_limit(path) {
         return with(Role::Large);
     }
-    let Some(head) = file.head else {
+    let Some(content) = file.content else {
         return with(Role::Other);
     };
+    let head = head_of(content);
     if is_manifest(name) {
         return with(Role::Manifest);
     }
@@ -173,6 +174,10 @@ pub fn classify(file: &FileFacts) -> Classification {
     if file_type.is_code() {
         if is_generated(head) {
             return with(Role::Gen);
+        }
+        // A bundle has no declarations worth a parse: its path stays.
+        if file_type == FileType::JavaScript && is_minified(content) {
+            return with(Role::Other);
         }
         if is_test_path(file_type, path) {
             return with(Role::Test);
@@ -210,7 +215,7 @@ fn is_text_config(name: &str) -> bool {
 }
 
 fn detect_type(file: &FileFacts) -> Option<FileType> {
-    let head = file.head.unwrap_or_default();
+    let head = head_of(file.content.unwrap_or_default());
     match filetype::detect(file_name(file.path)) {
         Detection::Known(file_type) => Some(file_type),
         Detection::Ambiguous(ambiguous) => {
@@ -281,6 +286,23 @@ fn is_manifest(name: &str) -> bool {
         )
         || SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
         || (name.starts_with("requirements") && name.ends_with(".txt"))
+}
+
+fn head_of(content: &[u8]) -> &[u8] {
+    &content[..content.len().min(HEAD_LEN)]
+}
+
+/// Line length that only generated code reaches.
+const MINIFIED_LINE: usize = 4096;
+
+/// Nearly all bytes sit in such lines: a bundle. A long literal beside real code stays source.
+fn is_minified(content: &[u8]) -> bool {
+    let long: usize = content
+        .split(|byte| *byte == b'\n')
+        .map(<[u8]>::len)
+        .filter(|length| *length >= MINIFIED_LINE)
+        .sum();
+    long > 0 && long * 10 >= content.len() * 9
 }
 
 fn is_generated(head: &[u8]) -> bool {
@@ -376,7 +398,7 @@ mod tests {
         classify(&FileFacts {
             path,
             size: content.len() as u64,
-            head: Some(content.as_bytes()),
+            content: Some(content.as_bytes()),
             cpp_sibling: false,
         })
     }
@@ -410,7 +432,7 @@ mod tests {
         let large = classify(&FileFacts {
             path: "data/big.json",
             size: LARGE_LIMIT + 1,
-            head: None,
+            content: None,
             cpp_sibling: false,
         });
         assert_eq!(large.role, Role::Large);
@@ -443,7 +465,7 @@ mod tests {
         let pdf = FileFacts {
             path: "paper.pdf",
             size: LARGE_LIMIT + 1,
-            head: Some(b"%PDF-1.7"),
+            content: Some(b"%PDF-1.7"),
             cpp_sibling: false,
         };
         assert_eq!(classify(&pdf).role, Role::Doc);
@@ -497,9 +519,16 @@ mod tests {
     }
 
     #[test]
-    fn long_lines_do_not_change_source_roles() {
+    fn only_minified_javascript_keeps_just_its_path() {
         let bundle = format!("/* banner */\n{}", "a=b;".repeat(2000));
-        assert_eq!(role("dist/app.js", &bundle), Role::Src);
+        assert_eq!(role("dist/app.js", &bundle), Role::Other);
+        assert_eq!(role("src/app.test.js", &bundle), Role::Other);
+        let beside_code = format!(
+            "const DATA = \"{}\";\n{}",
+            "x".repeat(5000),
+            "export function use() { return DATA; }\n".repeat(40)
+        );
+        assert_eq!(role("src/app.js", &beside_code), Role::Src);
         let literal = format!(
             "DATA = \"{}\"\n\ndef survivor():\n    return DATA\n",
             "x".repeat(5000)

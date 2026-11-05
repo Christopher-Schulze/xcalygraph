@@ -561,7 +561,7 @@ fn revision_file(
     let classification = crate::domain::role::classify(&crate::domain::role::FileFacts {
         path,
         size: content.len() as u64,
-        head: Some(&content[..content.len().min(crate::domain::role::HEAD_LEN)]),
+        content: Some(&content),
         cpp_sibling: false,
     });
     let file_type = file_type.or(classification.file_type);
