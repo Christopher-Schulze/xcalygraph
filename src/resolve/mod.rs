@@ -39,7 +39,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 104;
+pub const RESOLVE_VERSION: u32 = 105;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1864,6 +1864,7 @@ impl<'a> Index<'a> {
         let base = self.base[file as usize];
         let file_node = self.symbols.len() as u32 + file;
         let file_is_test = self.input.files[file as usize].role == Role::Test;
+        let mut mention_owner: Option<(u32, u32)> = None;
         for (reference_index, reference) in facts.refs.iter().enumerate() {
             let local_reference = u32::try_from(reference_index).ok();
             let source = reference.scope.map_or(file_node, |scope| base + scope);
@@ -1920,12 +1921,30 @@ impl<'a> Index<'a> {
                         }
                     }
                     RefKind::Path => self.resolve_path(file, &reference.name),
-                    RefKind::Mention => self.resolve_mention(file, &reference.name),
+                    RefKind::Mention => self.resolve_mention(
+                        file,
+                        &reference.name,
+                        mention_owner
+                            .filter(|&(scope, _)| scope == source)
+                            .map(|(_, owner)| owner),
+                    ),
                     RefKind::Run => self.resolve_run(file, reference),
                     RefKind::Query => self.resolve_table(file, &reference.name),
                     _ => Outcome::Unresolved,
                 }
             };
+            if reference.kind == RefKind::Path
+                || (reference.kind == RefKind::Mention && reference.name.contains('/'))
+            {
+                mention_owner = None;
+            }
+            if matches!(reference.kind, RefKind::Path | RefKind::Mention)
+                && let Outcome::Targets(targets, _) = &outcome
+                && let [(target, _)] = targets.as_slice()
+                && *target >= self.symbols.len() as u32
+            {
+                mention_owner = Some((source, *target - self.symbols.len() as u32));
+            }
             match outcome {
                 Outcome::Targets(targets, confidence) => {
                     let source_is_test =
@@ -2362,7 +2381,7 @@ impl<'a> Index<'a> {
 
     /// A backticked mention: a path names a file (exact); an identifier or qualified suffix
     /// names the unique symbol carrying it (inferred).
-    fn resolve_mention(&self, file: u32, mention: &str) -> Outcome {
+    fn resolve_mention(&self, file: u32, mention: &str, owner: Option<u32>) -> Outcome {
         let mention = strip_line_suffix(mention);
         // A qualified name of the index (`internal/platform.Worker`, `store::Store::open`).
         let normalized = mention.replace("::", ".");
@@ -2439,7 +2458,46 @@ impl<'a> Index<'a> {
                     || graph::has_qualified_suffix(&qualified, &normalized)
             })
             .filter(|&symbol| self.symbols[symbol as usize].kind != SymKind::Heading)
+            // File-level test classification is not evidence that prose names a fixture.
+            // Keep named tests and helpers under a preceding file anchor of this section.
+            .filter(|&symbol| {
+                if normalized != name || !self.is_test(symbol) {
+                    return true;
+                }
+                let record = &self.symbols[symbol as usize];
+                if owner == Some(record.file) {
+                    return true;
+                }
+                self.facts(record.file)
+                    .and_then(|facts| {
+                        facts
+                            .symbols
+                            .get((symbol - self.base[record.file as usize]) as usize)
+                    })
+                    .is_some_and(|declaration| {
+                        declaration.flags & facts::FLAG_TEST != 0
+                            && (declaration.parent.is_none()
+                                || declaration.flags & facts::FLAG_ENTRY != 0)
+                    })
+            })
             .collect();
+        if normalized == name
+            && let Some(owner) = owner
+        {
+            let mut scoped = candidates.iter().copied().filter(|&symbol| {
+                self.symbols[symbol as usize].file == owner && self.is_test(symbol)
+            });
+            match (scoped.next(), scoped.next()) {
+                (Some(symbol), None) => {
+                    return Outcome::Targets(
+                        vec![(symbol, Confidence::Inferred)],
+                        Confidence::Inferred,
+                    );
+                }
+                (Some(_), Some(_)) => return Outcome::Ambiguous,
+                _ => {}
+            }
+        }
         match unique(&candidates, |symbol| self.is_test(symbol)) {
             Some(symbol) => {
                 Outcome::Targets(vec![(symbol, Confidence::Inferred)], Confidence::Inferred)
