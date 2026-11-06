@@ -5,7 +5,7 @@ use super::filetype::{self, Class, Detection, FileType};
 pub const LARGE_LIMIT: u64 = 8 * 1024 * 1024;
 pub const LARGE_DOCUMENT_LIMIT: u64 = 64 * 1024 * 1024;
 /// Bytes of content inspected for markers, generated headers and NUL bytes.
-const HEAD_LEN: usize = 8 * 1024;
+pub const HEAD_LEN: usize = 8 * 1024;
 const GENERATED_HEAD_LEN: usize = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -133,6 +133,31 @@ pub fn large_limit(path: &str) -> u64 {
 /// True when the content is needed to classify or index the file.
 pub fn needs_content(path: &str, size: u64) -> bool {
     !is_sensitive(path) && !path.ends_with('/') && size <= large_limit(path)
+}
+
+/// How many bytes of a file its classification and extraction can use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentNeed {
+    /// Nothing: sensitive, or above the size limit.
+    None,
+    /// The head decides: without a known name only a shebang or plain text can make it extracted.
+    Head,
+    Whole,
+}
+
+/// The read a file needs, from its name and size alone.
+pub fn content_need(path: &str, size: u64) -> ContentNeed {
+    if !needs_content(path, size) {
+        return ContentNeed::None;
+    }
+    let name = file_name(path);
+    if is_manifest(name) {
+        return ContentNeed::Whole;
+    }
+    match filetype::detect(name) {
+        Detection::Unknown | Detection::Shebang => ContentNeed::Head,
+        Detection::Known(_) | Detection::Ambiguous(_) => ContentNeed::Whole,
+    }
 }
 
 /// Assigns the role and file type; first match in the role precedence wins.

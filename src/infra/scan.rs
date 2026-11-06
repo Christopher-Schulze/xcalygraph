@@ -2,18 +2,20 @@
 //! also extracts changed files from the bytes it hashed, so every source is read once.
 
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use rayon::prelude::*;
 use xxhash_rust::xxh3::xxh3_128;
 
 use crate::domain::corpus::{self, ChangeSet, Decision, FileRecord, Stat};
 use crate::domain::facts::Facts;
-use crate::domain::role::{self, FileFacts};
-use crate::infra::walk;
+use crate::domain::filetype::FileType;
+use crate::domain::role::{self, ContentNeed, FileFacts, Role};
+use crate::infra::{alloc_stats, walk};
 
 /// C++ suffixes that make a same-stem `.h` file C++.
 const CPP_SUFFIXES: [&str; 6] = ["cpp", "cc", "cxx", "hpp", "hh", "hxx"];
@@ -23,6 +25,48 @@ const KEPT_BUFFER: usize = 4 << 20;
 
 thread_local! {
     static READ_BUFFER: Cell<Vec<u8>> = const { Cell::new(Vec::new()) };
+    /// The directory of the worker's last file: siblings skip the path walk of a full open.
+    #[cfg(unix)]
+    static LAST_DIRECTORY: std::cell::RefCell<Option<(String, File)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Opens a source file, relative to the worker's last directory when it is the same one. A directory
+/// that cannot be opened (execute permission only) still allows the full path.
+#[cfg(unix)]
+fn open_source(root: &Path, relative: &str) -> io::Result<File> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let (parent, name) = relative.rsplit_once('/').unwrap_or(("", relative));
+    let opened = LAST_DIRECTORY.with_borrow_mut(|last| {
+        if last.as_ref().is_none_or(|(known, _)| known != parent) {
+            *last = File::open(root.join(parent))
+                .ok()
+                .map(|directory| (parent.to_owned(), directory));
+        }
+        let (_, directory) = last.as_ref()?;
+        let name = std::ffi::CString::new(std::ffi::OsStr::new(name).as_bytes()).ok()?;
+        // SAFETY: the descriptor and the C string outlive the call.
+        let descriptor = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC,
+            )
+        };
+        // SAFETY: a non-negative result is a new descriptor owned by nothing else.
+        (descriptor >= 0).then(|| unsafe { File::from_raw_fd(descriptor) })
+    });
+    match opened {
+        Some(file) => Ok(file),
+        None => File::open(root.join(relative)),
+    }
+}
+
+#[cfg(not(unix))]
+fn open_source(root: &Path, relative: &str) -> io::Result<File> {
+    File::open(root.join(relative))
 }
 
 /// Extracts a file from its bytes; `None` means permission to read it was denied.
@@ -31,6 +75,8 @@ pub type Extract<'a> = &'a (dyn Fn(&FileRecord, Option<&[u8]>) -> Facts + Sync);
 /// What a scan learned about a file's bytes.
 enum Content {
     Read(Vec<u8>),
+    /// The head only: the file is not extracted and its content has no hash.
+    Head(Vec<u8>),
     Denied,
     NotRead,
 }
@@ -52,6 +98,7 @@ pub fn scan(
     } else {
         HashSet::new()
     };
+    let extracted = ExtractedContent::default();
     let hashed: Vec<io::Result<(FileRecord, bool, Option<Facts>)>> = decisions
         .par_iter()
         .zip(walked.par_iter())
@@ -61,28 +108,22 @@ pub fn scan(
             }
             Decision::Unchanged(index) => {
                 let (record, content) = inspect(root, stat, has_cpp_sibling(&paths, &stat.path))?;
-                let old = &stored[*index];
-                let changed = old.hash != record.hash
-                    || old.role != record.role
-                    || old.file_type != record.file_type;
-                Ok(finish(record, content, changed, extract))
+                let changed = record_changed(&stored[*index], &record);
+                Ok(finish(record, content, changed, extract, &extracted))
             }
             Decision::Hash(previous) => {
                 let (record, content) = inspect(root, stat, has_cpp_sibling(&paths, &stat.path))?;
-                let changed = previous.is_none_or(|index| {
-                    let old = &stored[index];
-                    old.hash != record.hash
-                        || old.role != record.role
-                        || old.file_type != record.file_type
-                        || record.hash == 0
-                            && (old.size, old.mtime_ns) != (record.size, record.mtime_ns)
-                });
-                Ok(finish(record, content, changed, extract))
+                let changed = previous.is_none_or(|index| record_changed(&stored[index], &record));
+                Ok(finish(record, content, changed, extract, &extracted))
             }
         })
         .collect();
     // The buffers serve this pass only: the next stages need the memory.
-    rayon::broadcast(|_| READ_BUFFER.take());
+    rayon::broadcast(|_| {
+        READ_BUFFER.take();
+        #[cfg(unix)]
+        LAST_DIRECTORY.with_borrow_mut(Option::take);
+    });
     let mut changes = ChangeSet {
         deleted: deleted
             .iter()
@@ -108,21 +149,51 @@ pub fn scan(
     Ok(changes)
 }
 
+/// A record changed for the graph: content of an extracted file, or what the graph shows of any
+/// file. A touched binary only updates the file table.
+fn record_changed(old: &FileRecord, new: &FileRecord) -> bool {
+    if old.role != new.role || old.file_type != new.file_type {
+        return true;
+    }
+    if new.role.is_extracted() {
+        return old.hash != new.hash
+            || (new.hash == 0 && (old.size, old.mtime_ns) != (new.size, new.mtime_ns));
+    }
+    old.size.div_ceil(1024) != new.size.div_ceil(1024)
+}
+
+/// Facts of byte-identical documents of one scan, extracted once. Only binary documents: nothing
+/// in their extraction reads the path, which `first_extract_of_identical_documents_is_reused` and
+/// the fact comparison over all corpora prove.
+type ExtractedContent = Mutex<HashMap<(u128, Option<FileType>, Role), Arc<OnceLock<Facts>>>>;
+
 /// Extracts a changed file and hands its read buffer back to the worker.
 fn finish(
     record: FileRecord,
     content: Content,
     changed: bool,
     extract: Option<Extract>,
+    extracted: &ExtractedContent,
 ) -> (FileRecord, bool, Option<Facts>) {
     let facts = extract
         .filter(|_| changed && record.role.is_extracted())
         .and_then(|extract| match &content {
+            Content::Read(bytes) if record.file_type.is_some_and(FileType::is_binary_document) => {
+                let slot = {
+                    let mut known = extracted.lock().unwrap_or_else(PoisonError::into_inner);
+                    Arc::clone(
+                        known
+                            .entry((record.hash, record.file_type, record.role))
+                            .or_default(),
+                    )
+                };
+                Some(slot.get_or_init(|| extract(&record, Some(bytes))).clone())
+            }
             Content::Read(bytes) => Some(extract(&record, Some(bytes))),
             Content::Denied => Some(extract(&record, None)),
-            Content::NotRead => None,
+            Content::Head(_) | Content::NotRead => None,
         });
-    if let Content::Read(buffer) = content
+    if let Content::Read(buffer) | Content::Head(buffer) = content
         && buffer.capacity() <= KEPT_BUFFER
     {
         READ_BUFFER.set(buffer);
@@ -130,20 +201,77 @@ fn finish(
     (record, changed, facts)
 }
 
-/// The whole file in the worker's buffer, taken out so a nested job cannot share it.
-fn read_file(path: &Path, size: u64) -> io::Result<Vec<u8>> {
+/// The file in the worker's buffer, taken out so a nested job cannot share it; `Head` stops after
+/// the bytes classification looks at unless they make the file extracted.
+fn read_file(
+    root: &Path,
+    relative: &str,
+    stat_size: u64,
+    need: ContentNeed,
+    classify_head: impl Fn(&[u8]) -> bool,
+) -> io::Result<(Vec<u8>, bool)> {
     let mut buffer = READ_BUFFER.take();
     buffer.clear();
-    buffer.reserve(usize::try_from(size).unwrap_or(0));
-    File::open(path)?.read_to_end(&mut buffer)?;
-    Ok(buffer)
+    let mut file = open_source(root, relative)?;
+    if need == ContentNeed::Head {
+        let head = usize::try_from(stat_size)
+            .unwrap_or(usize::MAX)
+            .min(role::HEAD_LEN);
+        buffer.resize(head, 0);
+        let mut filled = 0;
+        while filled < head {
+            match file.read(&mut buffer[filled..])? {
+                0 => break,
+                read => filled += read,
+            }
+        }
+        buffer.truncate(filled);
+        if !classify_head(&buffer) {
+            return Ok((buffer, false));
+        }
+        file.read_to_end(&mut buffer)?;
+        return Ok((buffer, true));
+    }
+    // One read: a result of exactly the walked size is that snapshot; anything else (growth, a
+    // short read, a pseudo file) takes the loop, and the next walk sees a changed stat.
+    let size = usize::try_from(stat_size).unwrap_or(0);
+    buffer.resize(size + 1, 0);
+    let read = file.read(&mut buffer)?;
+    if read == size {
+        buffer.truncate(read);
+    } else {
+        buffer.truncate(read);
+        file.read_to_end(&mut buffer)?;
+    }
+    Ok((buffer, true))
 }
 
-/// Reads, hashes and classifies one file; sensitive and large files are never read.
+/// Reads, hashes and classifies one file; sensitive and large files are never read, a file only
+/// its head can classify is not read further unless the head makes it extracted.
 fn inspect(root: &Path, stat: &Stat, cpp_sibling: bool) -> io::Result<(FileRecord, Content)> {
-    let (hash, content) = if role::needs_content(&stat.path, stat.size) {
-        match read_file(&root.join(&stat.path), stat.size) {
-            Ok(content) => (xxh3_128(&content), Content::Read(content)),
+    let need = role::content_need(&stat.path, stat.size);
+    let head_extracted = |head: &[u8]| {
+        role::classify(&FileFacts {
+            path: &stat.path,
+            size: stat.size,
+            content: Some(head),
+            cpp_sibling,
+        })
+        .role
+        .is_extracted()
+    };
+    let (hash, content) = if need == ContentNeed::None {
+        (0, Content::NotRead)
+    } else {
+        match read_file(root, &stat.path, stat.size, need, head_extracted) {
+            Ok((content, true)) => {
+                alloc_stats::read(content.len());
+                (xxh3_128(&content), Content::Read(content))
+            }
+            Ok((head, false)) => {
+                alloc_stats::read(head.len());
+                (0, Content::Head(head))
+            }
             // Classified by path as empty content; extraction records the file as unreadable.
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => (0, Content::Denied),
             Err(error) => {
@@ -153,11 +281,9 @@ fn inspect(root: &Path, stat: &Stat, cpp_sibling: bool) -> io::Result<(FileRecor
                 ));
             }
         }
-    } else {
-        (0, Content::NotRead)
     };
     let bytes = match &content {
-        Content::Read(bytes) => Some(&bytes[..]),
+        Content::Read(bytes) | Content::Head(bytes) => Some(&bytes[..]),
         Content::Denied => Some(&[][..]),
         Content::NotRead => None,
     };
@@ -207,8 +333,6 @@ fn has_cpp_sibling(paths: &HashSet<&str>, path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::filetype::FileType;
-    use crate::domain::role::Role;
     use crate::infra::testdir::TestDir;
 
     const FAR_FUTURE: i64 = i64::MAX;
@@ -392,6 +516,81 @@ mod tests {
             identity: None,
         };
         assert!(inspect(dir.path(), &stat, false).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn a_file_only_its_head_classifies_is_not_hashed_or_read_further() -> io::Result<()> {
+        let dir = TestDir::new("scan-head")?;
+        let mut binary = vec![0_u8; 64];
+        binary.extend(vec![7_u8; 64 * 1024]);
+        std::fs::write(dir.path().join("blob"), &binary)?;
+        dir.write("data.unknownext", "plain text with a late nul follows")?;
+        let script = format!("#!/bin/sh\necho hi\n{}", "# pad\n".repeat(4000));
+        dir.write("tool", &script)?;
+        let changes = scan(dir.path(), &[], &[], FAR_FUTURE, None)?;
+        assert_eq!(
+            record(&changes, "blob").map(|r| (r.role, r.hash)),
+            Some((Role::Binary, 0))
+        );
+        assert_eq!(
+            record(&changes, "data.unknownext").map(|r| (r.role, r.hash)),
+            Some((Role::Other, 0))
+        );
+        let tool = record(&changes, "tool");
+        assert_eq!(tool.map(|r| r.hash), Some(xxh3_128(script.as_bytes())));
+        assert!(tool.is_some_and(|r| r.role.is_extracted()));
+        Ok(())
+    }
+
+    #[test]
+    fn a_touched_binary_is_no_graph_change_but_a_new_size_is() -> io::Result<()> {
+        let dir = TestDir::new("scan-touched")?;
+        let mut binary = vec![0_u8; 8];
+        binary.extend(vec![7_u8; 4096]);
+        std::fs::write(dir.path().join("blob"), &binary)?;
+        let first = scan(dir.path(), &[], &[], FAR_FUTURE, None)?;
+        // Same size, other bytes, inside the racy window: the file table alone changes.
+        binary[100] = 9;
+        std::fs::write(dir.path().join("blob"), &binary)?;
+        let touched = scan(dir.path(), &[], &first.records, FAR_FUTURE, None)?;
+        assert!(touched.changed.is_empty());
+        binary.extend(vec![7_u8; 4096]);
+        std::fs::write(dir.path().join("blob"), &binary)?;
+        let grown = scan(dir.path(), &[], &first.records, FAR_FUTURE, None)?;
+        assert_eq!(grown.changed, [0]);
+        Ok(())
+    }
+
+    #[test]
+    fn a_stale_walked_size_still_reads_the_whole_file() -> io::Result<()> {
+        let dir = TestDir::new("scan-stale-size")?;
+        dir.write("a.go", "package a\n")?;
+        for walked in [0, 3, 10, 11, 4096] {
+            let (bytes, whole) =
+                read_file(dir.path(), "a.go", walked, ContentNeed::Whole, |_| true)?;
+            assert!(whole);
+            assert_eq!(bytes, b"package a\n", "walked size {walked}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn first_extract_of_identical_documents_is_reused() -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = TestDir::new("scan-identical")?;
+        for path in ["a/x.rtf", "b/y.rtf", "c/x.rtf"] {
+            dir.write(path, "{\\rtf1\\ansi hello}")?;
+        }
+        dir.write("d/z.rtf", "{\\rtf1\\ansi other}")?;
+        let calls = AtomicUsize::new(0);
+        let extract = |_: &FileRecord, _: Option<&[u8]>| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Facts::default()
+        };
+        let changes = scan(dir.path(), &[], &[], FAR_FUTURE, Some(&extract))?;
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        assert_eq!(changes.facts.iter().flatten().count(), 4);
         Ok(())
     }
 }

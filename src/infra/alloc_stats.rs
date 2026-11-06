@@ -18,7 +18,23 @@ pub fn written(_bytes: u64) {}
 
 #[cfg(feature = "stage-stats")]
 pub fn written(bytes: u64) {
-    eprintln!("write-stats\t{bytes}");
+    eprintln!(
+        "write-stats\t{bytes}\tread\t{}",
+        READ.load(std::sync::atomic::Ordering::Relaxed)
+    );
+}
+
+#[cfg(feature = "stage-stats")]
+static READ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Source bytes a refresh read, on stderr with `stage-stats`.
+#[cfg(not(feature = "stage-stats"))]
+#[inline(always)]
+pub fn read(_bytes: usize) {}
+
+#[cfg(feature = "stage-stats")]
+pub fn read(bytes: usize) {
+    READ.fetch_add(bytes as u64, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[cfg(feature = "stage-stats")]
