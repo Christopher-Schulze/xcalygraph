@@ -69,13 +69,13 @@ struct Index<'a> {
     #[cfg(feature = "lang-typescript")]
     typescript_declaration_pairs: HashMap<u32, u32>,
     /// Top-level, non-method symbols per (module, name).
-    by_module: HashMap<(u32, &'a str), Vec<u32>>,
+    by_module: HashMap<(u32, &'a str), Ids>,
     /// Per file with many declarations: local indices sorted by name.
     named: Vec<FileNames>,
     /// Rust files with `pub use` or `pub extern crate`, per module.
-    rust_reexporting: HashMap<u32, Vec<u32>>,
+    rust_reexporting: HashMap<u32, Ids>,
     /// Methods per (method scope, owner type name, method name).
-    methods: HashMap<(u32, &'a str, &'a str), Vec<u32>>,
+    methods: HashMap<(u32, &'a str, &'a str), Ids>,
     /// Method scope id per module (modules sharing a crate share one).
     scope_ids: Vec<u32>,
     /// Declared Go package name per module.
@@ -89,9 +89,9 @@ struct Index<'a> {
     /// Root-relative path -> file index.
     path_index: HashMap<&'a str, u32>,
     /// File name -> files carrying it.
-    name_index: HashMap<&'a str, Vec<u32>>,
+    name_index: HashMap<&'a str, Ids>,
     /// Types per (module, name).
-    types: HashMap<(u32, &'a str), Vec<u32>>,
+    types: HashMap<(u32, &'a str), Ids>,
     /// Rust function type parameters, keyed by file, function scope and parameter name.
     rust_generic_parameters: HashMap<(u32, u32), Vec<Box<str>>>,
     /// Source-backed trait bounds for Rust function type parameters.
@@ -99,7 +99,7 @@ struct Index<'a> {
     /// The `#[path]` reference of a Rust `mod` declaration, by file and symbol.
     rust_path_refs: HashMap<(u32, u32), u32>,
     /// Every symbol per name, for the unique-name fallback.
-    by_name: HashMap<&'a str, Vec<u32>>,
+    by_name: HashMap<&'a str, Ids>,
     /// Declared result type of callables (bindings named "").
     returns: HashMap<u32, &'a str>,
     /// Field types per (type symbol, field name).
@@ -109,15 +109,15 @@ struct Index<'a> {
     /// Every (type symbol, field name), typed or not.
     field_names: HashSet<(u32, String)>,
     /// Implementations of abstract types and supertypes of concrete ones.
-    implementations: HashMap<u32, Vec<u32>>,
-    supertypes: HashMap<u32, Vec<u32>>,
+    implementations: HashMap<u32, Ids>,
+    supertypes: HashMap<u32, Ids>,
     /// .NET `global using` directives with their file: visible in every file of the language.
     global_usings: Vec<(u32, &'a facts::Import)>,
     /// C-family include directories (root-relative) and direct includes per file.
     include_dirs: Vec<String>,
     includes: Vec<Vec<u32>>,
     /// SQL tables and views per lowercase name (SQL identifiers ignore case).
-    tables: HashMap<String, Vec<u32>>,
+    tables: HashMap<String, Ids>,
 }
 
 /// Where an import or path leads.
@@ -440,7 +440,7 @@ impl<'a> Index<'a> {
                 .map(|(file, record)| (record.path.as_str(), file as u32))
                 .collect(),
             name_index: {
-                let mut names: HashMap<&str, Vec<u32>> = HashMap::default();
+                let mut names: HashMap<&str, Ids> = HashMap::default();
                 for (file, record) in input.files.iter().enumerate() {
                     names
                         .entry(role_file_name(&record.path))
@@ -1362,7 +1362,7 @@ impl<'a> Index<'a> {
             .cloned()
             .unwrap_or_default();
         if self.file_type(symbol.file) != Some(FileType::TypeScript) {
-            return methods.into();
+            return methods;
         }
         let owner = self.canonical_interface(type_symbol);
         let candidates: HashSet<_> = if methods
@@ -2608,12 +2608,7 @@ impl<'a> Index<'a> {
             return self.resolve_path(file, mention);
         }
         // A file name (`go.mod`, `cli.rs`): the unique file carrying it.
-        let named_files: Ids = self
-            .name_index
-            .get(mention)
-            .cloned()
-            .unwrap_or_default()
-            .into();
+        let named_files: Ids = self.name_index.get(mention).cloned().unwrap_or_default();
         if mention.contains('.') && !named_files.is_empty() {
             return match named_files.as_slice() {
                 [only] if *only != file => Outcome::Targets(

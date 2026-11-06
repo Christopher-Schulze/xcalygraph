@@ -215,6 +215,29 @@ impl Interner {
 /// output is the only large allocation left.
 pub fn build<R>(mut graph: Graph, sink: impl FnOnce(&[&[u8]]) -> R) -> R {
     let graph = &mut graph;
+    let nodes = graph.node_count();
+    let (forward_offsets, forward) = adjacency(nodes, graph, false);
+    let (reverse_offsets, reverse) = adjacency(nodes, graph, true);
+    // The search index only needs the names of callers; edges are its peak's largest input. It
+    // runs before the records exist and is the last reader of the body words.
+    let used_by = used_by_names(graph);
+    graph.edges = Vec::new();
+    let index = search_index(graph, &used_by);
+    drop(used_by);
+    rayon::join(
+        || {
+            graph
+                .symbols
+                .par_iter_mut()
+                .for_each(|symbol| symbol.terms = String::new());
+        },
+        || {
+            graph
+                .files
+                .par_iter_mut()
+                .for_each(|file| file.terms = String::new());
+        },
+    );
     let mut strings = Interner::new(graph.files.len() + graph.symbols.len() * 2);
     let files: Vec<FileRecord> = graph
         .files
@@ -256,9 +279,6 @@ pub fn build<R>(mut graph: Graph, sink: impl FnOnce(&[&[u8]]) -> R) -> R {
             }
         })
         .collect();
-    let nodes = graph.node_count();
-    let (forward_offsets, forward) = adjacency(nodes, graph, false);
-    let (reverse_offsets, reverse) = adjacency(nodes, graph, true);
     let modules: Vec<ModuleRecord> = graph
         .modules
         .iter()
@@ -311,11 +331,6 @@ pub fn build<R>(mut graph: Graph, sink: impl FnOnce(&[&[u8]]) -> R) -> R {
                 .join(",")),
         })
         .collect();
-    // The search index only needs the names of callers; edges are its peak's largest input.
-    let used_by = used_by_names(graph);
-    graph.edges = Vec::new();
-    let index = search_index(graph, &used_by);
-    drop(used_by);
     let tokens: Vec<TokenRecord> = index
         .tokens
         .iter()
