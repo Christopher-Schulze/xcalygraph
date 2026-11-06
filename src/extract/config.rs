@@ -93,23 +93,28 @@ fn path_literal(facts: &mut Facts, value: &str, line: u32) {
     {
         return;
     }
-    if !facts.refs.iter().any(|reference| {
-        reference.kind == RefKind::Path && reference.scope.is_none() && reference.name == value
-    }) {
-        facts.refs.push(Ref {
-            kind: RefKind::Path,
-            name: value.to_owned(),
-            qualifier: None,
-            scope: None,
-            line,
-            arity: NO_ARITY,
-            byte: crate::domain::facts::NO_BYTE,
-        });
-    }
+    facts.refs.push(Ref {
+        kind: RefKind::Path,
+        name: value.to_owned(),
+        qualifier: None,
+        scope: None,
+        line,
+        arity: NO_ARITY,
+        byte: crate::domain::facts::NO_BYTE,
+    });
 }
 
 /// Config paths cannot escape the indexed root, even if a root-relative fallback exists.
 pub(super) fn retain_in_root_paths(path: &str, file_type: FileType, facts: &mut Facts) {
+    // Each literal once, at its first line; one set instead of a scan per value.
+    let mut seen = std::collections::HashSet::new();
+    let mut refs = std::mem::take(&mut facts.refs);
+    refs.retain(|reference| {
+        reference.kind != RefKind::Path
+            || reference.scope.is_some()
+            || seen.insert(reference.name.clone())
+    });
+    facts.refs = refs;
     facts.refs.retain(|reference| {
         if reference.kind != RefKind::Path {
             return true;

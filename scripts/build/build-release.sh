@@ -181,6 +181,10 @@ stage_releases() {
   for target in "$@"; do
     name="xcalygraph-${version}-$(platform "${target}")" || return 1
     bash "${REPO_ROOT}/scripts/utils/check-build-space.sh" || return 1
+    # The C parser profile serves this target only; other compilers have no use for it.
+    if [[ "${target:-}" == aarch64-apple-darwin || ( -z "${target:-}" && "$(uname -sm)" == "Darwin arm64" ) ]]; then
+      export CFLAGS_aarch64_apple_darwin="-fprofile-instr-use=${REPO_ROOT}/scripts/build/c-parser.profdata -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
+    fi
     binary="$(cargo build ${build_args[@]+"${build_args[@]}"} --locked --bin xcalygraph --target "${target}" --message-format=json \
       | bash "${REPO_ROOT}/scripts/utils/cargo-artifact.sh")" || return 1
     package_release "${stage}" "${name}" "${binary}" || return 1
