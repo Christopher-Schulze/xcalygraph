@@ -384,9 +384,10 @@ for (path, line), symbols in references.items():
         if ACCESSOR.search(symbol) or owner(symbol) != symbol:
             continue  # property accessors are not calls; constructors count as their class
         group = "recall-calls" if symbol.endswith(").") else "recall-types" if symbol.endswith("#") else None
-        # The compiler kind tells enum variants (no graph nodes, docs/deferred.md) from associated
-        # types, which share the `Type#Member#` form; variants report apart from the types.
-        if group == "recall-types" and kinds.get(symbol) in (12, "EnumMember"):
+        # Enum variants (no graph nodes, docs/deferred.md) and associated types share `Type#Member#`;
+        # a compiler kind that names something else keeps the symbol among the types.
+        kind = kinds.get(symbol)
+        if group == "recall-types" and language == "rust" and symbol.count("#") >= 2 and kind in (None, 0, 12, "EnumMember", "UnspecifiedKind"):
             group = "recall-variants"
         if group is not None:
             pairs.add((group, path, symbol))

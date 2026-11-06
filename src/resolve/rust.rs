@@ -166,10 +166,18 @@ impl<'a> Index<'a> {
                 }
             }
         }
-        let mut target = Target::Module(
-            self.modules
-                .get(&format!("{crate_name}::{}", path.join("::")))?,
-        );
+        let base = self
+            .modules
+            .get(&format!("{crate_name}::{}", path.join("::")))
+            .or_else(|| {
+                // The crate of an explicit `[[bin]] path` has its root module under the target.
+                let root = self
+                    .modules
+                    .rust_target_root_of(&self.input.files[file as usize].path)
+                    .filter(|_| path.is_empty())?;
+                self.path_index.get(root).map(|&root| self.module_of(root))
+            })?;
+        let mut target = Target::Module(base);
         // A re-export leaves the module tree `path` describes; members follow the target from there.
         let mut left_tree = false;
         for segment in rest {
@@ -264,6 +272,36 @@ impl<'a> Index<'a> {
             }
         }
         None
+    }
+
+    /// Element type of a `const` or `static` named `name`, from its declaration `: &[&dyn T] =`.
+    pub(super) fn rust_collection_element(
+        &self,
+        file: u32,
+        imports: &Imports,
+        name: &str,
+    ) -> Option<(Vec<u32>, Confidence)> {
+        let symbol = match imports.names.get(name) {
+            Some(Target::Symbols(symbols)) => symbols.first().copied(),
+            _ => self
+                .module_symbol(self.module_of(file), name, None)
+                .first()
+                .copied(),
+        }?;
+        let record = &self.symbols[symbol as usize];
+        let local = (symbol - self.base[record.file as usize]) as usize;
+        let signature = &self.facts(record.file)?.symbols.get(local)?.signature;
+        let (_, declared) = signature.split_once(':')?;
+        let declared = declared.split('=').next()?.trim();
+        let declared = declared.trim_start_matches('&');
+        let declared = declared.strip_prefix("'static ").unwrap_or(declared).trim();
+        let element = match declared.strip_prefix('[') {
+            Some(inner) => inner.split([';', ']']).next()?,
+            None => declared.strip_prefix("Vec<")?.strip_suffix('>')?,
+        };
+        let element = crate::extract::engine::type_name(element);
+        self.resolve_type(record.file, None, None, &element)
+            .map(|(types, _)| (types, Confidence::Inferred))
     }
 
     /// `self::name` (qualifier `self::`, unlike the receiver of `self.name()`), `super::name` and

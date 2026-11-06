@@ -49,6 +49,18 @@ impl ModuleMap {
         self.by_key.get(key).copied()
     }
 
+    /// The explicit Cargo target root outside `src/` whose directory holds `path`.
+    pub fn rust_target_root_of(&self, path: &str) -> Option<&str> {
+        self.rust_target_roots
+            .keys()
+            .filter(|root| {
+                let directory = parent_dir(root);
+                !directory.ends_with("src") && path.starts_with(&format!("{directory}/"))
+            })
+            .max_by_key(|root| root.len())
+            .map(String::as_str)
+    }
+
     pub fn rust_path_target(&self, file: u32, reference: u32) -> Option<u32> {
         self.rust_path_targets.get(&(file, reference)).copied()
     }
@@ -589,7 +601,7 @@ fn rust_module_overrides(
             if rust_is_root(map, &record.path, relative) {
                 String::new()
             } else {
-                rust_module_path(relative)
+                rust_module_path_in(map, &record.path, relative)
             }
         })
         .collect();
@@ -965,7 +977,7 @@ fn module_of(map: &ModuleMap, record: &FileRecord, facts: Option<&Facts>) -> Mod
             let path = if is_root {
                 String::new()
             } else {
-                rust_module_path(relative)
+                rust_module_path_in(map, &record.path, relative)
             };
             let target = rust_root_target(map, &record.path, relative);
             if is_root && target.is_none() {
@@ -1047,6 +1059,29 @@ pub fn rust_crate(map: &ModuleMap, path: &str) -> (String, String) {
         }
     }
     (String::new(), "crate".to_owned())
+}
+
+/// Module path of a Rust file: below an explicit Cargo target root outside `src/`
+/// (`[[bin]] path = "crates/core/main.rs"`) the root's directory is the module root.
+fn rust_module_path_in(map: &ModuleMap, path: &str, relative: &str) -> String {
+    let root_directory = map
+        .rust_target_roots
+        .keys()
+        .map(|root| parent_dir(root))
+        .filter(|directory| {
+            !directory.is_empty()
+                && !directory.ends_with("src")
+                && path.starts_with(&format!("{directory}/"))
+        })
+        .max_by_key(|directory| directory.len());
+    match root_directory {
+        Some(directory) => {
+            let inner = path[directory.len() + 1..].trim_end_matches(".rs");
+            let inner = inner.strip_suffix("/mod").unwrap_or(inner);
+            inner.replace('/', "::")
+        }
+        None => rust_module_path(relative),
+    }
 }
 
 /// Module path from conventional Rust file layout; explicit Cargo target roots are handled by the

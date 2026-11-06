@@ -323,3 +323,64 @@ fn generic_parameters_and_bindings_do_not_reach_associated_types()
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+fn loop_variables_take_the_element_type_of_declared_collections()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = rust_root(
+        "rust-loop-element",
+        &[
+            (
+                "src/lib.rs",
+                "pub mod defs;\nuse defs::{FLAGS, Flag};\npub struct Plain;\nimpl Plain { pub fn run(&self) {} }\npub fn over_const() {\n    for flag in FLAGS.iter() {\n        flag.long_name();\n    }\n}\npub fn over_local(items: Vec<Plain>) {\n    for item in &items {\n        item.run();\n    }\n}\npub fn over_slice(items: &[Plain]) {\n    for item in items {\n        item.run();\n    }\n}\npub fn used(_: &dyn Flag) {}\n",
+            ),
+            (
+                "src/defs.rs",
+                "pub trait Flag { fn long_name(&self) -> &str; }\npub struct One;\nimpl Flag for One { fn long_name(&self) -> &str { \"one\" } }\npub const FLAGS: &[&dyn Flag] = &[&One];\n",
+            ),
+        ],
+    )?;
+    let text = outgoing(&root, "over_const")?;
+    assert!(text.contains("long_name"), "{text}");
+    for name in ["over_local", "over_slice"] {
+        let text = outgoing(&root, name)?;
+        assert!(text.contains("> Plain::run"), "{name}: {text}");
+    }
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn modules_below_an_explicit_binary_root_resolve() -> Result<(), Box<dyn std::error::Error>> {
+    let root = rust_root(
+        "rust-bin-path",
+        &[
+            (
+                "crates/core/main.rs",
+                "mod flags;\nfn main() { crate::flags::go(); }\n",
+            ),
+            (
+                "crates/core/flags/mod.rs",
+                "pub mod defs;\npub trait Flag { fn long_name(&self) -> &str; }\npub fn go() { defs::there(); }\n",
+            ),
+            (
+                "crates/core/flags/defs.rs",
+                "use crate::flags::Flag;\npub struct One;\nimpl Flag for One { fn long_name(&self) -> &str { \"one\" } }\npub fn there() {}\n",
+            ),
+        ],
+    )?;
+    let manifest = fs::read_to_string(root.join("Cargo.toml"))?;
+    fs::write(
+        root.join("Cargo.toml"),
+        format!("{manifest}\n[[bin]]\npath = \"crates/core/main.rs\"\nname = \"rg\"\n"),
+    )?;
+    let text = outgoing(&root, "main")?;
+    assert!(
+        text.contains("> go crates/core/flags/mod.rs") || text.contains("flags::go"),
+        "{text}"
+    );
+    let text = outgoing(&root, "go")?;
+    assert!(text.contains("there"), "{text}");
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

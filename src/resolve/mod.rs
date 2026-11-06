@@ -40,7 +40,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 125;
+pub const RESOLVE_VERSION: u32 = 127;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -4195,6 +4195,14 @@ impl<'a> Index<'a> {
             return (!types.is_empty()).then_some((types, Confidence::Exact));
         }
         if let Some(collection) = binding.type_name.strip_prefix("range:") {
+            // A const or static collection of this module or an import: its declared element type.
+            if self.file_type(file) == Some(FileType::Rust)
+                && self
+                    .binding(file, scope, collection, binding.line, binding.value_byte)
+                    .is_none()
+            {
+                return self.rust_collection_element(file, imports, collection);
+            }
             // The element of a ranged collection: the collection binding's (element) type.
             let source = self.binding(file, scope, collection, binding.line, binding.value_byte)?;
             if std::ptr::eq(source, binding) {
@@ -4212,6 +4220,9 @@ impl<'a> Index<'a> {
                 )
             ) {
                 let element = source.type_name.strip_prefix("elements:")?;
+                return self.resolve_type(file, Some(imports), scope, element);
+            }
+            if let Some(element) = source.type_name.strip_prefix("elements:") {
                 return self.resolve_type(file, Some(imports), scope, element);
             }
             return self

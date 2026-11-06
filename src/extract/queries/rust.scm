@@ -93,6 +93,18 @@
   (ref_pattern (mut_pattern (identifier) @binding.name @binding.pattern @binding))
 ])
 (let_declaration pattern: (identifier) @binding.name type: (_) @binding.type) @binding
+; Loop variables over a named collection: `for x in items`, `&items`, `items.iter()`.
+(for_expression
+  pattern: (identifier) @binding.name
+  value: (identifier) @binding.range) @binding
+(for_expression
+  pattern: (identifier) @binding.name
+  value: (reference_expression value: (identifier) @binding.range)) @binding
+(for_expression
+  pattern: (identifier) @binding.name
+  value: (call_expression
+    function: (field_expression value: (identifier) @binding.range field: (field_identifier) @_iter)
+    (#eq? @_iter "iter"))) @binding
 (let_declaration
   pattern: (identifier) @binding.name
   value: (struct_expression name: (_) @binding.ctor)) @binding

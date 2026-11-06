@@ -14,7 +14,9 @@ pub(super) fn visibility(path: &str, binding: Node<'_>) -> Option<Range<u32>> {
     if rust && binding.kind() == "identifier" {
         return pattern_visibility(binding);
     }
-    if javascript && binding.kind() == "for_in_statement" {
+    if (javascript && binding.kind() == "for_in_statement")
+        || (rust && binding.kind() == "for_expression")
+    {
         let start = u32::try_from(binding.child_by_field_name("body")?.start_byte()).ok()?;
         let end = u32::try_from(binding.end_byte()).ok()?;
         return (start < end).then_some(start..end);
@@ -105,6 +107,9 @@ pub(super) fn declared_element<'tree>(
     annotation: Node<'tree>,
     source: &[u8],
 ) -> Option<Node<'tree>> {
+    if path.ends_with(".rs") {
+        return rust_element(annotation, source);
+    }
     if !javascript(path) {
         return None;
     }
@@ -112,6 +117,21 @@ pub(super) fn declared_element<'tree>(
     container_element(element, source)
         .is_none()
         .then_some(element)
+}
+
+/// Element of a Rust slice, array or `Vec`, behind references.
+fn rust_element<'tree>(node: Node<'tree>, source: &[u8]) -> Option<Node<'tree>> {
+    match node.kind() {
+        "reference_type" => rust_element(node.child_by_field_name("type")?, source),
+        "array_type" => node.child_by_field_name("element"),
+        "generic_type" => {
+            let name = node.child_by_field_name("type")?.utf8_text(source).ok()?;
+            (name == "Vec")
+                .then(|| node.child_by_field_name("type_arguments")?.named_child(0))
+                .flatten()
+        }
+        _ => None,
+    }
 }
 
 fn container_element<'tree>(node: Node<'tree>, source: &[u8]) -> Option<Node<'tree>> {
