@@ -1,0 +1,14 @@
+httpx	SSL_CERT_FILE certificate environment variable	read	httpx/_config.py
+httpx	SSL_CERT_FILE certificate environment variable	doc	docs/environment_variables.md
+sqlc	SQLCCACHE cache directory environment	read	internal/cache/cache.go
+sqlc	SQLCCACHE cache directory environment	doc	docs/reference/environment-variables.md
+ripgrep	RIPGREP_CONFIG_PATH config file environment	read	crates/core/flags/config.rs
+ripgrep	RIPGREP_CONFIG_PATH config file environment	doc	GUIDE.md
+sqlc	SQLCDEBUG debug option environment	doc	docs/reference/environment-variables.md
+httpx	SSL_CERT_DIR certificate directory environment	doc	docs/environment_variables.md
+httpx	SSL_CERT_DIR certificate directory environment	read	httpx/_config.py
+cobra	BASH_COMP_DEBUG_FILE completion debug log	doc	site/content/completions/_index.md
+sqlc	lint ci workflow	run	.github/workflows
+express	lint ci workflow package	run	package.json
+cobra	BASH_COMP_DEBUG_FILE completion debug log	read	completions.go
+httpx	SSLKEYLOGFILE key log environment	read	absent

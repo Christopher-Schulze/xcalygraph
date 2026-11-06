@@ -79,3 +79,41 @@ fn a_lossy_html_script_proves_no_receiver() -> TestResult {
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+fn a_named_environment_variable_shows_its_reader_test_and_document() -> TestResult {
+    let root = support::exclusive_dir("env-star")?;
+    write(
+        &root,
+        &[
+            (
+                "cfg.py",
+                b"import os\n\ndef load():\n    return os.environ.get(\"APP_TOKEN\")\n",
+            ),
+            (
+                "tests/test_cfg.py",
+                b"from cfg import load\n\ndef test_load():\n    load()\n",
+            ),
+            (
+                "docs/env.md",
+                b"# Variables\n\n## APP_TOKEN\n\nThe token.\n",
+            ),
+            (
+                "other.py",
+                b"import os\n\ndef bare():\n    return os.environ.get(\"LONE_VALUE\")\n",
+            ),
+        ],
+    )?;
+    let text = query(&root, &["find", "APP_TOKEN", "token"])?;
+    let star = text.lines().next().unwrap_or_default();
+    assert!(star.starts_with("~ APP_TOKEN <read cfg.py:4"), "{text}");
+    assert!(star.contains("<t tests/test_cfg.py:3"), "{text}");
+    assert!(star.contains("<doc docs/env.md:3"), "{text}");
+    let text = query(&root, &["find", "LONE_VALUE"])?;
+    assert!(
+        text.lines().next().unwrap_or_default().ends_with("-t -doc"),
+        "{text}"
+    );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

@@ -33,6 +33,8 @@ const TESTS: usize = 2;
 const CARD_INDENT: usize = 2;
 /// Hits of a text answer with their full signature.
 const DETAILED_HITS: usize = 2;
+/// Environment star lines per answer.
+const MAX_STARS: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hit {
@@ -387,6 +389,62 @@ pub fn is_decided(index: &Index, hits: &[Hit], prompt: &str) -> bool {
     clear && asked.len() >= 3 && asked.iter().filter(|word| identity.contains(*word)).count() >= 2
 }
 
+/// One `~` line per environment variable the query names: where it is read, the test reaching the
+/// reader and the document explaining it, each with its site; `-doc` and `-t` state an absence.
+fn env_stars(index: &Index, filter: &Filter, query: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    for word in query.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')) {
+        let named = word.len() >= 3
+            && word
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
+        if !named || lines.len() >= MAX_STARS {
+            continue;
+        }
+        let reads: Vec<_> = index
+            .derived
+            .envs()
+            .iter()
+            .filter(|env| {
+                env.source == 0
+                    && index.string(env.name) == word
+                    && filter.includes(index, env.node)
+            })
+            .collect();
+        let Some(read) = reads.first() else {
+            continue;
+        };
+        let mut line = format!("~ {word} <read {}:{}", index.path_of(read.node), read.line);
+        match super::show::tests_of(index, filter, read.node).first() {
+            Some(test) => line.push_str(&format!(
+                " <t {}:{}",
+                index.path_of(test.0.node),
+                index.line_of(test.0.node)
+            )),
+            None => line.push_str(" -t"),
+        }
+        let document = index
+            .derived
+            .symbols()
+            .iter()
+            .enumerate()
+            .find(|(_, symbol)| {
+                symbol.kind() == crate::domain::facts::SymKind::Heading
+                    && index.string(symbol.name).contains(word)
+            });
+        match document {
+            Some((node, symbol)) => line.push_str(&format!(
+                " <doc {}:{}",
+                index.path_of(node as u32),
+                symbol.line
+            )),
+            None => line.push_str(" -doc"),
+        }
+        lines.push(line);
+    }
+    lines
+}
+
 /// Hits with their full signature; later ones print `line name`, and the budget this frees shows
 /// further hits: more required facts per answer at the same tokens. JSON keeps its fields.
 fn detailed_hits(json: bool) -> usize {
@@ -440,6 +498,39 @@ fn render_connected(
 /// [`render`] with the first answer: the top hit's source and neighbours follow its line, so
 /// an agent can conclude without a second call (about 20,000 tokens of re-sent context).
 pub fn render_answer(
+    index: &Index,
+    filter: &Filter,
+    root: &Path,
+    hits: &[Hit],
+    query: &str,
+    json: bool,
+    budget: usize,
+) -> String {
+    let stars = if json {
+        Vec::new()
+    } else {
+        env_stars(index, filter, query)
+    };
+    if !stars.is_empty() {
+        let mut answer = stars.join("\n");
+        answer.push('\n');
+        let reserved = answer.len().div_ceil(3);
+        let rest = render_answer_body(
+            index,
+            filter,
+            root,
+            hits,
+            query,
+            json,
+            budget.saturating_sub(reserved),
+        );
+        answer.push_str(&rest);
+        return answer;
+    }
+    render_answer_body(index, filter, root, hits, query, json, budget)
+}
+
+fn render_answer_body(
     index: &Index,
     filter: &Filter,
     root: &Path,

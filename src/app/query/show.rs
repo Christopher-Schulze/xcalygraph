@@ -550,7 +550,11 @@ fn tests(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: us
 }
 
 /// Tests of a symbol, direct ones and through a caller: (edge, through a caller, exact).
-fn tests_of<'a>(index: &'a Index, filter: &Filter, node: u32) -> Vec<(&'a EdgeRecord, bool, bool)> {
+pub(super) fn tests_of<'a>(
+    index: &'a Index,
+    filter: &Filter,
+    node: u32,
+) -> Vec<(&'a EdgeRecord, bool, bool)> {
     let mut found: Vec<(&EdgeRecord, bool, bool)> = Vec::new();
     let mut positions: HashMap<u32, usize> = HashMap::new();
     for edge in index.derived.incoming(node).iter().filter(|edge| {
