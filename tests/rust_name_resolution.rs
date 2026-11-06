@@ -384,3 +384,32 @@ fn modules_below_an_explicit_binary_root_resolve() -> Result<(), Box<dyn std::er
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+fn explicit_target_directory_ending_in_src_keeps_its_module_root()
+-> Result<(), Box<dyn std::error::Error>> {
+    for directory in ["custom", "customsrc", "custom/src", "src"] {
+        let root = rust_root("rust-explicit-suffix", &[])?;
+        fs::create_dir_all(root.join(directory))?;
+        fs::write(
+            root.join(directory).join("main.rs"),
+            "mod helper;\nfn main() { helper::do_work(); }\n",
+        )?;
+        fs::write(
+            root.join(directory).join("helper.rs"),
+            "pub fn do_work() {}\n",
+        )?;
+        let manifest = fs::read_to_string(root.join("Cargo.toml"))?;
+        fs::write(
+            root.join("Cargo.toml"),
+            format!("{manifest}\n[[bin]]\nname = \"tool\"\npath = \"{directory}/main.rs\"\n"),
+        )?;
+        let text = outgoing(&root, "main")?;
+        assert!(
+            text.contains(&format!("> do_work {directory}/helper.rs")),
+            "{directory}: {text}"
+        );
+        fs::remove_dir_all(root)?;
+    }
+    Ok(())
+}

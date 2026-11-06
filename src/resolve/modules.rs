@@ -55,7 +55,8 @@ impl ModuleMap {
             .keys()
             .filter(|root| {
                 let directory = parent_dir(root);
-                !directory.ends_with("src") && path.starts_with(&format!("{directory}/"))
+                !rust_conventional_source_dir(self, directory)
+                    && path.starts_with(&format!("{directory}/"))
             })
             .max_by_key(|root| root.len())
             .map(String::as_str)
@@ -1070,7 +1071,7 @@ fn rust_module_path_in(map: &ModuleMap, path: &str, relative: &str) -> String {
         .map(|root| parent_dir(root))
         .filter(|directory| {
             !directory.is_empty()
-                && !directory.ends_with("src")
+                && !rust_conventional_source_dir(map, directory)
                 && path.starts_with(&format!("{directory}/"))
         })
         .max_by_key(|directory| directory.len());
@@ -1082,6 +1083,26 @@ fn rust_module_path_in(map: &ModuleMap, path: &str, relative: &str) -> String {
         }
         None => rust_module_path(relative),
     }
+}
+
+fn rust_conventional_source_dir(map: &ModuleMap, directory: &str) -> bool {
+    let crate_dir = map
+        .crates
+        .iter()
+        .map(|(dir, _)| dir.as_str())
+        .find(|dir| {
+            dir.is_empty()
+                || directory == *dir
+                || directory
+                    .strip_prefix(*dir)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+        })
+        .unwrap_or("");
+    directory
+        .strip_prefix(crate_dir)
+        .unwrap_or(directory)
+        .trim_start_matches('/')
+        == "src"
 }
 
 /// Module path from conventional Rust file layout; explicit Cargo target roots are handled by the
