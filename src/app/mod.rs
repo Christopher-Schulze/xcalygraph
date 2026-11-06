@@ -1,6 +1,7 @@
 //! Use cases: one per command.
 
 pub mod error;
+pub mod hook;
 pub mod indexes;
 pub mod install;
 pub mod progress;
@@ -35,12 +36,14 @@ pub fn run(invocation: &Invocation) -> Result<String, AppError> {
     let options = &invocation.options;
     match invocation.command {
         CommandName::Version => return Ok(version()),
+        CommandName::Hook => return Ok(hook::run(&invocation.args[0])),
         CommandName::Install => {
             let home = install::home()?;
             let mut progress = progress::Progress::stderr();
             let options = install::Options {
                 binary: !options.skill_only,
                 link: !options.no_link,
+                hooks: options.hooks,
             };
             let out = install::install(&home, options, &mut progress)?;
             return Ok(result_lines(&progress, out));
@@ -73,6 +76,7 @@ pub fn run(invocation: &Invocation) -> Result<String, AppError> {
         | CommandName::Version
         | CommandName::Install
         | CommandName::Update
+        | CommandName::Hook
         | CommandName::Ls
         | CommandName::Clean => Ok(String::new()),
         command => {
@@ -307,7 +311,8 @@ fn run_query(
         | CommandName::Help
         | CommandName::Version
         | CommandName::Install
-        | CommandName::Update => Ok(String::new()),
+        | CommandName::Update
+        | CommandName::Hook => Ok(String::new()),
     }
 }
 

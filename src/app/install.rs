@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use super::error::AppError;
 use super::progress::Progress;
+use super::query::output::json_string;
+use crate::extract::json::{self, Value};
 
 pub const SKILL: &str = include_str!("../../skills/xcalygraph/SKILL.md");
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -59,6 +61,8 @@ pub struct Options {
     pub binary: bool,
     /// Link the skill for Claude Code when `~/.claude` exists.
     pub link: bool,
+    /// Add (`Some(true)`) or remove (`Some(false)`) the prompt hook in the hosts' settings.
+    pub hooks: Option<bool>,
 }
 
 /// Install directory of the binary: `$XCALYGRAPH_INSTALL_DIR`, else `~/.local/bin`.
@@ -94,7 +98,147 @@ pub fn install(home: &Path, options: Options, progress: &mut Progress) -> Result
         }
         out.push_str(&line);
     }
+    if let Some(add) = options.hooks {
+        progress.start("Hooks");
+        let line = hooks(home, add).inspect_err(|_| progress.fail("not changed"))?;
+        progress.pass("done");
+        out.push_str(&line);
+    }
     Ok(out)
+}
+
+/// Settings of the hosts that exist here.
+fn hook_settings(home: &Path) -> Vec<PathBuf> {
+    [(".claude", "settings.json"), (".codex", "hooks.json")]
+        .into_iter()
+        .filter(|(host, _)| home.join(host).is_dir())
+        .map(|(host, file)| home.join(host).join(file))
+        .collect()
+}
+
+fn hooks(home: &Path, add: bool) -> Result<String, AppError> {
+    let command = format!(
+        "{} hook prompt",
+        install_dir(home).join("xcalygraph").display()
+    );
+    let mut out = String::new();
+    for path in hook_settings(home) {
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => "{}".to_owned(),
+            Err(error) => return Err(AppError::io(path.display().to_string())(error)),
+        };
+        // Comments or broken JSON stay untouched: this edit must not lose anything.
+        let Some(settings) = json::parse_strict(&text) else {
+            out.push_str(&format!(
+                "! {} is no plain JSON, left as is\n",
+                path.display()
+            ));
+            continue;
+        };
+        let edited = with_prompt_hook(settings, &command, add);
+        let bytes = format!("{}\n", render_json(&edited, 0));
+        let changed = write_if_changed(&path, bytes.as_bytes(), 0o600)
+            .map_err(AppError::io(path.display().to_string()))?;
+        let state = if changed { "updated" } else { "unchanged" };
+        out.push_str(&format!("hooks {state} {}\n", path.display()));
+    }
+    if add && out.contains(".codex") {
+        out.push_str("! Codex asks to trust new hooks: run /hooks there\n");
+    }
+    Ok(out)
+}
+
+fn is_own_hook(group: &Value) -> bool {
+    group.get("hooks").is_some_and(|hooks| match hooks {
+        Value::Array(items) => items.iter().any(|item| {
+            item.get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|command| command.contains("xcalygraph") && command.contains(" hook "))
+        }),
+        _ => false,
+    })
+}
+
+fn object_entry<'a>(entries: &'a mut Vec<(String, u32, Value)>, key: &str) -> &'a mut Value {
+    let position = entries.iter().position(|(name, _, _)| name == key);
+    let position = position.unwrap_or_else(|| {
+        entries.push((key.to_owned(), 0, Value::Object(Vec::new())));
+        entries.len() - 1
+    });
+    &mut entries[position].2
+}
+
+/// `settings` with exactly one own entry under `hooks.UserPromptSubmit`, or none; everything else
+/// stays as it is, in order.
+fn with_prompt_hook(mut settings: Value, command: &str, add: bool) -> Value {
+    let Value::Object(entries) = &mut settings else {
+        return settings;
+    };
+    let hooks = object_entry(entries, "hooks");
+    let Value::Object(events) = hooks else {
+        return settings;
+    };
+    let event = object_entry(events, "UserPromptSubmit");
+    if matches!(event, Value::Object(items) if items.is_empty()) {
+        *event = Value::Array(Vec::new());
+    }
+    if let Value::Array(groups) = event {
+        groups.retain(|group| !is_own_hook(group));
+        if add {
+            groups.push(Value::Object(vec![(
+                "hooks".to_owned(),
+                0,
+                Value::Array(vec![Value::Object(vec![
+                    ("type".to_owned(), 0, Value::Str("command".to_owned())),
+                    ("command".to_owned(), 0, Value::Str(command.to_owned())),
+                    ("timeout".to_owned(), 0, Value::Number("1".to_owned())),
+                ])]),
+            )]));
+        }
+    }
+    if !add {
+        events.retain(|(name, _, value)| {
+            name != "UserPromptSubmit" || !matches!(value, Value::Array(items) if items.is_empty())
+        });
+        if events.is_empty() {
+            entries.retain(|(name, _, _)| name != "hooks");
+        }
+    }
+    settings
+}
+
+fn render_json(value: &Value, depth: usize) -> String {
+    let inner = "  ".repeat(depth + 1);
+    let outer = "  ".repeat(depth);
+    match value {
+        Value::Null => "null".to_owned(),
+        Value::Bool(flag) => flag.to_string(),
+        Value::Number(number) => number.clone(),
+        Value::Str(text) => json_string(text),
+        Value::Array(items) if items.is_empty() => "[]".to_owned(),
+        Value::Object(items) if items.is_empty() => "{}".to_owned(),
+        Value::Array(items) => {
+            let rendered: Vec<String> = items
+                .iter()
+                .map(|item| format!("{inner}{}", render_json(item, depth + 1)))
+                .collect();
+            format!("[\n{}\n{outer}]", rendered.join(",\n"))
+        }
+        Value::Object(items) => {
+            let rendered: Vec<String> = items
+                .iter()
+                .map(|(key, _, item)| {
+                    format!(
+                        "{inner}{}: {}",
+                        json_string(key),
+                        render_json(item, depth + 1)
+                    )
+                })
+                .collect();
+            format!("{{\n{}\n{outer}}}", rendered.join(",\n"))
+        }
+    }
 }
 
 /// Writes the embedded skill and its version stamp atomically.
@@ -249,6 +393,7 @@ mod tests {
         let options = Options {
             binary: false,
             link: true,
+            hooks: None,
         };
         fs::create_dir_all(home.join(".claude"))?;
         let first = install(home, options, &mut Progress::new(false, false))?;
@@ -301,6 +446,7 @@ mod tests {
         let options = Options {
             binary: false,
             link: true,
+            hooks: None,
         };
         let out = install(home, options, &mut Progress::new(false, false))?;
         assert!(out.contains("exists and is no link; not replaced"), "{out}");
@@ -315,6 +461,7 @@ mod tests {
         let options = Options {
             binary: false,
             link: true,
+            hooks: None,
         };
         let out = install(home, options, &mut Progress::new(false, false))?;
         assert!(out.contains("written") && !out.contains("link"), "{out}");

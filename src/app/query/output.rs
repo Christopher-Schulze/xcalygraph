@@ -264,7 +264,7 @@ pub fn json_object(fields: &[(&str, Value)]) -> String {
     out
 }
 
-fn json_string(text: &str) -> String {
+pub fn json_string(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     out.push('"');
     for ch in text.chars() {

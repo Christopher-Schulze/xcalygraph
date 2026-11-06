@@ -4873,3 +4873,155 @@ fn show_file_json_carries_the_line_and_symbol_counts() -> TestResult {
     assert!(text.contains("\"lines\":5,\"symbols\":2"), "{text}");
     Ok(())
 }
+
+fn hook_output(root: &Path, event: &str, input: &str) -> Result<(bool, String), Box<dyn Error>> {
+    let mut child = support::command(BINARY, root)
+        .args(["hook", event])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .ok_or("stdin")?
+        .write_all(input.as_bytes())?;
+    let output = child.wait_with_output()?;
+    Ok((output.status.success(), String::from_utf8(output.stdout)?))
+}
+
+#[test]
+fn hook_prompt_answers_only_with_a_current_index_and_a_decided_hit() -> TestResult {
+    let fixture = TempDir::new("hook-prompt")?;
+    fs::write(
+        fixture.0.join("a.go"),
+        "package a\n\n// RenderInvoiceTotals sums the invoice lines.\nfunc RenderInvoiceTotals() int { return 1 }\nfunc Other() int { return 2 }\n",
+    )?;
+    let root = fixture.0.canonicalize()?;
+    let input = |prompt: &str| {
+        format!(
+            "{{\"prompt\":\"{prompt}\",\"cwd\":\"{}\",\"session_id\":\"s\"}}",
+            root.display()
+        )
+    };
+    // No index yet: silent, and nothing was built.
+    let (ok, text) = hook_output(&root, "prompt", &input("where is RenderInvoiceTotals"))?;
+    assert!(ok && text.is_empty(), "{text}");
+    let index = support::command(BINARY, &root)
+        .args(["index", "-C"])
+        .arg(&root)
+        .output()?;
+    assert!(index.status.success());
+    let (ok, text) = hook_output(&root, "prompt", &input("where is RenderInvoiceTotals"))?;
+    assert!(ok, "{text}");
+    assert!(
+        text.starts_with(
+            "{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":"
+        ),
+        "{text}"
+    );
+    assert!(text.contains("a.go"), "{text}");
+    let (ok, text) = hook_output(&root, "prompt", &input("zzqq nothing here at all"))?;
+    assert!(ok && text.is_empty(), "{text}");
+    let (ok, text) = hook_output(&root, "prompt", "not json")?;
+    assert!(ok && text.is_empty(), "{text}");
+    Ok(())
+}
+
+#[test]
+fn install_hooks_keeps_foreign_settings_and_removes_only_its_own() -> TestResult {
+    let fixture = TempDir::new("hook-install")?;
+    let home = &fixture.0;
+    fs::create_dir_all(home.join(".claude"))?;
+    fs::create_dir_all(home.join(".codex"))?;
+    let foreign = "{\n  \"model\": \"x\",\n  \"hooks\": {\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"other\"\n          }\n        ]\n      }\n    ]\n  }\n}\n";
+    fs::write(home.join(".claude/settings.json"), foreign)?;
+    let run = |args: &[&str]| {
+        support::command(BINARY, home)
+            .args(args)
+            .env("HOME", home)
+            .output()
+    };
+    let first = run(&["install", "--skill-only", "--no-link", "--hooks"])?;
+    assert!(first.status.success(), "{first:?}");
+    let claude = fs::read_to_string(home.join(".claude/settings.json"))?;
+    assert!(
+        claude.contains("\"model\": \"x\"") && claude.contains("\"other\""),
+        "{claude}"
+    );
+    assert!(
+        claude.contains(" hook prompt") && claude.contains("\"timeout\": 1"),
+        "{claude}"
+    );
+    let codex = fs::read_to_string(home.join(".codex/hooks.json"))?;
+    assert!(codex.contains(" hook prompt"), "{codex}");
+    assert!(String::from_utf8(first.stdout)?.contains("/hooks"));
+    let again = run(&["install", "--skill-only", "--no-link", "--hooks"])?;
+    assert!(again.status.success());
+    assert_eq!(
+        fs::read_to_string(home.join(".claude/settings.json"))?,
+        claude
+    );
+    let removed = run(&["install", "--skill-only", "--no-link", "--no-hooks"])?;
+    assert!(removed.status.success());
+    assert_eq!(
+        fs::read_to_string(home.join(".claude/settings.json"))?,
+        foreign
+    );
+    fs::write(home.join(".codex/hooks.json"), "// comment\n{}\n")?;
+    let kept = run(&["install", "--skill-only", "--no-link", "--hooks"])?;
+    assert!(String::from_utf8(kept.stdout)?.contains("no plain JSON"));
+    assert_eq!(
+        fs::read_to_string(home.join(".codex/hooks.json"))?,
+        "// comment\n{}\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn hook_edit_reports_callers_and_stays_silent_on_a_body_edit() -> TestResult {
+    let fixture = TempDir::new("hook-edit")?;
+    let root = fixture.0.canonicalize()?;
+    let git = |args: &[&str]| -> TestResult {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(args)
+            .current_dir(&root)
+            .env_remove("GIT_DIR")
+            .status()?;
+        assert!(status.success());
+        Ok(())
+    };
+    git(&["init", "-q"])?;
+    fs::write(root.join("go.mod"), "module a\n")?;
+    fs::write(
+        root.join("a.go"),
+        "package a\n\nfunc Target(x int) int { return x }\n",
+    )?;
+    fs::write(
+        root.join("b.go"),
+        "package a\n\nfunc Caller() int { return Target(1) }\n",
+    )?;
+    git(&["add", "."])?;
+    git(&["commit", "-q", "-m", "first"])?;
+    let input = format!(
+        "{{\"cwd\":\"{}\",\"tool_input\":{{\"file_path\":\"a.go\"}}}}",
+        root.display()
+    );
+    fs::write(
+        root.join("a.go"),
+        "package a\n\nfunc Target(x int) int { return x + 1 }\n",
+    )?;
+    let (ok, text) = hook_output(&root, "edit", &input)?;
+    assert!(ok && text.is_empty(), "body edit: {text}");
+    fs::write(
+        root.join("a.go"),
+        "package a\n\nfunc Target(x, y int) int { return x + y }\n",
+    )?;
+    let (ok, text) = hook_output(&root, "edit", &input)?;
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("PostToolUse") && text.contains("Caller"),
+        "signature edit: {text}"
+    );
+    Ok(())
+}
