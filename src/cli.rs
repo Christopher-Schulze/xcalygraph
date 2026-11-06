@@ -9,7 +9,7 @@ use crate::domain::facts::SymKind;
 use crate::domain::filetype::FileType;
 
 /// Every command, in help order.
-const COMMANDS: [CommandName; 14] = [
+const COMMANDS: [CommandName; 13] = [
     CommandName::Map,
     CommandName::Find,
     CommandName::Show,
@@ -21,7 +21,6 @@ const COMMANDS: [CommandName; 14] = [
     CommandName::Clean,
     CommandName::Install,
     CommandName::Update,
-    CommandName::Hook,
     CommandName::Version,
     CommandName::Help,
 ];
@@ -83,7 +82,6 @@ pub enum CommandName {
     Clean,
     Install,
     Update,
-    Hook,
     Version,
     Help,
 }
@@ -106,7 +104,6 @@ impl CommandName {
             Self::Clean => "clean",
             Self::Install => "install",
             Self::Update => "update",
-            Self::Hook => "hook",
             Self::Version => "version",
             Self::Help => "help",
         }
@@ -123,9 +120,8 @@ impl CommandName {
             Self::Index => "index",
             Self::Ls => "ls",
             Self::Clean => "clean [ROOT...] [--missing]",
-            Self::Install => "install [--no-link] [--skill-only] [--hooks | --no-hooks]",
+            Self::Install => "install [--no-link] [--skill-only]",
             Self::Update => "update [--check]",
-            Self::Hook => "hook prompt|edit",
             Self::Version => "version",
             Self::Help => "help [COMMAND]",
         }
@@ -148,7 +144,6 @@ impl CommandName {
             Self::Index => "build or refresh the index explicitly",
             Self::Ls => "list indexes: root, size, last use, missing roots",
             Self::Clean => "delete every index, only those of ROOT..., or --missing roots",
-            Self::Hook => "for host hooks: host JSON on stdin, added context or nothing on stdout",
             Self::Install => {
                 "install the binary to ~/.local/bin and the skill to ~/.agents/skills/xcalygraph"
             }
@@ -168,7 +163,6 @@ impl CommandName {
             Self::Impact => (0, usize::MAX),
             Self::Path => (2, 2),
             Self::Clean => (0, usize::MAX),
-            Self::Hook => (1, 1),
             Self::Map
             | Self::Audit
             | Self::Index
@@ -188,15 +182,15 @@ impl CommandName {
             Self::Index => &[Flag::Root, Flag::IndexDir],
             Self::Ls => &[Flag::IndexDir],
             Self::Clean => &[Flag::IndexDir, Flag::Missing],
-            Self::Install => &[Flag::NoLink, Flag::SkillOnly, Flag::Hooks, Flag::NoHooks],
+            Self::Install => &[Flag::NoLink, Flag::SkillOnly],
             Self::Update => &[Flag::Check],
-            Self::Version | Self::Help | Self::Hook => &[],
+            Self::Version | Self::Help => &[],
         }
     }
 }
 
 /// Every flag, in help order.
-const FLAGS: [Flag; 19] = [
+const FLAGS: [Flag; 17] = [
     Flag::Root,
     Flag::Budget,
     Flag::Json,
@@ -213,8 +207,6 @@ const FLAGS: [Flag; 19] = [
     Flag::Missing,
     Flag::NoLink,
     Flag::SkillOnly,
-    Flag::Hooks,
-    Flag::NoHooks,
     Flag::Check,
 ];
 
@@ -236,8 +228,6 @@ pub enum Flag {
     Missing,
     NoLink,
     SkillOnly,
-    Hooks,
-    NoHooks,
     Check,
 }
 
@@ -260,8 +250,6 @@ impl Flag {
             Self::Missing => "--missing",
             Self::NoLink => "--no-link",
             Self::SkillOnly => "--skill-only",
-            Self::Hooks => "--hooks",
-            Self::NoHooks => "--no-hooks",
             Self::Check => "--check",
         }
     }
@@ -308,8 +296,6 @@ impl Flag {
             Self::Missing => "clean: indexes whose root no longer exists",
             Self::NoLink => "skip the Claude Code link (made when ~/.claude exists)",
             Self::SkillOnly => "install the skill only, not the binary",
-            Self::Hooks => "add the prompt hook to Claude Code and Codex settings",
-            Self::NoHooks => "remove the hooks of xcalygraph from those settings",
             Self::Check => "report an available update without installing it",
         }
     }
@@ -351,7 +337,6 @@ pub struct Options {
     pub missing: bool,
     pub no_link: bool,
     pub skill_only: bool,
-    pub hooks: Option<bool>,
     pub check: bool,
 }
 
@@ -526,8 +511,6 @@ fn apply(options: &mut Options, flag: Flag, value: Option<String>) -> Result<(),
         Flag::Check => options.check = true,
         Flag::NoLink => options.no_link = true,
         Flag::SkillOnly => options.skill_only = true,
-        Flag::Hooks => options.hooks = Some(true),
-        Flag::NoHooks => options.hooks = Some(false),
         Flag::Path => options.paths.push(value),
         Flag::Lang => {
             for id in value.split(',').filter(|id| !id.is_empty()) {

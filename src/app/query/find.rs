@@ -330,65 +330,6 @@ pub fn render(index: &Index, hits: &[Hit], json: bool, budget: usize) -> String 
     writer.finish()
 }
 
-/// Words of an identifier or path: `parseHTTPRequest_v2.go` gives parse, httprequest, v2, go.
-fn name_words(text: &str) -> HashSet<String> {
-    let mut words = HashSet::new();
-    let mut word = String::new();
-    let mut lower_before = false;
-    for ch in text.chars() {
-        if !ch.is_alphanumeric() {
-            words.insert(std::mem::take(&mut word));
-            lower_before = false;
-            continue;
-        }
-        if ch.is_uppercase() && lower_before {
-            words.insert(std::mem::take(&mut word));
-        }
-        lower_before = ch.is_lowercase() || ch.is_numeric();
-        word.extend(ch.to_lowercase());
-    }
-    words.insert(word);
-    words.remove("");
-    words
-}
-
-/// Whether the answer is certain enough to arrive unasked (`hook prompt`): the prompt names the top
-/// symbol, or two of its words stand in that name, or a clear top hit carries two of three or more
-/// words in its name, signature or path. A clear score alone also fires on small talk.
-pub fn is_decided(index: &Index, hits: &[Hit], prompt: &str) -> bool {
-    const FILLER: [&str; 16] = [
-        "the", "and", "for", "with", "from", "this", "that", "what", "where", "when", "which",
-        "how", "why", "you", "please", "does",
-    ];
-    let Some(first) = hits.first() else {
-        return false;
-    };
-    let Node::Symbol(symbol) = index.node(first.node) else {
-        return false;
-    };
-    let name = index.string(symbol.name);
-    let named_like_code =
-        name.contains('_') || name.bytes().skip(1).any(|b| b.is_ascii_uppercase());
-    let raw_words = || prompt.split(|ch: char| !(ch.is_alphanumeric() || ch == '_'));
-    if named_like_code && raw_words().any(|word| word == name) {
-        return true;
-    }
-    let mut asked = name_words(prompt);
-    asked.retain(|word| word.chars().count() >= 3 && !FILLER.contains(&word.as_str()));
-    let path = index.path_of(first.node);
-    let mut identity = name_words(name);
-    identity.extend(name_words(path.rsplit('/').next().unwrap_or(path)));
-    if asked.iter().filter(|word| identity.contains(*word)).count() >= 2 {
-        return true;
-    }
-    let clear = hits
-        .get(1)
-        .is_none_or(|second| first.score >= second.score * DOMINANCE);
-    identity.extend(name_words(index.string(symbol.signature)));
-    identity.extend(name_words(path));
-    clear && asked.len() >= 3 && asked.iter().filter(|word| identity.contains(*word)).count() >= 2
-}
-
 /// One `~` line per environment variable the query names: where it is read, the test reaching the
 /// reader and the document explaining it, each with its site; `-doc` and `-t` state an absence.
 fn env_stars(index: &Index, filter: &Filter, query: &str) -> Vec<String> {

@@ -20,7 +20,7 @@ Every further call costs far more than a longer answer: stop as soon as the outp
 
 ## Commands
 
-`map`, `find TERMS...`, `show NAME`, `path FROM TO`, `impact NAME... | --diff [REV]`, `audit`; housekeeping: `hook` (host hooks, `install --hooks`), `index`, `ls`, `clean [ROOT...] [--missing]`, `install`, `update [--check]`, `version`; `help [COMMAND]` for every flag.
+`map`, `find TERMS...`, `show NAME`, `path FROM TO`, `impact NAME... | --diff [REV]`, `audit`; housekeeping: `index`, `ls`, `clean [ROOT...] [--missing]`, `install`, `update [--check]`, `version`; `help [COMMAND]` for every flag.
 
 NAME: `pkg.Type.Method`, `crate::mod::fn`, `Store.Get`, `path:line`, `path::name`, a file path or a unique bare name. Exit 3 prints candidates: repeat with one of them.
 
