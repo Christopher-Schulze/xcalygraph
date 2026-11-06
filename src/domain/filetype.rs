@@ -322,6 +322,10 @@ impl FileType {
     }
 }
 
+const BLADE_SUFFIX: &[u8] = b".blade.php";
+/// Longer than every known extension.
+const MAX_EXTENSION: usize = 32;
+
 /// Detects the file type from the file name alone (lowercase suffix match, longest first).
 pub fn detect(name: &str) -> Detection {
     use FileType::*;
@@ -331,17 +335,30 @@ pub fn detect(name: &str) -> Detection {
         ".env.example" => return Detection::Known(EnvExample),
         _ => {}
     }
-    let lower = name.to_ascii_lowercase();
-    if lower.ends_with(".blade.php") {
+    let bytes = name.as_bytes();
+    if bytes.len() >= BLADE_SUFFIX.len()
+        && bytes[bytes.len() - BLADE_SUFFIX.len()..].eq_ignore_ascii_case(BLADE_SUFFIX)
+    {
         return Detection::Known(Blade);
     }
-    let Some(dot) = lower.rfind('.') else {
+    let Some(dot) = name.rfind('.') else {
         return Detection::Shebang;
     };
     if dot == 0 {
         return Detection::Unknown;
     }
-    let extension = &lower[dot + 1..];
+    // Lowercase on the stack: called for each path-like literal of every configuration file.
+    let mut buffer = [0; MAX_EXTENSION];
+    let extension = bytes
+        .get(dot + 1..)
+        .filter(|extension| extension.len() <= MAX_EXTENSION)
+        .and_then(|extension| {
+            let lower = &mut buffer[..extension.len()];
+            lower.copy_from_slice(extension);
+            lower.make_ascii_lowercase();
+            std::str::from_utf8(lower).ok()
+        })
+        .unwrap_or_default();
     let file_type = match extension {
         "go" => Go,
         "rs" => Rust,

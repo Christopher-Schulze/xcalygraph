@@ -85,6 +85,9 @@ enum Content {
     NotRead,
 }
 
+/// File record, whether its content changed, and its new facts.
+type HashedFile = (FileRecord, bool, Option<Box<Facts>>);
+
 /// Walks `root` and compares it with `stored` (sorted by path) as of `write_time_ns`; with
 /// `extract`, also extracts every changed file.
 pub fn scan(
@@ -103,7 +106,7 @@ pub fn scan(
         HashSet::new()
     };
     let extracted = ExtractedContent::default();
-    let hashed: Vec<io::Result<(FileRecord, bool, Option<Facts>)>> = decisions
+    let hashed: Vec<io::Result<HashedFile>> = decisions
         .par_iter()
         .zip(walked.par_iter())
         .map(|(decision, stat)| match decision {
@@ -178,7 +181,7 @@ fn finish(
     changed: bool,
     extract: Option<Extract>,
     extracted: &ExtractedContent,
-) -> (FileRecord, bool, Option<Facts>) {
+) -> HashedFile {
     let facts = extract
         .filter(|_| changed && record.role.is_extracted())
         .and_then(|extract| match &content {
@@ -202,7 +205,7 @@ fn finish(
     {
         READ_BUFFER.set(buffer);
     }
-    (record, changed, facts)
+    (record, changed, facts.map(Box::new))
 }
 
 /// The file in the worker's buffer, taken out so a nested job cannot share it; `Head` stops after

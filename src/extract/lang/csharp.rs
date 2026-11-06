@@ -6,6 +6,7 @@ use super::Pack;
 use super::java::header;
 use crate::domain::facts::{FLAG_ENTRY, FLAG_TEST, Import, SymKind};
 use crate::domain::filetype::FileType;
+use crate::domain::name::Name;
 use crate::extract::engine::{Definition, FileContext, Hooks, ImportExpansion};
 
 #[cfg(feature = "lang-csharp")]
@@ -152,9 +153,9 @@ pub(super) fn using_import(statement: &str, line: u32, _reexport: bool) -> Vec<I
     let is_static = text.starts_with("static ");
     text = text.trim_start_matches("static ").trim();
     let import = |spec: String, name: &str, alias: Option<&str>| Import {
-        spec,
-        alias: alias.map(str::to_owned),
-        names: vec![name.to_owned()],
+        spec: spec.into(),
+        alias: alias.map(Name::from),
+        names: vec![name.into()],
         line,
         reexport: global,
         type_only: false,
@@ -224,7 +225,14 @@ mod tests {
         let specs = |text: &str| -> Vec<(String, Vec<String>, Option<String>, bool)> {
             using_import(text, 1, false)
                 .into_iter()
-                .map(|import| (import.spec, import.names, import.alias, import.reexport))
+                .map(|import| {
+                    (
+                        import.spec.to_string(),
+                        import.names.iter().map(|name| name.to_string()).collect(),
+                        import.alias.map(|alias| alias.to_string()),
+                        import.reexport,
+                    )
+                })
                 .collect()
         };
         assert_eq!(

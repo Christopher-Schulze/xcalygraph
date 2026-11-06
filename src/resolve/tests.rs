@@ -61,7 +61,7 @@ pub fn graph_of(root: &Path) -> std::io::Result<Graph> {
             record
                 .role
                 .is_extracted()
-                .then(|| extract(&record, content)),
+                .then(|| Box::new(extract(&record, content))),
         );
         files.push(record);
     }
@@ -72,7 +72,7 @@ pub fn render(graph: &Graph) -> String {
     let name = |node: u32| -> String {
         let symbols = graph.symbols.len() as u32;
         if node < symbols {
-            graph.symbols[node as usize].qualified.clone()
+            graph.symbols[node as usize].qualified.to_string()
         } else {
             format!("file:{}", graph.files[(node - symbols) as usize].path)
         }
@@ -168,8 +168,13 @@ fn derived_bytes_are_identical_across_thread_counts() -> Result<(), Box<dyn std:
             .build()?;
         let mut images = Vec::new();
         for case in cases() {
-            let mut graph = pool.install(|| graph_of(&case))?;
-            images.push(crate::infra::store::derived::build(&mut graph));
+            let graph = pool.install(|| graph_of(&case))?;
+            images.push(crate::infra::store::derived::build(graph, |sections| {
+                crate::infra::store::container::build(
+                    crate::infra::store::container::Kind::Derived,
+                    sections,
+                )
+            }));
         }
         Ok(images)
     };
@@ -722,7 +727,7 @@ fn python_calls_resolve_to_last_same_module_definition() -> io::Result<()> {
 /// Scans, extracts and resolves a whole root, as a full index build does.
 fn corpus_graph(root: &Path) -> std::io::Result<Graph> {
     let changes = crate::infra::scan::scan(root, &[], &[], i64::MAX, None)?;
-    let facts: Vec<Option<crate::domain::facts::Facts>> = changes
+    let facts: Vec<Option<Box<crate::domain::facts::Facts>>> = changes
         .records
         .iter()
         .map(|record| -> std::io::Result<_> {
@@ -730,7 +735,7 @@ fn corpus_graph(root: &Path) -> std::io::Result<Graph> {
                 return Ok(None);
             }
             let content = fs::read(root.join(&record.path))?;
-            Ok(Some(extract(record, &content)))
+            Ok(Some(Box::new(extract(record, &content))))
         })
         .collect::<std::io::Result<_>>()?;
     Ok(build(&changes.records, facts))
@@ -896,7 +901,7 @@ fn targets_at(
             graph
                 .symbols
                 .get(edge.target as usize)
-                .map(|target| (edge.confidence, target.signature.clone()))
+                .map(|target| (edge.confidence, target.signature.to_string()))
         })
         .collect();
     targets.sort();

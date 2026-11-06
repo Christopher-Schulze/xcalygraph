@@ -1,10 +1,11 @@
 //! Java: `public`/`protected` visibility, JUnit tests, `static main` entry, annotation-registered
 //! framework methods as entrypoints. The import and annotation helpers serve every JVM language.
 
-#[cfg(feature = "lang-java")]
 use super::Pack;
 use crate::domain::facts::{FLAG_ENTRY, FLAG_TEST, Import, SymKind};
 use crate::domain::filetype::FileType;
+#[cfg(feature = "lang-java")]
+use crate::domain::name::Name;
 use crate::extract::engine::{Definition, FileContext};
 #[cfg(feature = "lang-java")]
 use crate::extract::engine::{Hooks, ImportExpansion};
@@ -176,12 +177,15 @@ fn import_path(text: &str, line: u32) -> Vec<Import> {
         let name = if name == "_" { "*" } else { name };
         Some(Import {
             spec: if is_static {
-                format!("static:{spec}")
+                format!("static:{spec}").into()
             } else {
-                spec.to_owned()
+                spec.into()
             },
-            alias: alias.map(str::to_owned).filter(|alias| alias != "_"),
-            names: vec![name.to_owned()],
+            alias: alias
+                .map(str::to_owned)
+                .filter(|alias| alias != "_")
+                .map(Name::from),
+            names: vec![name.into()],
             line,
             reexport: false,
             type_only: false,
@@ -268,7 +272,13 @@ mod tests {
         let specs = |text: &str| -> Vec<(String, Vec<String>, Option<String>)> {
             jvm_import(text, 1, false)
                 .into_iter()
-                .map(|import| (import.spec, import.names, import.alias))
+                .map(|import| {
+                    (
+                        import.spec.to_string(),
+                        import.names.iter().map(|name| name.to_string()).collect(),
+                        import.alias.map(|alias| alias.to_string()),
+                    )
+                })
                 .collect()
         };
         assert_eq!(

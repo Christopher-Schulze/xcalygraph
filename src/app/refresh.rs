@@ -172,6 +172,7 @@ fn invalidate_meta(workspace: &Workspace, meta: &Meta) -> Result<u64, AppError> 
 
 /// Facts per shard in the order of its files; `None` where the stored shard must be read.
 type KnownFacts = Vec<Option<Vec<Facts>>>;
+type ShardMember<'a> = (&'a FileRecord, Option<Box<Facts>>);
 
 fn no_known_facts() -> KnownFacts {
     (0..SHARDS).map(|_| None).collect()
@@ -233,14 +234,14 @@ fn write_derived(
         per_shard.push(Vec::into_iter(entries));
     }
     // Every shard lists its extracted files in the order of `records`.
-    let facts: Vec<Option<Facts>> = records
+    let facts: Vec<Option<Box<Facts>>> = records
         .iter()
         .map(|record| {
             if !record.role.is_extracted() {
                 return Ok(None);
             }
             let entry = per_shard[store::shard_of(&record.path)].next();
-            entry.map(Some).ok_or_else(|| {
+            entry.map(|facts| Some(Box::new(facts))).ok_or_else(|| {
                 AppError::Invalid(format!(
                     "fact missing for {}; cannot rebuild derived index",
                     record.path
@@ -250,14 +251,12 @@ fn write_derived(
         .collect::<Result<_, _>>()?;
     drop(per_shard);
     stage("facts");
-    let mut graph = resolve::build(records, facts);
+    let graph = resolve::build(records, facts);
     stage("resolve");
-    let image = derived::build(&mut graph);
-    stage("derive");
-    let ((), written) = rayon::join(
-        move || drop(graph),
-        || workspace.store.write_container("derived", &image),
-    );
+    let written = derived::build(graph, |sections| {
+        stage("derive");
+        workspace.store.write_derived(sections)
+    });
     written
         .map(|bytes| bytes + recovered_bytes)
         .map_err(AppError::index_io("write derived data"))
@@ -278,7 +277,7 @@ fn stored_state(workspace: &Workspace) -> Option<(Vec<FileRecord>, Meta)> {
 fn write_shards(
     workspace: &Workspace,
     changes: &ChangeSet,
-    extracted: Vec<Option<Facts>>,
+    extracted: Vec<Option<Box<Facts>>>,
     rebuilt: bool,
 ) -> Result<(u64, KnownFacts), AppError> {
     let store = &workspace.store;
@@ -297,7 +296,7 @@ fn write_shards(
         .map(|&index| changes.records[index].path.as_str())
         .collect();
     let mut extracted = changes.changed.iter().copied().zip(extracted).peekable();
-    let mut members: BTreeMap<usize, Vec<(&FileRecord, Option<Facts>)>> = BTreeMap::new();
+    let mut members: BTreeMap<usize, Vec<ShardMember<'_>>> = BTreeMap::new();
     for (index, record) in changes.records.iter().enumerate() {
         let given = extracted.next_if(|(changed, _)| *changed == index);
         if !record.role.is_extracted() {
@@ -343,9 +342,9 @@ fn write_shards(
                     Ok(_) => HashMap::new(),
                 }
             };
-            let (records, given): (Vec<&FileRecord>, Vec<Option<Facts>>) =
+            let (records, given): (Vec<&FileRecord>, Vec<Option<Box<Facts>>>) =
                 files.into_iter().unzip();
-            let reusable: Vec<Option<Facts>> = records
+            let reusable: Vec<Option<Box<Facts>>> = records
                 .iter()
                 .zip(given)
                 .map(|(record, given)| {
@@ -354,7 +353,7 @@ fn write_shards(
                             if content_hash == record.hash
                                 && !changed.contains(record.path.as_str()) =>
                         {
-                            Some(facts)
+                            Some(Box::new(facts))
                         }
                         _ => None,
                     })
@@ -364,7 +363,7 @@ fn write_shards(
                 .par_iter()
                 .zip(reusable.into_par_iter())
                 .map(|(record, cached)| match cached {
-                    Some(facts) => Ok(facts),
+                    Some(facts) => Ok(*facts),
                     None => extract_file(workspace, record),
                 })
                 .collect::<Result<_, AppError>>()?;

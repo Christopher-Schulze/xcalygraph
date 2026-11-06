@@ -2,6 +2,7 @@
 //! Java, Kotlin, Scala and Groovy; single-type, wildcard and static imports; members of the
 //! enclosing class visible without `this`.
 
+use super::Ids;
 use super::{Imports, Index, Target};
 use crate::domain::facts::{Facts, SymKind};
 use crate::domain::filetype::FileType;
@@ -67,9 +68,9 @@ impl Index<'_> {
     pub(super) fn jvm_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
         for import in &facts.imports {
             for name in &import.names {
-                let local = import.alias.clone().unwrap_or_else(|| name.clone());
+                let local = import.alias.unwrap_or(*name);
                 if let Some(class_path) = import.spec.strip_prefix("static:") {
-                    self.jvm_static_import(file, class_path, name, local, imports);
+                    self.jvm_static_import(file, class_path, name, local.to_string(), imports);
                     continue;
                 }
                 let Some(module) = self
@@ -88,7 +89,7 @@ impl Index<'_> {
                     match nested {
                         Some((module, outers)) if name != "*" => {
                             imports.modules.push(module);
-                            let types: Vec<u32> = self
+                            let types: Ids = self
                                 .types
                                 .get(&(module, name.as_str()))
                                 .into_iter()
@@ -99,15 +100,25 @@ impl Index<'_> {
                                 })
                                 .collect();
                             if !types.is_empty() {
-                                self.push_symbols(file, types, local, imports);
+                                self.push_symbols(
+                                    file,
+                                    types.into_vec(),
+                                    local.to_string(),
+                                    imports,
+                                );
                             } else {
                                 // Scala `import a.b.Util.{f, g}`: members of the object.
-                                let members: Vec<u32> = outers
+                                let members: Ids = outers
                                     .iter()
                                     .flat_map(|&outer| self.members_direct(outer, name))
                                     .collect();
                                 if !members.is_empty() {
-                                    self.push_symbols(file, members, local, imports);
+                                    self.push_symbols(
+                                        file,
+                                        members.into_vec(),
+                                        local.to_string(),
+                                        imports,
+                                    );
                                 }
                             }
                         }
@@ -118,7 +129,7 @@ impl Index<'_> {
                                 self.import_members(file, outer, imports);
                             }
                         }
-                        None => self.jvm_external(&import.spec, name, local, imports),
+                        None => self.jvm_external(&import.spec, name, local.to_string(), imports),
                     }
                     continue;
                 };
@@ -134,11 +145,13 @@ impl Index<'_> {
                         self.file_type(file),
                         &format!("{}.{name}", import.spec),
                     )) {
-                        imports.names.insert(local, Target::Module(child));
+                        imports
+                            .names
+                            .insert(local.to_string(), Target::Module(child));
                     }
                     continue;
                 }
-                self.push_symbols(file, found, local, imports);
+                self.push_symbols(file, found.into_vec(), local.to_string(), imports);
             }
         }
     }
@@ -167,13 +180,13 @@ impl Index<'_> {
         if name == "*" {
             return;
         }
-        let members: Vec<u32> = self
+        let members: Ids = self
             .module_symbol(module, class, Some(|kind: SymKind| kind.is_type()))
             .into_iter()
             .flat_map(|class| self.members(class, name))
             .collect();
         if !members.is_empty() {
-            self.push_symbols(file, members, local, imports);
+            self.push_symbols(file, members.into_vec(), local, imports);
         }
     }
 
@@ -204,7 +217,7 @@ impl Index<'_> {
             imports
                 .names
                 .entry(name.to_owned())
-                .or_insert(Target::Symbols(symbols));
+                .or_insert(Target::Symbols(symbols.into()));
         }
     }
 
@@ -215,7 +228,7 @@ impl Index<'_> {
                 imports.files.push((file, target_file));
             }
         }
-        imports.names.insert(local, Target::Symbols(symbols));
+        imports.names.insert(local, Target::Symbols(symbols.into()));
     }
 
     /// An import outside the root: platform packages are dropped, others are external
@@ -258,12 +271,12 @@ impl Index<'_> {
         let mut candidates = self.enclosing_members(file, scope, name);
         candidates.extend(self.module_symbol(self.module_of(file), name, None));
         if let Some(Target::Symbols(symbols)) = imports.names.get(name) {
-            candidates.extend(symbols);
+            candidates.extend(symbols.iter().copied());
         }
         for &glob in &imports.globs {
             candidates.extend(self.module_symbol(glob, name, None));
         }
-        candidates.retain(|&candidate| {
+        candidates.retain(|&mut candidate| {
             let symbol = &self.symbols[candidate as usize];
             matches!(symbol.kind, SymKind::Fn | SymKind::Method)
                 && (symbol.signature.contains(&format!(".{name}("))
@@ -272,7 +285,7 @@ impl Index<'_> {
         candidates.sort_unstable();
         candidates.dedup();
         if let Some(receiver) = receiver.map(simple_type) {
-            let matching: Vec<u32> = candidates
+            let matching: Ids = candidates
                 .iter()
                 .copied()
                 .filter(|&candidate| {
@@ -300,11 +313,11 @@ impl Index<'_> {
 
     /// Members `name` of the class enclosing `scope`, its supertypes included: unqualified calls
     /// and constants inside a class body.
-    pub(super) fn enclosing_members(&self, file: u32, scope: Option<u32>, name: &str) -> Vec<u32> {
+    pub(super) fn enclosing_members(&self, file: u32, scope: Option<u32>, name: &str) -> Ids {
         let Some(types) = self.owner_type(file, scope) else {
-            return Vec::new();
+            return Ids::new();
         };
-        let mut found: Vec<u32> = types
+        let mut found: Ids = types
             .iter()
             .flat_map(|&owner| self.members(owner, name))
             .collect();
@@ -320,7 +333,7 @@ impl Index<'_> {
         file: u32,
         scope: Option<u32>,
         name: &str,
-    ) -> Option<Option<(Vec<u32>, crate::domain::graph::Confidence)>> {
+    ) -> Option<Option<(Ids, crate::domain::graph::Confidence)>> {
         let types = self.owner_type(file, scope)?;
         types.iter().find_map(|&owner| {
             let field_type = self.field_types.get(&(owner, name))?;

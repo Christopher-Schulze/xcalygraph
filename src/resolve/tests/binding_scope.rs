@@ -273,7 +273,7 @@ fn typescript_generic_parameters_shadow_only_by_their_own_name() -> std::io::Res
         .iter()
         .filter_map(|edge| {
             let target = graph.symbols.get(edge.target as usize)?;
-            (edge.kind == EdgeKind::Calls && target.name == "run").then(|| target.qualified.clone())
+            (edge.kind == EdgeKind::Calls && target.name == "run").then_some(target.qualified)
         })
         .collect();
     assert_eq!(targets, ["a.Base.run"], "{}", super::render(&graph));

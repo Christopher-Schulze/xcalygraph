@@ -1,6 +1,7 @@
 //! Python module rules (`docs/spec.md` section 6): absolute and relative imports, package
 //! `__init__` modules, dotted qualifiers through the package tree.
 
+use super::Ids;
 use super::{Imports, Index, MAX_DISPATCH, Pair, Target};
 use crate::domain::facts;
 use crate::domain::facts::{Facts, SourceIdentityKind, SymKind};
@@ -108,7 +109,7 @@ impl Index<'_> {
                         other
                             .names
                             .first()
-                            .map(String::as_str)
+                            .map(|name| name.as_str())
                             .or_else(|| other.spec.split('.').next())
                     });
                     bound == Some(local) || other.names.iter().any(|name| name == "*")
@@ -122,7 +123,7 @@ impl Index<'_> {
     pub(super) fn python_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
         self.python_module_imports(file, facts, imports);
         // File edges to every imported module's files (module import graph at file level).
-        let mut targets: Vec<u32> = imports.modules.clone();
+        let mut targets: Ids = imports.modules.clone().into();
         targets.sort_unstable();
         targets.dedup();
         for (other, &module) in self.modules.file_module.iter().enumerate() {
@@ -146,7 +147,7 @@ impl Index<'_> {
             if import.names.is_empty() {
                 // `import a.b` binds `a`; `import a.b as c` binds `c` to `a.b`.
                 let (local, bound) = match &import.alias {
-                    Some(alias) => (alias.clone(), module_path.clone()),
+                    Some(alias) => (alias.to_string(), module_path.clone()),
                     None => {
                         let first = module_path
                             .split('.')
@@ -184,7 +185,7 @@ impl Index<'_> {
                     }
                     continue;
                 }
-                let local = import.alias.clone().unwrap_or_else(|| name.clone());
+                let local = import.alias.unwrap_or(*name);
                 let child = join(&module_path, name);
                 let target = match (self.python_module(&child), base) {
                     (Some(module), _) => Some(Target::Module(module)),
@@ -209,7 +210,7 @@ impl Index<'_> {
                     if let Target::Module(module) = &target {
                         imports.modules.push(*module);
                     }
-                    imports.names.insert(local, target);
+                    imports.names.insert(local.to_string(), target);
                 }
             }
         }
@@ -218,8 +219,8 @@ impl Index<'_> {
     /// Symbols a module offers as `name`: its own definitions, else names it imports itself
     /// (`__init__.py` and facade re-exports such as `from .install import claude_install`),
     /// followed through at most a few modules.
-    fn python_exported(&self, module: u32, name: &str, depth: usize) -> Vec<u32> {
-        let own: Vec<u32> = self
+    fn python_exported(&self, module: u32, name: &str, depth: usize) -> Ids {
+        let own: Ids = self
             .module_symbol(module, name, None)
             .into_iter()
             .filter(|&symbol| self.symbols[symbol as usize].kind != SymKind::Mod)
@@ -262,7 +263,7 @@ impl Index<'_> {
                 }
             }
         }
-        Vec::new()
+        Ids::new()
     }
 
     fn python_module(&self, dotted: &str) -> Option<u32> {
@@ -275,7 +276,7 @@ impl Index<'_> {
         imports: &Imports,
         qualifier: &str,
         name: &str,
-    ) -> Option<Vec<u32>> {
+    ) -> Option<Ids> {
         let mut segments = qualifier.split('.');
         let head = segments.next()?;
         let Target::Module(start) = imports.names.get(head)? else {
@@ -329,7 +330,7 @@ impl<'a> Index<'a> {
         name: &str,
         arity: u8,
         caller_is_test: bool,
-    ) -> Option<Vec<u32>> {
+    ) -> Option<Ids> {
         let mut pending = vec![base];
         let mut visited = HashSet::default();
         visited.insert(base);
@@ -349,7 +350,7 @@ impl<'a> Index<'a> {
                     continue;
                 }
                 pending.push(implementation);
-                let concrete: Vec<u32> = self
+                let concrete: Ids = self
                     .members_direct(implementation, name)
                     .into_iter()
                     .filter(|&method| self.symbols[method as usize].parent == implementation)
@@ -369,7 +370,7 @@ impl<'a> Index<'a> {
             }
         }
         targets.sort_unstable();
-        Some(targets)
+        Some(targets.into())
     }
 }
 

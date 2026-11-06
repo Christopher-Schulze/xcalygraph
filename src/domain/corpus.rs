@@ -97,7 +97,7 @@ pub struct ChangeSet {
     /// Indices into `records` of new files and files whose content or role changed.
     pub changed: Vec<usize>,
     /// Facts of `changed`, parallel to it, when the scan extracted them from the bytes it hashed.
-    pub facts: Vec<Option<Facts>>,
+    pub facts: Vec<Option<Box<Facts>>>,
     /// Paths of stored files that no longer exist.
     pub deleted: Vec<String>,
     /// True when any stored stat record differs from `records` (the file table must be rewritten).

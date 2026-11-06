@@ -46,6 +46,19 @@ pub fn replace_with(target: &Path, content: &[u8], mode: u32) -> io::Result<()> 
     result
 }
 
+/// As [`replace_with`] for content in several parts.
+pub fn replace_with_parts(target: &Path, parts: &[&[u8]], mode: u32) -> io::Result<()> {
+    let (temp, mut file) = create_beside(target, "tmp", mode)?;
+    let result = parts
+        .iter()
+        .try_for_each(|part| file.write_all(part))
+        .and_then(|()| fs::rename(&temp, target));
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
 /// A regular file with no other hard link; symbolic links are rejected by `symlink_metadata`.
 pub fn is_unshared_regular(metadata: &Metadata) -> bool {
     if !metadata.file_type().is_file() {

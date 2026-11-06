@@ -107,7 +107,7 @@ pub fn extract(record: &FileRecord, content: &[u8], capture_identities: bool) ->
     for (line, tag) in component_tags(&text, &skipped) {
         facts.refs.push(Ref {
             kind: RefKind::Call,
-            name: tag,
+            name: tag.into(),
             qualifier: None,
             scope: Some(component),
             line,
@@ -119,7 +119,7 @@ pub fn extract(record: &FileRecord, content: &[u8], capture_identities: bool) ->
         for (line, name) in directive_values(&text, &skipped) {
             facts.refs.push(Ref {
                 kind: RefKind::Value,
-                name,
+                name: name.into(),
                 qualifier: None,
                 scope: None,
                 line,
@@ -139,7 +139,7 @@ pub fn extract(record: &FileRecord, content: &[u8], capture_identities: bool) ->
             if let Some(store) = reference.name.strip_prefix('$')
                 && !store.is_empty()
             {
-                reference.name = store.to_owned();
+                reference.name = store.into();
             }
         }
     }

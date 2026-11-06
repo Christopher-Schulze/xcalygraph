@@ -224,8 +224,8 @@ impl<'a> Index<'a> {
         let (types, confidence) = if let Some((qualifier, name)) = split_qualified(name) {
             let reference = Ref {
                 kind: RefKind::Type,
-                name: name.to_owned(),
-                qualifier: Some(qualifier.to_owned()),
+                name: name.into(),
+                qualifier: Some(qualifier.into()),
                 scope,
                 line: 0,
                 arity: facts::NO_ARITY,

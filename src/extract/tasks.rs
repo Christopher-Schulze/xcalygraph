@@ -3,6 +3,7 @@
 //! `svc` symbols, Dockerfile stages as `task` symbols, with `runs` references to the scripts,
 //! entrypoints and tasks they run.
 
+use crate::domain::name::Name;
 use std::borrow::Cow;
 
 use super::json::{self, Value};
@@ -67,7 +68,7 @@ fn push_symbol(
 ) -> u32 {
     facts.symbols.push(Symbol {
         kind: Some(kind),
-        name: name.to_owned().into(),
+        name: name.into(),
         line,
         end_line: end_line.max(line),
         signature: facts::clip_space(&signature, 160).into(),
@@ -92,8 +93,8 @@ fn push_run(facts: &mut Facts, scope: Option<u32>, name: &str, qualifier: Option
     if !duplicate {
         facts.refs.push(Ref {
             kind: RefKind::Run,
-            name: name.to_owned(),
-            qualifier: qualifier.map(str::to_owned),
+            name: name.into(),
+            qualifier: qualifier.map(Name::from),
             scope,
             line,
             arity: NO_ARITY,
@@ -832,10 +833,11 @@ pub fn yaml(path: &str, text: &str, facts: &mut Facts) {
             }
             let start = entry.line.saturating_sub(1) as usize;
             let end = (entry.end as usize).min(source_lines.len());
-            if let Some(relative) = source_lines
-                .get(start..end)
-                .and_then(|lines| lines.iter().position(|line| line.contains(&reference.name)))
-            {
+            if let Some(relative) = source_lines.get(start..end).and_then(|lines| {
+                lines
+                    .iter()
+                    .position(|line| line.contains(reference.name.as_str()))
+            }) {
                 reference.line = (start + relative + 1) as u32;
             }
         }
@@ -901,7 +903,7 @@ mod tests {
             .filter(|reference| reference.kind == RefKind::Run)
             .map(|reference| {
                 let scope = reference.scope.map_or("-".to_owned(), |scope| {
-                    facts.symbols[scope as usize].name.clone().into_string()
+                    facts.symbols[scope as usize].name.to_string()
                 });
                 format!(
                     "{} {scope} -> {}{}",
@@ -1064,7 +1066,7 @@ mod tests {
         assert_eq!(symbols, ["1-2 Task build", "3-5 Task base"]);
         assert_eq!(
             facts.symbols[1].signature,
-            ("FROM gcr.io/distroless/base EXPOSE 8080").into()
+            "FROM gcr.io/distroless/base EXPOSE 8080"
         );
         assert_eq!(runs, ["5 base -> /app/start.sh"]);
     }

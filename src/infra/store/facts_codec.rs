@@ -293,9 +293,9 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
     let count = decoder.len()?;
     facts.imports.reserve_exact(count);
     for _ in 0..count {
-        let spec = decoder.string()?;
-        let alias = decoder.opt_string()?;
-        let names = decoder.strings()?;
+        let spec = decoder.name()?;
+        let alias = decoder.opt_name()?;
+        let names = decoder.names()?;
         let line = decoder.var_u32()?;
         let flags = decoder.u8()?;
         if flags & !3 != 0 {
@@ -315,8 +315,8 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
     for _ in 0..count {
         facts.refs.push(Ref {
             kind: RefKind::from_u8(decoder.u8()?).ok_or(DecodeError("ref kind"))?,
-            name: decoder.string()?,
-            qualifier: decoder.opt_string()?,
+            name: decoder.name()?,
+            qualifier: decoder.opt_name()?,
             scope: read_opt_index(decoder)?,
             line: decoder.var_u32()?,
             byte: read_opt_u32(decoder)?.unwrap_or(crate::domain::facts::NO_BYTE),
@@ -393,8 +393,8 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
     for _ in 0..count {
         facts.bindings.push(Binding {
             scope: read_opt_index(decoder)?,
-            name: decoder.string()?.into(),
-            type_name: decoder.string()?.into(),
+            name: decoder.name()?,
+            type_name: decoder.name()?,
             line: decoder.var_u32()?,
             visibility: match read_opt_u32(decoder)? {
                 Some(start) => {
@@ -740,25 +740,25 @@ mod tests {
             symbols: vec![
                 Symbol {
                     kind: Some(SymKind::Struct),
-                    name: "Store".to_owned().into(),
+                    name: "Store".into(),
                     parent: None,
                     owner: String::new().into(),
                     line: 3,
                     end_line: 9,
-                    signature: "type Store struct".to_owned().into(),
-                    doc: "Store keeps rows.".to_owned().into(),
-                    terms: "rows mutex insert".to_owned().into(),
+                    signature: "type Store struct".into(),
+                    doc: "Store keeps rows.".into(),
+                    terms: "rows mutex insert".into(),
                     exported: true,
                     flags: 0,
                 },
                 Symbol {
                     kind: Some(SymKind::Method),
-                    name: "Get".to_owned().into(),
+                    name: "Get".into(),
                     parent: Some(0),
-                    owner: "Store".to_owned().into(),
+                    owner: "Store".into(),
                     line: 11,
                     end_line: 15,
-                    signature: "func (s *Store) Get(id int) Row".to_owned().into(),
+                    signature: "func (s *Store) Get(id int) Row".into(),
                     doc: String::new().into(),
                     terms: String::new().into(),
                     exported: true,
@@ -766,9 +766,9 @@ mod tests {
                 },
             ],
             imports: vec![Import {
-                spec: "example.com/db".to_owned(),
-                alias: Some("database".to_owned()),
-                names: vec!["Open".to_owned()],
+                spec: "example.com/db".into(),
+                alias: Some("database".into()),
+                names: vec!["Open".into()],
                 line: 2,
                 reexport: true,
                 type_only: true,
@@ -776,8 +776,8 @@ mod tests {
             refs: vec![
                 Ref {
                     kind: RefKind::Call,
-                    name: "Query".to_owned(),
-                    qualifier: Some("s.db".to_owned()),
+                    name: "Query".into(),
+                    qualifier: Some("s.db".into()),
                     scope: Some(1),
                     line: 12,
                     byte: 140,
@@ -785,7 +785,7 @@ mod tests {
                 },
                 Ref {
                     kind: RefKind::Call,
-                    name: "length".to_owned(),
+                    name: "length".into(),
                     qualifier: None,
                     scope: Some(1),
                     line: 13,
@@ -817,8 +817,8 @@ mod tests {
             ),
             bindings: vec![Binding {
                 scope: Some(1),
-                name: "s".to_owned().into(),
-                type_name: "Store".to_owned().into(),
+                name: "s".into(),
+                type_name: "Store".into(),
                 line: 11,
                 visibility: None,
                 value_byte: crate::domain::facts::NO_BYTE,
@@ -928,8 +928,8 @@ mod tests {
     fn import_roles_round_trip_and_reserved_flags_are_rejected() -> DecodeResult<()> {
         let mut facts = Facts {
             imports: vec![Import {
-                spec: "./api.js".to_owned(),
-                names: vec!["Api".to_owned()],
+                spec: "./api.js".into(),
+                names: vec!["Api".into()],
                 ..Import::default()
             }],
             ..Facts::default()
@@ -969,7 +969,7 @@ mod tests {
         let facts = Facts {
             symbols: vec![Symbol {
                 kind: Some(SymKind::Fn),
-                name: "platform_call".to_owned().into(),
+                name: "platform_call".into(),
                 exported: true,
                 flags: FLAG_TEST | FLAG_RUST_CFG_UNIX | FLAG_RUST_CFG_NOT_UNIX,
                 ..Symbol::default()
@@ -987,7 +987,7 @@ mod tests {
         let mut facts = sample();
         facts.bindings.push(Binding {
             scope: Some(1),
-            name: "parse".to_owned().into(),
+            name: "parse".into(),
             type_name: String::new().into(),
             line: 14,
             visibility: Some(150..220),
@@ -1100,7 +1100,7 @@ mod tests {
         let mut facts = Facts {
             symbols: vec![Symbol {
                 kind: Some(SymKind::Iface),
-                name: "Window".to_owned().into(),
+                name: "Window".into(),
                 ..Symbol::default()
             }],
             source_identities: Some(
@@ -1258,7 +1258,7 @@ mod tests {
         let mut facts = sample();
         facts.symbols[0].kind = Some(SymKind::Iface);
         let mut base = facts.symbols[0].clone();
-        base.name = "Box".to_owned().into();
+        base.name = "Box".into();
         base.exported = false;
         facts.symbols.push(base);
         facts.fields.push(Fields {

@@ -1,5 +1,7 @@
 //! Per-file facts produced by extraction (`docs/spec.md` section 5).
 
+use crate::domain::name::Name;
+
 /// Symbol kinds (section 5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u8)]
@@ -116,15 +118,15 @@ pub const FLAG_RUST_CFG_NOT_UNIX: u8 = 128;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Symbol {
     pub kind: Option<SymKind>,
-    pub name: Box<str>,
+    pub name: Name,
     /// Index of the enclosing symbol in the same file.
     pub parent: Option<u32>,
     /// Type a method belongs to when declared outside the type (Go receiver, Rust `impl`).
-    pub owner: Box<str>,
+    pub owner: Name,
     pub line: u32,
     pub end_line: u32,
     /// One line, whitespace-normalized, body removed, max 160 chars.
-    pub signature: Box<str>,
+    pub signature: Name,
     /// First sentence of the attached doc comment, max 120 chars.
     pub doc: Box<str>,
     /// Distinct search tokens of the body outside nested symbols (identifiers, strings,
@@ -146,10 +148,10 @@ impl Symbol {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Import {
     /// Module specifier as written (path, package, namespace).
-    pub spec: String,
-    pub alias: Option<String>,
+    pub spec: Name,
+    pub alias: Option<Name>,
     /// Explicitly imported names; empty for whole-module imports.
-    pub names: Vec<String>,
+    pub names: Vec<Name>,
     pub line: u32,
     /// `pub use` and similar re-exports.
     pub reexport: bool,
@@ -201,9 +203,9 @@ impl RefKind {
 pub struct Ref {
     pub kind: RefKind,
     /// Identifier, or the member of a member chain.
-    pub name: String,
+    pub name: Name,
     /// Receiver or qualifier of a member chain (`x` in `x.m()`, `pkg` in `pkg.F`).
-    pub qualifier: Option<String>,
+    pub qualifier: Option<Name>,
     /// Enclosing symbol index in the same file.
     pub scope: Option<u32>,
     pub line: u32,
@@ -561,8 +563,8 @@ pub struct SourceIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
     pub scope: Option<u32>,
-    pub name: Box<str>,
-    pub type_name: Box<str>,
+    pub name: Name,
+    pub type_name: Name,
     pub line: u32,
     /// Half-open byte range in which the binding is active, when source-proven.
     pub visibility: Option<std::ops::Range<u32>>,

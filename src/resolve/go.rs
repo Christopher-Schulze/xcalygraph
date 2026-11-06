@@ -1,19 +1,20 @@
 //! Go imports and structural interface implementations.
 
+use super::Ids;
 use super::*;
 
 impl<'a> Index<'a> {
     pub(super) fn go_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
         for import in &facts.imports {
             let target = self.modules.get(&import.spec);
-            let local = import.alias.clone().unwrap_or_else(|| match target {
-                Some(module) => self.go_package_name(module),
+            let local = import.alias.unwrap_or_else(|| match target {
+                Some(module) => self.go_package_name(module).into(),
                 None => import
                     .spec
                     .rsplit('/')
                     .next()
                     .unwrap_or(&import.spec)
-                    .to_owned(),
+                    .into(),
             });
             if local == "_" {
                 continue;
@@ -23,7 +24,9 @@ impl<'a> Index<'a> {
                     if local == "." {
                         imports.globs.push(module);
                     } else {
-                        imports.names.insert(local, Target::Module(module));
+                        imports
+                            .names
+                            .insert(local.to_string(), Target::Module(module));
                     }
                     imports.modules.push(module);
                 }
@@ -31,7 +34,7 @@ impl<'a> Index<'a> {
                     let external = self.go_external(&import.spec);
                     imports
                         .names
-                        .insert(local, Target::External(external.clone()));
+                        .insert(local.to_string(), Target::External(external.clone()));
                     if let Some(external) = external.strip_prefix("ext:") {
                         imports.externals.push(external.to_owned());
                     }
@@ -43,7 +46,7 @@ impl<'a> Index<'a> {
 
     pub(super) fn go_structural_implementations(&self) -> Vec<(u32, u32, Confidence, u32)> {
         let mut interfaces: Vec<(u32, Vec<(&str, usize)>)> = Vec::new();
-        let mut concrete: Vec<u32> = Vec::new();
+        let mut concrete: Ids = Ids::new();
         for (id, symbol) in self.symbols.iter().enumerate() {
             if self.file_type(symbol.file) != Some(FileType::Go) {
                 continue;

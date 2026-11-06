@@ -70,7 +70,7 @@ impl ModuleMap {
     }
 }
 
-pub fn assign(files: &[FileRecord], facts: &[Option<Facts>]) -> ModuleMap {
+pub fn assign(files: &[FileRecord], facts: &[Option<Box<Facts>>]) -> ModuleMap {
     let mut go_modules: Vec<(String, String)> = Vec::new();
     let mut crates: Vec<(String, String)> = Vec::new();
     let mut rust_target_roots = HashMap::new();
@@ -124,7 +124,7 @@ pub fn assign(files: &[FileRecord], facts: &[Option<Facts>]) -> ModuleMap {
     let base_infos: Vec<ModuleInfo> = files
         .iter()
         .zip(facts)
-        .map(|(record, facts)| module_of(&map, record, facts.as_ref()))
+        .map(|(record, facts)| module_of(&map, record, facts.as_deref()))
         .collect();
     if rust_path_refs.is_empty() {
         for (record, mut info) in files.iter().zip(base_infos) {
@@ -314,7 +314,7 @@ struct RustModulePathRef<'a> {
     inline_path: &'a str,
 }
 
-fn rust_module_path_refs(facts: &[Option<Facts>]) -> Vec<RustModulePathRef<'_>> {
+fn rust_module_path_refs(facts: &[Option<Box<Facts>>]) -> Vec<RustModulePathRef<'_>> {
     let mut references = Vec::new();
     for (source, file_facts) in facts.iter().enumerate() {
         let Some(file_facts) = file_facts else {
@@ -345,7 +345,7 @@ fn rust_module_path_refs(facts: &[Option<Facts>]) -> Vec<RustModulePathRef<'_>> 
 
 fn resolve_rust_path_targets(
     files: &[FileRecord],
-    facts: &[Option<Facts>],
+    facts: &[Option<Box<Facts>>],
     map: &ModuleMap,
     base_infos: &[ModuleInfo],
     references: &[RustModulePathRef<'_>],

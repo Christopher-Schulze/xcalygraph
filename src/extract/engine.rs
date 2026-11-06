@@ -17,6 +17,7 @@
 //! - `@env` with `@env.name`; `@package` for the declared package or namespace.
 //! - Captures starting with `_` serve predicates only.
 
+use crate::domain::name::Name;
 use std::cell::RefCell;
 use std::collections::HashSet;
 
@@ -119,7 +120,7 @@ pub struct FileContext<'a> {
 ))]
 pub fn single_import(text: &str, line: u32, reexport: bool) -> Vec<Import> {
     vec![Import {
-        spec: unquote(text).to_owned(),
+        spec: unquote(text).into(),
         line,
         reexport,
         ..Import::default()
@@ -134,7 +135,7 @@ thread_local! {
 struct RawDef<'tree> {
     node: Option<Node<'tree>>,
     kind: Option<SymKind>,
-    name: String,
+    name: Name,
     source_identity: Option<String>,
     name_node: usize,
     owner: Option<String>,
@@ -145,9 +146,9 @@ struct RawDef<'tree> {
 #[derive(Default)]
 struct RawRef {
     kind: Option<RefKind>,
-    name: String,
+    name: Name,
     source_identity: Option<String>,
-    qualifier: Option<String>,
+    qualifier: Option<Name>,
     position: usize,
     line: u32,
     arity: u8,
@@ -174,8 +175,8 @@ struct RawImport<'tree> {
 
 #[derive(Default)]
 struct RawBinding {
-    name: Option<String>,
-    type_name: Option<String>,
+    name: Option<Name>,
+    type_name: Option<Name>,
     declared: bool,
     call: bool,
     try_result: bool,
@@ -420,11 +421,11 @@ fn collect(
                     name.id(),
                     RawRef {
                         kind: Some(RefKind::Path),
-                        name: path_value,
-                        qualifier: Some(facts::rust_module_path_ref_qualifier(
-                            &module_path,
-                            &inline_path,
-                        )),
+                        name: path_value.into(),
+                        qualifier: Some(
+                            facts::rust_module_path_ref_qualifier(&module_path, &inline_path)
+                                .into(),
+                        ),
                         position: module.start_byte(),
                         line,
                         arity: facts::NO_ARITY,
@@ -488,7 +489,7 @@ fn collect(
                 path,
                 primary_node,
                 kind,
-                name_text,
+                name_text.to_string(),
                 source,
                 reference.arity,
             );
@@ -496,9 +497,9 @@ fn collect(
                 && kind == Some(RefKind::Implement)
                 && primary_node.kind() == "trait_bounds"
             {
-                type_name(&reference_name)
+                type_name(&reference_name).into()
             } else {
-                reference_name
+                reference_name.into()
             };
             reference.source_identity = source_identity;
             reference.position = if path.ends_with(".rs") && kind == Some(RefKind::Implement) {
@@ -539,7 +540,7 @@ fn collect(
                 } else {
                     qualifier_text
                 };
-                reference.qualifier = Some(facts::clip_space(&qualifier_text, 80));
+                reference.qualifier = Some(facts::clip_space(&qualifier_text, 80).into());
             }
             if path.ends_with(".jl")
                 && kind == Some(RefKind::Call)
@@ -594,25 +595,26 @@ fn collect(
                     entry.line = line;
                     entry.visibility = super::bindings::visibility(path, primary_node);
                     if let Some(node) = get("binding.name") {
-                        entry.name = Some(text(node).to_owned());
+                        entry.name = Some(Name::new(text(node)));
                     }
                     if let Some(node) = get("binding.type") {
                         let type_text = text(node);
                         entry.type_name = Some(if path.ends_with(".jl") {
-                            facts::normalize_space(type_text)
+                            facts::normalize_space(type_text).into()
                         } else if let Some(element) =
                             super::bindings::declared_element(path, node, source)
                         {
                             match declared_type(path, text(element)) {
                                 Some(element) if !element.starts_with("elements:") => {
-                                    format!("elements:{element}")
+                                    format!("elements:{element}").into()
                                 }
-                                _ => facts::PATTERN_BINDING.to_owned(),
+                                _ => Name::new(facts::PATTERN_BINDING),
                             }
                         } else {
                             declared_type(path, type_text)
                                 .or_else(|| composite_type_identity(path, type_text))
                                 .unwrap_or_else(|| facts::PATTERN_BINDING.to_owned())
+                                .into()
                         });
                         entry.declared = true;
                         if path.ends_with(".rs") {
@@ -621,12 +623,12 @@ fn collect(
                         }
                     } else if let Some(node) = get("binding.ctor") {
                         // A constructor call fixes the type as firmly as a declaration.
-                        entry.type_name = Some(type_name(text(node)));
+                        entry.type_name = Some(type_name(text(node)).into());
                         entry.declared = true;
                     } else if let Some(node) = get("binding.range") {
-                        entry.type_name = Some(format!("range:{}", text(node)));
+                        entry.type_name = Some(format!("range:{}", text(node)).into());
                     } else if get("binding.pattern").is_some() {
-                        entry.type_name = Some(facts::PATTERN_BINDING.to_owned());
+                        entry.type_name = Some(Name::new(facts::PATTERN_BINDING));
                     } else if let Some(node) = get("binding.call")
                         && (!path.ends_with(".rs") || !entry.declared)
                     {
@@ -636,8 +638,9 @@ fn collect(
                                 primary_node,
                                 node,
                                 source,
-                            ),
-                            _ => Some(facts::normalize_space(text(node))),
+                            )
+                            .map(Name::from),
+                            _ => Some(facts::normalize_space(text(node)).into()),
                         };
                         entry.call = true;
                         entry.try_result = path.ends_with(".rs")
@@ -677,7 +680,7 @@ fn collect(
                             let _ = literal;
                         } else {
                             entry.name = normalize_captured_name(path, node, text(node))
-                                .map(FieldName::Text);
+                                .map(|name| FieldName::Text(name.to_string()));
                         }
                     }
                     if let Some(node) = get("field.type") {
@@ -944,8 +947,7 @@ fn assemble(assembly: Assembly) -> Parsed {
             .or_else(|| {
                 parent
                     .filter(|&p| kind == SymKind::Method && symbols[p].kind().is_type())
-                    .map(|p| symbols[p].name.clone())
-                    .map(Into::into)
+                    .map(|p| symbols[p].name.to_string())
             })
             .unwrap_or_default();
         let decorations = decorations(node, source);
@@ -1007,7 +1009,7 @@ fn assemble(assembly: Assembly) -> Parsed {
         }
         symbols.push(Symbol {
             kind: Some(kind),
-            name: def.name.clone().into(),
+            name: def.name,
             parent: parent.and_then(|p| u32::try_from(p).ok()),
             owner: owner.into(),
             line: row(node),
@@ -1167,8 +1169,8 @@ fn assemble(assembly: Assembly) -> Parsed {
             facts_refs.push(AssembledRef {
                 reference: Ref {
                     kind: RefKind::Implement,
-                    name: trait_name.clone(),
-                    qualifier: Some(target.clone()),
+                    name: Name::new(trait_name),
+                    qualifier: Some(Name::new(target)),
                     scope: None,
                     line: row(*impl_node),
                     byte: u32::try_from(impl_node.start_byte()).unwrap_or(facts::NO_BYTE),
@@ -1262,9 +1264,9 @@ fn assemble(assembly: Assembly) -> Parsed {
                 ImportExpansion::Tree(expand) => expand(tree, source, raw.line, raw.reexport),
             },
             (None, Some(path)) => vec![Import {
-                spec: path,
-                alias: raw.alias,
-                names: raw.names,
+                spec: path.into(),
+                alias: raw.alias.map(Name::from),
+                names: raw.names.iter().map(Name::from).collect(),
                 line: raw.line,
                 reexport: raw.reexport,
                 type_only: false,
@@ -1288,16 +1290,16 @@ fn assemble(assembly: Assembly) -> Parsed {
             let name = raw.name?;
             let type_name = match raw.type_name.filter(|name| !name.is_empty()) {
                 Some(type_name) => type_name,
-                None if path.ends_with(".rs") => String::new(),
+                None if path.ends_with(".rs") => String::new().into(),
                 None => return None,
             };
             Some(Binding {
                 scope: scope_of(raw.position),
-                name: name.into(),
+                name,
                 type_name: if raw.call {
                     format!("{type_name}(){}", if raw.try_result { "?" } else { "" }).into()
                 } else {
-                    type_name.into()
+                    type_name
                 },
                 line: raw.line,
                 visibility: raw.visibility,
@@ -1439,13 +1441,13 @@ fn is_primary(name: &str) -> bool {
         )
 }
 
-fn normalize_captured_name(path: &str, node: Node, name: &str) -> Option<String> {
+fn normalize_captured_name(path: &str, node: Node, name: &str) -> Option<Name> {
     #[cfg(feature = "lang-typescript")]
     if super::lang::typescript::is_typescript_path(path) && node.kind() == "property_identifier" {
-        return super::lang::typescript::normalize_identifier_name(name);
+        return super::lang::typescript::normalize_identifier_name(name).map(Name::from);
     }
     let _ = (path, node);
-    Some(name.to_owned())
+    Some(Name::new(name))
 }
 
 fn def_kind(kind: &str) -> Option<SymKind> {

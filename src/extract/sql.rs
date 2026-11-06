@@ -143,7 +143,7 @@ pub fn objects(text: &str, facts: &mut Facts) {
         } else {
             None
         };
-        let skip_own = facts.symbols.last().map(|symbol| symbol.name.clone());
+        let skip_own = facts.symbols.last().map(|symbol| symbol.name);
         for (name, relative) in table_names(statement) {
             let name = object_name(&original[relative..relative + name.len()]);
             // `CREATE TABLE t`: the table's own name is no query.
@@ -261,7 +261,7 @@ fn push_query(facts: &mut Facts, scope: Option<u32>, name: &str, line: u32) {
     if !duplicate {
         facts.refs.push(Ref {
             kind: RefKind::Query,
-            name: name.to_owned(),
+            name: name.into(),
             qualifier: None,
             scope,
             line,
@@ -590,7 +590,7 @@ mod tests {
             .iter()
             .map(|reference| {
                 let scope = reference.scope.map_or("-".to_owned(), |scope| {
-                    facts.symbols[scope as usize].name.clone().into_string()
+                    facts.symbols[scope as usize].name.to_string()
                 });
                 format!("{} {scope} -> {}", reference.line, reference.name)
             })
@@ -646,7 +646,7 @@ mod tests {
         let mut facts = Facts::default();
         facts.symbols.push(Symbol {
             kind: Some(SymKind::Fn),
-            name: "load".to_owned().into(),
+            name: "load".into(),
             line: 1,
             end_line: 6,
             ..Symbol::default()

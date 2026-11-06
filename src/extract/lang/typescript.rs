@@ -6,6 +6,7 @@ use super::Pack;
 use crate::domain::facts::FieldName;
 use crate::domain::facts::{FLAG_DECLARATION, Import, SymKind};
 use crate::domain::filetype::FileType;
+use crate::domain::name::Name;
 use crate::extract::engine::{Definition, FileContext, Hooks, ImportExpansion, unquote};
 
 #[cfg(feature = "lang-typescript")]
@@ -1787,9 +1788,9 @@ fn local_export_aliases(statement: tree_sitter::Node, source: &[u8], line: u32) 
                 && let Some((name, alias, type_only)) = import_specifier(specifier, source)
             {
                 imports.push(Import {
-                    spec: String::new(),
-                    alias: alias.map(str::to_owned),
-                    names: vec![name.to_owned()],
+                    spec: String::new().into(),
+                    alias: alias.map(Name::from),
+                    names: vec![name.into()],
                     line,
                     reexport: true,
                     type_only,
@@ -1828,9 +1829,9 @@ fn expand_import(
     let spec = unquote(text(spec)).to_owned();
     let statement_type_only = type_only_import(statement);
     let import = |name: &str, alias: Option<&str>, type_only: bool| Import {
-        spec: spec.clone(),
-        alias: alias.map(str::to_owned),
-        names: vec![name.to_owned()],
+        spec: spec.clone().into(),
+        alias: alias.map(Name::from),
+        names: vec![name.into()],
         line,
         reexport,
         type_only: statement_type_only || type_only,
@@ -1885,12 +1886,8 @@ fn expand_import(
                 .children(&mut cursor)
                 .any(|child| child.kind() == "*");
         imports.push(Import {
-            spec,
-            names: if glob {
-                vec!["*".to_owned()]
-            } else {
-                Vec::new()
-            },
+            spec: spec.into(),
+            names: if glob { vec!["*".into()] } else { Vec::new() },
             line,
             reexport,
             type_only: statement_type_only,
@@ -2751,9 +2748,14 @@ mod tests {
             .into_iter()
             .map(|import| {
                 (
-                    import.spec,
-                    import.names.join(","),
-                    import.alias,
+                    import.spec.to_string(),
+                    import
+                        .names
+                        .iter()
+                        .map(|name| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    import.alias.map(|alias| alias.to_string()),
                     import.reexport,
                 )
             })

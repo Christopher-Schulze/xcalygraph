@@ -1,6 +1,7 @@
 //! Receivers that are expressions: `Builder::new().depth(1).build()`, `c.req.header()`. The type
 //! flows through declared return and field types; every such edge is inferred.
 
+use super::Ids;
 use super::*;
 
 /// One step of a receiver expression.
@@ -136,7 +137,7 @@ impl Index<'_> {
         file: u32,
         scope: Option<u32>,
         result: &str,
-    ) -> Option<(Vec<u32>, Confidence)> {
+    ) -> Option<(Ids, Confidence)> {
         if self.file_type(file) == Some(FileType::Rust) {
             let (result, _) = self.rust_result(file, scope, result);
             let result = crate::extract::engine::type_name(result);
@@ -159,7 +160,7 @@ impl Index<'_> {
     }
 
     /// The declared result type of a member named `name` of one of `types`, in its own file.
-    pub(super) fn member_result(&self, types: &[u32], name: &str) -> Option<Vec<u32>> {
+    pub(super) fn member_result(&self, types: &[u32], name: &str) -> Option<Ids> {
         types.iter().find_map(|&type_symbol| {
             let member = *self.members(type_symbol, name).first()?;
             let result = *self.returns.get(&member)?;
@@ -178,7 +179,7 @@ impl Index<'_> {
         imports: &Imports,
         reference: &Ref,
         steps: &[Step],
-    ) -> Result<Vec<u32>, ChainFailure> {
+    ) -> Result<Ids, ChainFailure> {
         let (first, rest) = steps.split_first().ok_or(ChainFailure::Unknown)?;
         let rust = self.file_type(file) == Some(FileType::Rust);
         let mut layers = if rust && first.call {

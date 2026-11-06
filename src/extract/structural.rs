@@ -2,6 +2,7 @@
 //! patterns for Apex, Razor, Blade, EJS, Jinja, COBOL and XAML. Includes are path
 //! references to the included file; calls resolve by unique name (section 6, inferred).
 
+use crate::domain::name::Name;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -35,7 +36,7 @@ fn push_symbol(facts: &mut Facts, kind: SymKind, name: &str, line: u32, signatur
     let parent = innermost(facts, line);
     facts.symbols.push(Symbol {
         kind: Some(kind),
-        name: name.to_owned().into(),
+        name: name.into(),
         parent,
         line,
         end_line: line,
@@ -66,8 +67,8 @@ fn push_ref(facts: &mut Facts, kind: RefKind, name: &str, qualifier: Option<&str
     if !duplicate && !name.is_empty() {
         facts.refs.push(Ref {
             kind,
-            name: name.to_owned(),
-            qualifier: qualifier.map(str::to_owned),
+            name: name.into(),
+            qualifier: qualifier.map(Name::from),
             scope,
             line,
             arity: NO_ARITY,
@@ -235,7 +236,7 @@ fn apex(text: &str) -> Facts {
         if kind == SymKind::Method
             && let Some(parent) = facts.symbols[id as usize].parent
         {
-            facts.symbols[id as usize].owner = facts.symbols[parent as usize].name.clone();
+            facts.symbols[id as usize].owner = facts.symbols[parent as usize].name;
         }
         if let Some(base) = base {
             push_ref(&mut facts, RefKind::Inherit, &base, None, line);
@@ -393,7 +394,7 @@ fn razor(path: &str, text: &str) -> Facts {
                 .trim_end_matches('{'),
         );
         facts.symbols[id as usize].end_line = block_end(text, offset);
-        facts.symbols[id as usize].owner = stem.to_owned().into();
+        facts.symbols[id as usize].owner = stem.into();
     }
     for found in tag.captures_iter(text) {
         let Some(name) = found.get(1) else { continue };
@@ -845,7 +846,7 @@ mod tests {
             .iter()
             .map(|symbol| {
                 let parent = symbol.parent.map_or("-".to_owned(), |p| {
-                    facts.symbols[p as usize].name.clone().into_string()
+                    facts.symbols[p as usize].name.to_string()
                 });
                 format!(
                     "{} {} {}-{} <{parent} f{}",

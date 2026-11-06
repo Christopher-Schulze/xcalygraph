@@ -8,7 +8,7 @@ use std::ops::Range;
 use std::path::Path;
 
 use memmap2::Mmap;
-use xxhash_rust::xxh3::xxh3_64;
+use xxhash_rust::xxh3::{Xxh3, xxh3_64};
 
 pub const MAGIC: [u8; 8] = *b"XCALYGR\x00";
 /// Bumped on every incompatible change of any index file layout.
@@ -82,6 +82,65 @@ pub fn write(path: &Path, image: &[u8]) -> io::Result<u64> {
     }
     crate::infra::file_access::replace_with(path, image, 0o644)?;
     Ok(image.len() as u64)
+}
+
+/// Streams a large image: the same bytes as [`build`] plus [`write`] without a second copy of the
+/// sections in memory. An existing byte-identical image is left untouched.
+pub fn write_sections(path: &Path, kind: Kind, sections: &[&[u8]]) -> io::Result<u64> {
+    let table_len = align(sections.len() * 16);
+    let mut offset = HEADER_LEN + table_len;
+    let mut table = Vec::with_capacity(table_len);
+    for section in sections {
+        table.extend_from_slice(&(offset as u64).to_le_bytes());
+        table.extend_from_slice(&(section.len() as u64).to_le_bytes());
+        offset = align(offset + section.len());
+    }
+    table.resize(table_len, 0);
+    let padding = [0u8; ALIGN];
+    let mut parts: Vec<&[u8]> = Vec::with_capacity(sections.len() * 2 + 1);
+    parts.push(&table);
+    let mut end = HEADER_LEN + table_len;
+    for section in sections {
+        parts.push(section);
+        end += section.len();
+        parts.push(&padding[..align(end) - end]);
+        end = align(end);
+    }
+    let mut checksum = Xxh3::new();
+    for part in &parts {
+        checksum.update(part);
+    }
+    let mut header = [0u8; HEADER_LEN];
+    header[0..8].copy_from_slice(&MAGIC);
+    header[8..12].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
+    header[12..16].copy_from_slice(&(kind as u32).to_le_bytes());
+    header[16..20].copy_from_slice(&(sections.len() as u32).to_le_bytes());
+    header[24..32].copy_from_slice(&((end - HEADER_LEN) as u64).to_le_bytes());
+    header[32..40].copy_from_slice(&checksum.digest().to_le_bytes());
+    parts.insert(0, &header);
+    if same_parts(path, &parts, end as u64) {
+        return Ok(0);
+    }
+    crate::infra::file_access::replace_with_parts(path, &parts, 0o644)?;
+    Ok(end as u64)
+}
+
+fn same_parts(path: &Path, parts: &[&[u8]], length: u64) -> bool {
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    if file.metadata().map(|meta| meta.len()).ok() != Some(length) {
+        return false;
+    }
+    const CHUNK: usize = 64 * 1024;
+    let mut buffer = [0u8; CHUNK];
+    for expected in parts.iter().flat_map(|part| part.chunks(CHUNK)) {
+        let actual = &mut buffer[..expected.len()];
+        if file.read_exact(actual).is_err() || actual != expected {
+            return false;
+        }
+    }
+    true
 }
 
 fn same_image(path: &Path, image: &[u8]) -> bool {

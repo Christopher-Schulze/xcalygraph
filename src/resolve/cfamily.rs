@@ -4,6 +4,7 @@
 //! visible transitively; references to declarations prefer their definition, the header's paired
 //! implementation file first; C++ `ns::name` and `Type::member` resolve by qualified suffix.
 
+use super::Ids;
 use super::{Imports, Index, modules};
 use crate::domain::facts::{FLAG_DECLARATION, Facts, SymKind};
 use crate::domain::filetype::FileType;
@@ -30,7 +31,7 @@ pub(super) fn file_key(path: &str) -> String {
 /// directory they end with.
 pub(super) fn include_dirs(
     files: &[crate::domain::corpus::FileRecord],
-    facts: &[Option<Facts>],
+    facts: &[Option<Box<Facts>>],
 ) -> Vec<String> {
     let mut root_dirs: Vec<&str> = files
         .iter()
@@ -164,8 +165,8 @@ impl Index<'_> {
                 }
             }
         }
-        let mut visible: Vec<u32> = Vec::new();
-        let mut frontier: Vec<u32> = vec![file];
+        let mut visible: Ids = Ids::new();
+        let mut frontier: Ids = smallvec::smallvec![file];
         for _ in 0..MAX_INCLUDE_DEPTH {
             let mut next = Vec::new();
             for &current in &frontier {
@@ -182,7 +183,7 @@ impl Index<'_> {
             if next.is_empty() {
                 break;
             }
-            frontier = next;
+            frontier = next.into();
         }
         for target in visible {
             let module = self.module_of(target);
@@ -199,7 +200,7 @@ impl Index<'_> {
             return None;
         }
         let owner = self.owner_name(declaration);
-        let definitions: Vec<u32> = self
+        let definitions: Ids = self
             .by_name
             .get(symbol.name.as_str())
             .into_iter()
@@ -223,7 +224,7 @@ impl Index<'_> {
                     super::parameter_count(&other.signature, &other.name).map(|(_, total, _)| total)
                 };
                 let declared = count(declaration);
-                let several: Vec<u32> = several
+                let several: Ids = several
                     .iter()
                     .copied()
                     .filter(|&candidate| count(candidate) == declared)
@@ -232,7 +233,7 @@ impl Index<'_> {
                     return Some(*only);
                 }
                 let stem = stem(&self.input.files[symbol.file as usize].path);
-                let paired: Vec<u32> = several
+                let paired: Ids = several
                     .iter()
                     .copied()
                     .filter(|&candidate| {
@@ -252,7 +253,7 @@ impl Index<'_> {
         if symbol_record.parent != super::NONE {
             let parent = &self.symbols[symbol_record.parent as usize];
             if parent.kind.is_type() {
-                return parent.name.clone();
+                return parent.name.to_string();
             }
         }
         self.facts(symbol_record.file)
@@ -261,16 +262,16 @@ impl Index<'_> {
                     .symbols
                     .get((symbol - self.base[symbol_record.file as usize]) as usize)
             })
-            .map(|local| local.owner.clone())
+            .map(|local| local.owner)
             .unwrap_or_default()
-            .into_string()
+            .to_string()
     }
 
     /// C++ `ns::name`, `Type::member`, `ns::Type::member`: symbols whose qualified name ends with
     /// the written one.
-    pub(super) fn cpp_qualified(&self, qualifier: &str, name: &str) -> Option<Vec<u32>> {
+    pub(super) fn cpp_qualified(&self, qualifier: &str, name: &str) -> Option<Ids> {
         let written = format!("{}.{name}", qualifier.replace("::", "."));
-        let found: Vec<u32> = self
+        let found: Ids = self
             .by_name
             .get(name)
             .into_iter()

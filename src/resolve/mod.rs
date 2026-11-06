@@ -18,6 +18,7 @@ mod typescript;
 #[cfg(feature = "lang-typescript")]
 mod typescript_groups;
 
+use crate::domain::name::Name;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -52,7 +53,7 @@ pub struct Input<'a> {
     /// frees its own, which lowers the peak of a large tree by a third.
     pub refs: &'a [Mutex<Vec<Ref>>],
     /// Facts parallel to `files`; `None` for files indexed by path only.
-    pub facts: &'a [Option<Facts>],
+    pub facts: &'a [Option<Box<Facts>>],
 }
 
 /// Indexes over all symbols, shared by every file's resolution.
@@ -123,7 +124,7 @@ struct Index<'a> {
 #[derive(Debug, Clone, PartialEq)]
 enum Target {
     Module(u32),
-    Symbols(Vec<u32>),
+    Symbols(Ids),
     External(String),
 }
 
@@ -143,15 +144,15 @@ struct Imports {
 
 struct Resolved {
     edges: Vec<Edge>,
-    ambiguous_names: Vec<String>,
-    stale: Vec<(u32, u32, String)>,
+    ambiguous_names: Vec<Name>,
+    stale: Vec<(u32, u32, Name)>,
     /// Modules this file imports (module import graph).
     imported_modules: Vec<u32>,
     ambiguous: u32,
     externals: Vec<String>,
 }
 
-pub fn build(files: &[FileRecord], mut facts: Vec<Option<Facts>>) -> Graph {
+pub fn build(files: &[FileRecord], mut facts: Vec<Option<Box<Facts>>>) -> Graph {
     let modules = modules::assign(files, &facts);
     let refs: Vec<Mutex<Vec<Ref>>> = facts
         .iter_mut()
@@ -179,7 +180,7 @@ pub fn build(files: &[FileRecord], mut facts: Vec<Option<Facts>>) -> Graph {
 
 /// Moves the text only the search index reads from the facts into the graph, so it exists once
 /// while resolving (symbols keep the order of their file's facts).
-fn move_search_text(graph: &mut Graph, facts: &mut [Option<Facts>]) {
+fn move_search_text(graph: &mut Graph, facts: &mut [Option<Box<Facts>>]) {
     for (file, facts) in graph.files.iter_mut().zip(facts) {
         let Some(facts) = facts else { continue };
         file.doc = std::mem::take(&mut facts.doc);
@@ -320,12 +321,12 @@ impl<'a> Index<'a> {
                     symbols.push(GraphSymbol {
                         file: file as u32,
                         kind: symbol.kind(),
-                        name: symbol.name.clone().into_string(),
-                        qualified: symbol.name.clone().into_string(),
+                        name: symbol.name,
+                        qualified: symbol.name,
                         parent,
                         line: symbol.line,
                         end_line: symbol.end_line,
-                        signature: String::new(),
+                        signature: String::new().into(),
                         doc: String::new(),
                         terms: String::new(),
                         exported: true,
@@ -358,12 +359,12 @@ impl<'a> Index<'a> {
                 symbols.push(GraphSymbol {
                     file: file as u32,
                     kind: symbol.kind(),
-                    name: symbol.name.clone().into_string(),
-                    qualified,
+                    name: symbol.name,
+                    qualified: qualified.into(),
                     parent,
                     line: symbol.line,
                     end_line: symbol.end_line,
-                    signature: symbol.signature.clone().into_string(),
+                    signature: symbol.signature,
                     doc: String::new(),
                     terms: String::new(),
                     exported: symbol.exported,
@@ -373,7 +374,7 @@ impl<'a> Index<'a> {
             }
         }
         let mut scope_names: HashMap<&str, u32> = HashMap::default();
-        let scope_ids: Vec<u32> = modules
+        let scope_ids: Ids = modules
             .modules
             .iter()
             .map(|module| {
@@ -426,7 +427,7 @@ impl<'a> Index<'a> {
             interface_canonical,
             #[cfg(feature = "lang-typescript")]
             typescript_declaration_pairs: HashMap::default(),
-            scope_ids,
+            scope_ids: scope_ids.into_vec(),
             package_names,
             go_requires,
             implementation_pairs: Vec::new(),
@@ -453,7 +454,7 @@ impl<'a> Index<'a> {
                 .par_iter()
                 .map(|facts| {
                     facts
-                        .as_ref()
+                        .as_deref()
                         .map_or_else(FileNames::default, FileNames::new)
                 })
                 .collect(),
@@ -647,7 +648,7 @@ impl<'a> Index<'a> {
     }
 
     fn facts(&self, file: u32) -> Option<&'a Facts> {
-        self.input.facts[file as usize].as_ref()
+        self.input.facts[file as usize].as_deref()
     }
 
     fn file_type(&self, file: u32) -> Option<FileType> {
@@ -721,10 +722,10 @@ impl<'a> Index<'a> {
         if reference.kind != RefKind::Call {
             return None;
         }
-        let candidates: Vec<u32> = match file_type {
+        let candidates: Ids = match file_type {
             FileType::Robot => {
                 let wanted = robot_key(&reference.name);
-                let visible: Vec<u32> = std::iter::once(file)
+                let visible: Ids = std::iter::once(file)
                     .chain(
                         imports
                             .files
@@ -968,7 +969,7 @@ impl<'a> Index<'a> {
     }
 
     /// `module` symbols of a language named `name` (Julia, OCaml nested modules).
-    fn module_symbols(&self, name: &str, file_type: FileType) -> Vec<u32> {
+    fn module_symbols(&self, name: &str, file_type: FileType) -> Ids {
         self.by_name
             .get(name)
             .into_iter()
@@ -1000,7 +1001,7 @@ impl<'a> Index<'a> {
         }
         let name = reference.name.as_str();
         let last = qualifier.rsplit('.').next().unwrap_or(qualifier);
-        let mut found: Vec<u32> = self
+        let mut found: Ids = self
             .module_symbols(last, file_type)
             .iter()
             .flat_map(|&module| {
@@ -1065,7 +1066,7 @@ impl<'a> Index<'a> {
                 if modules.is_empty() {
                     return Some(Outcome::External);
                 }
-                let members: Vec<u32> = modules
+                let members: Ids = modules
                     .iter()
                     .flat_map(|&m| self.members(m, &reference.name))
                     .collect();
@@ -1127,7 +1128,7 @@ impl<'a> Index<'a> {
                     return Some(found).filter(|&found| found != file);
                 }
                 let wanted = format!("lib/{path}");
-                let found: Vec<u32> = self
+                let found: Ids = self
                     .input
                     .files
                     .iter()
@@ -1155,7 +1156,7 @@ impl<'a> Index<'a> {
         let dir = modules::parent_dir(&self.input.files[file as usize].path);
         for import in &facts.imports {
             let target = normalize_path(&if dir.is_empty() {
-                import.spec.clone()
+                import.spec.to_string()
             } else {
                 format!("{dir}/{}", import.spec)
             });
@@ -1249,13 +1250,8 @@ impl<'a> Index<'a> {
     }
 
     /// Top-level symbols named `name` in a module, optionally restricted by kind.
-    fn module_symbol(
-        &self,
-        module: u32,
-        name: &str,
-        want: Option<fn(SymKind) -> bool>,
-    ) -> Vec<u32> {
-        let mut found: Vec<u32> = self
+    fn module_symbol(&self, module: u32, name: &str, want: Option<fn(SymKind) -> bool>) -> Ids {
+        let mut found: Ids = self
             .by_module
             .get(&(module, name))
             .into_iter()
@@ -1264,7 +1260,7 @@ impl<'a> Index<'a> {
             .filter(|&symbol| want.is_none_or(|want| want(self.symbols[symbol as usize].kind)))
             .collect();
         if found.len() > 1 {
-            let non_test: Vec<u32> = found
+            let non_test: Ids = found
                 .iter()
                 .copied()
                 .filter(|&s| !self.is_test(s))
@@ -1277,7 +1273,7 @@ impl<'a> Index<'a> {
     }
 
     /// Methods and associated items `name` of a type, including those of its supertypes.
-    fn members(&self, type_symbol: u32, name: &str) -> Vec<u32> {
+    fn members(&self, type_symbol: u32, name: &str) -> Ids {
         let mut found = self.members_direct(type_symbol, name);
         if found.is_empty() {
             let supertypes = if self.interface_canonical.contains_key(&type_symbol) {
@@ -1304,7 +1300,7 @@ impl<'a> Index<'a> {
     }
 
     /// The locally verified interface group may have a transitive, multi-base hierarchy.
-    fn interface_ancestors(&self, type_symbol: u32) -> Vec<u32> {
+    fn interface_ancestors(&self, type_symbol: u32) -> Ids {
         let mut ancestors = vec![type_symbol];
         let mut visited = HashSet::default();
         visited.insert(type_symbol);
@@ -1322,10 +1318,10 @@ impl<'a> Index<'a> {
             }
             cursor += 1;
         }
-        ancestors
+        ancestors.into()
     }
 
-    fn members_direct(&self, type_symbol: u32, name: &str) -> Vec<u32> {
+    fn members_direct(&self, type_symbol: u32, name: &str) -> Ids {
         let symbol = &self.symbols[type_symbol as usize];
         if symbol.kind == SymKind::Mod {
             // Module blocks (Julia, OCaml): every symbol declared in the body.
@@ -1349,7 +1345,7 @@ impl<'a> Index<'a> {
                 .get(&(module, symbol.name.as_str()))
                 .cloned()
                 .unwrap_or_default();
-            let mut found: Vec<u32> = parts
+            let mut found: Ids = parts
                 .iter()
                 .filter(|&&part| self.symbols[part as usize].parent == NONE || part == type_symbol)
                 .flat_map(|&part| self.declared_members(part, name))
@@ -1366,7 +1362,7 @@ impl<'a> Index<'a> {
             .cloned()
             .unwrap_or_default();
         if self.file_type(symbol.file) != Some(FileType::TypeScript) {
-            return methods;
+            return methods.into();
         }
         let owner = self.canonical_interface(type_symbol);
         let candidates: HashSet<_> = if methods
@@ -1396,7 +1392,7 @@ impl<'a> Index<'a> {
 
     /// Members `name` declared in the body of `type_symbol`: JVM types of one package may share a
     /// simple name (nested `Builder` classes), so the owner name alone is ambiguous.
-    fn declared_members(&self, type_symbol: u32, name: &str) -> Vec<u32> {
+    fn declared_members(&self, type_symbol: u32, name: &str) -> Ids {
         self.by_name
             .get(name)
             .into_iter()
@@ -1417,7 +1413,7 @@ impl<'a> Index<'a> {
         imports: Option<&Imports>,
         scope: Option<u32>,
         name: &str,
-    ) -> Option<(Vec<u32>, Confidence)> {
+    ) -> Option<(Ids, Confidence)> {
         // Forward declarations (Pascal `TCore = class;`, C `struct s;` prototypes) stand for the
         // definition next to them.
         self.resolve_type_candidates(file, imports, scope, name)
@@ -1482,7 +1478,7 @@ impl<'a> Index<'a> {
         imports: Option<&Imports>,
         scope: Option<u32>,
         name: &str,
-    ) -> Option<(Vec<u32>, Confidence)> {
+    ) -> Option<(Ids, Confidence)> {
         let imports = imports.or_else(|| self.file_imports.get(file as usize));
         let name = name.trim();
         if name.is_empty() {
@@ -1498,7 +1494,7 @@ impl<'a> Index<'a> {
             let found = self
                 .qualified_symbols(file, imports, scope, qualifier, last)
                 .unwrap_or_default();
-            let mut types: Vec<u32> = found
+            let mut types: Ids = found
                 .into_iter()
                 .filter(|&s| self.symbols[s as usize].kind.is_type())
                 .collect();
@@ -1526,7 +1522,7 @@ impl<'a> Index<'a> {
                     return None;
                 }
                 for parent in chain.iter().copied().map(Some).chain(std::iter::once(None)) {
-                    let mut local: Vec<u32> = self
+                    let mut local: Ids = self
                         .named_symbols(file, facts, name)
                         .filter(|(_, symbol)| {
                             symbol.parent == parent
@@ -1545,7 +1541,7 @@ impl<'a> Index<'a> {
                     }
                 }
             } else {
-                let mut local: Vec<u32> = self
+                let mut local: Ids = self
                     .named_symbols(file, facts, name)
                     .filter(|(_, symbol)| *symbol.name == *name && symbol.kind().is_type())
                     .map(|(local, _)| {
@@ -1562,7 +1558,7 @@ impl<'a> Index<'a> {
         if let Some(imports) = imports
             && let Some(Target::Symbols(symbols)) = imports.names.get(name)
         {
-            let types: Vec<u32> = symbols
+            let types: Ids = symbols
                 .iter()
                 .copied()
                 .filter(|&s| {
@@ -1596,7 +1592,7 @@ impl<'a> Index<'a> {
                 })
                 .collect();
             if !visible.is_empty() {
-                return Some((visible, Confidence::Exact));
+                return Some((visible.into(), Confidence::Exact));
             }
         }
         if let Some(imports) = imports {
@@ -1615,7 +1611,7 @@ impl<'a> Index<'a> {
                         })
                         .collect();
                     if !visible.is_empty() {
-                        return Some((visible, Confidence::Exact));
+                        return Some((visible.into(), Confidence::Exact));
                     }
                 }
             }
@@ -1626,7 +1622,7 @@ impl<'a> Index<'a> {
         {
             return None;
         }
-        let candidates: Vec<u32> = self
+        let candidates: Ids = self
             .by_name
             .get(name)
             .into_iter()
@@ -1638,7 +1634,8 @@ impl<'a> Index<'a> {
                     || self.file_type(self.symbols[s as usize].file) == Some(FileType::Rust)
             })
             .collect();
-        unique(&candidates, |s| self.is_test(s)).map(|symbol| (vec![symbol], Confidence::Inferred))
+        unique(&candidates, |s| self.is_test(s))
+            .map(|symbol| (smallvec::smallvec![symbol], Confidence::Inferred))
     }
 
     /// Types `name` declared inside the type `outer`.
@@ -1649,9 +1646,9 @@ impl<'a> Index<'a> {
         scope: Option<u32>,
         outer: &str,
         name: &str,
-    ) -> Vec<u32> {
+    ) -> Ids {
         let Some((outers, _)) = self.resolve_type(file, imports, scope, outer) else {
-            return Vec::new();
+            return Ids::new();
         };
         self.by_name
             .get(name)
@@ -1687,7 +1684,7 @@ impl<'a> Index<'a> {
             .iter()
             .position(|symbol| symbol.parent.is_none() && *symbol.name == *qualifier)
         {
-            let members: Vec<u32> = facts
+            let members: Ids = facts
                 .symbols
                 .iter()
                 .enumerate()
@@ -1721,7 +1718,7 @@ impl<'a> Index<'a> {
             qualifier
         };
 
-        let found: Vec<u32> = facts
+        let found: Ids = facts
             .symbols
             .iter()
             .enumerate()
@@ -1770,7 +1767,7 @@ impl<'a> Index<'a> {
             .get(target_file as usize + 1)
             .copied()
             .unwrap_or(self.symbols.len() as u32);
-        let headings: Vec<u32> = (start..end)
+        let headings: Ids = (start..end)
             .filter(|&symbol| self.symbols[symbol as usize].kind == SymKind::Heading)
             .collect();
         if fragment.is_empty() || headings.is_empty() {
@@ -1807,8 +1804,8 @@ impl<'a> Index<'a> {
 
     /// Every part of the Objective-C classes in `types`: the `@interface`, class extensions,
     /// categories and the `@implementation` are separate symbols of one class.
-    fn objc_class_parts(&self, types: &[u32]) -> Vec<u32> {
-        let mut parts: Vec<u32> = types.to_vec();
+    fn objc_class_parts(&self, types: &[u32]) -> Ids {
+        let mut parts: Ids = Ids::from_slice(types);
         for &type_symbol in types {
             let name = self.symbols[type_symbol as usize].name.as_str();
             parts.extend(
@@ -1830,7 +1827,7 @@ impl<'a> Index<'a> {
     }
 
     /// Owner type of the method enclosing `scope`.
-    fn owner_type(&self, file: u32, scope: Option<u32>) -> Option<Vec<u32>> {
+    fn owner_type(&self, file: u32, scope: Option<u32>) -> Option<Ids> {
         let facts = self.facts(file)?;
         let mut current = scope;
         while let Some(local) = current {
@@ -1841,7 +1838,7 @@ impl<'a> Index<'a> {
                 && facts.symbols[parent as usize].kind().is_type()
                 && facts.symbols[parent as usize].name == symbol.owner
             {
-                return Some(vec![self.base[file as usize] + parent]);
+                return Some(vec![self.base[file as usize] + parent].into());
             }
             if !symbol.owner.is_empty() {
                 return self
@@ -1849,7 +1846,7 @@ impl<'a> Index<'a> {
                     .map(|(types, _)| types);
             }
             if symbol.kind().is_type() {
-                return Some(vec![self.base[file as usize] + local]);
+                return Some(vec![self.base[file as usize] + local].into());
             }
             current = symbol.parent;
         }
@@ -1864,7 +1861,7 @@ impl<'a> Index<'a> {
         scope: Option<u32>,
         qualifier: &str,
         name: &str,
-    ) -> Option<Vec<u32>> {
+    ) -> Option<Ids> {
         let imports = imports.or_else(|| self.file_imports.get(file as usize));
         if matches!(self.file_type(file), Some(FileType::Cpp | FileType::Ruby))
             && let Some(found) = self.cpp_qualified(qualifier, name)
@@ -1959,7 +1956,7 @@ impl<'a> Index<'a> {
                     (!found.is_empty()).then_some(found)
                 }
                 Target::Symbols(symbols) => {
-                    let found: Vec<u32> = symbols
+                    let found: Ids = symbols
                         .iter()
                         .flat_map(|&s| self.members(s, name))
                         .collect();
@@ -1969,7 +1966,7 @@ impl<'a> Index<'a> {
             };
         }
         let (types, _) = self.resolve_type(file, imports, None, qualifier)?;
-        let found: Vec<u32> = types.iter().flat_map(|&s| self.members(s, name)).collect();
+        let found: Ids = types.iter().flat_map(|&s| self.members(s, name)).collect();
         (!found.is_empty()).then_some(found)
     }
 
@@ -2216,7 +2213,7 @@ impl<'a> Index<'a> {
                 Outcome::External => {}
                 Outcome::Ambiguous => {
                     resolved.ambiguous += 1;
-                    resolved.ambiguous_names.push(reference.name.clone());
+                    resolved.ambiguous_names.push(reference.name);
                 }
                 Outcome::Unresolved => {
                     // Literal paths in code may name generated or remote files; only documents
@@ -2225,13 +2222,13 @@ impl<'a> Index<'a> {
                     if (from_doc || reference.kind != RefKind::Path) && self.is_stale(reference) {
                         resolved
                             .stale
-                            .push((source, reference.line, reference.name.clone()));
+                            .push((source, reference.line, reference.name));
                     }
                     // An unresolved reference to a name some symbol carries may target it.
                     if matches!(reference.kind, RefKind::Call | RefKind::Value)
                         && self.by_name.contains_key(reference.name.as_str())
                     {
-                        resolved.ambiguous_names.push(reference.name.clone());
+                        resolved.ambiguous_names.push(reference.name);
                     }
                 }
             }
@@ -2283,8 +2280,9 @@ impl<'a> Index<'a> {
             let service = match (contract.kind, self.file_type(contract.file)) {
                 (SymKind::Op, _) if !contract.name.contains(' ') => String::new(),
                 (SymKind::Method, Some(FileType::Proto)) => parent
-                    .map(|service| service.name.clone())
-                    .unwrap_or_default(),
+                    .map(|service| service.name)
+                    .unwrap_or_default()
+                    .to_string(),
                 (SymKind::Method, Some(FileType::GraphQl))
                     if parent.is_some_and(|root| {
                         matches!(root.name.as_str(), "Query" | "Mutation" | "Subscription")
@@ -2297,22 +2295,22 @@ impl<'a> Index<'a> {
             let Some(candidates) = handlers.get(&normalize(&contract.name)) else {
                 continue;
             };
-            let candidates: Vec<u32> = candidates
+            let candidates: Ids = candidates
                 .iter()
                 .copied()
                 .filter(|&handler| !contract_file(self.symbols[handler as usize].file))
                 .collect();
-            let chosen: Vec<u32> = if candidates.len() == 1 {
+            let chosen: Ids = if candidates.len() == 1 {
                 candidates
             } else if !service.is_empty() {
                 let wanted = normalize(&service);
-                let owned: Vec<u32> = candidates
+                let owned: Ids = candidates
                     .into_iter()
                     .filter(|&handler| normalize(&self.owner_name(handler)).contains(&wanted))
                     .collect();
-                if owned.len() == 1 { owned } else { Vec::new() }
+                if owned.len() == 1 { owned } else { Ids::new() }
             } else {
-                Vec::new()
+                Ids::new()
             };
             for handler in chosen {
                 edges.push(Edge {
@@ -2345,7 +2343,7 @@ impl<'a> Index<'a> {
                 } else {
                     "package.json"
                 };
-                let candidates: Vec<u32> = self
+                let candidates: Ids = self
                     .by_name
                     .get(name)
                     .into_iter()
@@ -2404,7 +2402,7 @@ impl<'a> Index<'a> {
             }
             _ => {
                 let base = self.base[file as usize];
-                let local: Vec<u32> = self
+                let local: Ids = self
                     .facts(file)
                     .map(|facts| {
                         facts
@@ -2444,7 +2442,7 @@ impl<'a> Index<'a> {
             .map(|&table| shared(table))
             .max()
             .unwrap_or_default();
-        let nearest: Vec<u32> = tables
+        let nearest: Ids = tables
             .iter()
             .copied()
             .filter(|&table| shared(table) == best)
@@ -2506,7 +2504,7 @@ impl<'a> Index<'a> {
         if structural && !target.contains("://") {
             let name = target.rsplit('/').next().unwrap_or(target);
             // COBOL copybooks differ in case between `COPY` and the file name.
-            let mut matches: Vec<u32> = [name.to_owned(), name.to_lowercase(), name.to_uppercase()]
+            let mut matches: Ids = [name.to_owned(), name.to_lowercase(), name.to_uppercase()]
                 .iter()
                 .flat_map(|candidate| {
                     self.name_index
@@ -2559,7 +2557,7 @@ impl<'a> Index<'a> {
         if normalized.contains('.')
             && let Some(name) = normalized.rsplit('.').next()
         {
-            let exact: Vec<u32> = self
+            let exact: Ids = self
                 .by_name
                 .get(name)
                 .into_iter()
@@ -2610,7 +2608,12 @@ impl<'a> Index<'a> {
             return self.resolve_path(file, mention);
         }
         // A file name (`go.mod`, `cli.rs`): the unique file carrying it.
-        let named_files: Vec<u32> = self.name_index.get(mention).cloned().unwrap_or_default();
+        let named_files: Ids = self
+            .name_index
+            .get(mention)
+            .cloned()
+            .unwrap_or_default()
+            .into();
         if mention.contains('.') && !named_files.is_empty() {
             return match named_files.as_slice() {
                 [only] if *only != file => Outcome::Targets(
@@ -2624,7 +2627,7 @@ impl<'a> Index<'a> {
         let name = normalized.rsplit('.').next().unwrap_or(&normalized);
         let unqualified = normalized == name;
         let plain_word = name.bytes().all(|byte| byte.is_ascii_lowercase());
-        let mut candidates: Vec<u32> = self
+        let mut candidates: Ids = self
             .by_name
             .get(name)
             .into_iter()
@@ -2644,7 +2647,7 @@ impl<'a> Index<'a> {
                     }),
             );
         }
-        candidates.retain(|&symbol| {
+        candidates.retain(|&mut symbol| {
             let record = &self.symbols[symbol as usize];
             if record.kind == SymKind::Heading {
                 return false;
@@ -2814,7 +2817,7 @@ impl<'a> Index<'a> {
                 // Stale only when the head names a type of the root that has neither a member
                 // nor a field of that name.
                 let member = last.split('.').next().unwrap_or(last);
-                let types: Vec<u32> = self
+                let types: Ids = self
                     .by_name
                     .get(head)
                     .into_iter()
@@ -2918,7 +2921,7 @@ impl<'a> Index<'a> {
                 format!("{qualifier}::{}", reference.name)
             }
             Some(qualifier) => format!("{qualifier}.{}", reference.name),
-            None => reference.name.clone(),
+            None => reference.name.to_string(),
         };
         let resolved = self
             .resolve_type(file, Some(imports), reference.scope, &name)
@@ -2944,7 +2947,7 @@ impl<'a> Index<'a> {
             }
             Some((types, confidence)) if reference.arity != facts::NO_ARITY => {
                 // Generic overloads by type parameter count (`IRequest`, `IRequest<T>`).
-                let matching: Vec<u32> = types
+                let matching: Ids = types
                     .into_iter()
                     .filter(|&candidate| {
                         let symbol = &self.symbols[candidate as usize];
@@ -2971,7 +2974,7 @@ impl<'a> Index<'a> {
             && self.file_type(file) == Some(FileType::Elixir)
         {
             // Module names are global: `Store.Repo`, or the last segment bound by `alias`.
-            let modules = match imports.names.get(&reference.name) {
+            let modules = match imports.names.get(reference.name.as_str()) {
                 Some(Target::Symbols(symbols)) => symbols.clone(),
                 _ => self.elixir_modules(&reference.name, file),
             };
@@ -2998,7 +3001,7 @@ impl<'a> Index<'a> {
             let Some(candidates) = self.by_name.get(reference.name.as_str()) else {
                 return Outcome::Unresolved;
             };
-            let mut targets: Vec<u32> = candidates
+            let mut targets: Ids = candidates
                 .iter()
                 .copied()
                 .filter(|&symbol| self.symbols[symbol as usize].kind == SymKind::Method)
@@ -3008,8 +3011,9 @@ impl<'a> Index<'a> {
                 .iter()
                 .any(|&symbol| self.symbols[symbol as usize].flags & FLAG_DECLARATION == 0)
             {
-                targets
-                    .retain(|&symbol| self.symbols[symbol as usize].flags & FLAG_DECLARATION == 0);
+                targets.retain(|&mut symbol| {
+                    self.symbols[symbol as usize].flags & FLAG_DECLARATION == 0
+                });
             }
             targets.sort_unstable();
             targets.dedup();
@@ -3171,7 +3175,7 @@ impl<'a> Index<'a> {
         // 0. JVM and .NET class bodies: methods and constants of the enclosing class and its
         // supertypes need no `this`.
         if !wants_type && jvm::has_implicit_this(self.file_type(file)) {
-            let members: Vec<u32> = self
+            let members: Ids = self
                 .enclosing_members(file, reference.scope, name)
                 .into_iter()
                 .filter(|&member| {
@@ -3289,8 +3293,7 @@ impl<'a> Index<'a> {
         if let Some(target) = imports.names.get(name) {
             return match target {
                 Target::Symbols(symbols) => {
-                    let wanted: Vec<u32> =
-                        symbols.iter().copied().filter(|&s| kind_ok(s)).collect();
+                    let wanted: Ids = symbols.iter().copied().filter(|&s| kind_ok(s)).collect();
                     if self.overload_set(&wanted) {
                         pick_members(self, wanted, Confidence::Exact, reference.arity)
                     } else {
@@ -3303,7 +3306,7 @@ impl<'a> Index<'a> {
         // 4. Same module unit; Go build-tag variants (`x_darwin.go`, `x_other.go`) define the
         // same name in several files and are all targets.
         let module = self.module_of(file);
-        let same: Vec<u32> = self
+        let same: Ids = self
             .module_symbol(module, name, None)
             .into_iter()
             .filter(|&s| kind_ok(s))
@@ -3356,7 +3359,7 @@ impl<'a> Index<'a> {
             return pick(&same, Confidence::Exact);
         }
         for &glob in &imports.globs {
-            let found: Vec<u32> = self
+            let found: Ids = self
                 .module_symbol(glob, name, None)
                 .into_iter()
                 .filter(|&s| kind_ok(s))
@@ -3440,7 +3443,7 @@ impl<'a> Index<'a> {
                         let chain: Vec<&str> = qualifier.split('.').collect();
                         match self.receiver_type(file, imports, reference, &chain) {
                             Receiver::Known(types, Confidence::Exact) => {
-                                let found: Vec<u32> = types
+                                let found: Ids = types
                                     .iter()
                                     .flat_map(|&t| self.members(t, &reference.name))
                                     .collect();
@@ -3464,7 +3467,7 @@ impl<'a> Index<'a> {
                                                 || call.ends_with(".__aenter__")
                                         }) =>
                             {
-                                let mut found: Vec<u32> = types
+                                let mut found: Ids = types
                                     .iter()
                                     .flat_map(|&type_symbol| {
                                         self.members(type_symbol, &reference.name)
@@ -3549,7 +3552,7 @@ impl<'a> Index<'a> {
             let Some(types) = self.owner_type(file, reference.scope) else {
                 return Outcome::Unresolved;
             };
-            let found: Vec<u32> = types
+            let found: Ids = types
                 .iter()
                 .flat_map(|owner| self.supertypes.get(owner).into_iter().flatten().copied())
                 .flat_map(|supertype| self.members(supertype, &reference.name))
@@ -3587,7 +3590,7 @@ impl<'a> Index<'a> {
             && let Some((types, confidence)) =
                 self.resolve_type(file, Some(imports), reference.scope, head)
         {
-            let static_methods: Vec<u32> = types
+            let static_methods: Ids = types
                 .iter()
                 .flat_map(|&type_symbol| self.members(type_symbol, name))
                 .filter(|&member| is_static_method(member))
@@ -3625,8 +3628,7 @@ impl<'a> Index<'a> {
         {
             return match self.resolve_type(file, Some(imports), reference.scope, class) {
                 Some((types, _)) => {
-                    let members: Vec<u32> =
-                        types.iter().flat_map(|&t| self.members(t, name)).collect();
+                    let members: Ids = types.iter().flat_map(|&t| self.members(t, name)).collect();
                     if members.is_empty() {
                         Outcome::External
                     } else {
@@ -3710,7 +3712,7 @@ impl<'a> Index<'a> {
                     }) {
                         return Outcome::Unresolved;
                     }
-                    let mut types: Vec<u32> = branches.into_iter().flatten().collect();
+                    let mut types: Ids = branches.into_iter().flatten().collect();
                     types.sort_unstable();
                     types.dedup();
                     Receiver::Known(types, confidence)
@@ -3850,15 +3852,15 @@ impl<'a> Index<'a> {
     /// Overload selection by argument count: the single candidate accepting `arity` is exact;
     /// otherwise the accepting candidates (all when none accepts) are inferred, since argument
     /// types decide, which names alone cannot.
-    fn overloads(&self, candidates: &[u32], arity: u8) -> (Vec<u32>, Confidence) {
+    fn overloads(&self, candidates: &[u32], arity: u8) -> (Ids, Confidence) {
         // C-family declarations and verified TypeScript declaration pairs defer to definitions;
         // unpaired TypeScript declaration files stay distinct.
         let preferred = prefer_definitions(self, candidates);
         let candidates = preferred.as_deref().unwrap_or(candidates);
         if candidates.len() <= 1 {
-            return (candidates.to_vec(), Confidence::Exact);
+            return (Ids::from_slice(candidates), Confidence::Exact);
         }
-        let accepting: Vec<u32> = candidates
+        let accepting: Ids = candidates
             .iter()
             .copied()
             .filter(|&candidate| {
@@ -3874,8 +3876,8 @@ impl<'a> Index<'a> {
             })
             .collect();
         match accepting.as_slice() {
-            [only] => (vec![*only], Confidence::Exact),
-            [] => (candidates.to_vec(), Confidence::Inferred),
+            [only] => (smallvec::smallvec![*only], Confidence::Exact),
+            [] => (Ids::from_slice(candidates), Confidence::Inferred),
             _ => (accepting, Confidence::Inferred),
         }
     }
@@ -3891,7 +3893,7 @@ impl<'a> Index<'a> {
         byte: u32,
         callee: &str,
     ) -> bool {
-        let callee_ref = PooledRef::call(callee, scope, line, byte);
+        let callee_ref = receiver_call(callee, scope, line, byte);
         if self.file_type(file) == Some(FileType::Rust)
             && callee_ref
                 .qualifier
@@ -3962,7 +3964,7 @@ impl<'a> Index<'a> {
             let Some(types) = self.owner_type(file, scope) else {
                 return Receiver::Unknown;
             };
-            let mut supers: Vec<u32> = self
+            let mut supers: Ids = self
                 .objc_class_parts(&types)
                 .iter()
                 .flat_map(|part| self.supertypes.get(part).into_iter().flatten().copied())
@@ -4046,7 +4048,7 @@ impl<'a> Index<'a> {
             } else if types.len() == 1 && self.interface_canonical.contains_key(&types[0]) {
                 self.interface_ancestors(types[0])
             } else {
-                types[..1].to_vec()
+                Ids::from_slice(&types[..1])
             };
             let Some((type_symbol, field_type)) = parts.iter().find_map(|&part| {
                 self.field_types
@@ -4181,7 +4183,7 @@ impl<'a> Index<'a> {
         imports: &Imports,
         scope: Option<u32>,
         binding: &Binding,
-    ) -> Option<(Vec<u32>, Confidence)> {
+    ) -> Option<(Ids, Confidence)> {
         // `x = x.next()` and mutually dependent call results recurse through receiver typing;
         // a depth guard ends the chain (the type stays unknown).
         let _guard = DepthGuard::enter()?;
@@ -4235,7 +4237,7 @@ impl<'a> Index<'a> {
         }
         if let Some((call, _)) = chains::call_binding(&binding.type_name) {
             // Result of a call: resolve the callee, then its declared result type.
-            let reference = PooledRef::call(call, scope, binding.line, binding.value_byte);
+            let reference = receiver_call(call, scope, binding.line, binding.value_byte);
             // Rust constructors by convention (`Type::new()`, `Type::default()`, `Type::with_x()`,
             // `Type::from_x()`): derived or external constructors have no source, yet return
             // `Self`.
@@ -4260,7 +4262,7 @@ impl<'a> Index<'a> {
             };
             // A call of a type is a constructor: the result is the type itself.
             if self.symbols[callee as usize].kind.is_type() {
-                return Some((vec![callee], Confidence::Inferred));
+                return Some((smallvec::smallvec![callee], Confidence::Inferred));
             }
             let Some(&result) = self.returns.get(&callee) else {
                 return rust_self();
@@ -4281,7 +4283,7 @@ impl<'a> Index<'a> {
                     let receiver = Binding {
                         scope,
                         name: String::new().into(),
-                        type_name: qualifier.to_owned().into(),
+                        type_name: qualifier.into(),
                         line: binding.line,
                         visibility: None,
                         value_byte: binding.value_byte,
@@ -4377,7 +4379,7 @@ impl<'a> Index<'a> {
     ) -> Outcome {
         // Test symbols are targets only for test code; definitions nested in a function are
         // invisible outside it.
-        let candidates: Vec<u32> = self
+        let candidates: Ids = self
             .by_name
             .get(name)
             .into_iter()
@@ -4405,9 +4407,9 @@ impl<'a> Index<'a> {
         } {
             candidates[..1].to_vec()
         } else {
-            candidates
+            candidates.into_vec()
         };
-        let imported: Vec<u32> = candidates
+        let imported: Ids = candidates
             .iter()
             .copied()
             .filter(|&s| {
@@ -4899,7 +4901,7 @@ enum Reach {
 }
 
 enum Receiver {
-    Known(Vec<u32>, Confidence),
+    Known(Ids, Confidence),
     #[cfg(feature = "lang-typescript")]
     Composite(Vec<Vec<u32>>, Confidence),
     External,
@@ -4921,7 +4923,7 @@ fn sorted_by_name<'n>(count: usize, name: impl Fn(usize) -> &'n str) -> Box<[u32
     if count <= SCANNED_RECORDS {
         return Box::default();
     }
-    let mut order: Vec<u32> = (0..count as u32).collect();
+    let mut order: Ids = (0..count as u32).collect();
     order.sort_by_key(|&index| (name(index as usize), index));
     order.into_boxed_slice()
 }
@@ -4975,59 +4977,22 @@ fn lock(refs: &Mutex<Vec<Ref>>) -> std::sync::MutexGuard<'_, Vec<Ref>> {
     refs.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-thread_local! {
-    static REF_POOL: std::cell::RefCell<Vec<Ref>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
-/// A call reference built while typing a receiver, with buffers reused across millions of them.
-struct PooledRef(Option<Ref>);
-
-impl PooledRef {
-    fn call(callee: &str, scope: Option<u32>, line: u32, byte: u32) -> Self {
-        let mut reference = REF_POOL.with_borrow_mut(Vec::pop).unwrap_or_else(|| Ref {
-            kind: RefKind::Call,
-            name: String::new(),
-            qualifier: None,
-            scope: None,
-            line: 0,
-            byte: 0,
-            arity: facts::NO_ARITY,
-        });
-        let (qualifier, name) =
-            split_qualified(callee).map_or((None, callee), |(q, n)| (Some(q), n));
-        reference.name.clear();
-        reference.name.push_str(name);
-        match (qualifier, &mut reference.qualifier) {
-            (Some(new), Some(buffer)) => {
-                buffer.clear();
-                buffer.push_str(new);
-            }
-            (Some(new), slot) => *slot = Some(new.to_owned()),
-            (None, slot) => *slot = None,
-        }
-        reference.scope = scope;
-        reference.line = line;
-        reference.byte = byte;
-        Self(Some(reference))
+/// A call reference built while typing a receiver.
+fn receiver_call(callee: &str, scope: Option<u32>, line: u32, byte: u32) -> Ref {
+    let (qualifier, name) = split_qualified(callee).map_or((None, callee), |(q, n)| (Some(q), n));
+    Ref {
+        kind: RefKind::Call,
+        name: name.into(),
+        qualifier: qualifier.map(Name::from),
+        scope,
+        line,
+        byte,
+        arity: facts::NO_ARITY,
     }
 }
 
-impl std::ops::Deref for PooledRef {
-    type Target = Ref;
-
-    fn deref(&self) -> &Ref {
-        // Taken only in `drop`.
-        self.0.as_ref().unwrap_or_else(|| unreachable!())
-    }
-}
-
-impl Drop for PooledRef {
-    fn drop(&mut self) {
-        if let Some(reference) = self.0.take() {
-            REF_POOL.with_borrow_mut(|pool| pool.push(reference));
-        }
-    }
-}
+/// Candidate symbols of one lookup: nearly always few, no heap allocation for them.
+pub(crate) type Ids = smallvec::SmallVec<[u32; 4]>;
 
 /// Most references have one target: no heap allocation per resolved reference.
 type Targets = smallvec::SmallVec<[(u32, Confidence); 2]>;
@@ -5063,11 +5028,11 @@ fn has_declarations(file_type: Option<FileType>) -> bool {
     )
 }
 
-fn prefer_definitions(index: &Index<'_>, candidates: &[u32]) -> Option<Vec<u32>> {
+fn prefer_definitions(index: &Index<'_>, candidates: &[u32]) -> Option<Ids> {
     if candidates.len() < 2 {
         return None;
     }
-    let mut retained: Vec<u32> = candidates
+    let mut retained: Ids = candidates
         .iter()
         .copied()
         .filter(|candidate| {
@@ -5106,7 +5071,7 @@ fn prefer_definitions(index: &Index<'_>, candidates: &[u32]) -> Option<Vec<u32>>
     (retained.len() != candidates.len()).then_some(retained)
 }
 
-fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence, arity: u8) -> Outcome {
+fn pick_members(index: &Index, found: Ids, confidence: Confidence, arity: u8) -> Outcome {
     let mut found = found;
     found.sort_unstable();
     found.dedup();
@@ -5129,7 +5094,7 @@ fn pick_members(index: &Index, found: Vec<u32>, confidence: Confidence, arity: u
         }
     }
     if found.len() > 1 {
-        let non_test: Vec<u32> = found
+        let non_test: Ids = found
             .iter()
             .copied()
             .filter(|&s| !index.is_test(s))
@@ -5362,7 +5327,7 @@ fn unique(candidates: &[u32], is_test: impl Fn(u32) -> bool) -> Option<u32> {
         [] => None,
         [only] => Some(*only),
         _ => {
-            let non_test: Vec<u32> = candidates
+            let non_test: Ids = candidates
                 .iter()
                 .copied()
                 .filter(|&s| !is_test(s))

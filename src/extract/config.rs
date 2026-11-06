@@ -95,7 +95,7 @@ fn path_literal(facts: &mut Facts, value: &str, line: u32) {
     }
     facts.refs.push(Ref {
         kind: RefKind::Path,
-        name: value.to_owned(),
+        name: value.into(),
         qualifier: None,
         scope: None,
         line,
@@ -110,9 +110,7 @@ pub(super) fn retain_in_root_paths(path: &str, file_type: FileType, facts: &mut 
     let mut seen = std::collections::HashSet::new();
     let mut refs = std::mem::take(&mut facts.refs);
     refs.retain(|reference| {
-        reference.kind != RefKind::Path
-            || reference.scope.is_some()
-            || seen.insert(reference.name.clone())
+        reference.kind != RefKind::Path || reference.scope.is_some() || seen.insert(reference.name)
     });
     facts.refs = refs;
     facts.refs.retain(|reference| {

@@ -1,6 +1,8 @@
 //! Rust module paths, imports, inline modules, generic bounds and member lookup.
 
+use super::Ids;
 use super::*;
+use crate::domain::name::Name;
 
 impl<'a> Index<'a> {
     pub(super) fn rust_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
@@ -11,7 +13,9 @@ impl<'a> Index<'a> {
                 if let Some(module) = self.rust_crate_root(&import.spec) {
                     let local = import.alias.as_ref().unwrap_or(&import.spec);
                     imports.modules.push(module);
-                    imports.names.insert(local.clone(), Target::Module(module));
+                    imports
+                        .names
+                        .insert(local.to_string(), Target::Module(module));
                 }
                 continue;
             };
@@ -37,7 +41,7 @@ impl<'a> Index<'a> {
                 self.rust_member(file, &base, name)
             };
             let Some(target) = target else { continue };
-            let local = import.alias.clone().unwrap_or_else(|| name.clone());
+            let local = import.alias.unwrap_or(*name);
             match &target {
                 Target::Module(module) => imports.modules.push(*module),
                 Target::External(external) => imports.externals.push(external.clone()),
@@ -49,7 +53,7 @@ impl<'a> Index<'a> {
                     }
                 }
             }
-            imports.names.insert(local, target);
+            imports.names.insert(local.to_string(), target);
         }
         // `mod child;` declarations make child modules visible by name.
         let module = self.module_of(file);
@@ -72,7 +76,7 @@ impl<'a> Index<'a> {
                     {
                         imports
                             .names
-                            .entry(symbol.name.clone().into_string())
+                            .entry(symbol.name.to_string())
                             .or_insert(Target::Module(child));
                     }
                     continue;
@@ -85,7 +89,7 @@ impl<'a> Index<'a> {
                 };
                 imports
                     .names
-                    .entry(symbol.name.clone().into_string())
+                    .entry(symbol.name.to_string())
                     .or_insert(Target::Module(child));
                 for (other, &other_module) in self.modules.file_module.iter().enumerate() {
                     if other_module == child {
@@ -207,7 +211,7 @@ impl<'a> Index<'a> {
                 if let Some(child) = self.rust_child(key, name) {
                     return Some(Target::Module(child));
                 }
-                let found: Vec<u32> = self
+                let found: Ids = self
                     .module_symbol(*module, name, None)
                     .into_iter()
                     .filter(|&symbol| self.symbols[symbol as usize].kind != SymKind::Mod)
@@ -218,7 +222,7 @@ impl<'a> Index<'a> {
                 Some(Target::Symbols(found))
             }
             Target::Symbols(symbols) => {
-                let found: Vec<u32> = symbols
+                let found: Ids = symbols
                     .iter()
                     .flat_map(|&symbol| self.members(symbol, name))
                     .collect();
@@ -280,7 +284,7 @@ impl<'a> Index<'a> {
         file: u32,
         imports: &Imports,
         name: &str,
-    ) -> Option<(Vec<u32>, Confidence)> {
+    ) -> Option<(Ids, Confidence)> {
         let symbol = match imports.names.get(name) {
             Some(Target::Symbols(symbols)) => symbols.first().copied(),
             _ => self
@@ -313,7 +317,7 @@ impl<'a> Index<'a> {
         scope: Option<u32>,
         qualifier: &str,
         name: &str,
-    ) -> Option<Vec<u32>> {
+    ) -> Option<Ids> {
         let facts = self.facts(file)?;
         let mut inline = Vec::new();
         let mut current = scope;
@@ -334,7 +338,7 @@ impl<'a> Index<'a> {
         };
         if let Some(&module) = enclosing {
             let base = self.base[file as usize];
-            let found: Vec<u32> = facts
+            let found: Ids = facts
                 .symbols
                 .iter()
                 .enumerate()
@@ -357,12 +361,7 @@ impl<'a> Index<'a> {
     // ---------------------------------------------------------------- lookups
 
     /// Members `name` of the inline module path `qualifier` declared in `file`.
-    pub(super) fn rust_inline_module(
-        &self,
-        file: u32,
-        qualifier: &str,
-        name: &str,
-    ) -> Option<Vec<u32>> {
+    pub(super) fn rust_inline_module(&self, file: u32, qualifier: &str, name: &str) -> Option<Ids> {
         let facts = self.facts(file)?;
         let base = self.base[file as usize];
         let mut parent: Option<u32> = None;
@@ -371,7 +370,7 @@ impl<'a> Index<'a> {
             if let Some(target) = external_target.as_ref() {
                 external_target = self.rust_member(file, target, segment);
                 if external_target.is_none() {
-                    return Some(Vec::new());
+                    return Some(Ids::new());
                 }
                 continue;
             }
@@ -383,7 +382,7 @@ impl<'a> Index<'a> {
             parent = Some(found as u32);
             if let Some(reference) = self.rust_path_refs.get(&(file, found as u32)).copied() {
                 let Some(module) = self.modules.rust_path_module(file, reference) else {
-                    return Some(Vec::new());
+                    return Some(Ids::new());
                 };
                 external_target = Some(Target::Module(module));
             }
@@ -391,12 +390,12 @@ impl<'a> Index<'a> {
         if let Some(target) = external_target {
             return match self.rust_member(file, &target, name) {
                 Some(Target::Symbols(symbols)) => Some(symbols),
-                Some(Target::Module(_) | Target::External(_)) => Some(Vec::new()),
-                None => Some(Vec::new()),
+                Some(Target::Module(_) | Target::External(_)) => Some(Ids::new()),
+                None => Some(Ids::new()),
             };
         }
         let module = parent?;
-        let members: Vec<u32> = facts
+        let members: Ids = facts
             .symbols
             .iter()
             .enumerate()
@@ -415,7 +414,7 @@ impl<'a> Index<'a> {
         imports: &Imports,
         scope: Option<u32>,
         parameter: &str,
-    ) -> Option<Vec<u32>> {
+    ) -> Option<Ids> {
         if self.file_type(file) != Some(FileType::Rust) {
             return None;
         }
@@ -449,7 +448,7 @@ impl<'a> Index<'a> {
                 }
             }
         }
-        Some(traits)
+        Some(traits.into())
     }
 
     /// Whether a qualified path leaves the root, respecting locally imported module aliases.
@@ -482,8 +481,8 @@ impl<'a> Index<'a> {
             .map_or((None, callee), |(qualifier, name)| (Some(qualifier), name));
         let call = Ref {
             kind: RefKind::Call,
-            qualifier: qualifier.map(str::to_owned),
-            name: name.to_owned(),
+            qualifier: qualifier.map(Name::from),
+            name: name.into(),
             scope: reference.scope,
             line: reference.line,
             arity: facts::NO_ARITY,

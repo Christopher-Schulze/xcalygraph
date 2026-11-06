@@ -21,7 +21,7 @@ fn push_symbol(
 ) -> u32 {
     facts.symbols.push(Symbol {
         kind: Some(kind),
-        name: name.to_owned().into(),
+        name: name.into(),
         parent,
         line,
         end_line: end_line.max(line),
@@ -40,7 +40,7 @@ fn push_type_ref(facts: &mut Facts, scope: u32, name: &str, line: u32) {
     }
     facts.refs.push(Ref {
         kind: RefKind::Type,
-        name: name.to_owned(),
+        name: name.into(),
         qualifier: None,
         scope: Some(scope),
         line,
@@ -264,7 +264,7 @@ pub fn graphql(text: &str, facts: &mut Facts) {
                 for interface in interfaces.trim_end_matches('{').split(['&', ',']) {
                     facts.refs.push(Ref {
                         kind: RefKind::Implement,
-                        name: interface.trim().to_owned(),
+                        name: interface.trim().into(),
                         qualifier: None,
                         scope: Some(symbol),
                         line,

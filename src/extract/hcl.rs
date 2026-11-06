@@ -85,7 +85,7 @@ pub fn extract(text: &str, facts: &mut Facts) {
                 }) && (source.starts_with("./") || source.starts_with("../"))
                 {
                     facts.imports.push(Import {
-                        spec: source,
+                        spec: source.into(),
                         line,
                         ..Import::default()
                     });
@@ -146,7 +146,7 @@ pub fn extract(text: &str, facts: &mut Facts) {
 fn push_block(facts: &mut Facts, kind: SymKind, name: &str, header: &str, line: u32, end: usize) {
     facts.symbols.push(Symbol {
         kind: Some(kind),
-        name: name.to_owned().into(),
+        name: name.into(),
         line,
         end_line: (end as u32 + 1).max(line),
         signature: facts::clip_space(header.trim_end_matches('{'), 160).into(),
@@ -164,7 +164,7 @@ fn push_ref(facts: &mut Facts, scope: Option<u32>, address: &str, line: u32) {
     if !own && !duplicate {
         facts.refs.push(Ref {
             kind: RefKind::Value,
-            name: address.to_owned(),
+            name: address.into(),
             qualifier: None,
             scope,
             line,
@@ -258,7 +258,7 @@ mod tests {
             .iter()
             .map(|reference| {
                 let scope = reference.scope.map_or("-".to_owned(), |scope| {
-                    facts.symbols[scope as usize].name.clone().into_string()
+                    facts.symbols[scope as usize].name.to_string()
                 });
                 format!("{} {scope} -> {}", reference.line, reference.name)
             })

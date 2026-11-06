@@ -5,6 +5,7 @@ use crate::domain::facts::{
     FLAG_ENTRY, FLAG_RUST_CFG_NOT_UNIX, FLAG_RUST_CFG_UNIX, FLAG_TEST, Import, SymKind,
 };
 use crate::domain::filetype::FileType;
+use crate::domain::name::Name;
 use crate::extract::engine::{Definition, FileContext, Hooks, ImportExpansion};
 use tree_sitter::Node;
 
@@ -226,9 +227,9 @@ fn expand(tree: &str, prefix: &[String], line: u32, reexport: bool, out: &mut Ve
     }
     let Some(name) = path.pop() else { return };
     out.push(Import {
-        spec: path.join("::"),
-        alias,
-        names: vec![name],
+        spec: path.join("::").into(),
+        alias: alias.map(Name::from),
+        names: vec![name.into()],
         line,
         reexport,
         type_only: false,
@@ -271,7 +272,18 @@ mod tests {
     fn imports(tree: &str) -> Vec<(String, String, Option<String>)> {
         expand_import(tree, 1, false)
             .into_iter()
-            .map(|import| (import.spec, import.names.join(","), import.alias))
+            .map(|import| {
+                (
+                    import.spec.to_string(),
+                    import
+                        .names
+                        .iter()
+                        .map(|name| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    import.alias.map(|alias| alias.to_string()),
+                )
+            })
             .collect()
     }
 

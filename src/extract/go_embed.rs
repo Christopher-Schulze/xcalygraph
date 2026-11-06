@@ -306,10 +306,7 @@ mod tests {
             extract("package p\nimport _ \"em\\x62ed\"\n//go:embed data.txt\nvar _ string\n");
         assert_eq!(facts.go_embeds.len(), 1);
         assert_eq!(facts.go_embeds[0].pattern, b"data.txt");
-        assert_eq!(
-            facts.symbols[facts.go_embeds[0].symbol as usize].name,
-            "_".into()
-        );
+        assert_eq!(facts.symbols[facts.go_embeds[0].symbol as usize].name, "_");
         assert!(
             extract("package p\nimport _ \"embed\"\n//go:embed\tdata.txt\nvar X string\n")
                 .go_embeds

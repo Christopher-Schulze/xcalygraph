@@ -138,7 +138,7 @@ mod tests {
             ..Facts::default()
         };
         index_lines(&mut facts, "##\n# User Database\n##\n");
-        assert_eq!(facts.symbols[0].name, ("# User Database").into());
+        assert_eq!(facts.symbols[0].name, "# User Database");
         assert_eq!(facts.symbols[0].line, 2);
     }
 

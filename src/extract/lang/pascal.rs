@@ -7,6 +7,7 @@ use crate::domain::facts::{
     self, FLAG_DECLARATION, FLAG_TEST, Facts, Import, NO_ARITY, Ref, RefKind, SymKind, Symbol,
 };
 use crate::domain::filetype::FileType;
+use crate::domain::name::Name;
 use crate::extract::engine::{self, Definition, FileContext, Hooks, ImportExpansion};
 
 pub static PACK: Pack = Pack {
@@ -100,7 +101,7 @@ pub fn form(path: &str, text: &str) -> Facts {
     if let Some((stem, _)) = path.rsplit_once('.') {
         let file = stem.rsplit('/').next().unwrap_or(stem);
         facts.imports.push(Import {
-            spec: format!("{file}.pas"),
+            spec: format!("{file}.pas").into(),
             line: 1,
             ..Import::default()
         });
@@ -124,7 +125,7 @@ pub fn form(path: &str, text: &str) -> Facts {
             let id = facts.symbols.len() as u32;
             facts.symbols.push(Symbol {
                 kind: Some(SymKind::Var),
-                name: name.trim().to_owned().into(),
+                name: name.trim().into(),
                 parent: open.last().copied(),
                 line: number,
                 end_line: line_count,
@@ -139,7 +140,7 @@ pub fn form(path: &str, text: &str) -> Facts {
             if !class.is_empty() {
                 facts.refs.push(Ref {
                     kind: RefKind::Type,
-                    name: class.split_whitespace().next().unwrap_or(class).to_owned(),
+                    name: class.split_whitespace().next().unwrap_or(class).into(),
                     qualifier: None,
                     scope: Some(id),
                     line: number,
@@ -166,8 +167,8 @@ pub fn form(path: &str, text: &str) -> Facts {
         {
             facts.refs.push(Ref {
                 kind: RefKind::Call,
-                name: value.trim().to_owned(),
-                qualifier: form_class.clone(),
+                name: value.trim().into(),
+                qualifier: form_class.clone().map(Name::from),
                 scope: open.last().copied(),
                 line: number,
                 arity: NO_ARITY,

@@ -49,7 +49,7 @@ pub fn toc_imports(text: &str, facts: &mut Facts) {
             continue;
         }
         facts.imports.push(Import {
-            spec: path.replace('\\', "/"),
+            spec: path.replace('\\', "/").into(),
             line: index as u32 + 1,
             ..Import::default()
         });

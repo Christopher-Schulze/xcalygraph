@@ -115,7 +115,7 @@ pub fn add(content: &[u8], facts: &mut Facts, spans: &[(usize, usize)]) {
         None
     };
     let mut direct_children = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: HashSet<u64> = HashSet::new();
     facts.terms = match &ownership {
         Some(plan) => {
             plan.file_children(&mut direct_children);
@@ -269,7 +269,7 @@ fn collect(
     content: &[u8],
     (first, last): (usize, usize),
     others: &[(usize, usize)],
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<u64>,
 ) -> String {
     seen.clear();
     let mut terms = String::new();
@@ -315,7 +315,6 @@ fn collect(
             // so its frequency still counts.
             line_words.clear();
             for_each_body_word(line, |word| {
-                // Only a new word costs a string: the set owns one copy of it.
                 lower.clear();
                 if word.is_ascii() {
                     lower.push_str(word);
@@ -323,8 +322,7 @@ fn collect(
                 } else {
                     lower.push_str(&word.to_lowercase());
                 }
-                if !KEYWORDS.contains(&lower.as_str()) && !seen.contains(&lower) {
-                    seen.insert(lower.clone());
+                if !KEYWORDS.contains(&lower.as_str()) && seen.insert(word_hash(&lower)) {
                     line_words.push_str(word);
                     line_words.push(' ');
                 }
@@ -801,6 +799,12 @@ fn line_text<'a>(content: &'a [u8], starts: &[usize], line: u32) -> Option<&'a [
 
 /// Unicode alphanumeric source words of at least two UTF-8 bytes outside URLs; digits-only words
 /// are excluded. Invalid UTF-8 becomes separators while its valid neighboring words survive.
+/// A new word costs no string; a 64-bit collision among one body's words is negligible and
+/// deterministic.
+fn word_hash(word: &str) -> u64 {
+    xxhash_rust::xxh3::xxh3_64(word.as_bytes())
+}
+
 fn for_each_body_word(text: &[u8], mut emit: impl FnMut(&str)) {
     for chunk in text.split(|byte| {
         byte.is_ascii_whitespace() || matches!(byte, b'\'' | b'"' | b'`' | b'(' | b')')

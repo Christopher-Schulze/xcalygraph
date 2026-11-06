@@ -4,6 +4,7 @@
 use super::Pack;
 use crate::domain::facts::{FLAG_TEST, Import, SymKind};
 use crate::domain::filetype::FileType;
+use crate::domain::name::Name;
 use crate::extract::engine::{Definition, FileContext, Hooks, ImportExpansion};
 use tree_sitter::Node;
 
@@ -339,9 +340,9 @@ fn expand_import(statement: &str, line: u32, _reexport: bool) -> Vec<Import> {
             .map(|part| {
                 let (name, alias) = split_alias(part);
                 Import {
-                    spec: module.trim().to_owned(),
-                    alias,
-                    names: vec![name],
+                    spec: module.trim().into(),
+                    alias: alias.map(Name::from),
+                    names: vec![name.into()],
                     line,
                     reexport: false,
                     type_only: false,
@@ -357,8 +358,8 @@ fn expand_import(statement: &str, line: u32, _reexport: bool) -> Vec<Import> {
         .map(|part| {
             let (module, alias) = split_alias(part);
             Import {
-                spec: module,
-                alias,
+                spec: module.into(),
+                alias: alias.map(Name::from),
                 names: Vec::new(),
                 line,
                 reexport: false,
@@ -612,7 +613,18 @@ mod tests {
     fn rows(statement: &str) -> Vec<(String, String, Option<String>)> {
         expand_import(statement, 1, false)
             .into_iter()
-            .map(|import| (import.spec, import.names.join(","), import.alias))
+            .map(|import| {
+                (
+                    import.spec.to_string(),
+                    import
+                        .names
+                        .iter()
+                        .map(|name| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    import.alias.map(|alias| alias.to_string()),
+                )
+            })
             .collect()
     }
 

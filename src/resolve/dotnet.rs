@@ -3,6 +3,7 @@
 //! using` applies to every file; enclosing namespaces are visible; extension methods
 //! (`static T M(this R r)`) serve member calls on their receiver.
 
+use super::Ids;
 use super::{Imports, Index, Outcome, Target};
 use crate::domain::facts::{Facts, SymKind};
 use crate::domain::filetype::FileType;
@@ -127,7 +128,7 @@ impl Index<'_> {
             return None;
         }
         let own = self.module_of(file);
-        let mut candidates: Vec<u32> = self
+        let mut candidates: Ids = self
             .by_name
             .get(name)
             .into_iter()
@@ -149,7 +150,7 @@ impl Index<'_> {
                 .next()
                 .unwrap_or(receiver)
                 .trim_end_matches('?');
-            let matching: Vec<u32> = candidates
+            let matching: Ids = candidates
                 .iter()
                 .copied()
                 .filter(|&candidate| {

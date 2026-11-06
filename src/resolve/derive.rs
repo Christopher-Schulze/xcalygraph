@@ -1,5 +1,6 @@
 //! Derived data: rank, module graph, cycles and layers (`docs/spec.md` section 6, derived items).
 
+use super::Ids;
 use super::modules::ModuleMap;
 use crate::domain::facts::{FLAG_GENERATED, FLAG_TEST};
 use crate::domain::graph::{Confidence, EdgeKind, Graph, Module, ModuleEdge};
@@ -36,7 +37,7 @@ pub fn finish(graph: &mut Graph, modules: &ModuleMap) {
 }
 
 /// Tarjan's algorithm, iterative; returns a component id per node.
-pub fn strongly_connected(count: usize, edges: &[ModuleEdge]) -> Vec<u32> {
+pub fn strongly_connected(count: usize, edges: &[ModuleEdge]) -> Ids {
     let mut adjacency: Vec<Vec<u32>> = vec![Vec::new(); count];
     for edge in edges {
         adjacency[edge.source as usize].push(edge.target);
@@ -45,7 +46,7 @@ pub fn strongly_connected(count: usize, edges: &[ModuleEdge]) -> Vec<u32> {
     let mut low = vec![0u32; count];
     let mut on_stack = vec![false; count];
     let mut component = vec![u32::MAX; count];
-    let mut stack: Vec<u32> = Vec::new();
+    let mut stack: Ids = Ids::new();
     let mut next_index = 0u32;
     let mut next_component = 0u32;
     for start in 0..count {
@@ -88,11 +89,11 @@ pub fn strongly_connected(count: usize, edges: &[ModuleEdge]) -> Vec<u32> {
             }
         }
     }
-    component
+    component.into()
 }
 
 /// Longest path to a sink on the condensed DAG; modules without dependencies are layer 0.
-fn layers(count: usize, edges: &[ModuleEdge], components: &[u32]) -> Vec<u32> {
+fn layers(count: usize, edges: &[ModuleEdge], components: &[u32]) -> Ids {
     let component_count = components
         .iter()
         .map(|&c| c as usize + 1)
@@ -202,6 +203,6 @@ mod tests {
         assert_ne!(components[0], components[1]);
         assert_ne!(components[3], components[1]);
         let layers = layers(4, &edges, &components);
-        assert_eq!(layers, [2, 0, 0, 1]);
+        assert_eq!(layers.as_slice(), [2, 0, 0, 1]);
     }
 }

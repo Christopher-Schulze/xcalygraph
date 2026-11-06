@@ -3,6 +3,7 @@
 //! workspace packages from `package.json`, the SvelteKit `$lib` alias, external packages
 //! otherwise.
 
+use super::Ids;
 use std::collections::{HashMap, HashSet};
 
 use super::modules::parent_dir;
@@ -423,11 +424,11 @@ impl Index<'_> {
                 if !package.is_empty() {
                     imports.externals.push(package.clone());
                     for name in &import.names {
-                        let local = import.alias.clone().unwrap_or_else(|| name.clone());
+                        let local = import.alias.unwrap_or(*name);
                         if !local.is_empty() && local != "*" {
                             imports
                                 .names
-                                .insert(local, Target::External(package.clone()));
+                                .insert(local.to_string(), Target::External(package.clone()));
                         }
                     }
                 }
@@ -441,29 +442,35 @@ impl Index<'_> {
             if import.names.is_empty()
                 && let Some(alias) = &import.alias
             {
-                imports.names.insert(alias.clone(), Target::Module(target));
+                imports
+                    .names
+                    .insert(alias.to_string(), Target::Module(target));
             }
             for name in &import.names {
-                let local = import.alias.clone().unwrap_or_else(|| name.clone());
+                let local = import.alias.unwrap_or(*name);
                 let mut imported_type_only = false;
                 match name.as_str() {
                     "" => {}
                     "*" if import.alias.is_none() => imports.globs.push(target),
                     "*" => {
-                        imports.names.insert(local, Target::Module(target));
+                        imports
+                            .names
+                            .insert(local.to_string(), Target::Module(target));
                     }
                     "default" => {
                         let found = self.default_export(target, &local);
                         imported_type_only =
                             found.as_ref().is_some_and(|symbols| only_types(symbols));
                         let bound = found.map_or(Target::Module(target), Target::Symbols);
-                        imports.names.insert(local, bound);
+                        imports.names.insert(local.to_string(), bound);
                     }
                     name => {
                         let found = self.exported(target, name);
                         imported_type_only = only_types(&found);
                         if !found.is_empty() {
-                            imports.names.insert(local, Target::Symbols(found));
+                            imports
+                                .names
+                                .insert(local.to_string(), Target::Symbols(found));
                         }
                     }
                 }
@@ -600,24 +607,24 @@ impl Index<'_> {
 
     /// Exported symbols `name` of a module, following `export { name } from` and
     /// `export * from` re-exports (depth max 8).
-    fn exported(&self, module: u32, name: &str) -> Vec<u32> {
+    fn exported(&self, module: u32, name: &str) -> Ids {
         self.exported_at(module, name, 0, true)
     }
 
-    pub(super) fn js_exported(&self, module: u32, name: &str) -> Vec<u32> {
+    pub(super) fn js_exported(&self, module: u32, name: &str) -> Ids {
         self.exported_at(module, name, 0, true)
     }
 
-    fn exported_at(&self, module: u32, name: &str, depth: usize, declarations: bool) -> Vec<u32> {
+    fn exported_at(&self, module: u32, name: &str, depth: usize, declarations: bool) -> Ids {
         // TypeScript namespaces are module symbols that importers name.
-        let own: Vec<u32> = self.module_symbol(module, name, None);
+        let own: Ids = self.module_symbol(module, name, None);
         if !own.is_empty() {
             return own;
         }
         if depth >= 8 {
             return if declarations {
                 self.js_declaration_module(module)
-                    .map_or_else(Vec::new, |declaration| {
+                    .map_or_else(Ids::new, |declaration| {
                         self.module_symbol(declaration, name, None)
                     })
             } else {
@@ -651,7 +658,7 @@ impl Index<'_> {
                     .names
                     .iter()
                     .find(|imported| import.alias.as_deref().unwrap_or(imported) == name)
-                    .map_or(name, String::as_str);
+                    .map_or(name, |imported| imported.as_str());
                 let found = self.exported_at(target, original, depth + 1, declarations);
                 if !found.is_empty() {
                     return found;
@@ -661,7 +668,7 @@ impl Index<'_> {
         declarations
             .then(|| self.js_declaration_module(module))
             .flatten()
-            .map_or_else(Vec::new, |declaration| {
+            .map_or_else(Ids::new, |declaration| {
                 // Declaration context is not another re-export hop.
                 self.exported_at(declaration, name, depth, false)
             })
@@ -692,12 +699,12 @@ impl Index<'_> {
     }
 
     /// Prefer a concrete default candidate before consulting its declaration context.
-    fn default_export(&self, module: u32, local: &str) -> Option<Vec<u32>> {
+    fn default_export(&self, module: u32, local: &str) -> Option<Ids> {
         let named = self.exported_at(module, local, 0, false);
         if !named.is_empty() {
             return Some(named);
         }
-        let candidates: Vec<u32> = self
+        let candidates: Ids = self
             .symbols
             .iter()
             .enumerate()

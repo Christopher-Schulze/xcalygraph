@@ -75,7 +75,7 @@ pub fn scan_lines(source: &[u8], facts: &mut Facts) {
                     if !name.is_empty() {
                         facts.refs.push(Ref {
                             kind,
-                            name: name.to_owned(),
+                            name: name.into(),
                             qualifier: None,
                             scope,
                             line: number,
@@ -118,7 +118,7 @@ mod tests {
         let mut facts = Facts::default();
         facts.symbols.push(crate::domain::facts::Symbol {
             kind: Some(SymKind::Class),
-            name: "C".to_owned().into(),
+            name: "C".into(),
             line: 3,
             end_line: 6,
             ..crate::domain::facts::Symbol::default()

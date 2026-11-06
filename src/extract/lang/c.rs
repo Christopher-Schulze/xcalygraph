@@ -85,7 +85,7 @@ pub(super) fn include_import(text: &str, line: u32, _reexport: bool) -> Vec<Impo
         return Vec::new();
     }
     vec![Import {
-        spec,
+        spec: spec.into(),
         line,
         ..Import::default()
     }]
@@ -173,7 +173,7 @@ pub fn macro_references(source: &[u8], facts: &mut Facts) {
         else {
             continue;
         };
-        let name = facts.symbols[scope].name.clone();
+        let name = facts.symbols[scope].name;
         // Skip `#define NAME(params)`: identifiers after the parameter list are the body.
         let after_name = body.split_once(name.as_ref()).map_or("", |(_, rest)| rest);
         let body = match after_name.strip_prefix('(') {
@@ -195,7 +195,7 @@ pub fn macro_references(source: &[u8], facts: &mut Facts) {
                 seen.push(word);
                 facts.refs.push(Ref {
                     kind: RefKind::Value,
-                    name: word.to_owned(),
+                    name: word.into(),
                     qualifier: None,
                     scope: u32::try_from(scope).ok(),
                     line: number,

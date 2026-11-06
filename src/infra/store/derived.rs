@@ -5,11 +5,12 @@ use bytemuck::{Pod, Zeroable};
 use rayon::prelude::*;
 
 use super::codec::{Decoder, Encoder};
-use super::container::{self, Container, Kind};
+use super::container::Container;
 use crate::domain::facts::{Coverage, FLAG_TYPESCRIPT_AUGMENTATION, SymKind};
 use crate::domain::filetype::FileType;
 use crate::domain::graph::{Confidence, EdgeKind, FLAG_TYPESCRIPT_GLOBAL_INTERFACE, Graph};
 use crate::domain::hash::FastMap;
+use crate::domain::name::Name;
 use crate::domain::role::Role;
 use crate::domain::search::{self, FIELDS};
 
@@ -170,7 +171,7 @@ mod section {
 struct Interner {
     blob: Vec<u8>,
     offsets: Vec<u32>,
-    ids: FastMap<String, u32>,
+    ids: FastMap<Name, u32>,
 }
 
 impl Interner {
@@ -204,13 +205,16 @@ impl Interner {
         let id = (self.offsets.len() - 1) as u32;
         self.blob.extend_from_slice(text.as_bytes());
         self.offsets.push(self.blob.len() as u32);
-        self.ids.insert(text.to_owned(), id);
+        self.ids.insert(Name::new(text), id);
         id
     }
 }
 
 /// Serializes the graph and its search index.
-pub fn build(graph: &mut Graph) -> Vec<u8> {
+/// Serializes the graph into sections and hands them to `sink`; the graph is gone by then, so the
+/// output is the only large allocation left.
+pub fn build<R>(mut graph: Graph, sink: impl FnOnce(&[&[u8]]) -> R) -> R {
+    let graph = &mut graph;
     let mut strings = Interner::new(graph.files.len() + graph.symbols.len() * 2);
     let files: Vec<FileRecord> = graph
         .files
@@ -311,6 +315,7 @@ pub fn build(graph: &mut Graph) -> Vec<u8> {
     let used_by = used_by_names(graph);
     graph.edges = Vec::new();
     let index = search_index(graph, &used_by);
+    drop(used_by);
     let tokens: Vec<TokenRecord> = index
         .tokens
         .iter()
@@ -363,7 +368,12 @@ pub fn build(graph: &mut Graph) -> Vec<u8> {
     views[section::INTERFACE_GROUPS] = bytemuck::cast_slice(&interface_groups);
     views[section::STRINGS] = &strings.blob;
     views[section::STRING_OFFSETS] = bytemuck::cast_slice(&strings.offsets);
-    container::build(Kind::Derived, &views)
+    drop(strings.ids);
+    rayon::join(
+        || drop(std::mem::take(&mut graph.symbols)),
+        || drop(std::mem::take(&mut graph.files)),
+    );
+    sink(&views)
 }
 
 /// CSR adjacency by counting sort: `graph.edges` is sorted by source, and a stable placement
@@ -402,24 +412,14 @@ fn adjacency(nodes: usize, graph: &Graph, reverse: bool) -> (Vec<u32>, Vec<EdgeR
 const USED_BY_NAMES: usize = 16;
 
 struct SearchIndex {
-    tokens: Vec<(String, u32, u32)>,
+    tokens: Vec<(Name, u32, u32)>,
     postings: Vec<u8>,
     lengths: Vec<LengthRecord>,
     averages: [f32; FIELDS],
 }
 
-/// Postings of one contiguous node range: token -> postings in node order.
-struct Chunk {
-    lists: FastMap<String, Vec<PostingRecord>>,
-}
-
-/// A token and its postings before encoding.
-type TokenPostings = (String, Vec<PostingRecord>);
 /// Tokens with start and count, and their encoded postings.
-type EncodedPart = (Vec<(String, u32, u32)>, Vec<u8>);
-
-/// Parts of the token list: one per first byte, so the parts stay in sort order.
-const TOKEN_PARTS: usize = 256;
+type EncodedPart = (Vec<(Name, u32, u32)>, Vec<u8>);
 
 fn token_part(token: &str) -> usize {
     token
@@ -452,6 +452,93 @@ fn used_by_names(graph: &Graph) -> Vec<String> {
         }
     }
     used_by
+}
+
+/// Postings of one node range: tokens with the end of their postings, flat and exactly sized.
+struct Chunk {
+    tokens: Vec<(Name, u32)>,
+    postings: Vec<PostingRecord>,
+}
+
+impl Chunk {
+    fn postings(&self, token: usize) -> &[PostingRecord] {
+        let start = token
+            .checked_sub(1)
+            .map_or(0, |previous| self.tokens[previous].1);
+        &self.postings[start as usize..self.tokens[token].1 as usize]
+    }
+}
+
+/// Per-worker buffers of the search index, reused for every chunk.
+#[derive(Default)]
+struct ChunkBuilder {
+    tokens: ChunkTokens,
+    buffer: String,
+}
+
+#[derive(Default)]
+struct ChunkTokens {
+    ids: FastMap<Name, u32>,
+    /// Per token id: its name, and its latest posting in `postings`.
+    names: Vec<(Name, u32)>,
+    /// Token id and posting, in node order.
+    postings: Vec<(u32, PostingRecord)>,
+}
+
+impl ChunkTokens {
+    fn add(&mut self, token: &str, node: u32, field: usize) {
+        let id = match self.ids.get(token) {
+            Some(&id) => id,
+            None => {
+                let name = Name::new(token);
+                let id = self.names.len() as u32;
+                self.ids.insert(name, id);
+                self.names.push((name, u32::MAX));
+                id
+            }
+        };
+        let latest = self.names[id as usize].1 as usize;
+        if let Some((_, last)) = self.postings.get_mut(latest)
+            && last.node == node
+        {
+            last.add(field);
+            return;
+        }
+        let mut posting = PostingRecord { node, packed: 0 };
+        posting.add(field);
+        self.names[id as usize].1 = self.postings.len() as u32;
+        self.postings.push((id, posting));
+    }
+
+    /// The chunk's postings grouped by token by a stable counting sort; the buffers stay for the
+    /// next chunk.
+    fn finish(&mut self) -> Chunk {
+        let mut ends = vec![0u32; self.names.len()];
+        for (id, _) in &self.postings {
+            ends[*id as usize] += 1;
+        }
+        let mut total = 0;
+        for end in &mut ends {
+            total += *end;
+            *end = total;
+        }
+        let tokens = self
+            .names
+            .iter()
+            .zip(&ends)
+            .map(|(name, end)| (name.0, *end))
+            .collect();
+        let mut postings = vec![PostingRecord { node: 0, packed: 0 }; self.postings.len()];
+        for (id, posting) in self.postings.iter().rev() {
+            let end = &mut ends[*id as usize];
+            *end -= 1;
+            postings[*end as usize] = *posting;
+        }
+        self.ids.clear();
+        self.names.clear();
+        self.postings.clear();
+        Chunk { tokens, postings }
+    }
 }
 
 fn search_index(graph: &Graph, used_by: &[String]) -> SearchIndex {
@@ -496,34 +583,19 @@ fn search_index(graph: &Graph, used_by: &[String]) -> SearchIndex {
     const CHUNK: usize = 4096;
     let chunk_results: Vec<(Chunk, Vec<LengthRecord>)> = (0..nodes.div_ceil(CHUNK))
         .into_par_iter()
-        .map(|chunk| {
+        .map_init(ChunkBuilder::default, |builder, chunk| {
             let range = chunk * CHUNK..((chunk + 1) * CHUNK).min(nodes);
-            let mut lists: FastMap<String, Vec<PostingRecord>> = FastMap::default();
             let mut lengths = Vec::with_capacity(range.len());
-            let mut buffer = String::new();
             for node in range {
                 let mut record = LengthRecord {
                     lengths: [0; FIELDS],
                 };
                 for (field, text) in texts(node).iter().enumerate() {
                     let mut count = 0u8;
+                    let tokens = &mut builder.tokens;
                     let mut add = |token: &str| {
                         count = count.saturating_add(1);
-                        let list = match lists.get_mut(token) {
-                            Some(list) => list,
-                            None => lists.entry(token.to_owned()).or_default(),
-                        };
-                        match list.last_mut() {
-                            Some(last) if last.node == node as u32 => last.add(field),
-                            _ => {
-                                let mut posting = PostingRecord {
-                                    node: node as u32,
-                                    packed: 0,
-                                };
-                                posting.add(field);
-                                list.push(posting);
-                            }
-                        }
+                        tokens.add(token, node as u32, field);
                     };
                     // Body terms are stored as normalized tokens (src/extract/terms.rs).
                     if field == search::BODY || field == search::TEXT {
@@ -531,13 +603,13 @@ fn search_index(graph: &Graph, used_by: &[String]) -> SearchIndex {
                             .filter(|token| !token.is_empty())
                             .for_each(&mut add);
                     } else {
-                        search::for_each_token(text, &mut buffer, add);
+                        search::for_each_token(text, &mut builder.buffer, add);
                     }
                     record.lengths[field] = count;
                 }
                 lengths.push(record);
             }
-            (Chunk { lists }, lengths)
+            (builder.tokens.finish(), lengths)
         })
         .collect();
     let mut lengths: Vec<LengthRecord> = Vec::with_capacity(nodes);
@@ -562,55 +634,55 @@ fn search_index(graph: &Graph, used_by: &[String]) -> SearchIndex {
             (total as f32 / nodes as f32).max(0.01)
         };
     }
-    // Tokens split by first byte: each part merges, sorts and encodes alone, and the parts
-    // concatenate into one sorted list.
-    let mut parts: Vec<Vec<Vec<TokenPostings>>> = chunks
-        .into_par_iter()
-        .map(|chunk| {
-            let mut part: Vec<Vec<TokenPostings>> = vec![Vec::new(); TOKEN_PARTS];
-            for (token, list) in chunk.lists {
-                part[token_part(&token)].push((token, list));
-            }
-            part
+    // One sorted token list; tokens split by first byte encode alone and concatenate. Chunks cover
+    // ascending node ranges, so a token's chunks in order keep its postings sorted by node.
+    let mut pieces: Vec<(Name, u32, u32)> = chunks
+        .iter()
+        .enumerate()
+        .flat_map(|(chunk_index, chunk)| {
+            chunk
+                .tokens
+                .iter()
+                .enumerate()
+                .map(move |(token, (name, _))| (*name, chunk_index as u32, token as u32))
         })
         .collect();
-    let by_part: Vec<Vec<Vec<TokenPostings>>> = (0..TOKEN_PARTS)
-        .map(|part| {
-            parts
-                .iter_mut()
-                .map(|chunk| std::mem::take(&mut chunk[part]))
-                .collect()
-        })
+    pieces.par_sort_unstable_by(|left, right| {
+        left.0
+            .as_str()
+            .cmp(right.0.as_str())
+            .then(left.1.cmp(&right.1))
+    });
+    let parts: Vec<&[(Name, u32, u32)]> = pieces
+        .chunk_by(|left, right| token_part(&left.0) == token_part(&right.0))
         .collect();
-    drop(parts);
-    let encoded: Vec<EncodedPart> = by_part
+    let encoded: Vec<EncodedPart> = parts
         .into_par_iter()
-        .map(|part| {
-            let mut merged: FastMap<String, Vec<PostingRecord>> = FastMap::default();
-            // Chunks cover ascending node ranges, so appending keeps lists sorted by node.
-            for chunk in part {
-                for (token, list) in chunk {
-                    merged.entry(token).or_default().extend(list);
-                }
-            }
-            let mut sorted: Vec<TokenPostings> = merged.into_iter().collect();
-            sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-            let mut tokens = Vec::with_capacity(sorted.len());
+        .map(|pieces| {
+            let mut tokens = Vec::new();
             let mut encoder = Encoder::default();
-            for (token, list) in sorted {
-                tokens.push((token, encoder.bytes.len() as u32, list.len() as u32));
+            for run in pieces.chunk_by(|left, right| left.0 == right.0) {
+                let start = encoder.bytes.len() as u32;
+                let mut count = 0;
                 let mut previous = 0;
-                for posting in list {
-                    encoder.var_u32(posting.node - previous);
-                    // The text field has the top bits: rotated into the low bits, a varint
-                    // stays short.
-                    encoder.var_u32(posting.packed.rotate_left(4));
-                    previous = posting.node;
+                for &(_, chunk, token) in run {
+                    let chunk = &chunks[chunk as usize];
+                    for posting in chunk.postings(token as usize) {
+                        count += 1;
+                        encoder.var_u32(posting.node - previous);
+                        // The text field has the top bits: rotated into the low bits, a varint
+                        // stays short.
+                        encoder.var_u32(posting.packed.rotate_left(4));
+                        previous = posting.node;
+                    }
                 }
+                tokens.push((run[0].0, start, count));
             }
             (tokens, encoder.bytes)
         })
         .collect();
+    drop(pieces);
+    drop(chunks);
     let mut tokens = Vec::with_capacity(encoded.iter().map(|(tokens, _)| tokens.len()).sum());
     let mut encoder = Encoder::default();
     encoder

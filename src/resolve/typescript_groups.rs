@@ -38,7 +38,7 @@ impl<'a> Index<'a> {
                     continue;
                 }
                 let candidates = self.module_symbol(module, &symbol.name, None);
-                let declarations: Vec<u32> = candidates
+                let declarations: Ids = candidates
                     .iter()
                     .copied()
                     .filter(|&candidate| {
@@ -54,7 +54,7 @@ impl<'a> Index<'a> {
                 if !matches!(declarations.as_slice(), [only] if *only == id) {
                     continue;
                 }
-                let definitions: Vec<u32> = candidates
+                let definitions: Ids = candidates
                     .into_iter()
                     .filter(|&candidate| {
                         let other = &self.symbols[candidate as usize];
@@ -281,7 +281,7 @@ impl<'a> Index<'a> {
         facts: &Facts,
         parts: &[u32],
         module_files: &HashMap<u32, Vec<u32>>,
-    ) -> Option<Vec<u32>> {
+    ) -> Option<Ids> {
         let first = facts.symbols.get(parts[0] as usize)?;
         if first.kind != Some(SymKind::Iface)
             || self

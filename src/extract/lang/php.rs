@@ -4,6 +4,7 @@
 use super::Pack;
 use crate::domain::facts::{FLAG_TEST, Import, SymKind};
 use crate::domain::filetype::FileType;
+use crate::domain::name::Name;
 use crate::extract::engine::{Definition, FileContext, Hooks, ImportExpansion};
 
 pub static PACK: Pack = Pack {
@@ -55,9 +56,9 @@ fn use_import(statement: &str, line: u32, _reexport: bool) -> Vec<Import> {
         let path = path.trim().trim_start_matches('\\');
         let (spec, name) = path.rsplit_once('\\').unwrap_or(("", path));
         (!name.is_empty()).then(|| Import {
-            spec: spec.to_owned(),
-            alias: alias.map(|alias| alias.trim().to_owned()),
-            names: vec![name.to_owned()],
+            spec: spec.into(),
+            alias: alias.map(|alias| alias.trim().to_owned()).map(Name::from),
+            names: vec![name.into()],
             line,
             reexport: false,
             type_only: false,
@@ -140,7 +141,18 @@ mod tests {
         let specs = |text: &str| -> Vec<(String, String, Option<String>)> {
             use_import(text, 1, false)
                 .into_iter()
-                .map(|import| (import.spec, import.names.join(","), import.alias))
+                .map(|import| {
+                    (
+                        import.spec.to_string(),
+                        import
+                            .names
+                            .iter()
+                            .map(|name| name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(","),
+                        import.alias.map(|alias| alias.to_string()),
+                    )
+                })
                 .collect()
         };
         assert_eq!(

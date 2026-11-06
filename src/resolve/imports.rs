@@ -1,5 +1,6 @@
 //! Import and module rules of the smaller languages (Zig, Lua, R, Elixir, Erlang, Dart, Swift, Ruby, OCaml).
 
+use super::Ids;
 use super::*;
 
 impl<'a> Index<'a> {
@@ -100,7 +101,7 @@ impl<'a> Index<'a> {
                     imports.globs.push(module);
                     imports.modules.push(module);
                 }
-                None => imports.externals.push(import.spec.clone()),
+                None => imports.externals.push(import.spec.to_string()),
             }
         }
     }
@@ -126,8 +127,8 @@ impl<'a> Index<'a> {
     /// Elixir modules of the root named `name` (`Store.Repo`). Nested `defmodule`s carry the
     /// enclosing modules' names; inside `file` a nested module is also reachable by its own
     /// name (Elixir's implicit alias).
-    pub(super) fn elixir_modules(&self, name: &str, file: u32) -> Vec<u32> {
-        let mut candidates: Vec<u32> = Vec::new();
+    pub(super) fn elixir_modules(&self, name: &str, file: u32) -> Ids {
+        let mut candidates: Ids = Ids::new();
         let mut suffix = name;
         loop {
             candidates.extend(self.by_name.get(suffix).into_iter().flatten().copied());
@@ -142,7 +143,7 @@ impl<'a> Index<'a> {
             let symbol = &self.symbols[*symbol as usize];
             symbol.kind.is_type() && self.file_type(symbol.file) == Some(FileType::Elixir)
         };
-        let exact: Vec<u32> = candidates
+        let exact: Ids = candidates
             .iter()
             .filter(|symbol| modules(symbol) && self.elixir_full_name(**symbol) == name)
             .copied()
@@ -274,7 +275,7 @@ impl<'a> Index<'a> {
                 if let Some(alias) = &import.alias {
                     imports
                         .names
-                        .insert(alias.clone(), Target::External(head.clone()));
+                        .insert(alias.to_string(), Target::External(head.clone()));
                 }
                 imports.externals.push(head);
                 continue;
@@ -283,7 +284,9 @@ impl<'a> Index<'a> {
             let module = self.module_of(target);
             imports.modules.push(module);
             if let Some(alias) = &import.alias {
-                imports.names.insert(alias.clone(), Target::Module(module));
+                imports
+                    .names
+                    .insert(alias.to_string(), Target::Module(module));
             }
         }
         // Members of required modules re-bound to locals; other tables are no imports.
@@ -291,16 +294,20 @@ impl<'a> Index<'a> {
             let (Some(alias), Some(member)) = (&import.alias, import.names.first()) else {
                 continue;
             };
-            match imports.names.get(&import.spec) {
+            match imports.names.get(import.spec.as_str()) {
                 Some(Target::Module(module)) => {
                     let found = self.module_symbol(*module, member, None);
                     if !found.is_empty() {
-                        imports.names.insert(alias.clone(), Target::Symbols(found));
+                        imports
+                            .names
+                            .insert(alias.to_string(), Target::Symbols(found));
                     }
                 }
                 Some(Target::External(name)) => {
                     let name = name.clone();
-                    imports.names.insert(alias.clone(), Target::External(name));
+                    imports
+                        .names
+                        .insert(alias.to_string(), Target::External(name));
                 }
                 _ => {}
             }
@@ -339,7 +346,7 @@ impl<'a> Index<'a> {
         for import in modules.into_iter().chain(members) {
             let target = if let Some(bound) = imports
                 .names
-                .get(&import.spec)
+                .get(import.spec.as_str())
                 .filter(|_| !import.names.is_empty())
             {
                 bound.clone()
@@ -368,9 +375,9 @@ impl<'a> Index<'a> {
                     }
                     None => {
                         if !matches!(import.spec.as_str(), "std" | "builtin" | "root") {
-                            imports.externals.push(import.spec.clone());
+                            imports.externals.push(import.spec.to_string());
                         }
-                        Target::External(import.spec.clone())
+                        Target::External(import.spec.to_string())
                     }
                 }
             };
@@ -383,7 +390,7 @@ impl<'a> Index<'a> {
                     Target::Symbols(found)
                 }
                 (Target::Symbols(types), Some(member)) => {
-                    let found: Vec<u32> = types
+                    let found: Ids = types
                         .iter()
                         .flat_map(|&t| self.members(t, member))
                         .collect();
@@ -395,7 +402,7 @@ impl<'a> Index<'a> {
                 _ => target,
             };
             if let Some(alias) = &import.alias {
-                imports.names.insert(alias.clone(), target);
+                imports.names.insert(alias.to_string(), target);
             }
         }
     }
@@ -477,7 +484,7 @@ impl<'a> Index<'a> {
                         | "PackageDescription"
                 ) =>
                 {
-                    imports.externals.push(import.spec.clone());
+                    imports.externals.push(import.spec.to_string());
                 }
                 None => {}
             }

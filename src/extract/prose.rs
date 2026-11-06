@@ -117,7 +117,7 @@ impl Outline {
         let scope = self.scope();
         self.facts.refs.push(Ref {
             kind: RefKind::Path,
-            name: target.to_owned(),
+            name: target.into(),
             qualifier: None,
             scope,
             line,
@@ -145,7 +145,7 @@ impl Outline {
         if identifier_like && !duplicate {
             self.facts.refs.push(Ref {
                 kind: RefKind::Mention,
-                name: inside.to_owned(),
+                name: inside.into(),
                 qualifier: None,
                 scope,
                 line,
@@ -631,7 +631,7 @@ mod tests {
             .iter()
             .map(|symbol| {
                 let parent = symbol.parent.map_or("-".to_owned(), |p| {
-                    facts.symbols[p as usize].name.clone().into_string()
+                    facts.symbols[p as usize].name.to_string()
                 });
                 format!(
                     "{}-{} {} <{parent}",

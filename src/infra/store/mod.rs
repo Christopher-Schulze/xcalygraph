@@ -219,8 +219,9 @@ impl Store {
         container::header_matches(&self.path(name), kind)
     }
 
-    pub fn write_container(&self, name: &str, image: &[u8]) -> io::Result<u64> {
-        container::write(&self.path(name), image)
+    /// Writes the `derived` file from its sections.
+    pub fn write_derived(&self, sections: &[&[u8]]) -> io::Result<u64> {
+        container::write_sections(&self.path("derived"), Kind::Derived, sections)
     }
 
     /// Stamps the last use (for `ls`), at most once an hour so queries stay write-free.

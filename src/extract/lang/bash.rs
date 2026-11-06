@@ -169,7 +169,7 @@ fn trap_reference(
         .and_then(|(index, _)| u32::try_from(index).ok());
     Some(Ref {
         kind: RefKind::Call,
-        name: name.to_owned(),
+        name: name.into(),
         qualifier: None,
         scope,
         line,
@@ -451,7 +451,7 @@ pub fn recover_functions(source: &str, facts: &mut crate::domain::facts::Facts) 
             let scope = facts.symbols.len() as u32;
             facts.symbols.push(Symbol {
                 kind: Some(SymKind::Fn),
-                name: name.to_owned().into(),
+                name: name.into(),
                 parent: None,
                 owner: String::new().into(),
                 line: number,
@@ -482,7 +482,7 @@ pub fn recover_functions(source: &str, facts: &mut crate::domain::facts::Facts) 
                     if !known && !builtin(command) {
                         facts.refs.push(Ref {
                             kind: RefKind::Call,
-                            name: command.to_owned(),
+                            name: command.into(),
                             qualifier: None,
                             scope: Some(scope),
                             line: body_line,

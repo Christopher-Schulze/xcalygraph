@@ -1,8 +1,7 @@
 //! Compact byte encoding: LEB128 varints, zigzag integers and length-prefixed strings.
 
+use crate::domain::name::Name;
 use std::fmt;
-
-use crate::domain::hash::FastMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodeError(pub &'static str);
@@ -26,9 +25,53 @@ pub struct Encoder {
 
 #[derive(Debug, Default)]
 struct StringTable {
-    ids: FastMap<String, u32>,
+    /// Open addressing: id + 1, 0 for empty; the length is a power of two.
+    slots: Vec<u32>,
+    /// Start and length of each string in `bytes`, in id order.
+    spans: Vec<(usize, u32)>,
     /// Each string length-prefixed, in id order.
     bytes: Vec<u8>,
+}
+
+impl StringTable {
+    fn intern(&mut self, value: &str) -> u32 {
+        if (self.spans.len() + 1) * 4 > self.slots.len() * 3 {
+            self.grow();
+        }
+        let mask = self.slots.len() - 1;
+        let mut slot = table_hash(value.as_bytes()) & mask;
+        while let Some(id) = self.slots[slot].checked_sub(1) {
+            let (start, length) = self.spans[id as usize];
+            if &self.bytes[start..start + length as usize] == value.as_bytes() {
+                return id;
+            }
+            slot = (slot + 1) & mask;
+        }
+        let id = self.spans.len() as u32;
+        self.slots[slot] = id + 1;
+        push_var(&mut self.bytes, value.len() as u64);
+        self.spans.push((self.bytes.len(), value.len() as u32));
+        self.bytes.extend_from_slice(value.as_bytes());
+        id
+    }
+
+    fn grow(&mut self) {
+        let capacity = (self.slots.len() * 2).max(64);
+        let mask = capacity - 1;
+        self.slots.clear();
+        self.slots.resize(capacity, 0);
+        for (id, &(start, length)) in self.spans.iter().enumerate() {
+            let mut slot = table_hash(&self.bytes[start..start + length as usize]) & mask;
+            while self.slots[slot] != 0 {
+                slot = (slot + 1) & mask;
+            }
+            self.slots[slot] = id as u32 + 1;
+        }
+    }
+}
+
+fn table_hash(bytes: &[u8]) -> usize {
+    xxhash_rust::xxh3::xxh3_64(bytes) as usize
 }
 
 impl Encoder {
@@ -45,7 +88,7 @@ impl Encoder {
         let mut out = Encoder::default();
         if let Some(table) = &self.table {
             out.bytes.reserve(table.bytes.len() + 10);
-            out.var_usize(table.ids.len());
+            out.var_usize(table.spans.len());
             out.bytes.extend_from_slice(&table.bytes);
         }
         out.bytes
@@ -77,16 +120,7 @@ impl Encoder {
 
     pub fn str(&mut self, value: &str) {
         if let Some(table) = &mut self.table {
-            let id = match table.ids.get(value) {
-                Some(&id) => id,
-                None => {
-                    let id = table.ids.len() as u32;
-                    table.ids.insert(value.to_owned(), id);
-                    push_var(&mut table.bytes, value.len() as u64);
-                    table.bytes.extend_from_slice(value.as_bytes());
-                    id
-                }
-            };
+            let id = table.intern(value);
             self.var_u32(id);
             return;
         }
@@ -104,10 +138,10 @@ impl Encoder {
         }
     }
 
-    pub fn strs(&mut self, values: &[String]) {
+    pub fn strs<S: AsRef<str>>(&mut self, values: &[S]) {
         self.var_usize(values.len());
         for value in values {
-            self.str(value);
+            self.str(value.as_ref());
         }
     }
 }
@@ -233,6 +267,26 @@ impl<'a> Decoder<'a> {
             1 => self.string().map(Some),
             _ => Err(DecodeError("invalid option tag")),
         }
+    }
+
+    pub fn name(&mut self) -> DecodeResult<Name> {
+        self.str().map(Name::new)
+    }
+
+    pub fn opt_name(&mut self) -> DecodeResult<Option<Name>> {
+        match self.u8()? {
+            0 => Ok(None),
+            1 => self.name().map(Some),
+            _ => Err(DecodeError("invalid option tag")),
+        }
+    }
+
+    pub fn names(&mut self) -> DecodeResult<Vec<Name>> {
+        let len = self.var_usize()?;
+        if len > self.bytes.len() {
+            return Err(DecodeError("list length exceeds data"));
+        }
+        (0..len).map(|_| self.name()).collect()
     }
 
     pub fn strings(&mut self) -> DecodeResult<Vec<String>> {

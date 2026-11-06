@@ -59,7 +59,7 @@ pub fn extract(text: &str) -> Facts {
             let id = facts.symbols.len() as u32;
             facts.symbols.push(Symbol {
                 kind: Some(SymKind::Heading),
-                name: title.to_owned().into(),
+                name: title.into(),
                 parent,
                 line: number,
                 end_line: line_count,
@@ -81,7 +81,7 @@ pub fn extract(text: &str) -> Facts {
         for target in links(line) {
             facts.refs.push(Ref {
                 kind: RefKind::Path,
-                name: target,
+                name: target.into(),
                 qualifier: None,
                 scope,
                 line: number,
@@ -92,7 +92,7 @@ pub fn extract(text: &str) -> Facts {
         for mention in mentions(line) {
             facts.refs.push(Ref {
                 kind: RefKind::Mention,
-                name: mention,
+                name: mention.into(),
                 qualifier: None,
                 scope,
                 line: number,

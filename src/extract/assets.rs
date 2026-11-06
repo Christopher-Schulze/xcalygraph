@@ -256,7 +256,7 @@ fn svg(text: &str) -> Facts {
         {
             facts.symbols.push(Symbol {
                 kind: Some(SymKind::Const),
-                name: id.to_owned().into(),
+                name: id.into(),
                 line: tag_line,
                 end_line: tag_line,
                 signature: facts::clip_space(tag, 160).into(),
@@ -270,7 +270,7 @@ fn svg(text: &str) -> Facts {
                 if !external && !target.is_empty() {
                     facts.refs.push(Ref {
                         kind: RefKind::Path,
-                        name: target.to_owned(),
+                        name: target.into(),
                         qualifier: None,
                         scope: None,
                         line: tag_line,
@@ -351,9 +351,9 @@ pub fn literal_paths(text: &str, facts: &mut Facts) {
             if !duplicate {
                 facts.refs.push(Ref {
                     kind: RefKind::Path,
-                    name: literal.to_owned(),
+                    name: literal.into(),
                     // A quoted string does not prove its base: the same-named repository file is a guess.
-                    qualifier: Some(crate::domain::facts::COMPUTED_BASE.to_owned()),
+                    qualifier: Some(crate::domain::facts::COMPUTED_BASE.into()),
                     scope,
                     line: number,
                     arity: NO_ARITY,
@@ -481,7 +481,7 @@ mod tests {
     fn literal_paths_in_code_and_css() {
         let mut facts = Facts::default();
         facts.symbols.push(Symbol {
-            name: "render".to_owned().into(),
+            name: "render".into(),
             line: 2,
             end_line: 4,
             ..Symbol::default()
@@ -493,7 +493,7 @@ mod tests {
         let refs: Vec<(String, u32, Option<u32>)> = facts
             .refs
             .iter()
-            .map(|r| (r.name.clone(), r.line, r.scope))
+            .map(|r| (r.name.to_string(), r.line, r.scope))
             .collect();
         assert_eq!(
             refs,
@@ -550,7 +550,7 @@ mod tests {
         let refs: Vec<(String, u32)> = facts
             .refs
             .iter()
-            .map(|r| (r.name.clone(), r.line))
+            .map(|r| (r.name.to_string(), r.line))
             .collect();
         assert_eq!(refs, [("img/bg.png".to_owned(), 6)]);
         assert_eq!(facts.doc, "svg 24x24 Store icons");

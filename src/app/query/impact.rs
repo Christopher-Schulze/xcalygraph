@@ -511,7 +511,9 @@ fn surviving_references(
             };
             let record = &index.derived.files()[position];
             for reference in &facts.refs {
-                if !DEPENDING_REFS.contains(&reference.kind) || !names.contains(&reference.name) {
+                if !DEPENDING_REFS.contains(&reference.kind)
+                    || !names.contains(reference.name.as_str())
+                {
                     continue;
                 }
                 let node = reference
@@ -2217,7 +2219,7 @@ mod tests {
             let facts = Facts {
                 symbols: vec![Symbol {
                     kind: Some(SymKind::Fn),
-                    name: "item".to_owned().into(),
+                    name: "item".into(),
                     parent: Some(parent),
                     ..Symbol::default()
                 }],

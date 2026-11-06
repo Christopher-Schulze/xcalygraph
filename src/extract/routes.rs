@@ -116,7 +116,7 @@ pub fn add(path: &str, text: &str, component: Option<u32>, facts: &mut Facts) {
             }
             Handlers::Component(kind) => {
                 if let Some(component) = component {
-                    let name = facts.symbols[component as usize].name.clone();
+                    let name = facts.symbols[component as usize].name;
                     push(facts, format!("{kind} {route}"), Some(&name), 1);
                 }
             }
@@ -371,7 +371,7 @@ impl Exports {
             .iter()
             .find(|symbol| symbol.parent.is_none() && symbol.exported && *symbol.name == *name)
         {
-            return Some((symbol.name.clone().into_string(), symbol.line));
+            return Some((symbol.name.to_string(), symbol.line));
         }
         self.renamed
             .iter()
@@ -440,7 +440,7 @@ fn push(facts: &mut Facts, name: String, handler: Option<&str>, line: u32) -> u3
 fn call(facts: &mut Facts, route: u32, handler: &str, line: u32) {
     facts.refs.push(Ref {
         kind: RefKind::Call,
-        name: handler.to_owned(),
+        name: handler.into(),
         qualifier: None,
         scope: Some(route),
         line,

@@ -3,6 +3,7 @@
 use super::facts::{FieldName, SymKind};
 use super::filetype::FileType;
 use super::role::Role;
+use crate::domain::name::Name;
 
 /// Node ids: symbols are `0..symbols.len()`, files follow.
 pub type NodeId = u32;
@@ -102,13 +103,13 @@ pub struct GraphFile {
 pub struct GraphSymbol {
     pub file: u32,
     pub kind: SymKind,
-    pub name: String,
+    pub name: Name,
     /// Qualified name: module path, enclosing types, name.
-    pub qualified: String,
+    pub qualified: Name,
     pub parent: u32,
     pub line: u32,
     pub end_line: u32,
-    pub signature: String,
+    pub signature: Name,
     pub doc: String,
     /// Body words for search ([`crate::domain::facts::Symbol::terms`]).
     pub terms: String,
@@ -187,10 +188,10 @@ pub struct Graph {
     /// (type, member) pairs: methods and associated items of each type, sorted.
     pub members: Vec<(u32, u32)>,
     /// Doc references to missing files or members: (referring node, line, reference text).
-    pub stale: Vec<(NodeId, u32, String)>,
+    pub stale: Vec<(NodeId, u32, Name)>,
     /// Names of references that stayed ambiguous or unresolved although symbols carry them,
     /// sorted: such symbols are never reported dead.
-    pub ambiguous_names: Vec<String>,
+    pub ambiguous_names: Vec<Name>,
 }
 
 impl Graph {
