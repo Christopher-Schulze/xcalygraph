@@ -4,7 +4,8 @@
 # Usage: scripts/benchmarks/measure-edge-oracle.sh CORPUS...
 #   CORPUS is xcalygraph, graphify (the pinned upstream clone) or a pinned public corpus under
 #   research/corpora/. The language comes from scripts/benchmarks/corpora.tsv (xcalygraph: rust,
-#   graphify: python).
+#   graphify: python). A TypeScript corpus without a root tsconfig.json is a monorepo: one
+#   compiler project per nested tsconfig.json.
 #   Indexers (development tools, on PATH or in SCIP_TOOLS, default ~/.local/share/scip-tools):
 #   scip, scip-go, rust-analyzer, scip-python, scip-typescript.
 #   Output: .cache/edge-oracle/run.*/ with per-corpus edges, oracle references and verdicts, plus
@@ -61,6 +62,19 @@ index_corpus() {
       if [[ "${language}" == javascript && ! -e "${root}/tsconfig.json" && ! -L "${root}/tsconfig.json" ]]; then
         ( set -o noclobber; printf '%s\n' '{"compilerOptions":{"allowJs":true}}' > "${root}/tsconfig.json" )
       fi
+      # A monorepo without a root config: one compiler project per app, each with its own
+      # dependencies and aliases, under one index with repository-relative paths.
+      if [[ "${language}" == typescript && ! -e "${root}/tsconfig.json" ]]; then
+        local projects=() project
+        while IFS= read -r project; do
+          projects+=("${project%/tsconfig.json}")
+          ( cd "${root}/${project%/tsconfig.json}" && bun install --no-save --ignore-scripts )
+        done < <(cd "${root}" && find . -mindepth 2 -maxdepth 3 -name tsconfig.json -not -path '*/node_modules/*' | sed 's|^\./||' | LC_ALL=C sort)
+        (( ${#projects[@]} > 0 )) || { echo "measure-edge-oracle.sh: no TypeScript project" >&2; return 1; }
+        printf '%s\n' "${projects[@]}" > "${output%.scip}.projects"
+        ( cd "${root}" && scip-typescript index "${projects[@]}" --output "${output}" )
+        return
+      fi
       ( cd "${root}" && bun install --no-save --ignore-scripts &&
           scip-typescript index --infer-tsconfig --output "${output}" ) ;;
     *) echo "measure-edge-oracle.sh: no indexer for ${language}" >&2; return 1 ;;
@@ -101,11 +115,27 @@ for corpus in "$@"; do
     "${WORK}/${corpus}.verdicts.tsv" >> "${WORK}/summary.tsv" <<'PYTHON'
 import collections
 import json
+import os
 import re
 import sys
 
 corpus, language, scip_path, edges_path, verdicts_path = sys.argv[1:]
 index = json.load(open(scip_path))
+# Several compiler projects may share a package name, so one symbol string would name a definition
+# per app. A symbol belongs to the project of its document: no reference crosses projects unnoticed.
+projects_path = scip_path.replace(".scip.json", ".projects")
+if os.path.exists(projects_path):
+    projects = open(projects_path, encoding="utf-8").read().split()
+    for document in index["documents"]:
+        project = next((p for p in projects if document["relative_path"].startswith(p + "/")), "")
+        def scoped(symbol):
+            return symbol if symbol.startswith("local ") else f"{project}|{symbol}"
+        for occurrence in document.get("occurrences") or []:
+            occurrence["symbol"] = scoped(occurrence["symbol"])
+        for information in document.get("symbols") or []:
+            information["symbol"] = scoped(information["symbol"])
+            for relation in information.get("relationships") or []:
+                relation["symbol"] = scoped(relation["symbol"])
 DEFINITION = 1
 
 def start_line(occurrence):

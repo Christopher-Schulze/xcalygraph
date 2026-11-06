@@ -798,6 +798,8 @@ pub enum Coverage {
     Failed = 4,
     /// The source could not be read; the file contributes no facts.
     Unreadable = 5,
+    /// Code kept by path only: a minified bundle or a file above the read limit.
+    NotParsed = 6,
 }
 
 impl Coverage {
@@ -809,6 +811,7 @@ impl Coverage {
             3 => Some(Self::NoGrammar),
             4 => Some(Self::Failed),
             5 => Some(Self::Unreadable),
+            6 => Some(Self::NotParsed),
             _ => None,
         }
     }
@@ -821,6 +824,7 @@ impl Coverage {
             Self::NoGrammar => "no grammar",
             Self::Failed => "failed",
             Self::Unreadable => "unreadable",
+            Self::NotParsed => "not parsed",
         }
     }
 }

@@ -295,14 +295,44 @@ fn head_of(content: &[u8]) -> &[u8] {
 /// Line length that only generated code reaches.
 const MINIFIED_LINE: usize = 4096;
 
-/// Nearly all bytes sit in such lines: a bundle. A long literal beside real code stays source.
+/// Nearly all bytes sit in such lines and those lines are code: a bundle. A long literal stays source.
 fn is_minified(content: &[u8]) -> bool {
-    let long: usize = content
-        .split(|byte| *byte == b'\n')
-        .map(<[u8]>::len)
-        .filter(|length| *length >= MINIFIED_LINE)
-        .sum();
-    long > 0 && long * 10 >= content.len() * 9
+    let mut long = 0;
+    let mut letters = 0;
+    for line in content.split(|byte| *byte == b'\n') {
+        if line.len() >= MINIFIED_LINE {
+            long += line.len();
+            letters += code_letters(line);
+        }
+    }
+    long > 0 && long * 10 >= content.len() * 9 && letters * 50 >= long
+}
+
+/// Identifier letters outside strings and comments of one line.
+fn code_letters(line: &[u8]) -> usize {
+    if line.trim_ascii_start().starts_with(b"//") {
+        return 0;
+    }
+    let mut letters = 0;
+    let mut index = 0;
+    while index < line.len() {
+        let byte = line[index];
+        if matches!(byte, b'"' | b'\'' | b'`') {
+            index += 1;
+            while index < line.len() && line[index] != byte {
+                index += if line[index] == b'\\' { 2 } else { 1 };
+            }
+        } else if byte == b'/' && line.get(index + 1) == Some(&b'*') {
+            index = line[index + 2..]
+                .windows(2)
+                .position(|pair| pair == b"*/")
+                .map_or(line.len(), |end| index + 2 + end + 1);
+        } else if byte.is_ascii_alphabetic() || byte == b'_' || byte == b'$' {
+            letters += 1;
+        }
+        index += 1;
+    }
+    letters
 }
 
 fn is_generated(head: &[u8]) -> bool {

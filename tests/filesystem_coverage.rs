@@ -132,3 +132,66 @@ fn anchored_global_ignore_rules_do_not_depend_on_the_working_directory()
     fs::remove_dir_all(base)?;
     Ok(())
 }
+
+fn bundle(functions: usize) -> String {
+    let mut code = String::from("!function(e,t){");
+    for index in 0..functions {
+        code.push_str(&format!(
+            "function f{index}(a,b){{return a+b+t}}var v{index}=f{index}(e,t);"
+        ));
+    }
+    code.push_str("}(this,1);\n");
+    code
+}
+
+#[test]
+fn long_literals_stay_source_and_bundles_are_reported_as_not_parsed() -> Result<(), Box<dyn Error>>
+{
+    let root = support::exclusive_dir("minified-rule")?;
+    let svg = "<svg><path d='M0 0;1 1'/>{x}(y);</svg>".repeat(160);
+    let mut icons = String::new();
+    for index in 0..17 {
+        icons.push_str(&format!(
+            "export function renderIcon{index}() {{ return \"{svg}\"; }}\n"
+        ));
+    }
+    fs::write(root.join("icons.js"), icons)?;
+    fs::write(
+        root.join("table.js"),
+        format!(
+            "export function decodeTable(x) {{ return T[x]; }}\nconst T = [{}];\n",
+            (0..3000)
+                .map(|n| (n % 251).to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+    )?;
+    fs::write(
+        root.join("noted.js"),
+        format!(
+            "export function afterComment(x) {{ return x; }}\n// {}\n",
+            "word; and { more } ( text ".repeat(300)
+        ),
+    )?;
+    fs::write(root.join("bundle.js"), bundle(400))?;
+    let run = |args: &[&str]| -> Result<(bool, String), Box<dyn Error>> {
+        let output = support::command(BINARY, &root)
+            .args(args)
+            .arg("-C")
+            .arg(&root)
+            .output()?;
+        let mut text = String::from_utf8(output.stdout)?;
+        text.push_str(&String::from_utf8(output.stderr)?);
+        Ok((output.status.success(), text))
+    };
+    for symbol in ["renderIcon16", "decodeTable", "afterComment"] {
+        let (found, text) = run(&["show", symbol])?;
+        assert!(found, "{symbol}: {text}");
+    }
+    let (found, text) = run(&["find", "f399"])?;
+    assert!(!found, "{text}");
+    assert!(text.contains("not parsed"), "{text}");
+    assert!(text.contains("bundle.js"), "{text}");
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

@@ -92,8 +92,16 @@ pub(super) fn coverage_note(
             continue;
         }
         total += 1;
-        if file.coverage() >= minimum.max(Coverage::ParseErrors) {
-            incomplete.push((file.coverage(), index.string(file.path)));
+        // Code in role `Other` is a minified bundle or above the read limit: no fact of it exists.
+        let coverage = if file.role() == crate::domain::role::Role::Other
+            && file.file_type().is_some_and(FileType::is_code)
+        {
+            Coverage::NotParsed
+        } else {
+            file.coverage()
+        };
+        if coverage >= minimum.max(Coverage::ParseErrors) {
+            incomplete.push((coverage, index.string(file.path)));
         }
     }
     if incomplete.is_empty() {
@@ -128,6 +136,11 @@ pub(super) fn coverage_note(
         "! coverage: {} of {total} files incomplete ({classes}): {paths}{more}; absence unproven",
         incomplete.len()
     ))
+}
+
+/// The files whose absence of a match proves nothing, for an empty answer.
+pub fn not_parsed_note(index: &Index, filter: &Filter) -> Option<String> {
+    coverage_note(index, filter, Coverage::NotParsed, None)
 }
 
 impl Filter {
