@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 128;
+pub const RESOLVE_VERSION: u32 = 129;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -4221,6 +4221,9 @@ impl<'a> Index<'a> {
             }
             if let Some(element) = source.type_name.strip_prefix("elements:") {
                 return self.resolve_type(file, Some(imports), scope, element);
+            }
+            if self.file_type(file) == Some(FileType::Rust) {
+                return None;
             }
             return self
                 .binding_type(file, imports, scope, source)

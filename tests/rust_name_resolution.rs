@@ -413,3 +413,95 @@ fn explicit_target_directory_ending_in_src_keeps_its_module_root()
     }
     Ok(())
 }
+
+#[test]
+fn shadowed_vec_does_not_prove_its_generic_argument_is_the_loop_element()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = rust_root(
+        "rust-shadowed-vec",
+        &[(
+            "src/lib.rs",
+            "pub struct A;\nimpl A { pub fn run(&self) {} }\n\
+             pub struct B;\nimpl B { pub fn run(&self) {} }\n\
+             pub mod custom {\n\
+               pub struct Vec<T>(pub std::marker::PhantomData<T>);\n\
+               impl<T> Vec<T> {\n\
+                 pub fn run(&self) {}\n\
+                 pub fn iter(&self) -> std::iter::Once<super::B> { std::iter::once(super::B) }\n\
+               }\n\
+               impl<T> IntoIterator for Vec<T> {\n\
+                 type Item = super::B;\n\
+                 type IntoIter = std::iter::Once<super::B>;\n\
+                 fn into_iter(self) -> Self::IntoIter { std::iter::once(super::B) }\n\
+               }\n\
+               pub fn local(items: Vec<super::A>) { for item in items { item.run(); } }\n\
+             }\n\
+             pub mod imported {\n\
+               use super::custom::Vec;\n\
+               pub fn imported_check(items: Vec<super::A>) { for item in items { item.run(); } }\n\
+             }\n\
+             pub mod wildcard {\n\
+               use super::custom::*;\n\
+               pub fn wildcard_check(items: Vec<super::A>) { for item in items { item.run(); } }\n\
+             }\n\
+             pub mod shadow_std {\n\
+               mod std { pub mod vec { pub use crate::custom::Vec; } }\n\
+               pub fn shadow_std_check(items: std::vec::Vec<super::A>) { for item in items { item.run(); } }\n\
+             }\n\
+             pub mod standard {\n\
+               use std::vec::Vec;\n\
+               pub fn standard_check(items: Vec<super::A>) { for item in items { item.run(); } }\n\
+               pub fn qualified(items: std::vec::Vec<super::A>) { for item in items { item.run(); } }\n\
+             }\n\
+             use custom::Vec;\n\
+             pub static ROOT_ITEMS: Vec<A> = Vec(std::marker::PhantomData);\n\
+             pub fn static_check() { for item in ROOT_ITEMS.iter() { item.run(); } }\n",
+        )],
+    )?;
+    let mut compiler = support::command("rustc", &root);
+    if let Some(rustup_home) = std::env::var_os("RUSTUP_HOME").or_else(|| {
+        std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".rustup").into())
+    }) {
+        compiler.env("RUSTUP_HOME", rustup_home);
+    }
+    let compiler = compiler
+        .args([
+            "--crate-type",
+            "lib",
+            "--edition",
+            "2021",
+            "--emit",
+            "metadata",
+        ])
+        .arg(root.join("src/lib.rs"))
+        .arg("-o")
+        .arg(root.join("proof.rmeta"))
+        .output()?;
+    assert!(
+        compiler.status.success(),
+        "fixture does not compile: {}",
+        String::from_utf8_lossy(&compiler.stderr)
+    );
+    for name in [
+        "local",
+        "imported_check",
+        "wildcard_check",
+        "shadow_std_check",
+        "static_check",
+    ] {
+        let text = outgoing(&root, name)?;
+        assert!(!text.contains("> A::run"), "{name}: {text}");
+        assert!(
+            !text
+                .lines()
+                .any(|line| line.starts_with("> ") && line.contains("Vec::run")),
+            "{name}: {text}"
+        );
+    }
+    for name in ["standard_check", "qualified"] {
+        let text = outgoing(&root, name)?;
+        assert!(text.contains("> A::run"), "{name}: {text}");
+    }
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

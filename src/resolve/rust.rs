@@ -299,10 +299,7 @@ impl<'a> Index<'a> {
         let declared = declared.split('=').next()?.trim();
         let declared = declared.trim_start_matches('&');
         let declared = declared.strip_prefix("'static ").unwrap_or(declared).trim();
-        let element = match declared.strip_prefix('[') {
-            Some(inner) => inner.split([';', ']']).next()?,
-            None => declared.strip_prefix("Vec<")?.strip_suffix('>')?,
-        };
+        let element = declared.strip_prefix('[')?.split([';', ']']).next()?;
         let element = crate::extract::engine::type_name(element);
         self.resolve_type(record.file, None, None, &element)
             .map(|(types, _)| (types, Confidence::Inferred))

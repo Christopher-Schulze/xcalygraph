@@ -119,19 +119,82 @@ pub(super) fn declared_element<'tree>(
         .then_some(element)
 }
 
-/// Element of a Rust slice, array or `Vec`, behind references.
+/// Element of a Rust slice, array or proven standard `Vec`, behind references.
 fn rust_element<'tree>(node: Node<'tree>, source: &[u8]) -> Option<Node<'tree>> {
     match node.kind() {
         "reference_type" => rust_element(node.child_by_field_name("type")?, source),
         "array_type" => node.child_by_field_name("element"),
         "generic_type" => {
             let name = node.child_by_field_name("type")?.utf8_text(source).ok()?;
-            (name == "Vec")
-                .then(|| node.child_by_field_name("type_arguments")?.named_child(0))
-                .flatten()
+            ((name == "std::vec::Vec" && !rust_name_shadowed(node, "std", source))
+                || (name == "alloc::vec::Vec" && !rust_name_shadowed(node, "alloc", source))
+                || (name == "Vec" && !rust_name_shadowed(node, "Vec", source)))
+            .then(|| node.child_by_field_name("type_arguments")?.named_child(0))
+            .flatten()
         }
         _ => None,
     }
+}
+
+/// A declaration or import in the same Rust module or an enclosing block may shadow the prelude.
+fn rust_name_shadowed(node: Node<'_>, name: &str, source: &[u8]) -> bool {
+    let mut current = Some(node);
+    while let Some(scope) = current {
+        if matches!(scope.kind(), "source_file" | "declaration_list" | "block") {
+            let mut cursor = scope.walk();
+            if scope.named_children(&mut cursor).any(|item| {
+                if item.kind() == "use_declaration" {
+                    let Some(argument) = item.child_by_field_name("argument") else {
+                        return true;
+                    };
+                    let Ok(text) = argument.utf8_text(source) else {
+                        return true;
+                    };
+                    let standard_root = match text {
+                        "std::vec::Vec" => Some("std"),
+                        "alloc::vec::Vec" => Some("alloc"),
+                        _ => None,
+                    };
+                    if standard_root == Some(name)
+                        || (name == "Vec"
+                            && standard_root
+                                .is_some_and(|root| !rust_name_shadowed(node, root, source)))
+                    {
+                        return false;
+                    }
+                    return text.contains('*')
+                        || text
+                            .split(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+                            .any(|word| word == name);
+                }
+                matches!(
+                    item.kind(),
+                    "struct_item"
+                        | "enum_item"
+                        | "union_item"
+                        | "type_item"
+                        | "trait_item"
+                        | "mod_item"
+                        | "extern_crate_declaration"
+                ) && item
+                    .child_by_field_name("alias")
+                    .or_else(|| item.child_by_field_name("name"))
+                    .and_then(|declared| declared.utf8_text(source).ok())
+                    .is_some_and(|declared| declared.trim_start_matches("r#") == name)
+            }) {
+                return true;
+            }
+            if scope.kind() == "declaration_list"
+                && scope
+                    .parent()
+                    .is_some_and(|parent| parent.kind() == "mod_item")
+            {
+                break;
+            }
+        }
+        current = scope.parent();
+    }
+    false
 }
 
 fn container_element<'tree>(node: Node<'tree>, source: &[u8]) -> Option<Node<'tree>> {
