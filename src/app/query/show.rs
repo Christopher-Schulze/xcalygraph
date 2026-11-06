@@ -195,6 +195,8 @@ fn header(index: &Index, filter: &Filter, writer: &mut Writer, node: u32) {
                     ("t", Value::Str("file")),
                     ("path", Value::Str(path)),
                     ("kind", Value::Str(kind)),
+                    ("lines", Value::Int(u64::from(file.lines))),
+                    ("symbols", Value::Int(u64::from(file.symbol_count))),
                     ("doc", Value::Str(&doc)),
                 ],
             );

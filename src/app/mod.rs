@@ -224,7 +224,10 @@ fn run_query(
             Ok(query::show::render(index, filter, node, &show))
         }
         CommandName::Impact => {
-            let history = impact_history(root, &workspace.store, options.read_only);
+            // `--exact` shows no co-change: history is an inference and needs no git run.
+            let history = (!filter.exact)
+                .then(|| impact_history(root, &workspace.store, options.read_only))
+                .flatten();
             let impact = query::impact::ImpactOptions {
                 root,
                 store: &workspace.store,

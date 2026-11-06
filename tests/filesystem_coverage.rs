@@ -94,3 +94,41 @@ fn server_configs_reference_literal_files_without_executing_mentions() -> Result
     fs::remove_dir_all(fixture)?;
     Ok(())
 }
+
+#[test]
+fn anchored_global_ignore_rules_do_not_depend_on_the_working_directory()
+-> Result<(), Box<dyn Error>> {
+    let base = support::exclusive_dir("global-ignore")?;
+    let root = base.join("root");
+    let elsewhere = base.join("elsewhere");
+    fs::create_dir_all(root.join("sub"))?;
+    fs::create_dir_all(&elsewhere)?;
+    fs::write(
+        root.join("sub/hidden.py"),
+        "def hiddenglobal():\n    return 1\n",
+    )?;
+    fs::write(root.join("kept.py"), "def keptglobal():\n    return 1\n")?;
+    fs::write(base.join("excludes"), "/sub/hidden.py\n")?;
+    let config = base.join("gitconfig");
+    fs::write(
+        &config,
+        format!(
+            "[core]\n\texcludesFile = {}\n",
+            base.join("excludes").display()
+        ),
+    )?;
+    for (cwd, index) in [(&root, "inside"), (&elsewhere, "outside")] {
+        let output = support::command(BINARY, &base)
+            .current_dir(cwd)
+            .env("GIT_CONFIG_GLOBAL", &config)
+            .env("XCALYGRAPH_INDEX_DIR", base.join(index))
+            .args(["map", "-C"])
+            .arg(&root)
+            .output()?;
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8(output.stdout)?;
+        assert!(text.contains("1 files"), "{index}: {text}");
+    }
+    fs::remove_dir_all(base)?;
+    Ok(())
+}

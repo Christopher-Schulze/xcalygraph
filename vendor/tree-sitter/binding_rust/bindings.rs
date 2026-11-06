@@ -591,6 +591,13 @@ unsafe extern "C" {
         error_offset: *mut u32,
         error_type: *mut TSQueryError,
     ) -> *mut TSQuery;
+    pub fn ts_query_new_analyzed(
+        language: *const TSLanguage,
+        source: *const ::core::ffi::c_char,
+        source_len: u32,
+        error_offset: *mut u32,
+        error_type: *mut TSQueryError,
+    ) -> *mut TSQuery;
 }
 unsafe extern "C" {
     #[doc = " Delete a query, freeing all of the memory that it used."]

@@ -927,6 +927,14 @@ TSTreeCursor ts_tree_cursor_copy(const TSTreeCursor *cursor);
  * 1. The byte offset of the error is written to the `error_offset` parameter.
  * 2. The type of error is written to the `error_type` parameter.
  */
+TSQuery *ts_query_new_analyzed(
+  const TSLanguage *language,
+  const char *source,
+  uint32_t source_len,
+  uint32_t *error_offset,
+  TSQueryError *error_type
+);
+
 TSQuery *ts_query_new(
   const TSLanguage *language,
   const char *source,

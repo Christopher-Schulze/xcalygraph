@@ -194,12 +194,10 @@ mod tests {
 
     #[test]
     fn every_query_compiles() {
-        // The vendored tree-sitter skips its parse-table analysis in production; here it runs and
-        // rejects patterns the grammar can never match. Other tests only get slower queries.
-        // SAFETY: no thread in this test binary mutates the environment, and getenv only reads.
-        unsafe { std::env::set_var("XCALYGRAPH_QUERY_ANALYSIS", "1") };
+        // Production queries skip the parse-table analysis; this rejects patterns the grammar can
+        // never match.
         for pack in packs() {
-            let compiled = Query::new(&(pack.language)(""), pack.query);
+            let compiled = Query::new_analyzed(&(pack.language)(""), pack.query);
             assert!(
                 compiled.is_ok(),
                 "{}: {:?}",
@@ -207,5 +205,66 @@ mod tests {
                 compiled.err()
             );
         }
+    }
+
+    fn python() -> Result<Language, &'static str> {
+        packs()
+            .iter()
+            .find(|pack| pack.file_type == FileType::Python)
+            .map(|pack| (pack.language)(""))
+            .ok_or("python pack")
+    }
+
+    fn match_count(language: &Language, source: &[u8], query: &Query) -> Option<usize> {
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(language).ok()?;
+        let tree = parser.parse(source, None)?;
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut found = cursor.matches(query, tree.root_node(), source);
+        let mut count = 0;
+        while tree_sitter::StreamingIterator::next(&mut found).is_some() {
+            count += 1;
+        }
+        Some(count)
+    }
+
+    #[test]
+    fn queries_without_analysis_keep_every_match() -> Result<(), Box<dyn std::error::Error>> {
+        let language = python()?;
+        let decorated = "(decorated_definition (decorator (call)) \
+            definition: (function_definition name: (identifier) @name))";
+        for (source, pattern) in [
+            (
+                &b"@plain\n@with_call()\ndef f():\n    pass\n"[..],
+                decorated,
+            ),
+            (
+                &b"@with_call()\n@plain\ndef f():\n    pass\n"[..],
+                decorated,
+            ),
+            (
+                &b"def f():\n    a\n    b\n    pass\n"[..],
+                "(block (expression_statement) . (pass_statement) @p)",
+            ),
+        ] {
+            let plain = Query::new(&language, pattern)?;
+            let analyzed = Query::new_analyzed(&language, pattern)?;
+            assert_eq!(match_count(&language, source, &plain), Some(1), "{pattern}");
+            assert_eq!(
+                match_count(&language, source, &analyzed),
+                Some(1),
+                "{pattern}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn only_the_analysis_rejects_impossible_patterns() -> Result<(), Box<dyn std::error::Error>> {
+        let language = python()?;
+        let impossible = "(function_definition (pass_statement) @x)";
+        assert!(Query::new(&language, impossible).is_ok());
+        assert!(Query::new_analyzed(&language, impossible).is_err());
+        Ok(())
     }
 }

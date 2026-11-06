@@ -4856,3 +4856,20 @@ fn a_disk_tree_survives_denied_folders_and_searches_its_config_text() -> TestRes
     assert!(found.starts_with("web/site.conf\n  1 "), "{found}");
     Ok(())
 }
+
+#[test]
+fn show_file_json_carries_the_line_and_symbol_counts() -> TestResult {
+    let fixture = TempDir::new("show-json-counts")?;
+    fs::write(
+        fixture.0.join("a.py"),
+        "def one():\n    return 1\n\ndef two():\n    return 2\n",
+    )?;
+    let output = support::command(BINARY, &fixture.0)
+        .args(["show", "a.py", "--json", "-C"])
+        .arg(&fixture.0)
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout)?;
+    assert!(text.contains("\"lines\":5,\"symbols\":2"), "{text}");
+    Ok(())
+}

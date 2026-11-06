@@ -334,7 +334,7 @@ pub fn literal_paths(text: &str, facts: &mut Facts) {
         if facts.imports.iter().any(|import| import.line == number) {
             continue;
         }
-        let mut path_literal = |literal: &str, computed: bool| {
+        let mut path_literal = |literal: &str| {
             if !is_path_literal(literal) {
                 return;
             }
@@ -352,7 +352,8 @@ pub fn literal_paths(text: &str, facts: &mut Facts) {
                 facts.refs.push(Ref {
                     kind: RefKind::Path,
                     name: literal.to_owned(),
-                    qualifier: computed.then(|| crate::domain::facts::COMPUTED_BASE.to_owned()),
+                    // A quoted string does not prove its base: the same-named repository file is a guess.
+                    qualifier: Some(crate::domain::facts::COMPUTED_BASE.to_owned()),
                     scope,
                     line: number,
                     arity: NO_ARITY,
@@ -361,17 +362,12 @@ pub fn literal_paths(text: &str, facts: &mut Facts) {
             }
         };
         // Quotes nested in template literals (`` `<img src="a.png">` ``) count too.
-        for_each_quoted(line, |literal, before| {
-            // `root / "src/main.rs"`, `dir.join("src/main.rs")` and a bare `"README.md"` hang
-            // below a computed or unknown base: the same-named repository file is a guess.
-            let before = before.trim_end();
+        for_each_quoted(line, |literal, _| {
             let literal = literal.trim();
-            let computed =
-                before.ends_with('/') || before.ends_with("join(") || !literal.contains('/');
             if is_path_literal(literal) {
-                path_literal(literal, computed);
+                path_literal(literal);
             } else {
-                for_each_quoted(literal, |nested, _| path_literal(nested.trim(), computed));
+                for_each_quoted(literal, |nested, _| path_literal(nested.trim()));
             }
         });
     }
@@ -511,10 +507,10 @@ mod tests {
     }
 
     #[test]
-    fn literal_paths_below_a_computed_base_are_marked() {
+    fn every_literal_path_has_an_unproven_base() {
         let mut facts = Facts::default();
         literal_paths(
-            "(project / \"src/main.rs\").write_text('x')\nroot.join(\"src/lib.rs\");\nopen('src/real.rs')\nopen('README.md')\n",
+            "(project / \"src/main.rs\").write_text('x')\nroot.join(\"src/lib.rs\");\nopen('src/real.rs')\nbase + \"/src/plus.rs\"\n",
             &mut facts,
         );
         let names: Vec<_> = facts
@@ -527,8 +523,8 @@ mod tests {
             [
                 ("src/main.rs", true),
                 ("src/lib.rs", true),
-                ("src/real.rs", false),
-                ("README.md", true)
+                ("src/real.rs", true),
+                ("/src/plus.rs", true)
             ]
         );
     }

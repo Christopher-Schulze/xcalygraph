@@ -26,6 +26,6 @@ PERFORMANCE OF THIS SOFTWARE.
 tree-sitter
 Source: https://github.com/tree-sitter/tree-sitter (crate tree-sitter 0.27.1)
 License: MIT, see vendor/tree-sitter/LICENSE
-Vendored in vendor/tree-sitter with one change in src/query.c: Query::new skips the parse-table
-analysis of patterns unless XCALYGRAPH_QUERY_ANALYSIS is set. The WebAssembly libc in
+Vendored in vendor/tree-sitter with one change in src/query.c and its bindings: Query::new skips the
+parse-table analysis of patterns and claims no match shortcut; Query::new_analyzed runs it. The WebAssembly libc in
 src/wasm-stdlib is left out except imports.txt, which the build script reads; WebAssembly is off.

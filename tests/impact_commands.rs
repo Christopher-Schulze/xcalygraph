@@ -409,6 +409,11 @@ fn impact_names_files_that_change_together_without_an_edge() -> Result<(), Box<d
     );
     let json = run(&["--json"])?;
     assert!(json.contains("\"rel\":\"cochange\""), "{json}");
+    let exact = run(&["--exact"])?;
+    assert!(
+        !exact.contains("config.yaml"),
+        "co-change is an inference: {exact}"
+    );
     fs::remove_dir_all(root)?;
     Ok(())
 }

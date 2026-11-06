@@ -2492,19 +2492,29 @@ impl Query {
         unsafe { Self::from_raw_parts(ptr, source) }
     }
 
+    /// `new` plus the parse-table analysis: rejects patterns the grammar can never match.
+    pub fn new_analyzed(language: &Language, source: &str) -> Result<Self, QueryError> {
+        let ptr = Self::compile(language, source, true)?;
+        unsafe { Self::from_raw_parts(ptr, source) }
+    }
+
     /// Constructs a raw [`TSQuery`](ffi::TSQuery) pointer without performing extra checks specific to the rust
     /// bindings, such as predicate validation. A [`Query`] object can be constructed from the
     /// returned pointer using [`from_raw_parts`](Query::from_raw_parts). The caller is
     /// responsible for ensuring that the returned pointer is eventually freed by calling
     /// [`ts_query_delete`](ffi::ts_query_delete).
     pub fn new_raw(language: &Language, source: &str) -> Result<*mut ffi::TSQuery, QueryError> {
+        Self::compile(language, source, false)
+    }
+
+    fn compile(language: &Language, source: &str, analyze: bool) -> Result<*mut ffi::TSQuery, QueryError> {
         let mut error_offset = 0u32;
         let mut error_type: ffi::TSQueryError = 0;
         let bytes = source.as_bytes();
 
         // Compile the query.
         let ptr = unsafe {
-            ffi::ts_query_new(
+            (if analyze { ffi::ts_query_new_analyzed } else { ffi::ts_query_new })(
                 language.0,
                 bytes.as_ptr().cast::<c_char>(),
                 bytes.len() as u32,

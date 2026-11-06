@@ -7,7 +7,6 @@
 #undef _POSIX_C_SOURCE
 #endif
 
-#include <stdlib.h>
 #include "tree_sitter/api.h"
 #include "./alloc.h"
 #include "./array.h"
@@ -1654,7 +1653,7 @@ static void ts_query__dump_steps(const TSQuery *self, const char *label) {
 }
 #endif
 
-static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
+static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset, bool analyze) {
   Array(uint16_t) non_rooted_pattern_start_steps = array_new();
   for (unsigned i = 0; i < self->pattern_map.size; i++) {
     PatternEntry *pattern = array_get(&self->pattern_map, i);
@@ -1740,10 +1739,18 @@ static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
     }
   }
 
-  // xcalygraph: the parse-table walk below only diagnoses impossible patterns and marks match
-  // shortcuts that `matches` does not depend on. It costs most of Query::new and would run on
-  // every refresh of a language; the test suite enables it to validate the shipped queries.
-  if (!getenv("XCALYGRAPH_QUERY_ANALYSIS")) goto supertype_cleanup;
+  // xcalygraph: the parse-table walk below costs most of Query::new and would run on every refresh
+  // of a language. It rejects impossible patterns and proves match shortcuts: without it no step
+  // may claim one, or the cursor drops states and loses matches. `ts_query_new_analyzed` runs it.
+  if (!analyze) {
+    for (unsigned i = 0; i < self->steps.size; i++) {
+      QueryStep *step = array_get(&self->steps, i);
+      if (step->depth == PATTERN_DONE_MARKER) continue;
+      step->parent_pattern_guaranteed = false;
+      step->root_pattern_guaranteed = false;
+    }
+    goto supertype_cleanup;
+  }
 
   // For every parent symbol in the query, initialize an 'analysis subgraph'.
   // This subgraph lists all of the states in the parse table that are directly
@@ -3026,10 +3033,11 @@ static TSQueryError ts_query__parse_pattern(
   return 0;
 }
 
-TSQuery *ts_query_new(
+static TSQuery *ts_query__new(
   const TSLanguage *language,
   const char *source,
   uint32_t source_len,
+  bool analyze,
   uint32_t *error_offset,
   TSQueryError *error_type
 ) {
@@ -3202,7 +3210,7 @@ TSQuery *ts_query_new(
     ts_query__dump_steps(self, "post-parse");
   #endif
 
-  if (!ts_query__analyze_patterns(self, error_offset)) {
+  if (!ts_query__analyze_patterns(self, error_offset, analyze)) {
     *error_type = TSQueryErrorStructure;
     ts_query_delete(self);
     return NULL;
@@ -4885,3 +4893,24 @@ void ts_query_cursor_set_max_start_depth(
 }
 
 #undef LOG
+
+
+TSQuery *ts_query_new(
+  const TSLanguage *language,
+  const char *source,
+  uint32_t source_len,
+  uint32_t *error_offset,
+  TSQueryError *error_type
+) {
+  return ts_query__new(language, source, source_len, false, error_offset, error_type);
+}
+
+TSQuery *ts_query_new_analyzed(
+  const TSLanguage *language,
+  const char *source,
+  uint32_t source_len,
+  uint32_t *error_offset,
+  TSQueryError *error_type
+) {
+  return ts_query__new(language, source, source_len, true, error_offset, error_type);
+}

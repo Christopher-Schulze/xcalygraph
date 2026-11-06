@@ -261,7 +261,8 @@ impl Walk<'_> {
 /// Files below `root`, sorted by path; `None` when the portable walker has to decide.
 pub fn walk(root: &Path, excluded: &[PathBuf]) -> Option<Vec<Stat>> {
     let parent = ancestor_levels(root)?;
-    let (global, error) = Gitignore::global();
+    // Anchored patterns of the global gitignore are relative to the root, not the working directory.
+    let (global, error) = GitignoreBuilder::new(root).build_global();
     if error.is_some() {
         return None;
     }
