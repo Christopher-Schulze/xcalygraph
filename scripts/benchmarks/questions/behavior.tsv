@@ -1,14 +1,14 @@
-httpx	read proxy settings from the environment	get_environment_proxies
-httpx	load certificate file from environment variable	create_ssl_context
-sqlc	read auth token environment variable	addEnvVars
-cobra	environment variable that enables active help	activeHelpEnvVar
-express	write a cookie on the response	res.cookie
-express	clear a cookie	res.clearCookie
-hono	set a cookie on the context	setCookie
-hono	register a route handler on the app	#addRoute
-express	register a route for a path	app.route
-express	render a template to html	res.render
-sqlc	find table in catalog	getTable
-cobra	register a subcommand	AddCommand
-ky	retry a failed request	_retry
-ripgrep	decide binary file detection	binary_detection
+httpx	read proxy settings from the environment	get_environment_proxies	httpx/_utils.py
+httpx	load certificate file from environment variable	create_ssl_context	httpx/_config.py
+sqlc	read auth token environment variable	addEnvVars	internal/config/env.go
+cobra	environment variable that enables active help	activeHelpEnvVar	active_help.go
+express	write a cookie on the response	res.cookie	lib/response.js
+express	clear a cookie	res.clearCookie	lib/response.js
+hono	set a cookie on the context	setCookie	src/helper/cookie/index.ts
+hono	register a route handler on the app	#addRoute	src/hono-base.ts
+express	register a route for a path	app.route	lib/application.js
+express	render a template to html	res.render	lib/response.js
+sqlc	find table in catalog	getTable	internal/sql/catalog/schema.go
+cobra	register a subcommand	AddCommand	command.go
+ky	retry a failed request	#retry	source/core/Ky.ts
+ripgrep	decide binary file detection	binary_detection	crates/searcher/src/line_buffer.rs

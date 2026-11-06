@@ -174,6 +174,8 @@ def owner(symbol):
     match = CONSTRUCTOR.match(symbol)
     return match.group(1) if match and match.group(1) in definitions else symbol
 
+kinds = {information["symbol"]: information.get("kind")
+         for document in index["documents"] for information in document.get("symbols") or []}
 references = collections.defaultdict(set)
 opaque_references = set()
 for document in index["documents"]:
@@ -382,9 +384,9 @@ for (path, line), symbols in references.items():
         if ACCESSOR.search(symbol) or owner(symbol) != symbol:
             continue  # property accessors are not calls; constructors count as their class
         group = "recall-calls" if symbol.endswith(").") else "recall-types" if symbol.endswith("#") else None
-        # rust-analyzer names an enum variant `Type#Variant#`; the graph has no variant nodes
-        # (docs/deferred.md), so variants report apart from the types an edge can reach.
-        if group == "recall-types" and language == "rust" and symbol.count("#") >= 2:
+        # The compiler kind tells enum variants (no graph nodes, docs/deferred.md) from associated
+        # types, which share the `Type#Member#` form; variants report apart from the types.
+        if group == "recall-types" and kinds.get(symbol) in (12, "EnumMember"):
             group = "recall-variants"
         if group is not None:
             pairs.add((group, path, symbol))

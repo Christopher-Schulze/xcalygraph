@@ -11,6 +11,16 @@ pub fn stage(_name: &str) {}
 #[inline(always)]
 pub fn start() {}
 
+/// Logical bytes a refresh wrote to the index, on stderr with `stage-stats`.
+#[cfg(not(feature = "stage-stats"))]
+#[inline(always)]
+pub fn written(_bytes: u64) {}
+
+#[cfg(feature = "stage-stats")]
+pub fn written(bytes: u64) {
+    eprintln!("write-stats\t{bytes}");
+}
+
 #[cfg(feature = "stage-stats")]
 pub use counting::{stage, start};
 

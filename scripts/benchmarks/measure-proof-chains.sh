@@ -36,9 +36,10 @@ for row in open(os.path.join(repo, "scripts/benchmarks/questions/proof-chains.ts
         source, target = link.split(">")
         adjacent = any(source == chain[i] and target == chain[i + 1]
                        for chain in chains for i in range(len(chain) - 1))
-        leading = (first is not None and source.split(".")[-1].split("::")[-1] in first[0]
+        short = source.split(".")[-1].split("::")[-1]
+        leading = (first is not None and re.search(rf"(?<!\w){re.escape(short)}(?!\w)", first[0])
                    and target in neighbours)
-        found += adjacent or leading
+        found += bool(adjacent or leading)
     shown += found
     required += len(links.split())
     tokens += (len(output) + 2) // 3

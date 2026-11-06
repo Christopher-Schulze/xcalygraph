@@ -120,6 +120,7 @@ pub fn refresh(workspace: &Workspace, mode: Mode) -> Result<Report, AppError> {
     report.bytes_written += store
         .write_meta(&meta)
         .map_err(AppError::index_io("write meta"))?;
+    alloc_stats::written(report.bytes_written);
     Ok(report)
 }
 
