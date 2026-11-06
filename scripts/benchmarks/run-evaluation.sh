@@ -256,7 +256,8 @@ for corpus in "${corpora[@]}"; do
       rg_out="$(cd "${root}" && rg -n -i --no-heading --max-columns 200 "${terms[@]}" . 2>/dev/null || true)"
     fi
     spent="$(printf '%s' "${rg_out}" | tokens)"
-    if grep -q -F "${path}:" <<<"${rg_out}"; then
+    # A stale expectation names a file that is gone; the question then counts as a miss.
+    if [[ -f "${root}/${path}" ]] && grep -q -F "${path}:" <<<"${rg_out}"; then
       rg_hits=$(( rg_hits + 1 ))
       spent=$(( spent + $(tokens < "${root}/${path}") ))
     fi

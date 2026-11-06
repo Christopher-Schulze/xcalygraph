@@ -40,7 +40,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 124;
+pub const RESOLVE_VERSION: u32 = 125;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1428,6 +1428,52 @@ impl<'a> Index<'a> {
                 }
                 (types, confidence)
             })
+            .filter(|(types, _)| {
+                // A bare Rust name never reaches an associated type: `I` is a generic parameter.
+                self.file_type(file) != Some(FileType::Rust)
+                    || name.contains("::")
+                    || !types
+                        .iter()
+                        .all(|&symbol| self.rust_associated_type(symbol))
+            })
+    }
+
+    /// A bare Rust type name is a generic parameter or a type in scope, never an associated type.
+    fn without_rust_associated_types(
+        &self,
+        file: u32,
+        reference: &Ref,
+        outcome: Outcome,
+    ) -> Outcome {
+        if reference.kind != RefKind::Type
+            || reference.qualifier.is_some()
+            || self.file_type(file) != Some(FileType::Rust)
+        {
+            return outcome;
+        }
+        match outcome {
+            Outcome::Targets(mut targets, confidence) => {
+                targets.retain(|(target, _)| {
+                    *target >= self.symbols.len() as u32 || !self.rust_associated_type(*target)
+                });
+                if targets.is_empty() {
+                    Outcome::External
+                } else {
+                    Outcome::Targets(targets, confidence)
+                }
+            }
+            outcome => outcome,
+        }
+    }
+
+    fn rust_associated_type(&self, symbol: u32) -> bool {
+        let record = &self.symbols[symbol as usize];
+        let local = (symbol - self.base[record.file as usize]) as usize;
+        record.kind == SymKind::Alias
+            && self
+                .facts(record.file)
+                .and_then(|facts| facts.symbols.get(local))
+                .is_some_and(|symbol| !symbol.owner.is_empty())
     }
 
     fn resolve_type_candidates(
@@ -1967,10 +2013,15 @@ impl<'a> Index<'a> {
                 self.resolve_julia_base_call(file, imports, facts, reference_index, reference)
             } else {
                 match reference.kind {
-                    RefKind::Call | RefKind::Type => source_identity.map_or_else(
-                        || self.resolve_ref(file, imports, reference),
-                        |identity| self.resolve_source_identity(file, imports, reference, identity),
-                    ),
+                    RefKind::Call | RefKind::Type => {
+                        let outcome = source_identity.map_or_else(
+                            || self.resolve_ref(file, imports, reference),
+                            |identity| {
+                                self.resolve_source_identity(file, imports, reference, identity)
+                            },
+                        );
+                        self.without_rust_associated_types(file, reference, outcome)
+                    }
                     // A value reference only counts when it certainly names a symbol: no fallback,
                     // no ambiguity count (most identifiers are locals).
                     RefKind::Value => match source_identity {

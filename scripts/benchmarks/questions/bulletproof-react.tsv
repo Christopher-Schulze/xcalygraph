@@ -1,0 +1,16 @@
+question	expected
+send cookies and json accept header with every api request	apps/react-vite/src/lib/api-client.ts::authRequestInterceptor
+show an error notification when an api call fails	apps/react-vite/src/lib/api-client.ts
+decide whether a user may delete a comment	apps/react-vite/src/lib/authorization.tsx::POLICIES
+redirect to the login page when the user is not signed in	apps/react-vite/src/lib/auth.tsx::ProtectedRoute
+define the application routes and lazy load each page	apps/react-vite/src/app/router.tsx::createAppRouter
+wrap the app with the query client, error boundary and auth loader	apps/react-vite/src/app/provider.tsx::AppProvider
+load more comments of a discussion page by page	apps/react-vite/src/features/comments/api/get-comments.ts::useInfiniteComments
+create a discussion and refresh the discussion list afterwards	apps/react-vite/src/features/discussions/api/create-discussion.ts::useCreateDiscussion
+admin deletes a user account	apps/react-vite/src/features/users/api/delete-user.ts::useDeleteUser
+update the profile of the signed in user	apps/react-vite/src/features/users/api/update-profile.ts::useUpdateProfile
+open and close state for drawers and dialogs	apps/react-vite/src/hooks/use-disclosure.ts::useDisclosure
+global store of toast notifications	apps/react-vite/src/components/ui/notifications/notifications-store.ts::useNotifications
+pagination controls below a table	apps/react-vite/src/components/ui/table/pagination.tsx::TablePagination
+fallback screen when the whole app crashes	apps/react-vite/src/components/errors/main.tsx::MainErrorFallback
+format a timestamp as a readable date	apps/react-vite/src/utils/format.ts::formatDate

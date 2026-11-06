@@ -295,3 +295,31 @@ fn a_self_method_is_no_self_path() -> Result<(), Box<dyn std::error::Error>> {
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+fn generic_parameters_and_bindings_do_not_reach_associated_types()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = rust_root(
+        "rust-associated",
+        &[(
+            "src/lib.rs",
+            "pub trait Provider { type I; }\npub struct Wrap<R>(R);\nimpl<R> Provider for Wrap<R> {\n    type I = R;\n}\npub struct Holder<I: Clone> {\n    pub value: I,\n}\npub struct Counter;\nimpl Iterator for Counter {\n    type Item = u32;\n    fn next(&mut self) -> Option<Self::Item> { None }\n}\npub fn items() -> impl Iterator<Item = u32> { Counter }\n",
+        )],
+    )?;
+    let output = support::command(BINARY, &root)
+        .args(["show", "Wrap::I", "--json", "-C"])
+        .arg(&root)
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout)?;
+    assert!(!text.contains("Holder"), "{text}");
+    let text = outgoing(&root, "items")?;
+    assert!(
+        !text
+            .lines()
+            .any(|line| line.starts_with('>') && line.contains("Item")),
+        "{text}"
+    );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

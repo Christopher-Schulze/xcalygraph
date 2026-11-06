@@ -393,6 +393,8 @@ fn collect(
             entry.name_node = name.id();
             if let Some(owner) = get("owner") {
                 entry.owner = Some(type_name(text(owner)));
+            } else if let Some(owner) = rust_associated_type_owner(primary_node, path) {
+                entry.owner = Some(type_name(text(owner)));
             }
             // A result type captured with the definition (one pattern instead of two).
             if let Some(node) = get("return.type") {
@@ -461,6 +463,17 @@ fn collect(
             let reference = refs.entry(name.id()).or_default();
             let kind = ref_kind(kind);
             if priority(kind) < priority(reference.kind) {
+                continue;
+            }
+            // `Item` in `Iterator<Item = T>` names a member of that trait, nothing in scope.
+            if path.ends_with(".rs")
+                && kind == Some(RefKind::Type)
+                && name.parent().is_some_and(|parent| {
+                    parent.kind() == "type_binding"
+                        && parent.child_by_field_name("name").map(|node| node.id())
+                            == Some(name.id())
+                })
+            {
                 continue;
             }
             reference.kind = kind;
@@ -2223,6 +2236,19 @@ pub fn type_name(text: &str) -> String {
         })
         .unwrap_or(rest.len());
     rest[..end].trim_end_matches(['?', '!']).to_owned()
+}
+
+/// The impl type or trait around a Rust `type` item: such a type is reachable through its owner only.
+fn rust_associated_type_owner<'tree>(node: Node<'tree>, path: &str) -> Option<Node<'tree>> {
+    if !path.ends_with(".rs") || node.kind() != "type_item" {
+        return None;
+    }
+    let container = node.parent()?.parent()?;
+    match container.kind() {
+        "impl_item" => container.child_by_field_name("type"),
+        "trait_item" => container.child_by_field_name("name"),
+        _ => None,
+    }
 }
 
 /// Top-level parts of a type expression split at `separator`.
