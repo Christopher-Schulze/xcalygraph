@@ -147,22 +147,36 @@ def manifest(root):
 COMMENT = {".py": "# {}\n", ".rb": "# {}\n", ".sh": "# {}\n"}
 ADDED = {".go": "\nfunc XcalygraphEdit() {{}}\n", ".py": "\ndef xcalygraph_edit():\n    pass\n",
          ".rs": "\npub fn xcalygraph_edit() {{}}\n", ".ts": "\nexport function xcalygraphEdit() {{}}\n",
-         ".js": "\nfunction xcalygraphEdit() {{}}\n", ".php": "\nfunction xcalygraphEdit() {{}}\n",
-         ".java": "\n// no top-level function {}\n"}
+         ".js": "\nfunction xcalygraphEdit() {{}}\n", ".php": "\nfunction xcalygraphEdit() {{}}\n"}
 
-def edit_target(root):
-    best = None
+NAMES = {".go": "XcalygraphEdit", ".py": "xcalygraph_edit", ".rs": "xcalygraph_edit",
+         ".ts": "xcalygraphEdit", ".js": "xcalygraphEdit", ".php": "xcalygraphEdit"}
+
+def edit_candidates(root):
+    # Typical source sizes: the largest files are often generated or above the extraction limits.
+    found = []
     for directory, names, entries in os.walk(root):
         names[:] = [name for name in names if name not in (".git", "node_modules", "vendor")]
         for name in entries:
             extension = os.path.splitext(name)[1]
-            if extension not in ADDED:
-                continue
             path = os.path.join(directory, name)
-            size = os.lstat(path).st_size
-            if size and (best is None or (size, path) > best):
-                best = (size, path)
-    return best[1] if best else None
+            if extension in ADDED and not os.path.islink(path) and 0 < os.lstat(path).st_size <= 64 * 1024:
+                found.append((os.lstat(path).st_size, path))
+    return [path for _, path in sorted(found, reverse=True)]
+
+def edit_target(root, index):
+    # The added symbol must become visible, or the refresh measures an ignored file.
+    for path in edit_candidates(root)[:40]:
+        extension = os.path.splitext(path)[1]
+        original = open(path, "rb").read()
+        with open(path, "wb") as handle:
+            handle.write(original + ADDED[extension].format("").encode())
+        found = measured("old", index, ["show", NAMES[extension]], root)["returncode"] == 0
+        with open(path, "wb") as handle:
+            handle.write(original)
+        if found:
+            return path
+    return None
 
 manifest_file = open(os.path.join(output, "manifest.tsv"), "w")
 manifest_file.write("root\tfiles\tbytes\tlargest\tload_before\tload_after\n")
@@ -207,7 +221,8 @@ for root in args.roots:
     else:
         copy = os.path.join(work, "copy")
         shutil.copytree(root, copy, symlinks=True, ignore=shutil.ignore_patterns(".git"))
-        target = edit_target(copy)
+        target = edit_target(copy, os.path.join(work, "probe-index"))
+        shutil.rmtree(os.path.join(work, "probe-index"), ignore_errors=True)
         if target is None:
             report.write(f"{name}\trefresh\tskipped\tno editable source\t\t\t\t\n")
         else:
@@ -219,13 +234,21 @@ for root in args.roots:
             copy_indexes = {tag: os.path.join(work, f"copy-{tag}") for tag in binaries}
             for tag in binaries:
                 measured(tag, copy_indexes[tag], ["index"], copy)
-            for kind, text in (("body", comment.format("xcalygraph edit")), ("signature", ADDED[extension].format("xcalygraph edit"))):
-                counter = [0]
+            head_end = original.find(b"\n") + 1
+            for kind in ("body", "signature"):
+                counter = {"old": 0, "new": 0}
                 sizes = {"old": [], "new": []}
                 def apply(tag):
-                    counter[0] += 1
+                    # Each run of one binary differs from its last: a line shift (body) or a new name.
+                    counter[tag] += 1
+                    if kind == "body":
+                        lines = comment.format("xcalygraph edit") * (1 + counter[tag] % 2)
+                        edited = original[:head_end] + lines.encode() + original[head_end:]
+                    else:
+                        name = NAMES[extension]
+                        edited = original + ADDED[extension].format("").replace(name, f"{name}{counter[tag]}").encode()
                     with open(target, "wb") as handle:
-                        handle.write(original + text.encode() + f"{comment.format(counter[0])}".encode())
+                        handle.write(edited)
                 load = cool_down()
                 runs = {"old": [], "new": []}
                 for _ in range(args.runs):

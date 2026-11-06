@@ -21,6 +21,9 @@ grep -q "facts	comparison	identical" <<<"${same}" || { echo "same binary: facts 
 for metric in refresh_body refresh_signature find_common quiet; do
   grep -q "^root	${metric}	median_ms" <<<"${same}" || { echo "missing ${metric}" >&2; exit 1; }
 done
+# A body edit that shifts lines must reach the index in every run.
+awk -F'\t' '$2 == "refresh_body" && $3 == "changed_index_bytes" && $4 > 2000' <<<"${same}" | grep -q . || {
+  echo "body edit did not reach the index" >&2; exit 1; }
 if awk -F'\t' '$3 == "median_ms" && $7 == "slower" && $5 - $4 > 300' <<<"${same}" | grep -q .; then
   echo "same binary reported as slower" >&2; exit 1
 fi
