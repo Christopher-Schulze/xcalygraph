@@ -20,6 +20,7 @@ OUTPUT="$(mktemp -d "${OUTPUT_BASE}/compare.XXXXXXXX")"
 readonly OUTPUT
 python3 -I - "${OUTPUT}" "$@" <<'PYTHON'
 import argparse
+import atexit
 import filecmp
 import hashlib
 import os
@@ -53,7 +54,7 @@ TIME = ["/usr/bin/time", "-l"] if sys.platform == "darwin" else None
 COUNTERS = {"rss": r"(\d+)\s+maximum resident set size", "footprint": r"(\d+)\s+peak memory footprint",
             "instructions": r"(\d+)\s+instructions retired"}
 
-def measured(tag, index, command, root):
+def measured(tag, index, command, root, allowed=None):
     environment = dict(os.environ, HOME=home, XCALYGRAPH_INDEX_DIR=index)
     full = [binaries[tag], *command, "-C", root]
     if TIME:
@@ -61,6 +62,10 @@ def measured(tag, index, command, root):
     start = time.perf_counter()
     done = subprocess.run(full, env=environment, capture_output=True, text=True, errors="replace")
     elapsed = (time.perf_counter() - start) * 1000
+    if allowed is None:
+        allowed = (0, 4) if command[0] == "find" else (0, 3) if command[0] == "show" else (0,)
+    if done.returncode not in allowed:
+        sys.exit(f"compare-binaries.sh: {tag} {command} exit {done.returncode}: {done.stderr.strip()}")
     row = {"ms": elapsed, "returncode": done.returncode, "stdout": done.stdout}
     for name, pattern in COUNTERS.items():
         found = re.search(pattern, done.stderr)
@@ -102,9 +107,6 @@ def paired(root_name, metric, prepare, command, root, indexes, keep=("rss", "foo
             if prepare:
                 prepare(tag)
             result = measured(tag, indexes[tag], command, root)
-            # An empty answer is an answer; a signal or a panic is not.
-            if result["returncode"] < 0 or result["returncode"] == 101:
-                sys.exit(f"compare-binaries.sh: {tag} {command} exit {result['returncode']}")
             runs[tag].append(result)
     old_ms, new_ms = [r["ms"] for r in runs["old"]], [r["ms"] for r in runs["new"]]
     ratio, result = verdict(old_ms, new_ms)
@@ -171,7 +173,7 @@ def edit_target(root, index):
         original = open(path, "rb").read()
         with open(path, "wb") as handle:
             handle.write(original + ADDED[extension].format("").encode())
-        found = measured("old", index, ["show", NAMES[extension]], root)["returncode"] == 0
+        found = measured("old", index, ["show", NAMES[extension]], root, allowed=(0, 3, 4))["returncode"] == 0
         with open(path, "wb") as handle:
             handle.write(original)
         if found:
@@ -190,23 +192,29 @@ for root in args.roots:
     load_before = os.getloadavg()[0]
     files, total, largest = manifest(root)
     work = tempfile.mkdtemp(prefix=f"{name}.", dir=output)
+    atexit.register(shutil.rmtree, work, ignore_errors=True)
     indexes = {tag: os.path.join(work, f"index-{tag}") for tag in binaries}
     def fresh(tag):
         shutil.rmtree(indexes[tag], ignore_errors=True)
     paired(name, "build", fresh, ["index"], root, indexes)
     old_size, new_size = size_of(indexes["old"]), size_of(indexes["new"])
     row(name, "index", "bytes", old_size, new_size, new_size / max(old_size, 1), "-", os.getloadavg()[0])
-    facts = "unknown"
     def locate(index, wanted):
         for directory, names, entries in os.walk(index):
             if wanted in names or wanted in entries:
                 return os.path.join(directory, wanted)
     old_derived, new_derived = locate(indexes["old"], "derived"), locate(indexes["new"], "derived")
-    if old_derived and new_derived:
-        old_facts, new_facts = locate(indexes["old"], "facts"), locate(indexes["new"], "facts")
-        same_derived = filecmp.cmp(old_derived, new_derived, shallow=False)
-        same_facts = old_facts and new_facts and subprocess.run(["diff", "-rq", old_facts, new_facts], capture_output=True).returncode == 0
-        facts = "identical" if same_derived and same_facts else "different"
+    if not old_derived or not new_derived:
+        sys.exit("compare-binaries.sh: a successful build did not produce a derived index")
+    old_facts, new_facts = locate(indexes["old"], "facts"), locate(indexes["new"], "facts")
+    if not old_facts or not new_facts:
+        sys.exit("compare-binaries.sh: a successful build did not produce facts")
+    same_derived = filecmp.cmp(old_derived, new_derived, shallow=False)
+    comparison = subprocess.run(["diff", "-rq", old_facts, new_facts], capture_output=True)
+    if comparison.returncode not in (0, 1):
+        sys.exit(f"compare-binaries.sh: facts comparison exit {comparison.returncode}")
+    same_facts = comparison.returncode == 0
+    facts = "identical" if same_derived and same_facts else "different"
     report.write(f"{name}\tfacts\tcomparison\t{facts}\t\t\t\t\n")
     print(f"{name}\tfacts\tcomparison\t{facts}")
     paired(name, "quiet", None, ["index"], root, indexes, keep=("rss", "instructions"))
