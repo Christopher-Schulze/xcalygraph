@@ -52,8 +52,11 @@ pub(super) fn extract(
             reference.byte = crate::domain::facts::NO_BYTE;
         }
         for binding in &mut parsed.facts.bindings {
+            // Lossy text moved the bytes: scope and value are unknown, the name still shadows.
             binding.value_byte = crate::domain::facts::NO_BYTE;
             binding.visibility = None;
+            binding.type_name = crate::domain::facts::PATTERN_BINDING.into();
+            binding.declared = false;
         }
     }
     parsed.facts.lines = super::count_lines(content);

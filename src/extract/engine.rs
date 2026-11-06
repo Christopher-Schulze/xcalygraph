@@ -327,7 +327,7 @@ fn collect(
         if path.ends_with(".rs") {
             facts::normalize_space(text(node))
         } else {
-            result_type(text(node))
+            result_type(path, text(node))
         }
     };
     let mut defs: FastMap<usize, RawDef> = FastMap::default();
@@ -516,6 +516,16 @@ fn collect(
                         text(qualifier).to_owned()
                     }
                 };
+                // The path `self::f` is no receiver, unlike `self` in `self.f()`.
+                let qualifier_text = if qualifier_text == "self"
+                    && qualifier
+                        .parent()
+                        .is_some_and(|parent| parent.kind() == "scoped_identifier")
+                {
+                    "self::".to_owned()
+                } else {
+                    qualifier_text
+                };
                 reference.qualifier = Some(facts::clip_space(&qualifier_text, 80));
             }
             if path.ends_with(".jl")
@@ -580,9 +590,16 @@ fn collect(
                         } else if let Some(element) =
                             super::bindings::declared_element(path, node, source)
                         {
-                            format!("elements:{}", type_name(text(element)))
+                            match declared_type(path, text(element)) {
+                                Some(element) if !element.starts_with("elements:") => {
+                                    format!("elements:{element}")
+                                }
+                                _ => facts::PATTERN_BINDING.to_owned(),
+                            }
                         } else {
-                            type_name(type_text)
+                            declared_type(path, type_text)
+                                .or_else(|| composite_type_identity(path, type_text))
+                                .unwrap_or_else(|| facts::PATTERN_BINDING.to_owned())
                         });
                         entry.declared = true;
                         if path.ends_with(".rs") {
@@ -657,12 +674,12 @@ fn collect(
                                 super::lang::typescript::field_type_identity(node, source)
                                     .unwrap_or_default()
                             } else {
-                                type_name(text(node))
+                                declared_type(path, text(node)).unwrap_or_default()
                             };
                         }
                         #[cfg(not(feature = "lang-typescript"))]
                         {
-                            entry.type_name = type_name(text(node));
+                            entry.type_name = declared_type(path, text(node)).unwrap_or_default();
                         }
                     }
                 }
@@ -2208,9 +2225,124 @@ pub fn type_name(text: &str) -> String {
     rest[..end].trim_end_matches(['?', '!']).to_owned()
 }
 
-/// Type a call result binds: like [`type_name`], with `Result` and `Option` unwrapped.
-pub fn result_type(text: &str) -> String {
+/// Top-level parts of a type expression split at `separator`.
+fn type_parts(text: &str, separator: u8) -> Vec<&str> {
+    let (mut parts, mut depth, mut start) = (Vec::new(), 0_i32, 0);
+    let bytes = text.as_bytes();
+    for (index, &byte) in bytes.iter().enumerate() {
+        match byte {
+            b'<' | b'(' | b'[' | b'{' => depth += 1,
+            // `=>` of a function type closes nothing.
+            b'>' if index > 0 && bytes[index - 1] == b'=' => {}
+            b'>' | b')' | b']' | b'}' => depth -= 1,
+            _ if byte == separator && depth == 0 => {
+                parts.push(text[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(text[start..].trim());
+    parts.retain(|part| !part.is_empty());
+    parts
+}
+
+/// The alternatives of a union that hold no value, in the syntax of the language.
+fn is_null_alternative(path: &str, alternative: &str) -> bool {
+    let words: &[&str] = if super::bindings::javascript(path) {
+        &["null", "undefined", "void", "never"]
+    } else if path.ends_with(".py") || path.ends_with(".pyi") {
+        &["None"]
+    } else if path.ends_with(".php") {
+        &["null", "void"]
+    } else {
+        &[]
+    };
+    words.contains(&alternative)
+}
+
+/// The one type a declaration proves: `Left | null` is `Left`, a union of two values or a composed
+/// type proves none. `Some("elements:T")` for an array left over from such a union.
+pub fn declared_type(path: &str, text: &str) -> Option<String> {
+    let normalized = facts::normalize_space(text);
+    let mut trimmed = normalized.trim();
+    while let Some(inner) = trimmed.strip_prefix('(').and_then(|t| t.strip_suffix(')')) {
+        if inner.contains(['(', ')']) {
+            break;
+        }
+        trimmed = inner.trim();
+    }
+    let alternatives = type_parts(trimmed, b'|');
+    let composed = |text: &str| {
+        super::bindings::javascript(path)
+            && (type_parts(text, b'&').len() > 1 || text.contains(" extends "))
+    };
+    if alternatives.len() <= 1 {
+        return (!composed(trimmed)).then(|| type_name(text));
+    }
+    let values: Vec<&str> = alternatives
+        .into_iter()
+        .filter(|alternative| !is_null_alternative(path, alternative))
+        .collect();
+    let [value] = values[..] else {
+        return None;
+    };
+    if composed(value) {
+        return None;
+    }
+    if super::bindings::javascript(path)
+        && let Some(element) = value.strip_suffix("[]")
+    {
+        return Some(format!("elements:{}", type_name(element)));
+    }
+    Some(type_name(value))
+}
+
+#[cfg(not(feature = "lang-typescript"))]
+fn composite_type_identity(_: &str, _: &str) -> Option<String> {
+    None
+}
+
+/// Identity of a TypeScript union or intersection of plain names, resolved branch by branch.
+#[cfg(feature = "lang-typescript")]
+fn composite_type_identity(path: &str, text: &str) -> Option<String> {
+    if !path
+        .rsplit('.')
+        .next()
+        .is_some_and(|ext| matches!(ext, "ts" | "tsx" | "mts" | "cts"))
+    {
+        return None;
+    }
+    let normalized = facts::normalize_space(text);
+    let trimmed = normalized.trim();
+    let plain = |part: &&str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$' | b'.'))
+    };
+    let union = type_parts(trimmed, b'|');
+    let (prefix, parts, separator) = if union.len() > 1 {
+        let values: Vec<&str> = union
+            .into_iter()
+            .filter(|part| !is_null_alternative(path, part))
+            .collect();
+        (facts::TYPESCRIPT_UNION_FIELD_TYPE_PREFIX, values, "|")
+    } else {
+        (
+            facts::TYPESCRIPT_INTERSECTION_FIELD_TYPE_PREFIX,
+            type_parts(trimmed, b'&'),
+            "&",
+        )
+    };
+    (parts.len() > 1 && parts.iter().all(plain))
+        .then(|| format!("{prefix}{}", parts.join(separator)))
+}
+
+/// Type a call result binds: like [`declared_type`], with `Result` and `Option` unwrapped.
+pub fn result_type(path: &str, text: &str) -> String {
     let mut text = facts::normalize_space(text);
+    let mut wrapped = false;
     loop {
         let unwrapped = [
             "Result<",
@@ -2222,11 +2354,24 @@ pub fn result_type(text: &str) -> String {
         .iter()
         .find_map(|wrapper| text.strip_prefix(wrapper).map(str::to_owned));
         match unwrapped {
-            Some(inner) => text = inner,
+            Some(inner) => {
+                text = inner;
+                wrapped = true;
+            }
             None => break,
         }
     }
-    type_name(&text)
+    if wrapped && type_parts(&text, b'|').len() <= 1 {
+        return type_name(&text);
+    }
+    let closed = if wrapped {
+        text.trim_end_matches('>')
+    } else {
+        &text
+    };
+    declared_type(path, closed)
+        .filter(|name| !name.starts_with("elements:"))
+        .unwrap_or_default()
 }
 
 /// Definition text up to its body, on one line.
@@ -2667,6 +2812,32 @@ mod tests {
     }
 
     #[test]
+    fn declared_types_prove_one_value_or_none() {
+        for (path, input, want) in [
+            ("a.ts", "Left", Some("Left")),
+            ("a.ts", "Left | null", Some("Left")),
+            ("a.ts", "undefined | Right", Some("Right")),
+            ("a.ts", "Left | Right", None),
+            ("a.ts", "Left & Right", None),
+            ("a.ts", "A extends B ? C : D", None),
+            ("a.ts", "Left[] | null", Some("elements:Left")),
+            ("a.ts", "(Left | null)", Some("Left")),
+            ("a.py", "None | Right", Some("Right")),
+            ("a.py", "null | Right", None),
+            ("a.php", "null|Right", Some("Right")),
+            ("a.php", "Left|Right", None),
+            ("a.scala", "Left | Right", None),
+            ("a.go", "*Store", Some("Store")),
+        ] {
+            assert_eq!(
+                declared_type(path, input).as_deref(),
+                want,
+                "{path} {input}"
+            );
+        }
+    }
+
+    #[test]
     fn brackets_lose_line_break_spacing() {
         assert_eq!(
             tidy_brackets("fn f( a: u8, b: u8, ) -> u8"),
@@ -2676,9 +2847,12 @@ mod tests {
 
     #[test]
     fn result_types_unwrap_result_and_option() {
-        assert_eq!(result_type("Result<Self, Error>"), "Self");
-        assert_eq!(result_type("io::Result<Option<Box<Store>>>"), "Store");
-        assert_eq!(result_type("(*Store, error)"), "Store");
+        assert_eq!(result_type("a.go", "Result<Self, Error>"), "Self");
+        assert_eq!(
+            result_type("a.go", "io::Result<Option<Box<Store>>>"),
+            "Store"
+        );
+        assert_eq!(result_type("a.go", "(*Store, error)"), "Store");
     }
 
     #[test]

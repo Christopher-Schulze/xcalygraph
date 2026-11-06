@@ -7,6 +7,12 @@ use crate::domain::facts::{
     Manifest, RustTargetRoot, SourceIdentity, SourceIdentityKind, TypeScriptProjectConfig,
 };
 
+/// `jsconfig.json` and `tsconfig.json` with variants such as `tsconfig.base.json`; the variants are
+/// `extends` and `references` targets, so their aliases count.
+pub fn is_project_config(name: &str) -> bool {
+    name.ends_with(".json") && (name.starts_with("tsconfig") || name.starts_with("jsconfig"))
+}
+
 /// Parses a manifest by file name; `None` for manifests without a parser.
 pub fn parse(name: &str, text: &str) -> Option<Manifest> {
     if matches!(name, "tsconfig.json" | "package.json") {
@@ -43,12 +49,14 @@ pub fn parse_with_project_scope(
 }
 
 fn parse_other(name: &str, text: &str) -> Option<Manifest> {
+    if is_project_config(name) {
+        return Some(tsconfig(&json::parse(text)?));
+    }
     match name {
         "go.mod" => Some(go_mod(text)),
         "go.work" => Some(go_work(text)),
         "Cargo.toml" => Some(cargo_toml(text)),
         "package.json" => Some(package_json(&json::parse(text)?)),
-        "jsconfig.json" => Some(tsconfig(&json::parse(text)?)),
         "CMakeLists.txt" => Some(cmake(text)),
         "compile_commands.json" => Some(compile_commands(&json::parse(text)?)),
         "DESCRIPTION" => Some(r_description(text)),
@@ -279,18 +287,45 @@ fn package_json(value: &Value) -> Manifest {
     manifest
 }
 
-/// `compilerOptions.baseUrl` as source root, `paths` as `alias=target` include entries.
+/// `compilerOptions.baseUrl` as source root, `paths` as one `alias=target` include entry per target
+/// in array order (later targets are fallbacks), the project scope as `project_links`.
 fn tsconfig(value: &Value) -> Manifest {
     let mut manifest = Manifest::default();
+    let links = &mut manifest.project_links;
+    for extended in value.get("extends").map(Value::strings).unwrap_or_default() {
+        links.push(format!("extends={extended}"));
+    }
+    if let Some(Value::Array(references)) = value.get("references") {
+        for reference in references {
+            if let Some(path) = reference.get("path").and_then(Value::as_str) {
+                links.push(format!("reference={path}"));
+            }
+        }
+    }
+    for (key, item) in [
+        ("files", "file"),
+        ("include", "include"),
+        ("exclude", "exclude"),
+    ] {
+        if let Some(entries) = value.get(key) {
+            links.push(format!("has={key}"));
+            for entry in entries.strings() {
+                links.push(format!("{item}={entry}"));
+            }
+        }
+    }
     let Some(options) = value.get("compilerOptions") else {
         return manifest;
     };
     if let Some(base) = options.get("baseUrl").and_then(Value::as_str) {
         manifest.source_roots.push(base.to_owned());
     }
-    for (alias, _, targets) in options.get("paths").map(Value::entries).unwrap_or_default() {
-        if let Some(target) = targets.strings().first() {
-            manifest.include_dirs.push(format!("{alias}={target}"));
+    if let Some(paths) = options.get("paths") {
+        manifest.project_links.push("has=paths".to_owned());
+        for (alias, _, targets) in paths.entries() {
+            for target in targets.strings() {
+                manifest.include_dirs.push(format!("{alias}={target}"));
+            }
         }
     }
     manifest

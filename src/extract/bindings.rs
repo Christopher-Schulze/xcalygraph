@@ -89,9 +89,10 @@ fn bytes(start: usize, end: usize) -> Option<Range<u32>> {
     (start < end).then_some(start..end)
 }
 
-fn javascript(path: &str) -> bool {
+pub(super) fn javascript(path: &str) -> bool {
     [
         ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte", ".astro",
+        ".html", ".htm",
     ]
     .iter()
     .any(|suffix| path.ends_with(suffix))
@@ -119,6 +120,9 @@ fn container_element<'tree>(node: Node<'tree>, source: &[u8]) -> Option<Node<'tr
         "array_type" => node.named_child(0),
         "generic_type" => {
             let name = node.child_by_field_name("name")?.utf8_text(source).ok()?;
+            if file_declares(node, name, source) {
+                return None;
+            }
             matches!(
                 name,
                 "Array" | "ReadonlyArray" | "Set" | "ReadonlySet" | "Iterable" | "IterableIterator"
@@ -128,4 +132,31 @@ fn container_element<'tree>(node: Node<'tree>, source: &[u8]) -> Option<Node<'tr
         }
         _ => None,
     }
+}
+
+/// A class, interface, type or import of `name` in this file shadows the standard container.
+fn file_declares(node: Node<'_>, name: &str, source: &[u8]) -> bool {
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let names = |item: Node<'_>| {
+        item.child_by_field_name("name")
+            .and_then(|found| found.utf8_text(source).ok())
+            == Some(name)
+    };
+    let mut walker = root.walk();
+    root.named_children(&mut walker)
+        .any(|item| match item.kind() {
+            "import_statement" => item.utf8_text(source).is_ok_and(|text| {
+                text.split(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '$'))
+                    .any(|word| word == name)
+            }),
+            "export_statement" => item.child_by_field_name("declaration").is_some_and(names),
+            "class_declaration"
+            | "abstract_class_declaration"
+            | "interface_declaration"
+            | "type_alias_declaration" => names(item),
+            _ => false,
+        })
 }

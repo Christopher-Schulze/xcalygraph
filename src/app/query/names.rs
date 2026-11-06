@@ -127,6 +127,31 @@ pub const AMBIGUITY_BUDGET: usize = 600;
 
 /// Exactly one node for NAME; ambiguity lists the candidates (exit 3) within `budget`, no match
 /// is exit 4.
+/// The declaration behind `export { local as name }`, only on a miss: scanning the facts costs a
+/// read of every shard.
+pub fn export_alias(
+    index: &Index,
+    filter: &Filter,
+    store: &crate::infra::store::Store,
+    name: &str,
+) -> Option<u32> {
+    for shard in 0..crate::infra::store::SHARDS {
+        for (path, _, facts) in store.read_shard(shard).ok()? {
+            let local = facts.imports.iter().find_map(|import| {
+                (import.reexport && import.spec.is_empty() && import.alias.as_deref() == Some(name))
+                    .then(|| import.names.first())
+                    .flatten()
+            });
+            if let Some(local) = local
+                && let [node] = in_file(index, filter, &path, local)[..]
+            {
+                return Some(node);
+            }
+        }
+    }
+    None
+}
+
 pub fn resolve_one(
     index: &Index,
     filter: &Filter,

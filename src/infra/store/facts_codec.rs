@@ -239,6 +239,7 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
                 encoder.str(&root.path);
                 encoder.u8(u8::from(root.is_library));
             }
+            encoder.strs(&manifest.project_links);
         }
         None => encoder.u8(0),
     }
@@ -511,6 +512,7 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
                 }
                 roots
             },
+            project_links: decoder.strings()?,
         });
     }
     let mut identities: Vec<SourceIdentity> = Vec::new();
@@ -864,6 +866,7 @@ mod tests {
                     path: "src/lib.rs".to_owned(),
                     is_library: true,
                 }],
+                project_links: vec!["extends=../base.json".to_owned()],
             }),
         }
     }

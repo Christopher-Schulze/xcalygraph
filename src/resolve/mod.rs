@@ -40,7 +40,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 122;
+pub const RESOLVE_VERSION: u32 = 124;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1450,7 +1450,7 @@ impl<'a> Index<'a> {
         let module = self.module_of(file);
         if let Some((qualifier, last)) = split_qualified(name) {
             let found = self
-                .qualified_symbols(file, imports, qualifier, last)
+                .qualified_symbols(file, imports, scope, qualifier, last)
                 .unwrap_or_default();
             let mut types: Vec<u32> = found
                 .into_iter()
@@ -1815,6 +1815,7 @@ impl<'a> Index<'a> {
         &self,
         file: u32,
         imports: Option<&Imports>,
+        scope: Option<u32>,
         qualifier: &str,
         name: &str,
     ) -> Option<Vec<u32>> {
@@ -1857,6 +1858,9 @@ impl<'a> Index<'a> {
         if rust && let Some(found) = self.rust_inline_module(file, qualifier, name) {
             return Some(found);
         }
+        if rust && matches!(qualifier, "self::" | "super" | "crate") {
+            return self.rust_relative_member(file, scope, qualifier, name);
+        }
         if rust && qualifier.contains("::") {
             let segments: Vec<&str> = qualifier.split("::").collect();
             let base = self.rust_path(file, &segments).or_else(|| {
@@ -1871,6 +1875,27 @@ impl<'a> Index<'a> {
                 Target::Symbols(symbols) => Some(symbols),
                 _ => None,
             };
+        }
+        if rust
+            && !qualifier.contains("::")
+            && qualifier != "self"
+            && self.facts(file).is_some_and(|facts| {
+                !facts
+                    .bindings
+                    .iter()
+                    .any(|binding| *binding.name == *qualifier)
+            })
+        {
+            // A module named by one segment re-exports like one named by a path; a value of that
+            // name is a receiver instead.
+            let module = imports
+                .and_then(|imports| imports.names.get(qualifier).cloned())
+                .or_else(|| self.rust_path(file, &[qualifier]));
+            if let Some(module @ Target::Module(_)) = module
+                && let Some(Target::Symbols(symbols)) = self.rust_member(file, &module, name)
+            {
+                return Some(symbols);
+            }
         }
         if let Some(imports) = imports
             && let Some(target) = imports.names.get(qualifier)
@@ -2649,7 +2674,7 @@ impl<'a> Index<'a> {
             parent.kind().is_type().then_some(parent.name.as_ref())
         });
         if let Some(member_owner) = member_owner {
-            return self.document_shows(file, references, scope, member_owner);
+            return self.document_shows(file, references, scope, member_owner, true);
         }
         if record.kind.is_callable() || !plain_word {
             return true;
@@ -2661,31 +2686,33 @@ impl<'a> Index<'a> {
             references,
             scope,
             stem.split('.').next().unwrap_or(stem),
+            false,
         )
     }
 
-    /// `word` appears in the document's path, a heading above the scope or a reference of it.
+    /// `word` appears as a whole word in the document's path, a heading above the scope or a
+    /// reference of its scope. `standalone` also accepts a reference that is exactly `word`.
     fn document_shows(
         &self,
         file: u32,
         references: &[Ref],
         scope: Option<u32>,
         word: &str,
+        standalone: bool,
     ) -> bool {
         let Some(document) = self.facts(file) else {
             return true;
         };
         let lowercase = word.to_ascii_lowercase();
-        if self.input.files[file as usize]
-            .path
-            .to_ascii_lowercase()
-            .contains(&lowercase)
-        {
+        if has_word(
+            &self.input.files[file as usize].path.to_ascii_lowercase(),
+            &lowercase,
+        ) {
             return true;
         }
         let mut heading = scope;
         while let Some(section) = heading.and_then(|index| document.symbols.get(index as usize)) {
-            if section.name.contains(word) {
+            if has_word(&section.name, word) {
                 return true;
             }
             heading = section.parent;
@@ -2693,8 +2720,8 @@ impl<'a> Index<'a> {
         references.iter().any(|reference| {
             reference.scope == scope
                 && matches!(reference.kind, RefKind::Mention | RefKind::Path)
-                && reference.name != word
-                && reference.name.contains(word)
+                && (standalone || reference.name != word)
+                && has_word(&reference.name, word)
         })
     }
 
@@ -3346,7 +3373,13 @@ impl<'a> Index<'a> {
                 let qualified = if shadowed {
                     None
                 } else {
-                    self.qualified_symbols(file, Some(imports), qualifier, &reference.name)
+                    self.qualified_symbols(
+                        file,
+                        Some(imports),
+                        reference.scope,
+                        qualifier,
+                        &reference.name,
+                    )
                 };
                 match qualified {
                     Some(found) => pick_members(self, found, Confidence::Exact, reference.arity),
@@ -3511,7 +3544,8 @@ impl<'a> Index<'a> {
             return pick_members(self, static_methods, confidence, reference.arity);
         }
         if (plain_head || (rust && qualifier.contains("::")))
-            && let Some(found) = self.qualified_symbols(file, Some(imports), qualifier, name)
+            && let Some(found) =
+                self.qualified_symbols(file, Some(imports), reference.scope, qualifier, name)
         {
             return pick_members(self, found, Confidence::Exact, reference.arity);
         }
@@ -3891,6 +3925,28 @@ impl<'a> Index<'a> {
         } else if let Some(binding) =
             self.binding(file, scope, head, reference.line, reference.byte)
         {
+            #[cfg(feature = "lang-typescript")]
+            if binding
+                .type_name
+                .starts_with(facts::TYPESCRIPT_UNION_FIELD_TYPE_PREFIX)
+                || binding
+                    .type_name
+                    .starts_with(facts::TYPESCRIPT_INTERSECTION_FIELD_TYPE_PREFIX)
+            {
+                return (chain.len() == 1)
+                    .then(|| {
+                        self.typescript_composite_field_type(
+                            file,
+                            Some(imports),
+                            scope,
+                            &binding.type_name,
+                        )
+                    })
+                    .flatten()
+                    .map_or(Receiver::Unknown, |(branches, confidence)| {
+                        Receiver::Composite(branches, confidence)
+                    });
+            }
             match self.binding_type(file, imports, scope, binding) {
                 Some(found) => Some(found),
                 None if let Some((callee, _)) = chains::call_binding(&binding.type_name)
@@ -4038,7 +4094,7 @@ impl<'a> Index<'a> {
                     return Receiver::External;
                 }
                 return self
-                    .typescript_composite_field_type(owner_file, field_scope, field_type)
+                    .typescript_composite_field_type(owner_file, None, field_scope, field_type)
                     .map_or(Receiver::External, |(branches, next_confidence)| {
                         Receiver::Composite(branches, confidence.max(next_confidence))
                     });
@@ -5827,3 +5883,13 @@ fn robot_key(name: &str) -> String {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+/// `word` occurs in `text` between characters that cannot extend an identifier.
+fn has_word(text: &str, word: &str) -> bool {
+    let extends = |ch: Option<char>| ch.is_some_and(|ch| ch.is_alphanumeric() || ch == '_');
+    !word.is_empty()
+        && text.match_indices(word).any(|(start, _)| {
+            !extends(text[..start].chars().next_back())
+                && !extends(text[start + word.len()..].chars().next())
+        })
+}

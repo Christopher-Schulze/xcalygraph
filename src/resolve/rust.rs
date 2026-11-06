@@ -226,39 +226,94 @@ impl<'a> Index<'a> {
     /// What a module re-exports as `name`: `pub use` items and globs, `pub extern crate`.
     fn rust_reexport(&self, module: u32, name: &str) -> Option<Target> {
         let _guard = DepthGuard::enter()?;
-        for &file in self.rust_reexporting.get(&module)? {
-            let Some(facts) = self.facts(file) else {
-                continue;
-            };
-            for import in facts.imports.iter().filter(|import| import.reexport) {
-                let Some(imported) = import.names.first() else {
-                    if import.alias.as_ref().unwrap_or(&import.spec) == name {
-                        return self.rust_root_segment(file, &import.spec);
+        let files = self.rust_reexporting.get(&module)?;
+        // An explicit item shadows every glob, whatever the order of the `use` lines.
+        for globs in [false, true] {
+            for &file in files {
+                let Some(facts) = self.facts(file) else {
+                    continue;
+                };
+                for import in facts.imports.iter().filter(|import| import.reexport) {
+                    let Some(imported) = import.names.first() else {
+                        if !globs && import.alias.as_ref().unwrap_or(&import.spec) == name {
+                            return self.rust_root_segment(file, &import.spec);
+                        }
+                        continue;
+                    };
+                    let glob = imported == "*";
+                    if glob != globs || (!glob && import.alias.as_ref().unwrap_or(imported) != name)
+                    {
+                        continue;
                     }
-                    continue;
-                };
-                let glob = imported == "*";
-                if !glob && import.alias.as_ref().unwrap_or(imported) != name {
-                    continue;
-                }
-                let segments: Vec<&str> =
-                    import.spec.split("::").filter(|s| !s.is_empty()).collect();
-                let target = if segments.is_empty() {
-                    self.rust_root_segment(file, imported)
-                } else {
-                    // A glob of an external crate proves nothing about this name.
-                    self.rust_path(file, &segments)
-                        .filter(|base| !glob || !matches!(base, Target::External(_)))
-                        .and_then(|base| {
-                            self.rust_member(file, &base, if glob { name } else { imported })
-                        })
-                };
-                if target.is_some() {
-                    return target;
+                    let segments: Vec<&str> =
+                        import.spec.split("::").filter(|s| !s.is_empty()).collect();
+                    let target = if segments.is_empty() {
+                        self.rust_root_segment(file, imported)
+                    } else {
+                        // A glob of an external crate proves nothing about this name.
+                        self.rust_path(file, &segments)
+                            .filter(|base| !glob || !matches!(base, Target::External(_)))
+                            .and_then(|base| {
+                                self.rust_member(file, &base, if glob { name } else { imported })
+                            })
+                    };
+                    if target.is_some() {
+                        return target;
+                    }
                 }
             }
         }
         None
+    }
+
+    /// `self::name` (qualifier `self::`, unlike the receiver of `self.name()`), `super::name` and
+    /// `crate::name` from `scope`: inline modules around the scope count as path levels before the
+    /// module of the file.
+    pub(super) fn rust_relative_member(
+        &self,
+        file: u32,
+        scope: Option<u32>,
+        qualifier: &str,
+        name: &str,
+    ) -> Option<Vec<u32>> {
+        let facts = self.facts(file)?;
+        let mut inline = Vec::new();
+        let mut current = scope;
+        while let Some(index) = current {
+            let symbol = facts.symbols.get(index as usize)?;
+            if symbol.kind() == SymKind::Mod {
+                inline.push(index);
+            }
+            current = symbol.parent;
+        }
+        let (enclosing, path) = match qualifier {
+            "self::" => (inline.first(), "self"),
+            "super" => (
+                inline.get(1),
+                if inline.is_empty() { "super" } else { "self" },
+            ),
+            _ => (None, "crate"),
+        };
+        if let Some(&module) = enclosing {
+            let base = self.base[file as usize];
+            let found: Vec<u32> = facts
+                .symbols
+                .iter()
+                .enumerate()
+                .filter(|(_, symbol)| {
+                    symbol.parent == Some(module)
+                        && *symbol.name == *name
+                        && symbol.kind() != SymKind::Mod
+                })
+                .map(|(index, _)| base + index as u32)
+                .collect();
+            return (!found.is_empty()).then_some(found);
+        }
+        let module = self.rust_path(file, &[path])?;
+        match self.rust_member(file, &module, name)? {
+            Target::Symbols(symbols) => Some(symbols),
+            _ => None,
+        }
     }
 
     // ---------------------------------------------------------------- lookups

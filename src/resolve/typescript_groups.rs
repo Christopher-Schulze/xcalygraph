@@ -441,6 +441,7 @@ impl<'a> Index<'a> {
     pub(super) fn typescript_composite_field_type(
         &self,
         file: u32,
+        imports: Option<&Imports>,
         scope: Option<u32>,
         type_name: &str,
     ) -> Option<(Vec<Vec<u32>>, Confidence)> {
@@ -462,7 +463,7 @@ impl<'a> Index<'a> {
         }
         let mut types = Vec::with_capacity(names.len());
         for name in names {
-            let (mut resolved, confidence) = self.resolve_type(file, None, scope, name)?;
+            let (mut resolved, confidence) = self.resolve_type(file, imports, scope, name)?;
             if confidence != Confidence::Exact || resolved.len() != 1 {
                 return None;
             }

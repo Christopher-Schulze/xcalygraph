@@ -445,7 +445,11 @@ fn project_config_supported(config: &TypeScriptProjectConfig) -> bool {
             .is_none_or(|path| normalize_project_path(path).is_some())
 }
 
-fn project_includes_file(root: &str, config: &TypeScriptProjectConfig, path: &str) -> Option<bool> {
+pub(super) fn project_includes_file(
+    root: &str,
+    config: &TypeScriptProjectConfig,
+    path: &str,
+) -> Option<bool> {
     let Some(relative) = path_relative_to_root(path, root) else {
         return Some(false);
     };

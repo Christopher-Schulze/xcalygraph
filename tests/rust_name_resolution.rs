@@ -173,3 +173,125 @@ fn rust_pattern_names_shadow_only_their_arm() -> Result<(), Box<dyn Error>> {
     fs::remove_dir_all(fixture)?;
     Ok(())
 }
+
+fn rust_root(label: &str, files: &[(&str, &str)]) -> std::io::Result<std::path::PathBuf> {
+    let root = support::exclusive_dir(label)?;
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    for (path, content) in files {
+        let path = root.join(path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, content)?;
+    }
+    Ok(root)
+}
+
+fn outgoing(root: &std::path::Path, name: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let output = support::command(BINARY, root)
+        .args(["show", name, "-C"])
+        .arg(root)
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    Ok(String::from_utf8(output.stdout)?)
+}
+
+#[test]
+fn self_super_and_crate_calls_resolve() -> Result<(), Box<dyn std::error::Error>> {
+    let root = rust_root(
+        "rust-relative",
+        &[
+            (
+                "src/lib.rs",
+                "pub mod a;\npub fn root_fn() -> i32 { 1 }\npub fn sup_inline() -> i32 { 2 }\npub fn calls_self() -> i32 { self::root_fn() }\npub fn calls_crate() -> i32 { crate::root_fn() }\nmod inner {\n    pub fn own() -> i32 { 3 }\n    pub fn calls_inline_self() -> i32 { self::own() }\n    pub fn calls_inline_super() -> i32 { super::sup_inline() }\n}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {\n        super::root_fn();\n    }\n}\n",
+            ),
+            (
+                "src/a/mod.rs",
+                "pub mod b;\npub fn parent_fn() -> i32 { 1 }\n",
+            ),
+            (
+                "src/a/b.rs",
+                "pub fn calls_parent() -> i32 { super::parent_fn() }\n",
+            ),
+        ],
+    )?;
+    for (name, want) in [
+        ("calls_self", "> root_fn src/lib.rs"),
+        ("calls_crate", "> root_fn src/lib.rs"),
+        ("calls_inline_self", "> inner::own src/lib.rs"),
+        ("calls_inline_super", "> sup_inline src/lib.rs"),
+        ("calls_parent", "> parent_fn src/a/mod.rs"),
+    ] {
+        let text = outgoing(&root, name)?;
+        assert!(text.contains(want), "{name}: {text}");
+    }
+    let text = outgoing(&root, "root_fn")?;
+    assert!(text.contains("tests::t"), "{text}");
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn one_segment_modules_follow_their_reexports() -> Result<(), Box<dyn std::error::Error>> {
+    let root = rust_root(
+        "rust-one-segment",
+        &[
+            (
+                "src/lib.rs",
+                "pub mod a;\nuse crate::a as m;\npub fn direct() -> i32 { a::pick() }\npub fn imported() -> i32 { m::pick() }\n",
+            ),
+            ("src/a/mod.rs", "pub mod two;\npub use two::pick;\n"),
+            ("src/a/two.rs", "pub fn pick() -> i32 { 1 }\n"),
+        ],
+    )?;
+    for name in ["direct", "imported"] {
+        let text = outgoing(&root, name)?;
+        assert!(text.contains("pick src/a/two.rs"), "{name}: {text}");
+    }
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn an_explicit_reexport_shadows_a_glob() -> Result<(), Box<dyn std::error::Error>> {
+    let root = rust_root(
+        "rust-explicit-glob",
+        &[
+            (
+                "src/lib.rs",
+                "pub mod a;\npub mod b;\npub mod m;\npub fn check() -> i32 { m::pick() }\n",
+            ),
+            ("src/a.rs", "pub fn pick() -> i32 { 1 }\n"),
+            ("src/b.rs", "pub fn pick() -> i32 { 2 }\n"),
+            (
+                "src/m.rs",
+                "pub use crate::a::*;\npub use crate::b::pick;\n",
+            ),
+        ],
+    )?;
+    let text = outgoing(&root, "check")?;
+    assert!(text.contains("pick src/b.rs"), "{text}");
+    assert!(!text.contains("pick src/a.rs"), "{text}");
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn a_self_method_is_no_self_path() -> Result<(), Box<dyn std::error::Error>> {
+    let root = rust_root(
+        "rust-self-method",
+        &[(
+            "src/lib.rs",
+            "pub struct S;\nimpl S {\n    pub fn entry(&self) -> i32 { self.helper() }\n    fn helper(&self) -> i32 { 1 }\n}\npub fn helper() -> i32 { 2 }\npub fn free_entry() -> i32 { self::helper() }\n",
+        )],
+    )?;
+    let text = outgoing(&root, "S.entry")?;
+    assert!(text.contains("> S::helper src/lib.rs:4"), "{text}");
+    let text = outgoing(&root, "free_entry")?;
+    assert!(text.contains("> helper src/lib.rs:6"), "{text}");
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

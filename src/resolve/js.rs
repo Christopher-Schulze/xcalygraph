@@ -3,11 +3,14 @@
 //! workspace packages from `package.json`, the SvelteKit `$lib` alias, external packages
 //! otherwise.
 
+use std::collections::{HashMap, HashSet};
+
 use super::modules::parent_dir;
 use super::{Imports, Index, Input, Target};
-use crate::domain::facts::{Facts, SymKind};
+use crate::domain::facts::{Facts, Manifest, SymKind, TypeScriptProjectConfig};
 use crate::domain::filetype::FileType;
 use crate::domain::role;
+use crate::extract::manifest::is_project_config;
 
 /// Extensions a specifier may omit or name with a `.js` stand-in.
 const STRIP: [&str; 14] = [
@@ -39,12 +42,172 @@ pub fn strip_extension(path: &str) -> &str {
 /// Path aliases and workspace packages, computed once per resolution.
 #[derive(Debug, Default)]
 pub struct JsTables {
-    /// (alias prefix, root-relative target prefix), longest alias first.
-    aliases: Vec<(String, String)>,
-    /// Root-relative `baseUrl` directories.
-    base_dirs: Vec<String>,
+    /// Project config by root-relative path.
+    configs: HashMap<String, JsConfig>,
+    /// Directory -> `tsconfig.json`, else `jsconfig.json` of that directory.
+    config_of_dir: HashMap<String, String>,
+    /// Directories holding a `svelte.config.*`.
+    svelte_dirs: HashSet<String>,
     /// (package name, root-relative entry as declared, package directory).
     packages: Vec<(String, String, String)>,
+}
+
+/// One project config with its `extends` chain applied.
+#[derive(Debug, Default, Clone)]
+struct JsConfig {
+    aliases: Vec<JsAlias>,
+    /// Root-relative `baseUrl`.
+    base_dir: Option<String>,
+    references: Vec<String>,
+    scope: Option<(String, TypeScriptProjectConfig)>,
+}
+
+/// A `paths` entry: `prefix*suffix`, or the exact name without a star, and its targets in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct JsAlias {
+    prefix: String,
+    suffix: String,
+    wildcard: bool,
+    targets: Vec<String>,
+}
+
+impl JsAlias {
+    fn matched<'a>(&self, spec: &'a str) -> Option<&'a str> {
+        if !self.wildcard {
+            return (spec == self.prefix).then_some("");
+        }
+        spec.strip_prefix(self.prefix.as_str())?
+            .strip_suffix(self.suffix.as_str())
+    }
+}
+
+/// What one config file declares before `extends`.
+#[derive(Debug, Default, Clone)]
+struct RawConfig {
+    dir: String,
+    extends: Vec<String>,
+    references: Vec<String>,
+    /// Target templates; `None` without a `paths` key.
+    paths: Option<Vec<(String, Vec<String>)>>,
+    /// Directory of the config that declared `paths`.
+    paths_dir: String,
+    base_url: Option<String>,
+    files: Option<Vec<String>>,
+    include: Option<Vec<String>>,
+    exclude: Option<Vec<String>>,
+}
+
+/// `extends` and `references` name a file, or a directory or stem of one; package configs outside
+/// the tree have no entry here.
+fn config_path(raw: &HashMap<String, RawConfig>, dir: &str, target: &str) -> Option<String> {
+    if !target.starts_with('.') && !target.starts_with('/') {
+        return None;
+    }
+    let joined = normalize(&join(dir, target));
+    [
+        joined.clone(),
+        format!("{joined}.json"),
+        join(&joined, "tsconfig.json"),
+    ]
+    .into_iter()
+    .find(|path| raw.contains_key(path))
+}
+
+fn effective(
+    raw: &HashMap<String, RawConfig>,
+    path: &str,
+    seen: &mut Vec<String>,
+) -> Option<RawConfig> {
+    if seen.iter().any(|visited| visited == path) {
+        return None;
+    }
+    seen.push(path.to_owned());
+    let own = raw.get(path)?;
+    let mut merged = RawConfig {
+        dir: own.dir.clone(),
+        extends: own.extends.clone(),
+        references: own.references.clone(),
+        ..RawConfig::default()
+    };
+    // Later `extends` entries override earlier ones, the config itself overrides them all.
+    // Relative values stay relative to the config that declares them.
+    let mut layers: Vec<RawConfig> = own
+        .extends
+        .iter()
+        .filter_map(|target| config_path(raw, &own.dir, target))
+        .filter_map(|parent| effective(raw, &parent, seen))
+        .collect();
+    let mut rooted = own.clone();
+    rooted.paths_dir.clone_from(&own.dir);
+    rooted.base_url = own
+        .base_url
+        .as_ref()
+        .map(|base| normalize(&join(&own.dir, base)));
+    layers.push(rooted);
+    for layer in layers {
+        if layer.paths.is_some() {
+            merged.paths.clone_from(&layer.paths);
+            merged.paths_dir.clone_from(&layer.paths_dir);
+        }
+        if let Some(base) = &layer.base_url {
+            merged.base_url = Some(base.clone());
+        }
+        for (slot, value) in [
+            (&mut merged.files, &layer.files),
+            (&mut merged.include, &layer.include),
+            (&mut merged.exclude, &layer.exclude),
+        ] {
+            if value.is_some() {
+                slot.clone_from(value);
+            }
+        }
+    }
+    seen.pop();
+    Some(merged)
+}
+
+fn raw_config(path: &str, manifest: &Manifest) -> RawConfig {
+    let dir = parent_dir(path).to_owned();
+    let mut config = RawConfig {
+        dir,
+        base_url: manifest.source_roots.first().cloned(),
+        ..RawConfig::default()
+    };
+    for link in &manifest.project_links {
+        let Some((key, value)) = link.split_once('=') else {
+            continue;
+        };
+        match (key, value) {
+            ("extends", _) => config.extends.push(value.to_owned()),
+            ("reference", _) => config.references.push(value.to_owned()),
+            ("has", "paths") => config.paths = Some(Vec::new()),
+            ("has", "files") => config.files = Some(Vec::new()),
+            ("has", "include") => config.include = Some(Vec::new()),
+            ("has", "exclude") => config.exclude = Some(Vec::new()),
+            ("file", _) => config.files.get_or_insert_default().push(value.to_owned()),
+            ("include", _) => config
+                .include
+                .get_or_insert_default()
+                .push(value.to_owned()),
+            ("exclude", _) => config
+                .exclude
+                .get_or_insert_default()
+                .push(value.to_owned()),
+            _ => {}
+        }
+    }
+    if let Some(paths) = &mut config.paths {
+        for entry in &manifest.include_dirs {
+            let Some((alias, target)) = entry.split_once('=') else {
+                continue;
+            };
+            match paths.iter_mut().find(|(name, _)| name == alias) {
+                Some((_, targets)) => targets.push(target.to_owned()),
+                None => paths.push((alias.to_owned(), vec![target.to_owned()])),
+            }
+        }
+    }
+    config
 }
 
 /// Physical files behind the existing module lookup, before declaration grouping.
@@ -55,52 +218,185 @@ struct JsImportTarget {
 
 pub fn tables(input: &Input) -> JsTables {
     let mut tables = JsTables::default();
+    let mut raw = HashMap::new();
     for (record, facts) in input.files.iter().zip(input.facts) {
         // SvelteKit's default `$lib` alias; the generated tsconfig declaring it is not checked in.
-        if role::file_name(&record.path).starts_with("svelte.config.") {
-            let dir = parent_dir(&record.path);
+        let name = role::file_name(&record.path);
+        if name.starts_with("svelte.config.") {
             tables
-                .aliases
-                .push(("$lib/".to_owned(), normalize(&join(dir, "src/lib"))));
+                .svelte_dirs
+                .insert(parent_dir(&record.path).to_owned());
         }
         let Some(manifest) = facts.as_ref().and_then(|facts| facts.manifest.as_ref()) else {
             continue;
         };
         let dir = parent_dir(&record.path);
-        match role::file_name(&record.path) {
-            "tsconfig.json" | "jsconfig.json" => {
-                let base = manifest
-                    .source_roots
-                    .first()
-                    .map_or(dir.to_owned(), |base| normalize(&join(dir, base)));
-                for entry in &manifest.include_dirs {
-                    if let Some((alias, target)) = entry.split_once('=') {
-                        tables.aliases.push((
-                            alias.trim_end_matches('*').to_owned(),
-                            normalize(&join(&base, target.trim_end_matches('*'))),
-                        ));
-                    }
-                }
-                if !manifest.source_roots.is_empty() {
-                    tables.base_dirs.push(base);
-                }
+        if is_project_config(name) {
+            raw.insert(record.path.clone(), raw_config(&record.path, manifest));
+            if name == "tsconfig.json"
+                || (name == "jsconfig.json" && !tables.config_of_dir.contains_key(dir))
+            {
+                tables
+                    .config_of_dir
+                    .insert(dir.to_owned(), record.path.clone());
             }
-            "package.json" => {
-                if let Some(name) = &manifest.module {
-                    let entry = manifest.source_roots.first().map_or_else(
-                        || join(dir, "src/index"),
-                        |main| normalize(&join(dir, main)),
-                    );
-                    tables.packages.push((name.clone(), entry, dir.to_owned()));
-                }
-            }
-            _ => {}
+        } else if name == "package.json"
+            && let Some(package) = &manifest.module
+        {
+            let entry = manifest.source_roots.first().map_or_else(
+                || join(dir, "src/index"),
+                |main| normalize(&join(dir, main)),
+            );
+            tables
+                .packages
+                .push((package.clone(), entry, dir.to_owned()));
         }
     }
+    for path in raw.keys() {
+        let Some(config) = effective(&raw, path, &mut Vec::new()) else {
+            continue;
+        };
+        tables.configs.insert(path.clone(), resolved(&raw, &config));
+    }
     tables
-        .aliases
-        .sort_by(|a, b| b.0.len().cmp(&a.0.len()).then(a.cmp(b)));
-    tables
+}
+
+/// Targets of `paths` are relative to the `baseUrl` in effect, else to the config declaring them.
+fn resolved(raw: &HashMap<String, RawConfig>, config: &RawConfig) -> JsConfig {
+    let base = config.base_url.as_deref().unwrap_or(&config.paths_dir);
+    let aliases = config
+        .paths
+        .iter()
+        .flatten()
+        .map(|(alias, targets)| {
+            let (prefix, suffix, wildcard) = match alias.split_once('*') {
+                Some((prefix, suffix)) => (prefix.to_owned(), suffix.to_owned(), true),
+                None => (alias.clone(), String::new(), false),
+            };
+            JsAlias {
+                prefix,
+                suffix,
+                wildcard,
+                targets: targets
+                    .iter()
+                    .map(|target| normalize(&join(base, target)))
+                    .collect(),
+            }
+        })
+        .collect();
+    JsConfig {
+        aliases,
+        base_dir: config.base_url.clone(),
+        references: config
+            .references
+            .iter()
+            .filter_map(|target| config_path(raw, &config.dir, target))
+            .collect(),
+        scope: Some((
+            config.dir.clone(),
+            TypeScriptProjectConfig {
+                files: config.files.clone(),
+                include: config.include.clone(),
+                exclude: config.exclude.clone(),
+                out_dir: None,
+                module_detection: None,
+                module: None,
+                jsx: None,
+            },
+        )),
+    }
+}
+
+#[cfg(feature = "lang-typescript")]
+fn project_holds(root: &str, scope: &TypeScriptProjectConfig, path: &str) -> bool {
+    super::typescript::project_includes_file(root, scope, path) == Some(true)
+}
+
+#[cfg(not(feature = "lang-typescript"))]
+fn project_holds(_: &str, _: &TypeScriptProjectConfig, _: &str) -> bool {
+    false
+}
+
+impl JsTables {
+    /// The config answering for `path`: the nearest ancestor config; with `references`, the
+    /// referenced or own project that holds the file. `None` without a config, or when several
+    /// projects with different aliases hold the file: then no alias choice is proven.
+    fn config_for(&self, path: &str) -> Option<&JsConfig> {
+        let mut dir = parent_dir(path);
+        let nearest = loop {
+            if let Some(config) = self.config_of_dir.get(dir) {
+                break self.configs.get(config)?;
+            }
+            if dir.is_empty() {
+                return None;
+            }
+            dir = parent_dir(dir);
+        };
+        if nearest.references.is_empty() {
+            return Some(nearest);
+        }
+        let holds = |config: &&JsConfig| {
+            config
+                .scope
+                .as_ref()
+                .is_some_and(|(root, scope)| project_holds(root, scope, path))
+        };
+        let mut holding = nearest
+            .references
+            .iter()
+            .filter_map(|reference| self.configs.get(reference))
+            .chain(std::iter::once(nearest))
+            .filter(holds);
+        let Some(first) = holding.next() else {
+            return Some(nearest);
+        };
+        holding
+            .all(|other| other.aliases == first.aliases && other.base_dir == first.base_dir)
+            .then_some(first)
+    }
+
+    /// Candidate paths of a non-relative specifier, as `tsc` selects them: the exact alias, else the
+    /// wildcard with the longest prefix, and then only its targets, in order. Without a match the
+    /// `baseUrl` applies. Nothing leaves the config of the importing file.
+    fn alias_bases(&self, path: &str, spec: &str, bases: &mut Vec<String>) {
+        let config = self.config_for(path);
+        let aliases = config.map_or(&[][..], |config| &config.aliases[..]);
+        let chosen = aliases
+            .iter()
+            .find(|alias| !alias.wildcard && alias.matched(spec).is_some())
+            .or_else(|| {
+                aliases
+                    .iter()
+                    .filter(|alias| alias.wildcard && alias.matched(spec).is_some())
+                    .max_by_key(|alias| alias.prefix.len())
+            });
+        if let Some(alias) = chosen {
+            let star = alias.matched(spec).unwrap_or_default();
+            bases.extend(
+                alias
+                    .targets
+                    .iter()
+                    .map(|target| normalize(&target.replacen('*', star, 1))),
+            );
+            return;
+        }
+        if let Some(rest) = spec.strip_prefix("$lib/") {
+            let mut dir = parent_dir(path);
+            loop {
+                if self.svelte_dirs.contains(dir) {
+                    bases.push(normalize(&join(&join(dir, "src/lib"), rest)));
+                    return;
+                }
+                if dir.is_empty() {
+                    break;
+                }
+                dir = parent_dir(dir);
+            }
+        }
+        if let Some(base) = config.and_then(|config| config.base_dir.as_deref()) {
+            bases.push(normalize(&join(base, spec)));
+        }
+    }
 }
 
 impl Index<'_> {
@@ -205,14 +501,7 @@ impl Index<'_> {
         if spec.starts_with('.') {
             bases.push(normalize(&join(dir, spec)));
         } else {
-            for (alias, target) in &tables.aliases {
-                if let Some(rest) = spec.strip_prefix(alias.as_str()) {
-                    bases.push(normalize(&join(target, rest)));
-                }
-            }
-            for base in &tables.base_dirs {
-                bases.push(normalize(&join(base, spec)));
-            }
+            tables.alias_bases(&self.input.files[file as usize].path, spec, &mut bases);
             for (name, entry, package_root) in &tables.packages {
                 if spec == name {
                     bases.push(entry.clone());

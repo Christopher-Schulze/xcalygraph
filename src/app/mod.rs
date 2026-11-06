@@ -214,7 +214,13 @@ fn run_query(
             ))
         }
         CommandName::Show => {
-            let node = query::names::resolve_one(index, filter, &args[0], json, ambiguity)?;
+            let node = match query::names::resolve_one(index, filter, &args[0], json, ambiguity) {
+                Err(AppError::NoMatch(message)) => {
+                    query::names::export_alias(index, filter, &workspace.store, &args[0])
+                        .ok_or(AppError::NoMatch(message))?
+                }
+                resolved => resolved?,
+            };
             let show = query::show::ShowOptions {
                 depth: options.depth.unwrap_or(1),
                 all: options.all,

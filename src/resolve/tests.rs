@@ -1603,3 +1603,64 @@ fn member_values_respect_local_import_shadowing() -> std::io::Result<()> {
     }
     Ok(())
 }
+
+fn mention_targets(files: &[(&str, &str)]) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let dir = crate::infra::testdir::TestDir::new("mention-evidence")?;
+    for (path, content) in files {
+        dir.write(path, content)?;
+    }
+    let graph = graph_of(dir.path())?;
+    let mut targets = Vec::new();
+    for edge in graph
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == EdgeKind::Mentions)
+    {
+        if let Some(location) = node_location(&graph, edge.target) {
+            targets.push(
+                location
+                    .name
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned(),
+            );
+        }
+    }
+    targets.sort();
+    Ok(targets)
+}
+
+#[test]
+fn a_document_mention_needs_whole_word_evidence() -> Result<(), Box<dyn std::error::Error>> {
+    let api = "class Cat:\n    def eat(self):\n        return 1\n";
+    assert_eq!(
+        mention_targets(&[
+            ("api.py", api),
+            ("catalog.md", "# Nutrition\n\n`eat` your vegetables.\n")
+        ])?,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        mention_targets(&[
+            ("api.py", api),
+            ("cat.md", "# Nutrition\n\n`eat` your vegetables.\n")
+        ])?,
+        ["eat"]
+    );
+    Ok(())
+}
+
+#[test]
+fn a_standalone_owner_mention_is_evidence_for_its_member() -> Result<(), Box<dyn std::error::Error>>
+{
+    let api = "class Widget:\n    def run(self):\n        return 1\n";
+    assert_eq!(
+        mention_targets(&[
+            ("api.py", api),
+            ("guide.md", "# API\n\n`Widget` exposes `run`.\n")
+        ])?,
+        ["Widget", "run"]
+    );
+    Ok(())
+}
