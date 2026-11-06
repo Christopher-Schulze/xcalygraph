@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Remove aged, explicitly marked completed runs in known cache categories, compact older evidence
 # runs and report total size. Compaction uses the same age and completion requirements.
-# Usage: scripts/utils/prune-cache.sh [AGE_HOURS]  (default 24; 0 selects all marked runs)
+# Usage: scripts/utils/prune-cache.sh [AGE_HOURS]  (default 1; 0 selects all marked runs)
 # Unknown entries, candidate symlinks, incomplete runs, snapshots and .keep-protected runs stay.
 # Ad-hoc work directories (task*, edge-guard.*, leftovers of failed test fixtures NAME-PID-N) go
 # once nothing in them is younger than the age and no open TASK file names them.
-# Fails above 3 GiB without the frozen corpus snapshots: evidence must not grow unnoticed.
+# Fails above 2.3 GiB, snapshots included: nothing below .cache grows unnoticed.
 # Compaction: in evaluation/ and task192-manifests/, runs beyond the newest KEEP_RUNS, in
 # edge-oracle/ beyond the newest one, lose every file except top-level regular files up to 1 MiB (reports, identities,
 # summaries, ledgers); a run containing .keep-full is never compacted.
@@ -15,8 +15,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
 REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 readonly CACHE="${REPO_ROOT}/.cache"
-readonly AGE_HOURS="${1:-24}"
-readonly LIMIT_KIB=$((3 * 1024 * 1024))
+readonly AGE_HOURS="${1:-1}"
+readonly LIMIT_KIB=$((23 * 1024 * 1024 / 10))
 readonly MARKER=".xcalygraph-disposable"
 readonly KEEP_RUNS=2
 readonly SMALL_KIB=1024
@@ -141,12 +141,8 @@ if ! size_kib="$(du -sk "${CACHE}" | awk 'NR == 1 { print $1 }')"; then
   exit 1
 fi
 echo "prune-cache.sh: removed ${removed} entries, compacted ${compacted} runs, .cache is $((size_kib / 1024)) MiB"
-snapshot_kib=0
-if [[ -d "${CACHE}/corpus-snapshots" ]]; then
-  snapshot_kib="$(du -sk "${CACHE}/corpus-snapshots" | awk 'NR == 1 { print $1 }')"
-fi
-if (( size_kib - snapshot_kib > LIMIT_KIB )); then
-  echo "prune-cache.sh: evidence in .cache exceeds 3 GiB; largest entries:" >&2
+if (( size_kib > LIMIT_KIB )); then
+  echo "prune-cache.sh: .cache exceeds 2.3 GiB; largest entries:" >&2
   du -sk "${CACHE}"/* "${CACHE}"/*/* 2>/dev/null | sort -rn \
     | awk 'NR <= 5 { printf "  %d MiB %s\n", $1 / 1024, $2 }' >&2
   exit 1

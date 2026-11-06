@@ -160,17 +160,16 @@ with tempfile.TemporaryDirectory(prefix="prune-regression.", dir=base) as tempor
     assert named_work.is_dir() and kept_work.is_dir() and fresh_work.is_dir(), result.stdout
     assert linked_work.is_symlink() and (outside / "keep").read_text() == "foreign"
 
-    # Evidence above the limit fails the gate; frozen snapshots do not count.
+    # Anything above the limit fails the gate, snapshots included.
     limit_script = root / "scripts/utils/limit-prune.sh"
-    limit_script.write_text(script.read_text().replace("LIMIT_KIB=$((3 * 1024 * 1024))", "LIMIT_KIB=2048"))
-    (snapshot / "frozen.bin").write_bytes(b"0" * (8 * 1024 * 1024))
+    limit_script.write_text(script.read_text().replace("LIMIT_KIB=$((23 * 1024 * 1024 / 10))", "LIMIT_KIB=2048"))
     ok = subprocess.run(["bash", str(limit_script), "24"], env=environment, text=True, capture_output=True)
     assert ok.returncode == 0, ok.stderr
-    (foreign / "bulk.bin").write_bytes(b"0" * (4 * 1024 * 1024))
-    over = subprocess.run(["bash", str(limit_script), "24"], env=environment, text=True, capture_output=True)
-    assert over.returncode == 1 and "exceeds 3 GiB" in over.stderr, over.stderr
-    (foreign / "bulk.bin").unlink()
-    (snapshot / "frozen.bin").unlink()
+    for bulky in (foreign, snapshot):
+        (bulky / "bulk.bin").write_bytes(b"0" * (4 * 1024 * 1024))
+        over = subprocess.run(["bash", str(limit_script), "24"], env=environment, text=True, capture_output=True)
+        assert over.returncode == 1 and "exceeds 2.3 GiB" in over.stderr, over.stderr
+        (bulky / "bulk.bin").unlink()
     limit_script.unlink()
 
     linked_project = Path(temporary) / "linked-project"

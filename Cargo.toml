@@ -121,5 +121,13 @@ strip = true
 lto = "fat"
 codegen-units = 1
 
+# Disk: line numbers for our own panics only, no incremental store.
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.dev.package.xxhash-rust]
 opt-level = 3

@@ -56,3 +56,8 @@ CARGO_BUILD_BUILD_DIR="${CARGO_TARGET_DIR}"
 export CARGO_TARGET_DIR CARGO_BUILD_BUILD_DIR
 bash "${REPO_ROOT}/scripts/utils/verification-source.sh" \
   bash "${REPO_ROOT}/scripts/tests/test-execution.sh" "${work}" "${mode}"
+# Green: the verification build is done with and costs disk until the next gate. After a failure it
+# stays, so the fix does not rebuild everything.
+case "${CARGO_TARGET_DIR}" in
+  */.xcalygraph-verification/*) rm -rf -- "${CARGO_TARGET_DIR}" ;;
+esac

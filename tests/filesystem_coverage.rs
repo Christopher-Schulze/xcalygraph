@@ -7,6 +7,56 @@ use std::fs;
 
 const BINARY: &str = env!("CARGO_BIN_EXE_xcalygraph");
 
+/// Path, length, modification time and mode of everything below `root`.
+fn tree_state(root: &std::path::Path) -> Result<Vec<String>, Box<dyn Error>> {
+    use std::os::unix::fs::MetadataExt;
+    let mut state = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let metadata = fs::symlink_metadata(&path)?;
+        state.push(format!(
+            "{} {} {} {:o}",
+            path.display(),
+            metadata.len(),
+            metadata.mtime_nsec() + metadata.mtime() * 1_000_000_000,
+            metadata.mode()
+        ));
+        if metadata.is_dir() {
+            for entry in fs::read_dir(&path)? {
+                pending.push(entry?.path());
+            }
+        }
+    }
+    state.sort();
+    Ok(state)
+}
+
+#[test]
+fn indexing_and_querying_never_change_the_scanned_tree() -> Result<(), Box<dyn Error>> {
+    let fixture = support::exclusive_dir("scanned-tree-stays")?;
+    let root = fixture.join("source");
+    fs::create_dir_all(root.join("App.app/Contents"))?;
+    fs::write(root.join("app.py"), "def untouched_tree():\n    return 1\n")?;
+    fs::write(
+        root.join("App.app/Contents/Info.plist"),
+        "<plist></plist>\n",
+    )?;
+    fs::write(root.join("App.app/Contents/binary"), [0u8, 159, 146, 150])?;
+    std::os::unix::fs::symlink("app.py", root.join("link.py"))?;
+    let before = tree_state(&root)?;
+    for args in [vec!["index"], vec!["find", "untouched_tree"], vec!["map"]] {
+        let output = support::command(BINARY, &fixture)
+            .args(&args)
+            .arg("-C")
+            .arg(&root)
+            .output()?;
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        assert_eq!(tree_state(&root)?, before, "{args:?}");
+    }
+    fs::remove_dir_all(fixture)?;
+    Ok(())
+}
+
 #[test]
 fn a_long_literal_does_not_hide_the_following_definition() -> Result<(), Box<dyn Error>> {
     let fixture = support::exclusive_dir("long-literal-source")?;
