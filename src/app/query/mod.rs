@@ -377,6 +377,18 @@ impl Index {
 
     /// One symbol as a grouped text line and JSON record.
     pub fn write_symbol(&self, writer: &mut Writer, node: u32, score: Option<f32>) -> bool {
+        self.write_hit(writer, node, score, true)
+    }
+
+    /// [`Self::write_symbol`]; without `detail` the text line names the symbol only: its signature
+    /// is one `show path:line` away.
+    pub fn write_hit(
+        &self,
+        writer: &mut Writer,
+        node: u32,
+        score: Option<f32>,
+        detail: bool,
+    ) -> bool {
         let Node::Symbol(symbol) = self.node(node) else {
             let path = self.path_of(node);
             let mut record = vec![("t", Value::Str("file")), ("path", Value::Str(path))];
@@ -388,7 +400,9 @@ impl Index {
         let path = self.path_of(node);
         let summary = self.summary(symbol);
         // The signature carries the kind; symbols without one show kind and name.
-        let text = if self.string(symbol.signature).is_empty() {
+        let text = if !detail && !self.string(symbol.name).is_empty() {
+            format!("{} {}", symbol.line, self.string(symbol.name))
+        } else if self.string(symbol.signature).is_empty() {
             format!("{} {} {}", symbol.line, symbol.kind().id(), summary)
         } else {
             format!("{} {}", symbol.line, summary)

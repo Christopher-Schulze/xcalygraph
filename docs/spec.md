@@ -276,7 +276,7 @@ Git data requires `git` on PATH and a git work tree; otherwise git sections prin
 
 ## 7. Query semantics
 
-Detail ladder: `find` (one line per hit, a clear top hit with source and neighbours) -> `show` (full card) -> source read at the cited lines.
+Detail ladder: `find` (one line per hit, signatures on the first two hits only, a clear top hit with source and neighbours) -> `show` (full card) -> source read at the cited lines.
 
 ### 7.1 map
 

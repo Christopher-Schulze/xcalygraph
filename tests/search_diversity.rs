@@ -433,3 +433,55 @@ fn explicit_exact_symbol_queries_reject_semantic_neighbors_and_keep_behavioral_s
 
     Ok(())
 }
+
+#[test]
+fn later_find_hits_print_their_name_and_stay_reachable() -> Result<(), Box<dyn std::error::Error>> {
+    let root = support::exclusive_dir("find-tiers")?;
+    let mut source = String::new();
+    for index in 0..8 {
+        source.push_str(&format!(
+            "pub fn sharedword{index}(first: u32, second: u32) -> u32 {{ first + second }}\n"
+        ));
+    }
+    fs::write(root.join("a.rs"), source)?;
+    let run = |args: &[&str]| -> Result<String, Box<dyn std::error::Error>> {
+        let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &root)
+            .args(args)
+            .arg("-C")
+            .arg(&root)
+            .output()?;
+        assert!(output.status.success(), "{output:?}");
+        Ok(String::from_utf8(output.stdout)?)
+    };
+    let text = run(&["find", "first", "second"])?;
+    let symbols: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with("  ") && line.contains("sharedword"))
+        .collect();
+    assert!(symbols.len() >= 4, "{text}");
+    assert!(
+        symbols
+            .iter()
+            .take(2)
+            .all(|line| line.contains("second: u32")),
+        "{text}"
+    );
+    assert!(
+        symbols
+            .iter()
+            .skip(2)
+            .all(|line| !line.contains("second: u32")),
+        "{text}"
+    );
+    let handle = symbols[3].trim().split(' ').next().ok_or("line number")?;
+    let shown = run(&["show", &format!("a.rs:{handle}")])?;
+    assert!(shown.contains("second: u32"), "{shown}");
+    let json = run(&["find", "first", "second", "--json"])?;
+    assert_eq!(
+        json.matches("second: u32").count(),
+        json.matches("\"t\":\"sym\"").count(),
+        "{json}"
+    );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

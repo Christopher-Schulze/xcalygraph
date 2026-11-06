@@ -31,6 +31,8 @@ const NEIGHBOURS: usize = 3;
 /// Tests of the first answer, with one command to run them.
 const TESTS: usize = 2;
 const CARD_INDENT: usize = 2;
+/// Hits of a text answer with their full signature.
+const DETAILED_HITS: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hit {
@@ -295,14 +297,19 @@ fn posting(list: &[PostingRecord], node: u32) -> Option<&PostingRecord> {
 /// Renders the best hits that fit the budget in score order; adjacent hits of one file share
 /// its path line, so a weak sibling never pushes a stronger hit of another file down.
 pub fn render(index: &Index, hits: &[Hit], json: bool, budget: usize) -> String {
-    let write = |writer: &mut Writer, count: usize| {
-        for hit in &hits[..count] {
-            index.write_symbol(writer, hit.node, json.then_some(hit.score));
+    let write = |writer: &mut Writer, count: usize, detailed: usize| {
+        for (position, hit) in hits[..count].iter().enumerate() {
+            index.write_hit(
+                writer,
+                hit.node,
+                json.then_some(hit.score),
+                position < detailed,
+            );
         }
     };
     let fits = |count: usize| {
         let mut writer = Writer::new(json, budget);
-        write(&mut writer, count);
+        write(&mut writer, count, detailed_hits(json));
         !writer.is_full()
     };
     let (mut low, mut high) = (0, hits.len());
@@ -316,9 +323,15 @@ pub fn render(index: &Index, hits: &[Hit], json: bool, budget: usize) -> String 
     }
     let count = low.max(usize::from(!hits.is_empty()));
     let mut writer = Writer::new(json, budget);
-    write(&mut writer, count);
+    write(&mut writer, count, detailed_hits(json));
     writer.skip(hits.len() - count);
     writer.finish()
+}
+
+/// Hits with their full signature; later ones print `line name`, and the budget this frees shows
+/// further hits: more required facts per answer at the same tokens. JSON keeps its fields.
+fn detailed_hits(json: bool) -> usize {
+    if json { usize::MAX } else { DETAILED_HITS }
 }
 
 /// [`render`] without a clear top hit: the edges joining the leading hits come first, because
@@ -332,17 +345,22 @@ fn render_connected(
 ) -> String {
     let leading: Vec<u32> = hits.iter().take(CHAIN_HITS).map(|hit| hit.node).collect();
     let chains = path::chains(index, filter, &leading, MAX_CHAINS);
-    let write = |writer: &mut Writer, count: usize| {
+    let write = |writer: &mut Writer, count: usize, detailed: usize| {
         for (start, links) in &chains {
             path::write_chain(index, writer, *start, links);
         }
-        for hit in &hits[..count] {
-            index.write_symbol(writer, hit.node, json.then_some(hit.score));
+        for (position, hit) in hits[..count].iter().enumerate() {
+            index.write_hit(
+                writer,
+                hit.node,
+                json.then_some(hit.score),
+                position < detailed,
+            );
         }
     };
     let fits = |count: usize| {
         let mut writer = Writer::new(json, budget);
-        write(&mut writer, count);
+        write(&mut writer, count, detailed_hits(json));
         !writer.is_full()
     };
     let (mut low, mut high) = (0, hits.len());
@@ -355,7 +373,7 @@ fn render_connected(
         }
     }
     let mut writer = Writer::new(json, budget);
-    write(&mut writer, low);
+    write(&mut writer, low, detailed_hits(json));
     writer.skip(hits.len() - low);
     writer.finish()
 }
@@ -382,9 +400,14 @@ pub fn render_answer(
         return render_connected(index, filter, hits, json, budget);
     }
     let lines = excerpt(index, root, first.node, query);
-    let write = |writer: &mut Writer, count: usize| {
+    let write = |writer: &mut Writer, count: usize, detailed: usize| {
         for (position, hit) in hits[..count].iter().enumerate() {
-            index.write_symbol(writer, hit.node, json.then_some(hit.score));
+            index.write_hit(
+                writer,
+                hit.node,
+                json.then_some(hit.score),
+                position < detailed,
+            );
             if position == 0 {
                 for (line, text) in &lines {
                     let shown = match line {
@@ -407,7 +430,7 @@ pub fn render_answer(
     };
     let fits = |count: usize| {
         let mut writer = Writer::new(json, budget);
-        write(&mut writer, count);
+        write(&mut writer, count, detailed_hits(json));
         !writer.is_full()
     };
     let (mut low, mut high) = (1, hits.len());
@@ -420,7 +443,7 @@ pub fn render_answer(
         }
     }
     let mut writer = Writer::new(json, budget);
-    write(&mut writer, low);
+    write(&mut writer, low, detailed_hits(json));
     writer.skip(hits.len() - low);
     writer.finish()
 }

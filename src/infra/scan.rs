@@ -27,7 +27,7 @@ thread_local! {
     static READ_BUFFER: Cell<Vec<u8>> = const { Cell::new(Vec::new()) };
     /// The directory of the worker's last file: siblings skip the path walk of a full open.
     #[cfg(unix)]
-    static LAST_DIRECTORY: std::cell::RefCell<Option<(String, File)>> =
+    static LAST_DIRECTORY: std::cell::RefCell<Option<(PathBuf, File)>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -39,11 +39,15 @@ fn open_source(root: &Path, relative: &str) -> io::Result<File> {
     use std::os::unix::ffi::OsStrExt;
 
     let (parent, name) = relative.rsplit_once('/').unwrap_or(("", relative));
+    let directory_path = root.join(parent);
     let opened = LAST_DIRECTORY.with_borrow_mut(|last| {
-        if last.as_ref().is_none_or(|(known, _)| known != parent) {
-            *last = File::open(root.join(parent))
+        if last
+            .as_ref()
+            .is_none_or(|(known, _)| *known != directory_path)
+        {
+            *last = File::open(&directory_path)
                 .ok()
-                .map(|directory| (parent.to_owned(), directory));
+                .map(|directory| (directory_path, directory));
         }
         let (_, directory) = last.as_ref()?;
         let name = std::ffi::CString::new(std::ffi::OsStr::new(name).as_bytes()).ok()?;
