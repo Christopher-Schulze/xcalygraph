@@ -535,7 +535,9 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             | SourceIdentityKind::TypeScriptModuleSyntax
             | SourceIdentityKind::TypeScriptProject
             | SourceIdentityKind::TypeScriptGlobalAugmentationScope
-            | SourceIdentityKind::TypeScriptPackageType => 1,
+            | SourceIdentityKind::TypeScriptPackageType
+            | SourceIdentityKind::CommonJsExport => 1,
+            SourceIdentityKind::CommonJsRequire => facts.imports.len(),
             SourceIdentityKind::TypeScriptGlobalAugmentation => facts.symbols.len(),
         };
         if usize::try_from(index).map_or(true, |index| index >= limit)

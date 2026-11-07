@@ -309,6 +309,10 @@ pub enum SourceIdentityKind {
     TypeScriptGlobalAugmentation,
     /// `package.json` type setting relevant to TypeScript's Node module detection.
     TypeScriptPackageType,
+    /// File-level static CommonJS callable export, local declaration or literal forwarding.
+    CommonJsExport,
+    /// Import-indexed proof of an unshadowed require and stable top-level module binding.
+    CommonJsRequire,
 }
 
 impl SourceIdentityKind {
@@ -342,6 +346,8 @@ impl SourceIdentityKind {
             value if value == Self::TypeScriptPackageType as u8 => {
                 Some(Self::TypeScriptPackageType)
             }
+            value if value == Self::CommonJsExport as u8 => Some(Self::CommonJsExport),
+            value if value == Self::CommonJsRequire as u8 => Some(Self::CommonJsRequire),
             _ => None,
         }
     }

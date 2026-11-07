@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 133;
+pub const RESOLVE_VERSION: u32 = 134;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -3226,6 +3226,22 @@ impl<'a> Index<'a> {
                 if *symbol.name != *name || !kind_ok(id) || symbol.kind() == SymKind::Method {
                     continue;
                 }
+                // A top-level require binding names the module value, not a callable at
+                // the declaration line. Actual lexical locals keep their precedence.
+                if js_like
+                    && reference.kind == RefKind::Call
+                    && self.commonjs_require(file, name)
+                    && symbol.parent.is_none()
+                    && symbol.kind() == SymKind::Const
+                    && matches!(imports.names.get(name), Some(Target::Module(_)))
+                    && facts.imports.iter().any(|import| {
+                        import.names.is_empty()
+                            && import.alias.as_deref() == Some(name)
+                            && import.line == symbol.line
+                    })
+                {
+                    continue;
+                }
                 let depth = match symbol.parent {
                     None => 0,
                     Some(parent) => match chain.iter().position(|&p| p == parent) {
@@ -3308,6 +3324,18 @@ impl<'a> Index<'a> {
                         pick_members(self, wanted, Confidence::Exact, reference.arity)
                     } else {
                         pick(&wanted, Confidence::Exact)
+                    }
+                }
+                Target::Module(module)
+                    if reference.kind == RefKind::Call
+                        && self.file_type(file) == Some(FileType::JavaScript)
+                        && self.commonjs_require(file, name) =>
+                {
+                    let targets = self.commonjs_callable(*module, 0);
+                    if targets.is_empty() {
+                        Outcome::External
+                    } else {
+                        pick(&targets, Confidence::Exact)
                     }
                 }
                 Target::Module(_) | Target::External(_) => Outcome::External,

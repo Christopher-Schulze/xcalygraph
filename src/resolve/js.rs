@@ -556,6 +556,101 @@ impl JsTables {
 }
 
 impl Index<'_> {
+    pub(super) fn commonjs_require(&self, file: u32, name: &str) -> bool {
+        self.commonjs_context(file)
+            && self.facts(file).is_some_and(|facts| {
+                facts.imports.iter().enumerate().any(|(index, import)| {
+                    import.alias.as_deref() == Some(name)
+                        && import.names.is_empty()
+                        && u32::try_from(index).ok().is_some_and(|index| {
+                            facts.source_identity(
+                                crate::domain::facts::SourceIdentityKind::CommonJsRequire,
+                                index,
+                            ) == Some("unshadowed")
+                        })
+                })
+            })
+    }
+
+    /// Resolve only explicit CommonJS callable evidence; namespace member lookup stays separate.
+    pub(super) fn commonjs_callable(&self, module: u32, depth: usize) -> Ids {
+        if depth >= 8 {
+            return Ids::new();
+        }
+        let Some(path) = self.modules.modules[module as usize]
+            .key
+            .strip_prefix("js:")
+        else {
+            return Ids::new();
+        };
+        let Some(&file) = self.path_index.get(path) else {
+            return Ids::new();
+        };
+        if !self.commonjs_context(file) {
+            return Ids::new();
+        }
+        if let Some(identity) = self.facts(file).and_then(|facts| {
+            facts.source_identity(crate::domain::facts::SourceIdentityKind::CommonJsExport, 0)
+        }) {
+            if let Some(name) = identity.strip_prefix("local:") {
+                let targets = self.module_symbol(module, name, None);
+                return if targets.len() == 1
+                    && self.symbols[targets[0] as usize].kind == SymKind::Fn
+                {
+                    targets
+                } else {
+                    Ids::new()
+                };
+            }
+            if let Some(spec) = identity.strip_prefix("module:") {
+                return self
+                    .js_module(file, spec)
+                    .map_or_else(Ids::new, |target| self.commonjs_callable(target, depth + 1));
+            }
+        }
+        Ids::new()
+    }
+
+    pub(super) fn commonjs_context(&self, file: u32) -> bool {
+        let path = self.input.files[file as usize].path.as_str();
+        if path
+            .rsplit('.')
+            .next()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("cjs"))
+        {
+            return true;
+        }
+        if path
+            .rsplit('.')
+            .next()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("mjs"))
+        {
+            return false;
+        }
+        let mut directory = parent_dir(path);
+        loop {
+            if let Some(&package) = self
+                .path_index
+                .get(join(directory, "package.json").as_str())
+            {
+                return self.facts(package).is_some_and(|facts| {
+                    facts
+                        .source_identity(
+                            crate::domain::facts::SourceIdentityKind::TypeScriptPackageType,
+                            0,
+                        )
+                        .is_some_and(|identity| {
+                            !matches!(identity, "unproven" | "typescript_package:v1:module")
+                        })
+                });
+            }
+            if directory.is_empty() {
+                return true;
+            }
+            directory = parent_dir(directory);
+        }
+    }
+
     pub(super) fn js_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
         let typed_source = self.file_type(file) != Some(FileType::JavaScript);
         let only_types = |symbols: &[u32]| {
