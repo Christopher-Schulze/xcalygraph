@@ -260,6 +260,38 @@ mod tests {
     }
 
     #[test]
+    fn saturated_query_marks_extraction_incomplete() -> Result<(), Box<dyn std::error::Error>> {
+        let language = python()?;
+        let pattern = "(block (expression_statement (identifier) @name) (pass_statement))";
+        let plain = Query::new(&language, pattern)?;
+        let analyzed = Query::new_analyzed(&language, pattern)?;
+        let source = |count| format!("def example():\n{}    pass\n", "    value\n".repeat(count));
+        let small = source(64);
+        assert_eq!(match_count(&language, small.as_bytes(), &plain), Some(64));
+        assert_eq!(
+            match_count(&language, small.as_bytes(), &analyzed),
+            Some(64)
+        );
+        let saturated = source(4100);
+        for query in [&plain, &analyzed] {
+            let parsed = super::super::engine::extract(
+                &language,
+                query,
+                &python::PACK.hooks,
+                "example.py",
+                saturated.as_bytes(),
+                true,
+            );
+            assert_eq!(
+                parsed.facts.coverage,
+                crate::domain::facts::Coverage::MatchLimit
+            );
+            assert!(parsed.incomplete);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn only_the_analysis_rejects_impossible_patterns() -> Result<(), Box<dyn std::error::Error>> {
         let language = python()?;
         let impossible = "(function_definition (pass_statement) @x)";
