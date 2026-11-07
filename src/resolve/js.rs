@@ -575,6 +575,17 @@ impl Index<'_> {
             .filter(|import| !import.spec.is_empty())
         {
             let Some(selected) = self.js_import_target(file, &import.spec) else {
+                if self
+                    .js_tables
+                    .deno_may_remap(&self.input.files[file as usize].path, &import.spec)
+                    && let Some(target) = self.workspace_import_candidate(file, &import.spec)
+                    && target != file
+                {
+                    imports
+                        .inferred_files
+                        .get_or_insert_with(|| Box::new(Ids::new()))
+                        .push(target);
+                }
                 let package = package_name(&import.spec);
                 if !package.is_empty() {
                     imports.externals.push(package.clone());
@@ -657,12 +668,74 @@ impl Index<'_> {
 
     fn js_import_target(&self, file: u32, spec: &str) -> Option<JsImportTarget> {
         let path = &self.input.files[file as usize].path;
+        if self.js_tables.deno_may_remap(path, spec) {
+            return None;
+        }
+        self.js_import_target_unmapped(file, spec)
+    }
+
+    /// A unique in-root package explicitly named as a workspace dependency is a possible Node
+    /// target even when a Deno map can choose another one. It proves no imported symbol.
+    fn workspace_import_candidate(&self, file: u32, spec: &str) -> Option<u32> {
+        if spec.contains(':') {
+            return None;
+        }
+        let package = package_name(spec);
+        let mut packages = self
+            .js_tables
+            .packages
+            .iter()
+            .filter(|(name, _, _)| name == &package);
+        let (_, _, package_dir) = packages.next()?;
+        if package.is_empty() || packages.next().is_some() {
+            return None;
+        }
+        let package_manifest = self
+            .path_index
+            .get(join(package_dir, "package.json").as_str())
+            .and_then(|&file| self.facts(file))?
+            .manifest
+            .as_ref()?;
+        if package_manifest
+            .source_roots
+            .first()
+            .is_some_and(|entry| normalize_in_root(package_dir, entry).is_none())
+        {
+            return None;
+        }
+        let path = &self.input.files[file as usize].path;
+        let mut aliases = Vec::new();
+        if self.js_tables.alias_bases(path, spec, &mut aliases) || !aliases.is_empty() {
+            return None;
+        }
+        let mut dir = parent_dir(path);
+        loop {
+            let manifest_path = join(dir, "package.json");
+            if let Some(&manifest_file) = self.path_index.get(manifest_path.as_str()) {
+                let manifest = self.facts(manifest_file)?.manifest.as_ref()?;
+                if !manifest
+                    .deps
+                    .iter()
+                    .any(|(name, version)| name == &package && version.starts_with("workspace:"))
+                {
+                    return None;
+                }
+                return self
+                    .js_import_target_unmapped(file, spec)
+                    .map(|target| target.type_file);
+            }
+            if dir.is_empty() {
+                return None;
+            }
+            dir = parent_dir(dir);
+        }
+    }
+
+    fn js_import_target_unmapped(&self, file: u32, spec: &str) -> Option<JsImportTarget> {
+        let path = &self.input.files[file as usize].path;
         let dir = parent_dir(path);
         let typescript = self.file_type(file) != Some(FileType::JavaScript);
         let tables = &self.js_tables;
-        if tables.deno_may_remap(path, spec) {
-            return None;
-        }
         let mut bases: Vec<String> = Vec::new();
         if spec.starts_with('.') {
             bases.push(normalize(&join(dir, spec)));

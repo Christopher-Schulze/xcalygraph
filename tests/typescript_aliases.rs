@@ -135,6 +135,95 @@ fn deno_scopes_external_maps_and_relative_keys_do_not_prove_targets() -> TestRes
 }
 
 #[test]
+fn a_deno_conflicting_workspace_import_keeps_only_an_inferred_file_edge() -> TestResult {
+    let root = support::exclusive_dir("alias-deno-workspace")?;
+    write(
+        &root,
+        &[
+            (
+                "package.json",
+                r#"{"name":"shared","module":"./runtime.ts"}"#,
+            ),
+            ("runtime.ts", WHO),
+            (
+                "app/package.json",
+                r#"{"name":"app","devDependencies":{"shared":"workspace:*"}}"#,
+            ),
+            ("app/deno.json", r#"{"imports":{"shared":"./other.ts"}}"#),
+            (
+                "app/main.ts",
+                "import { who } from 'shared';\nexport function denoEntry() { return who(); }\n",
+            ),
+        ],
+    )?;
+    let file = show(&root, "app/main.ts")?;
+    assert!(
+        file.lines()
+            .any(|line| line.contains("runtime.ts:1") && line.contains("imports?")),
+        "{file}"
+    );
+    let symbol = show(&root, "denoEntry")?;
+    assert!(!symbol.contains("> who runtime.ts"), "{symbol}");
+    let exact = support::command(BINARY, &root)
+        .args(["show", "app/main.ts", "--exact", "-C"])
+        .arg(&root)
+        .output()?;
+    assert!(exact.status.success());
+    assert!(!String::from_utf8(exact.stdout)?.contains("runtime.ts"));
+    write(
+        &root,
+        &[
+            (
+                "app/tsconfig.json",
+                r#"{"compilerOptions":{"paths":{"shared":["./alternate.ts"]}}}"#,
+            ),
+            ("app/alternate.ts", WHO),
+        ],
+    )?;
+    let aliased = show(&root, "app/main.ts")?;
+    assert!(
+        !aliased.contains("runtime.ts") && !aliased.contains("alternate.ts"),
+        "{aliased}"
+    );
+    fs::write(root.join("app/tsconfig.json"), "{}")?;
+    fs::write(
+        root.join("app/package.json"),
+        r#"{"name":"app","devDependencies":{"shared":"^1"}}"#,
+    )?;
+    let external = show(&root, "app/main.ts")?;
+    assert!(!external.contains("runtime.ts"), "{external}");
+    fs::write(
+        root.join("app/package.json"),
+        r#"{"name":"app","devDependencies":{"shared":"workspace:*"}}"#,
+    )?;
+    write(&root, &[("outside.ts", WHO)])?;
+    fs::write(
+        root.join("package.json"),
+        r#"{"name":"shared","module":"../outside.ts"}"#,
+    )?;
+    let outside = show(&root, "app/main.ts")?;
+    assert!(!outside.contains("outside.ts"), "{outside}");
+    fs::write(
+        root.join("package.json"),
+        r#"{"name":"shared","module":"./runtime.ts"}"#,
+    )?;
+    write(
+        &root,
+        &[
+            (
+                "duplicate/package.json",
+                r#"{"name":"shared","module":"./runtime.ts"}"#,
+            ),
+            ("duplicate/runtime.ts", WHO),
+        ],
+    )?;
+    let duplicate = show(&root, "app/main.ts")?;
+    assert!(!duplicate.contains("runtime.ts"), "{duplicate}");
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
 fn each_app_uses_its_own_alias_table() -> TestResult {
     let root = support::exclusive_dir("alias-apps")?;
     let config = r#"{"compilerOptions":{"paths":{"@/*":["./src/*"]}}}"#;

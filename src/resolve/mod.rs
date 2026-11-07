@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 131;
+pub const RESOLVE_VERSION: u32 = 132;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -140,6 +140,8 @@ struct Imports {
     externals: Vec<String>,
     /// Files the file imports (file -> file `imports` edges).
     files: Vec<(u32, u32)>,
+    /// Possible file targets whose runtime context is not proven; never used for name resolution.
+    inferred_files: Option<Box<Ids>>,
 }
 
 struct Resolved {
@@ -2241,6 +2243,19 @@ impl<'a> Index<'a> {
                 confidence: Confidence::Exact,
                 line: 1,
             });
+        }
+        if let Some(targets) = &imports.inferred_files {
+            for &target in targets.iter() {
+                if !imports.files.contains(&(file, target)) {
+                    resolved.edges.push(Edge {
+                        source: file_node,
+                        target: self.symbols.len() as u32 + target,
+                        kind: EdgeKind::Imports,
+                        confidence: Confidence::Inferred,
+                        line: 1,
+                    });
+                }
+            }
         }
         resolved
     }
