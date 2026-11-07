@@ -35,7 +35,7 @@ Syntax: `xcalygraph <command> [args] [flags]`.
 | `index` | none | none | explicit build or refresh |
 | `ls` | none | none | indexes in the index base: root, size, last use, `missing` when the root is gone, totals |
 | `clean` | `[ROOT...] [--missing]` | none | delete verified indexes in the index base; with ROOTs only theirs (also their local index under `<root>/.xcalygraph/`); `--missing` only those whose root is gone; preserve and report unverified entries |
-| `install` | `[--no-link] [--skill-only]` | none | install the running binary, the embedded skill and the Claude Code link (section 10); add or remove the prompt hook in host settings |
+| `install` | `[--no-link] [--skill-only]` | none | install the running binary, the embedded skill and the Claude Code link (section 10) |
 | `update` | `[--check]` | none | self-update the binary, then refresh a stale skill |
 | `version` | none | none | binary, index format and installed skill versions |
 | `help` | `[COMMAND]` | none | syntax reference |
