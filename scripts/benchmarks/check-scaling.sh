@@ -10,6 +10,11 @@ set -euo pipefail
 (( $# == 1 )) && [[ -x "$1" ]] || { echo "usage: check-scaling.sh BINARY" >&2; exit 2; }
 readonly binary="$1"
 readonly MAX_RATIO=6
+# GNU time (Linux) rejects -l; BSD time (macOS) reports retired instructions with it.
+if ! /usr/bin/time -l true >/dev/null 2>&1; then
+  echo "check-scaling.sh: /usr/bin/time -l is unavailable; scaling unchecked" >&2
+  exit 0
+fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/xcalygraph-scaling.XXXXXXXX")"
 readonly work
