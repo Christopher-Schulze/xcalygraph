@@ -331,7 +331,7 @@ pub fn render(index: &Index, hits: &[Hit], json: bool, budget: usize) -> String 
 }
 
 /// One `~` line per environment variable the query names: where it is read, the test reaching the
-/// reader and the document explaining it, each with its site; `-doc` and `-t` state an absence.
+/// reader and a matching document heading, each with its site; `-doc` and `-t` mark no match.
 fn env_stars(index: &Index, filter: &Filter, query: &str) -> Vec<String> {
     let mut lines = Vec::new();
     for word in query.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')) {
@@ -358,7 +358,8 @@ fn env_stars(index: &Index, filter: &Filter, query: &str) -> Vec<String> {
         let mut line = format!("~ {word} <read {}:{}", index.path_of(read.node), read.line);
         match super::show::tests_of(index, filter, read.node).first() {
             Some(test) => line.push_str(&format!(
-                " <t {}:{}",
+                " <t{} {}:{}",
+                if test.2 { "" } else { "?" },
                 index.path_of(test.0.node),
                 index.line_of(test.0.node)
             )),
@@ -370,12 +371,14 @@ fn env_stars(index: &Index, filter: &Filter, query: &str) -> Vec<String> {
             .iter()
             .enumerate()
             .find(|(_, symbol)| {
-                symbol.kind() == crate::domain::facts::SymKind::Heading
-                    && index.string(symbol.name).contains(word)
+                !filter.exact
+                    && symbol.kind() == crate::domain::facts::SymKind::Heading
+                    && filter.symbol(index, symbol)
+                    && crate::domain::filetype::contains_word(index.string(symbol.name), word)
             });
         match document {
             Some((node, symbol)) => line.push_str(&format!(
-                " <doc {}:{}",
+                " <doc? {}:{}",
                 index.path_of(node as u32),
                 symbol.line
             )),
@@ -453,9 +456,16 @@ pub fn render_answer(
         env_stars(index, filter, query)
     };
     if !stars.is_empty() {
-        let mut answer = stars.join("\n");
-        answer.push('\n');
-        let reserved = answer.len().div_ceil(3);
+        let mut writer = Writer::new(false, budget);
+        for star in &stars {
+            writer.line(star, &[]);
+        }
+        if writer.is_full() {
+            writer.skip(hits.len());
+            return writer.finish();
+        }
+        let mut answer = writer.finish();
+        let reserved = answer.len().div_ceil(super::output::BYTES_PER_TOKEN);
         let rest = render_answer_body(
             index,
             filter,

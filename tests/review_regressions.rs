@@ -182,11 +182,92 @@ fn a_named_environment_variable_shows_its_reader_test_and_document() -> TestResu
     let star = text.lines().next().unwrap_or_default();
     assert!(star.starts_with("~ APP_TOKEN <read cfg.py:4"), "{text}");
     assert!(star.contains("<t tests/test_cfg.py:3"), "{text}");
-    assert!(star.contains("<doc docs/env.md:3"), "{text}");
+    assert!(star.contains("<doc? docs/env.md:3"), "{text}");
     let text = query(&root, &["find", "LONE_VALUE"])?;
     assert!(
         text.lines().next().unwrap_or_default().ends_with("-t -doc"),
         "{text}"
+    );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn environment_documents_require_a_whole_identifier_and_obey_filters() -> TestResult {
+    let root = support::exclusive_dir("env-star-document-filter")?;
+    write(
+        &root,
+        &[
+            (
+                "cfg.py",
+                b"import os\ndef load():\n    return os.environ.get('APP_TOKEN')\n",
+            ),
+            ("docs/a.md", b"# NOT_APP_TOKEN\n"),
+            ("docs/b.md", b"# APP_TOKEN settings\n"),
+        ],
+    )?;
+    let text = query(&root, &["find", "APP_TOKEN"])?;
+    let star = text.lines().next().unwrap_or_default();
+    assert!(star.contains("<doc? docs/b.md:1"), "{text}");
+    assert!(!star.contains("docs/a.md"), "{text}");
+    for filter in [["-p", "cfg.py"], ["-l", "python"], ["-k", "fn"]] {
+        let text = query(&root, &["find", "APP_TOKEN", filter[0], filter[1]])?;
+        let star = text.lines().next().unwrap_or_default();
+        assert!(star.contains("-doc") && !star.contains("<doc"), "{text}");
+    }
+    let exact = query(&root, &["find", "APP_TOKEN", "--exact"])?;
+    let star = exact.lines().next().unwrap_or_default();
+    assert!(star.contains("-doc") && !star.contains("<doc?"), "{exact}");
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn environment_stars_fit_the_entire_answer_budget() -> TestResult {
+    let root = support::exclusive_dir("env-star-budget")?;
+    write(
+        &root,
+        &[(
+            "config\\escaped.py",
+            b"import os\ndef load():\n    return os.environ.get('APP_TOKEN')\n",
+        )],
+    )?;
+    let full = query(&root, &["find", "APP_TOKEN", "-b", "600"])?;
+    assert!(full.contains("<read config\\\\escaped.py:3"), "{full}");
+    for budget in [1usize, 2, 3, 10, 20, 40, 100, 600] {
+        let text = query(&root, &["find", "APP_TOKEN", "-b", &budget.to_string()])?;
+        assert!(text.len() <= budget * 3, "budget {budget}: {text:?}");
+        if text.contains("<read") {
+            assert!(text.contains("config\\\\escaped.py"), "{text}");
+        }
+    }
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn environment_star_marks_an_inferred_test_relation() -> TestResult {
+    let root = support::exclusive_dir("env-star-inferred-test")?;
+    write(
+        &root,
+        &[
+            (
+                "service.js",
+                b"function Service() {}\nService.prototype.render = function render() { return process.env.INFERRED_KEY; };\nmodule.exports = Service;\n",
+            ),
+            (
+                "tests/service.test.js",
+                b"var Service = require('../service');\nfunction test_read(unknown) { unknown.render(); }\n",
+            ),
+        ],
+    )?;
+    let text = query(&root, &["find", "INFERRED_KEY"])?;
+    let star = text.lines().next().unwrap_or_default();
+    assert!(star.contains("<t? tests/service.test.js:2"), "{text}");
+    let exact = query(&root, &["find", "INFERRED_KEY", "--exact"])?;
+    assert!(
+        !exact.lines().next().unwrap_or_default().contains("<t?"),
+        "{exact}"
     );
     fs::remove_dir_all(root)?;
     Ok(())
