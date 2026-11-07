@@ -15,6 +15,8 @@
 #   and recall rows (recall-calls / recall-types / recall-variants: distinct source-file/target pairs the compiler
 #   references, and how many have an edge; edges are deduplicated per source symbol and target,
 #   so recall is measured per file and target rather than per line).
+# Missed-pair rows retain group, source, target, compiler symbol and sorted one-based reference
+# lines (comma-separated), so source classification remains possible after raw SCIP compaction.
 # Verdict per edge: unknown when the compiler has no symbol for the target; correct when the
 # compiler resolves a reference owned by the declared caller on the edge line to the edge
 # target (same file, name and definition line, identifying one physical definition) or to a method
@@ -124,7 +126,7 @@ index = json.load(open(scip_path))
 # Several compiler projects may share a package name, so one symbol string would name a definition
 # per app. A symbol belongs to the project of its document: no reference crosses projects unnoticed.
 projects_path = scip_path.replace(".scip.json", ".projects")
-if os.path.exists(projects_path):
+if projects_path != scip_path and os.path.exists(projects_path):
     projects = open(projects_path, encoding="utf-8").read().split()
     for document in index["documents"]:
         project = next((p for p in projects if document["relative_path"].startswith(p + "/")), "")
@@ -379,6 +381,7 @@ for row in open(edges_path, encoding="utf-8"):
         edge_targets[source].add(symbol)
         edge_targets[source].update(implements.get(symbol, ()))
 pairs = set()
+missed_lines = collections.defaultdict(set)
 for (path, line), symbols in references.items():
     for symbol in symbols:
         if ACCESSOR.search(symbol) or owner(symbol) != symbol:
@@ -390,7 +393,10 @@ for (path, line), symbols in references.items():
         if group == "recall-types" and language == "rust" and symbol.count("#") >= 2 and kind in (None, 0, 12, "EnumMember", "UnspecifiedKind"):
             group = "recall-variants"
         if group is not None:
-            pairs.add((group, path, symbol))
+            pair = (group, path, symbol)
+            pairs.add(pair)
+            if symbol not in edge_targets.get(path, ()):
+                missed_lines[pair].add(line)
 recall = collections.Counter()
 with open(verdicts_path.replace(".verdicts.tsv", ".missed.tsv"), "w") as missed, \
      open(verdicts_path.replace(".verdicts.tsv", ".unknown.tsv"), "w") as unknown:
@@ -405,7 +411,8 @@ with open(verdicts_path.replace(".verdicts.tsv", ".missed.tsv"), "w") as missed,
             recall[(group, "found")] += 1
         else:
             location = min(definitions[symbol])
-            missed.write(f"{group}\t{path}\t{location[0]}:{location[1]}\t{symbol}\n")
+            lines = ",".join(str(line) for line in sorted(missed_lines[(group, path, symbol)]))
+            missed.write(f"{group}\t{path}\t{location[0]}:{location[1]}\t{symbol}\t{lines}\n")
 for group in ("recall-calls", "recall-types", "recall-variants"):
     total, found, unknown = (recall[(group, value)] for value in ("total", "found", "unknown"))
     if total:

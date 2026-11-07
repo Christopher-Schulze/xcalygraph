@@ -104,6 +104,25 @@ with tempfile.TemporaryDirectory(prefix="edge-oracle-regression.", dir=cache) as
     assert actual == expected, f"caller oracle verdicts: {actual}; expected {expected}"
     recall = next(row for row in csv.reader(caller_result.stdout.splitlines(), delimiter="\t") if row[2] == "recall-calls")
     assert recall[4:] == ["5", "3", "0", "2", "100.0"], recall
+    # Missing pairs must retain every compiler reference line after bulky SCIP input is pruned.
+    for name, language, expected in [
+        ("caller-identities", "rust", {"src/lib.rs:1": "3,4", "src/lib.rs:2": "3"}),
+        ("go-caller-identities", "go", {"caller.go:2": "4,6", "caller.go:3": "4"}),
+    ]:
+        empty = work / (name + ".empty.edges.tsv")
+        empty.touch(exist_ok=False)
+        missing_verdicts = work / (name + ".missing.verdicts.tsv")
+        subprocess.run(
+            [sys.executable, "-I", "-", name, language,
+             str(repo / "tests/fixtures/oracle" / name / "compiler.json"), str(empty), str(missing_verdicts)],
+            input=program, text=True, capture_output=True, env=dict(os.environ, HOME=str(home)), check=True,
+        )
+        rows = list(csv.reader(missing_verdicts.with_name(name + ".missing.missed.tsv").open(), delimiter="\t"))
+        assert rows and all(len(row) == 5 and row[4] for row in rows), rows
+        prefix = "rust-analyzer " if language == "rust" else "scip-go "
+        assert all(row[3].startswith(prefix) for row in rows), rows
+        actual = {row[2]: row[4] for row in rows}
+        assert expected.items() <= actual.items(), (name, actual, expected)
     for fixture_name, language, kind, cases in [
         ("accessor-identities", "typescript", "calls", [("index.ts", 3, "index.ts", 1, "first", 2, "Box", "target")]),
         ("local-accessor-identities", "typescript", "calls", [
@@ -139,5 +158,5 @@ with tempfile.TemporaryDirectory(prefix="edge-oracle-regression.", dir=cache) as
         )
         actual = [row[0] for row in csv.reader(verdicts.open(), delimiter="\t")]
         assert actual == [case[-1] for case in cases], f"{fixture_name}: {actual}"
-print("PASS: real compiler identities prove targets and callers, reject shared-line/nested calls, and qualify ambiguous recall")
+print("PASS: real compiler identities prove targets and callers, reject shared-line/nested calls, and retain recall reference lines")
 PYTHON
