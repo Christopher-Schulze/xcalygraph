@@ -38,7 +38,7 @@ use crate::domain::role::{self, Role};
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
 /// Rows of a CSV or TSV file that reach search.
 const CSV_INDEXED_ROWS: usize = 2000;
-const EXTRACTION_VERSION: u32 = 138;
+const EXTRACTION_VERSION: u32 = 139;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -297,12 +297,13 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
             }
         }
     }
+    let mut typescript_candidate = None;
     if matches!(record.role, Role::Config | Role::Manifest)
         && let Some(file_type) = record.file_type
     {
         let text = String::from_utf8_lossy(content);
         if record.role == Role::Config {
-            config::extract(&record.path, file_type, &text, &mut facts);
+            typescript_candidate = config::extract(&record.path, file_type, &text, &mut facts);
         }
         match file_type {
             FileType::Proto => contracts::proto(&text, &mut facts),
@@ -375,6 +376,12 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
             ),
             None => {}
         }
+    } else if let Some(has_options) = typescript_candidate {
+        facts.manifest = if has_options {
+            manifest::parse_typescript_candidate(&String::from_utf8_lossy(content))
+        } else {
+            Some(crate::domain::facts::Manifest::default())
+        };
     }
     facts.entry |= content.starts_with(b"#!");
     if capture_identities {

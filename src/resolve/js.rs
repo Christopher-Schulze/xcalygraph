@@ -60,6 +60,7 @@ struct JsConfig {
     /// Root-relative `baseUrl`.
     base_dir: Option<String>,
     references: Vec<String>,
+    references_complete: bool,
     scope: Option<(String, TypeScriptProjectConfig)>,
 }
 
@@ -70,6 +71,7 @@ struct JsAlias {
     suffix: String,
     wildcard: bool,
     targets: Vec<String>,
+    unproven_target: bool,
 }
 
 impl JsAlias {
@@ -100,22 +102,44 @@ struct RawConfig {
 
 /// `extends` and `references` name a file, or a directory or stem of one; package configs outside
 /// the tree have no entry here.
-fn config_path(raw: &HashMap<String, RawConfig>, dir: &str, target: &str) -> Option<String> {
-    if !target.starts_with('.') && !target.starts_with('/') {
+fn config_path(
+    raw: &HashMap<String, RawConfig>,
+    input: &Input<'_>,
+    dir: &str,
+    target: &str,
+) -> Option<String> {
+    if !target.starts_with('.') {
         return None;
     }
-    let joined = normalize(&join(dir, target));
+    let joined = normalize_in_root(dir, target)?;
     [
         joined.clone(),
         format!("{joined}.json"),
         join(&joined, "tsconfig.json"),
     ]
     .into_iter()
-    .find(|path| raw.contains_key(path))
+    .find(|path| raw.contains_key(path) || empty_json_config(input, path))
+}
+
+fn empty_json_config(input: &Input<'_>, path: &str) -> bool {
+    let Ok(index) = input
+        .files
+        .binary_search_by(|file| file.path.as_str().cmp(path))
+    else {
+        return false;
+    };
+    let file = &input.files[index];
+    file.role == role::Role::Config
+        && file.file_type == Some(FileType::Json)
+        && input.facts[index]
+            .as_ref()
+            .and_then(|facts| facts.manifest.as_ref())
+            .is_some_and(|manifest| manifest.project_links.is_empty())
 }
 
 fn effective(
     raw: &HashMap<String, RawConfig>,
+    input: &Input<'_>,
     path: &str,
     seen: &mut Vec<String>,
 ) -> Option<RawConfig> {
@@ -123,7 +147,18 @@ fn effective(
         return None;
     }
     seen.push(path.to_owned());
-    let own = raw.get(path)?;
+    let empty;
+    let own = if let Some(own) = raw.get(path) {
+        own
+    } else if empty_json_config(input, path) {
+        empty = RawConfig {
+            dir: parent_dir(path).to_owned(),
+            ..RawConfig::default()
+        };
+        &empty
+    } else {
+        return None;
+    };
     let mut merged = RawConfig {
         dir: own.dir.clone(),
         extends: own.extends.clone(),
@@ -132,18 +167,17 @@ fn effective(
     };
     // Later `extends` entries override earlier ones, the config itself overrides them all.
     // Relative values stay relative to the config that declares them.
-    let mut layers: Vec<RawConfig> = own
-        .extends
-        .iter()
-        .filter_map(|target| config_path(raw, &own.dir, target))
-        .filter_map(|parent| effective(raw, &parent, seen))
-        .collect();
+    let mut layers = Vec::with_capacity(own.extends.len() + 1);
+    for target in &own.extends {
+        let parent = config_path(raw, input, &own.dir, target)?;
+        layers.push(effective(raw, input, &parent, seen)?);
+    }
     let mut rooted = own.clone();
     rooted.paths_dir.clone_from(&own.dir);
-    rooted.base_url = own
-        .base_url
-        .as_ref()
-        .map(|base| normalize(&join(&own.dir, base)));
+    rooted.base_url = match &own.base_url {
+        Some(base) => Some(normalize_in_root(&own.dir, base)?),
+        None => None,
+    };
     layers.push(rooted);
     for layer in layers {
         if layer.paths.is_some() {
@@ -169,11 +203,18 @@ fn effective(
 
 fn raw_config(path: &str, manifest: &Manifest) -> RawConfig {
     let dir = parent_dir(path).to_owned();
+    let candidate = manifest
+        .project_links
+        .iter()
+        .any(|link| link == "project_candidate=v1");
     let mut config = RawConfig {
         dir,
-        base_url: manifest.source_roots.first().cloned(),
+        base_url: (!candidate)
+            .then(|| manifest.source_roots.first().cloned())
+            .flatten(),
         ..RawConfig::default()
     };
+    let mut candidate_alias = None;
     for link in &manifest.project_links {
         let Some((key, value)) = link.split_once('=') else {
             continue;
@@ -194,6 +235,16 @@ fn raw_config(path: &str, manifest: &Manifest) -> RawConfig {
                 .exclude
                 .get_or_insert_default()
                 .push(value.to_owned()),
+            ("candidate_base", _) if candidate => config.base_url = Some(value.to_owned()),
+            ("candidate_alias", _) if candidate => candidate_alias = Some(value),
+            ("candidate_target", _) if candidate => {
+                if let (Some(alias), Some(paths)) = (candidate_alias.take(), &mut config.paths) {
+                    match paths.iter_mut().find(|(name, _)| name == alias) {
+                        Some((_, targets)) => targets.push(value.to_owned()),
+                        None => paths.push((alias.to_owned(), vec![value.to_owned()])),
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -228,20 +279,26 @@ pub fn tables(input: &Input) -> JsTables {
                 .svelte_dirs
                 .insert(parent_dir(&record.path).to_owned());
         }
+        let dir = parent_dir(&record.path);
+        if name == "tsconfig.json"
+            || (name == "jsconfig.json" && !tables.config_of_dir.contains_key(dir))
+        {
+            tables
+                .config_of_dir
+                .insert(dir.to_owned(), record.path.clone());
+        }
         let Some(manifest) = facts.as_ref().and_then(|facts| facts.manifest.as_ref()) else {
             continue;
         };
-        let dir = parent_dir(&record.path);
-        if is_project_config(name) {
+        if is_project_config(name)
+            || manifest
+                .project_links
+                .iter()
+                .any(|link| link == "project_candidate=v1")
+        {
             raw.insert(record.path.clone(), raw_config(&record.path, manifest));
-            if name == "tsconfig.json"
-                || (name == "jsconfig.json" && !tables.config_of_dir.contains_key(dir))
-            {
-                tables
-                    .config_of_dir
-                    .insert(dir.to_owned(), record.path.clone());
-            }
-        } else if name == "package.json"
+        }
+        if name == "package.json"
             && let Some(package) = &manifest.module
         {
             let entry = manifest.source_roots.first().map_or_else(
@@ -253,17 +310,27 @@ pub fn tables(input: &Input) -> JsTables {
                 .push((package.clone(), entry, dir.to_owned()));
         }
     }
-    for path in raw.keys() {
-        let Some(config) = effective(&raw, path, &mut Vec::new()) else {
+    let mut pending: Vec<String> = raw
+        .keys()
+        .filter(|path| is_project_config(role::file_name(path)))
+        .cloned()
+        .collect();
+    while let Some(path) = pending.pop() {
+        if tables.configs.contains_key(&path) {
+            continue;
+        }
+        let Some(config) = effective(&raw, input, &path, &mut Vec::new()) else {
             continue;
         };
-        tables.configs.insert(path.clone(), resolved(&raw, &config));
+        let config = resolved(&raw, input, &config);
+        pending.extend(config.references.iter().cloned());
+        tables.configs.insert(path, config);
     }
     tables
 }
 
 /// Targets of `paths` are relative to the `baseUrl` in effect, else to the config declaring them.
-fn resolved(raw: &HashMap<String, RawConfig>, config: &RawConfig) -> JsConfig {
+fn resolved(raw: &HashMap<String, RawConfig>, input: &Input<'_>, config: &RawConfig) -> JsConfig {
     let base = config.base_url.as_deref().unwrap_or(&config.paths_dir);
     let aliases = config
         .paths
@@ -274,25 +341,35 @@ fn resolved(raw: &HashMap<String, RawConfig>, config: &RawConfig) -> JsConfig {
                 Some((prefix, suffix)) => (prefix.to_owned(), suffix.to_owned(), true),
                 None => (alias.clone(), String::new(), false),
             };
+            let mut resolved_targets = Vec::with_capacity(targets.len());
+            let mut unproven_target = false;
+            for target in targets {
+                let Some(target) = normalize_in_root(base, target) else {
+                    unproven_target = true;
+                    break;
+                };
+                resolved_targets.push(target);
+            }
             JsAlias {
                 prefix,
                 suffix,
                 wildcard,
-                targets: targets
-                    .iter()
-                    .map(|target| normalize(&join(base, target)))
-                    .collect(),
+                targets: resolved_targets,
+                unproven_target,
             }
         })
         .collect();
+    let references: Option<Vec<String>> = config
+        .references
+        .iter()
+        .map(|target| config_path(raw, input, &config.dir, target))
+        .collect();
+    let references_complete = references.is_some();
     JsConfig {
         aliases,
         base_dir: config.base_url.clone(),
-        references: config
-            .references
-            .iter()
-            .filter_map(|target| config_path(raw, &config.dir, target))
-            .collect(),
+        references: references.unwrap_or_default(),
+        references_complete,
         scope: Some((
             config.dir.clone(),
             TypeScriptProjectConfig {
@@ -320,21 +397,31 @@ fn project_holds(_: &str, _: &TypeScriptProjectConfig, _: &str) -> bool {
 
 impl JsTables {
     /// The config answering for `path`: the nearest ancestor config; with `references`, the
-    /// referenced or own project that holds the file. `None` without a config, or when several
-    /// projects with different aliases hold the file: then no alias choice is proven.
-    fn config_for(&self, path: &str) -> Option<&JsConfig> {
+    /// referenced or own project that holds the file. `Ok(None)` means no config exists;
+    /// `Err(())` means a project exists but its alias choice is not proven.
+    fn config_for(&self, path: &str) -> Result<Option<&JsConfig>, ()> {
         let mut dir = parent_dir(path);
         let nearest = loop {
             if let Some(config) = self.config_of_dir.get(dir) {
-                break self.configs.get(config)?;
+                break self.configs.get(config).ok_or(())?;
             }
             if dir.is_empty() {
-                return None;
+                return Ok(None);
             }
             dir = parent_dir(dir);
         };
+        if !nearest.references_complete {
+            return Err(());
+        }
         if nearest.references.is_empty() {
-            return Some(nearest);
+            return Ok(Some(nearest));
+        }
+        if nearest.references.iter().any(|reference| {
+            self.configs
+                .get(reference)
+                .is_none_or(|config| !config.references_complete || !config.references.is_empty())
+        }) {
+            return Err(());
         }
         let holds = |config: &&JsConfig| {
             config
@@ -349,18 +436,25 @@ impl JsTables {
             .chain(std::iter::once(nearest))
             .filter(holds);
         let Some(first) = holding.next() else {
-            return Some(nearest);
+            return Err(());
         };
-        holding
-            .all(|other| other.aliases == first.aliases && other.base_dir == first.base_dir)
-            .then_some(first)
+        if holding.all(|other| other.aliases == first.aliases && other.base_dir == first.base_dir) {
+            Ok(Some(first))
+        } else {
+            Err(())
+        }
     }
 
     /// Candidate paths of a non-relative specifier, as `tsc` selects them: the exact alias, else the
     /// wildcard with the longest prefix, and then only its targets, in order. Without a match the
     /// `baseUrl` applies. Nothing leaves the config of the importing file.
-    fn alias_bases(&self, path: &str, spec: &str, bases: &mut Vec<String>) {
-        let config = self.config_for(path);
+    fn alias_bases(&self, path: &str, spec: &str, bases: &mut Vec<String>) -> bool {
+        let selection = self.config_for(path);
+        let unproven = selection.is_err();
+        if unproven && !spec.starts_with("$lib/") {
+            return true;
+        }
+        let config = selection.ok().flatten();
         let aliases = config.map_or(&[][..], |config| &config.aliases[..]);
         let chosen = aliases
             .iter()
@@ -373,20 +467,20 @@ impl JsTables {
             });
         if let Some(alias) = chosen {
             let star = alias.matched(spec).unwrap_or_default();
-            bases.extend(
-                alias
-                    .targets
-                    .iter()
-                    .map(|target| normalize(&target.replacen('*', star, 1))),
-            );
-            return;
+            for target in &alias.targets {
+                let Some(target) = normalize_in_root("", &target.replacen('*', star, 1)) else {
+                    return true;
+                };
+                bases.push(target);
+            }
+            return alias.unproven_target;
         }
         if let Some(rest) = spec.strip_prefix("$lib/") {
             let mut dir = parent_dir(path);
             loop {
                 if self.svelte_dirs.contains(dir) {
                     bases.push(normalize(&join(&join(dir, "src/lib"), rest)));
-                    return;
+                    return false;
                 }
                 if dir.is_empty() {
                     break;
@@ -394,9 +488,15 @@ impl JsTables {
                 dir = parent_dir(dir);
             }
         }
-        if let Some(base) = config.and_then(|config| config.base_dir.as_deref()) {
-            bases.push(normalize(&join(base, spec)));
+        if unproven {
+            return true;
         }
+        if let Some(base) = config.and_then(|config| config.base_dir.as_deref())
+            && let Some(path) = normalize_in_root(base, spec)
+        {
+            bases.push(path);
+        }
+        false
     }
 }
 
@@ -508,8 +608,9 @@ impl Index<'_> {
         if spec.starts_with('.') {
             bases.push(normalize(&join(dir, spec)));
         } else {
-            tables.alias_bases(&self.input.files[file as usize].path, spec, &mut bases);
-            for (name, entry, package_root) in &tables.packages {
+            let unproven =
+                tables.alias_bases(&self.input.files[file as usize].path, spec, &mut bases);
+            for (name, entry, package_root) in tables.packages.iter().filter(|_| !unproven) {
                 if spec == name {
                     bases.push(entry.clone());
                     bases.push(normalize(&join(package_root, "src/index")));
@@ -745,6 +846,24 @@ fn join(dir: &str, path: &str) -> String {
     } else {
         format!("{dir}/{path}")
     }
+}
+
+/// A path relative to the indexed root, rejecting paths whose meaning depends on outside files.
+fn normalize_in_root(dir: &str, path: &str) -> Option<String> {
+    if path.starts_with('/') || path.contains(['\\', '\0']) {
+        return None;
+    }
+    let mut parts: Vec<&str> = dir.split('/').filter(|part| !part.is_empty()).collect();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
 }
 
 /// Resolves `.` and `..` segments; never climbs above the root.

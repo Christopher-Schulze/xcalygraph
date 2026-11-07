@@ -28,7 +28,7 @@ pub fn parse_with_project_scope(
     text: &str,
 ) -> Option<(Manifest, Option<SourceIdentity>)> {
     if name == "tsconfig.json" {
-        let value = json::parse(text)?;
+        let value = json::parse_complete(text)?;
         let identity = SourceIdentity {
             kind: SourceIdentityKind::TypeScriptProject,
             index: 0,
@@ -37,20 +37,24 @@ pub fn parse_with_project_scope(
         return Some((tsconfig(&value), Some(identity)));
     }
     if name == "package.json" {
-        let value = json::parse(text)?;
+        let value = json::parse_complete(text)?;
         let identity = SourceIdentity {
             kind: SourceIdentityKind::TypeScriptPackageType,
             index: 0,
             identity: typescript_package_scope(&value),
         };
-        return Some((package_json(&value), Some(identity)));
+        let mut manifest = package_json(&value);
+        if let Some(links) = typescript_candidate_links(&value) {
+            manifest.project_links = links;
+        }
+        return Some((manifest, Some(identity)));
     }
     parse(name, text).map(|manifest| (manifest, None))
 }
 
 fn parse_other(name: &str, text: &str) -> Option<Manifest> {
     if is_project_config(name) {
-        return Some(tsconfig(&json::parse(text)?));
+        return Some(tsconfig(&json::parse_complete(text)?));
     }
     match name {
         "go.mod" => Some(go_mod(text)),
@@ -58,7 +62,14 @@ fn parse_other(name: &str, text: &str) -> Option<Manifest> {
         "Cargo.toml" => Some(cargo_toml(text)),
         "package.json" => Some(package_json(&json::parse(text)?)),
         "CMakeLists.txt" => Some(cmake(text)),
-        "compile_commands.json" => Some(compile_commands(&json::parse(text)?)),
+        "compile_commands.json" => {
+            let value = json::parse_complete(text)?;
+            let mut manifest = compile_commands(&value);
+            if let Some(links) = typescript_candidate_links(&value) {
+                manifest.project_links = links;
+            }
+            Some(manifest)
+        }
         "DESCRIPTION" => Some(r_description(text)),
         "pubspec.yaml" => Some(pubspec(text)),
         "remappings.txt" | "foundry.toml" => Some(solidity_remappings(text)),
@@ -290,8 +301,28 @@ fn package_json(value: &Value) -> Manifest {
 /// `compilerOptions.baseUrl` as source root, `paths` as one `alias=target` include entry per target
 /// in array order (later targets are fallbacks), the project scope as `project_links`.
 fn tsconfig(value: &Value) -> Manifest {
-    let mut manifest = Manifest::default();
-    let links = &mut manifest.project_links;
+    let mut manifest = Manifest {
+        project_links: typescript_project_links(value),
+        ..Manifest::default()
+    };
+    let Some(options) = value.get("compilerOptions") else {
+        return manifest;
+    };
+    if let Some(base) = options.get("baseUrl").and_then(Value::as_str) {
+        manifest.source_roots.push(base.to_owned());
+    }
+    if let Some(paths) = options.get("paths") {
+        for (alias, _, targets) in paths.entries() {
+            for target in targets.strings() {
+                manifest.include_dirs.push(format!("{alias}={target}"));
+            }
+        }
+    }
+    manifest
+}
+
+fn typescript_project_links(value: &Value) -> Vec<String> {
+    let mut links = Vec::new();
     for extended in value.get("extends").map(Value::strings).unwrap_or_default() {
         links.push(format!("extends={extended}"));
     }
@@ -314,21 +345,45 @@ fn tsconfig(value: &Value) -> Manifest {
             }
         }
     }
-    let Some(options) = value.get("compilerOptions") else {
-        return manifest;
-    };
-    if let Some(base) = options.get("baseUrl").and_then(Value::as_str) {
-        manifest.source_roots.push(base.to_owned());
+    if value
+        .get("compilerOptions")
+        .and_then(|options| options.get("paths"))
+        .is_some()
+    {
+        links.push("has=paths".to_owned());
     }
-    if let Some(paths) = options.get("paths") {
-        manifest.project_links.push("has=paths".to_owned());
-        for (alias, _, targets) in paths.entries() {
-            for target in targets.strings() {
-                manifest.include_dirs.push(format!("{alias}={target}"));
+    links
+}
+
+/// Project options from a JSON file that may be named by `extends` or `references`. These stay
+/// separate from package roots and C-family include directories in the same manifest.
+fn typescript_candidate_links(value: &Value) -> Option<Vec<String>> {
+    if !matches!(value, Value::Object(_)) {
+        return None;
+    }
+    let mut links = typescript_project_links(value);
+    links.push("project_candidate=v1".to_owned());
+    if let Some(options) = value.get("compilerOptions") {
+        if let Some(base) = options.get("baseUrl").and_then(Value::as_str) {
+            links.push(format!("candidate_base={base}"));
+        }
+        if let Some(paths) = options.get("paths") {
+            for (alias, _, targets) in paths.entries() {
+                for target in targets.strings() {
+                    links.push(format!("candidate_alias={alias}"));
+                    links.push(format!("candidate_target={target}"));
+                }
             }
         }
     }
-    manifest
+    Some(links)
+}
+
+pub(super) fn parse_typescript_candidate(text: &str) -> Option<Manifest> {
+    Some(Manifest {
+        project_links: typescript_candidate_links(&json::parse_complete(text)?)?,
+        ..Manifest::default()
+    })
 }
 
 /// R `DESCRIPTION`: `Package` name, `Depends`, `Imports` and `LinkingTo` packages (`R` itself

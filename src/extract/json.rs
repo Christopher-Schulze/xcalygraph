@@ -54,6 +54,14 @@ pub fn parse(text: &str) -> Option<Value> {
     parse_with_mode(text, true)
 }
 
+/// Parses a complete JSONC document, rejecting trailing non-comment content.
+pub fn parse_complete(text: &str) -> Option<Value> {
+    let mut parser = new_parser(text, true);
+    let value = parser.value()?;
+    parser.skip();
+    (parser.position == parser.bytes.len() && !parser.unterminated_comment).then_some(value)
+}
+
 /// Parses one complete RFC 8259 JSON value without comments or trailing commas.
 pub fn parse_strict(text: &str) -> Option<Value> {
     parse_with_mode(text, false)
@@ -85,11 +93,20 @@ pub trait KeyVisitor {
 /// Reads a whole JSONC document like [`parse`] without building values, so a large data file
 /// costs no allocation per value. On `None` the document was invalid and the keys already
 /// visited are void.
+#[cfg(test)]
 pub fn walk_keys(text: &str, visitor: &mut impl KeyVisitor) -> Option<()> {
     let mut parser = new_parser(text, true);
     parser.walk_value(visitor)?;
     parser.skip();
     Some(())
+}
+
+/// Walks one complete JSONC value and returns its root kind.
+pub fn walk_keys_complete(text: &str, visitor: &mut impl KeyVisitor) -> Option<Kind> {
+    let mut parser = new_parser(text, true);
+    let kind = parser.walk_value(visitor)?;
+    parser.skip();
+    (parser.position == parser.bytes.len() && !parser.unterminated_comment).then_some(kind)
 }
 
 fn new_parser(text: &str, allow_jsonc: bool) -> Parser<'_> {
@@ -100,6 +117,7 @@ fn new_parser(text: &str, allow_jsonc: bool) -> Parser<'_> {
         line: 1,
         depth: 0,
         allow_jsonc,
+        unterminated_comment: false,
         scratch: Vec::new(),
     }
 }
@@ -130,6 +148,7 @@ struct Parser<'a> {
     line: u32,
     depth: usize,
     allow_jsonc: bool,
+    unterminated_comment: bool,
     /// Bytes of the string being read.
     scratch: Vec<u8>,
 }
@@ -170,6 +189,10 @@ impl Parser<'_> {
                             && self.bytes.get(self.position + 1) == Some(&b'/'))
                     {
                         self.bump();
+                    }
+                    if self.peek().is_none() {
+                        self.unterminated_comment = true;
+                        return;
                     }
                     self.bump();
                     self.bump();

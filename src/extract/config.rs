@@ -15,19 +15,23 @@ const MAX_DEPTH: usize = 6;
 /// Key paths kept per file: large data files would flood the search index.
 const MAX_KEYS: usize = 400;
 
-/// Fills `config_keys` and `env_defs` of a config file.
-pub fn extract(path: &str, file_type: FileType, text: &str, facts: &mut Facts) {
-    match file_type {
-        FileType::Json => json_keys(text, facts),
-        FileType::Yaml => yaml(path, text, facts),
-        FileType::Toml => toml_keys(text, facts),
-        FileType::Ini | FileType::Properties => ini_keys(text, facts),
-        FileType::Text => server_keys(text, facts),
-        FileType::Xml => xml_keys(text, facts),
-        FileType::EnvExample => env_example(text, facts),
-        FileType::Dockerfile => dockerfile(text, facts),
-        _ => {}
-    }
+/// Fills `config_keys` and `env_defs`; a valid JSON object returns whether it has project options.
+pub fn extract(path: &str, file_type: FileType, text: &str, facts: &mut Facts) -> Option<bool> {
+    let candidate = if file_type == FileType::Json {
+        json_keys(text, facts)
+    } else {
+        match file_type {
+            FileType::Yaml => yaml(path, text, facts),
+            FileType::Toml => toml_keys(text, facts),
+            FileType::Ini | FileType::Properties => ini_keys(text, facts),
+            FileType::Text => server_keys(text, facts),
+            FileType::Xml => xml_keys(text, facts),
+            FileType::EnvExample => env_example(text, facts),
+            FileType::Dockerfile => dockerfile(text, facts),
+            _ => {}
+        }
+        None
+    };
     let mut seen = HashSet::with_capacity(facts.config_keys.len());
     let first: Vec<bool> = facts
         .config_keys
@@ -37,6 +41,7 @@ pub fn extract(path: &str, file_type: FileType, text: &str, facts: &mut Facts) {
     let mut first = first.into_iter();
     facts.config_keys.retain(|_| first.next().unwrap_or(false));
     facts.config_keys.truncate(MAX_KEYS);
+    candidate
 }
 
 fn push_key(facts: &mut Facts, path: &[String], kind: ValueKind, line: u32) {
@@ -334,7 +339,7 @@ fn push_env(facts: &mut Facts, name: &str, source: EnvSource, line: u32) {
     }
 }
 
-fn json_keys(text: &str, facts: &mut Facts) {
+fn json_keys(text: &str, facts: &mut Facts) -> Option<bool> {
     let before = facts.config_keys.len();
     let before_refs = facts.refs.len();
     let mut walk = JsonWalk {
@@ -342,12 +347,17 @@ fn json_keys(text: &str, facts: &mut Facts) {
         lengths: Vec::new(),
         seen: HashSet::new(),
         facts,
+        project_candidate: false,
     };
-    if json::walk_keys(text, &mut walk).is_none() {
+    let kind = json::walk_keys_complete(text, &mut walk);
+    let candidate = walk.project_candidate;
+    if kind.is_none() {
         facts.config_keys.truncate(before);
         facts.refs.truncate(before_refs);
         facts.coverage = facts.coverage.max(Coverage::ParseErrors);
+        return None;
     }
+    (kind == Some(Kind::Object)).then_some(candidate)
 }
 
 fn json_kind(kind: Kind) -> ValueKind {
@@ -369,6 +379,7 @@ struct JsonWalk<'a> {
     lengths: Vec<usize>,
     seen: HashSet<u64>,
     facts: &'a mut Facts,
+    project_candidate: bool,
 }
 
 impl JsonWalk<'_> {
@@ -396,6 +407,14 @@ impl KeyVisitor for JsonWalk<'_> {
     }
 
     fn key(&mut self, key: &str, line: u32, kind: Kind) {
+        if self.lengths.is_empty()
+            && matches!(
+                key,
+                "compilerOptions" | "extends" | "references" | "files" | "include" | "exclude"
+            )
+        {
+            self.project_candidate = true;
+        }
         path_literal(self.facts, key, line);
         self.enter(key);
         if self.lengths.len() <= MAX_DEPTH
