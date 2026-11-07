@@ -2,6 +2,8 @@
 
 ((lexical_declaration (variable_declarator name: (identifier) @name) @definition.constant) @_top (#parent? @_top "program"))
 ((export_statement (lexical_declaration (variable_declarator name: (identifier) @name) @definition.constant)) @_top (#parent? @_top "program"))
+; Each shorthand binding is a separate exported declaration, not the factory's implementation.
+((export_statement (lexical_declaration (variable_declarator name: (object_pattern (shorthand_property_identifier_pattern) @name @definition.constant)))) @_top (#parent? @_top "program"))
 (function_declaration name: (identifier) @name) @definition.function
 (function_declaration return_type: (type_annotation (_) @return.type)) @return
 (generator_function_declaration name: (identifier) @name) @definition.function

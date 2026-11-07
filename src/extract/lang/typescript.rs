@@ -1743,6 +1743,10 @@ fn flags(definition: &Definition, _: &FileContext) -> u8 {
 }
 
 fn exported(definition: &Definition) -> bool {
+    // The query captures shorthand pattern names only inside a top-level export statement.
+    if definition.node_kind == "shorthand_property_identifier_pattern" {
+        return true;
+    }
     // `exports.f = function`, `app.f = function`: reachable through the object.
     if definition.export_wrapper || definition.node_kind == "assignment_expression" {
         return true;

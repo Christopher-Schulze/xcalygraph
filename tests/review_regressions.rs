@@ -272,3 +272,41 @@ fn environment_star_marks_an_inferred_test_relation() -> TestResult {
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+fn destructured_exports_resolve_to_each_apps_own_binding() -> TestResult {
+    let root = support::exclusive_dir("destructured-exports")?;
+    write(
+        &root,
+        &[
+            ("app-a/auth.ts", b"export const { useUser, useLogin } = makeAuth();\n"),
+            ("app-b/auth.ts", b"export const { useUser, useLogin } = makeAuth();\n"),
+            (
+                "app-a/main.ts",
+                b"import { useUser, useLogin as login } from './auth';\nexport function entryA() { return useUser() + login(); }\nexport function shadow(useUser: () => void) { useUser(); }\n",
+            ),
+            (
+                "app-b/main.ts",
+                b"import { useUser } from './auth';\nexport function entryB() { return useUser(); }\n",
+            ),
+            ("other.ts", b"export function useUser() {}\n"),
+        ],
+    )?;
+    let first = query(&root, &["show", "entryA", "--exact"])?;
+    assert!(first.contains("> useUser app-a/auth.ts:1"), "{first}");
+    assert!(first.contains("> useLogin :1"), "{first}");
+    assert!(
+        !first.contains("app-b/auth.ts") && !first.contains("other.ts"),
+        "{first}"
+    );
+    let second = query(&root, &["show", "entryB", "--exact"])?;
+    assert!(second.contains("> useUser app-b/auth.ts:1"), "{second}");
+    assert!(
+        !second.contains("app-a/auth.ts") && !second.contains("other.ts"),
+        "{second}"
+    );
+    let shadow = query(&root, &["show", "shadow", "--exact"])?;
+    assert!(!shadow.contains("> useUser "), "{shadow}");
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
