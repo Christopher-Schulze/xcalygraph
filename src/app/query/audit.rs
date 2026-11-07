@@ -386,23 +386,34 @@ fn unreferenced(
                 .filter(|&part| filter.node(index, part))
         };
         let incoming = || parts().flat_map(|part| index.derived.incoming(part));
+        // Member uses count for their exporting type, with the same file/route boundary
+        // as direct uses. A same-file caller outside the type does not use its export.
+        let outside_file = |caller| {
+            index.file_of(caller).path != index.file_of(node).path
+                || matches!(index.node(caller), Node::Symbol(symbol) if symbol.kind() == SymKind::Op)
+        };
         if symbol.exported == 0 {
             // A name with ambiguous references may be one of their targets; a type whose members
             // are used from outside (`Type.CONSTANT`, static imports) is alive.
             if incoming().next().is_none()
                 && !index.derived.is_ambiguous_name(index.string(symbol.name))
                 && !(kind.is_type()
-                    && parts().any(|part| members_used_outside(index, part) || has_entry_member(index, part)))
+                    && parts().any(|part| {
+                        members_used_outside(index, part) || has_entry_member(index, part)
+                    }))
             {
                 dead.push(node);
             }
         } else if kind != SymKind::Method
             && export_semantics(index.file_of(node).file_type())
             // A framework route (`page /x`, `GET /api/x`) using it is its outside caller.
-            && incoming().all(|edge| {
-                index.file_of(edge.node).path == index.file_of(node).path
-                    && !matches!(index.node(edge.node), Node::Symbol(caller) if caller.kind() == SymKind::Op)
-            })
+            && incoming().all(|edge| !outside_file(edge.node))
+            && !(kind.is_type()
+                && parts().any(|part| {
+                    index.derived.members(part).any(|member| {
+                        index.derived.incoming(member).iter().any(|edge| outside_file(edge.node))
+                    })
+                }))
         {
             unused.push(node);
         }
