@@ -4395,39 +4395,80 @@ impl<'a> Index<'a> {
         byte: u32,
     ) -> Option<&'a Binding> {
         let facts = self.facts(file)?;
-        named_indices(
-            &self.named[file as usize].bindings,
-            &facts.bindings,
-            |binding| binding.name.as_ref(),
-            name,
-        )
-        .map(|index| &facts.bindings[index])
-        .filter(|binding| *binding.name == *name && binding.line <= line)
-        .filter(|binding| {
-            byte == facts::NO_BYTE
-                || binding
-                    .visibility
-                    .as_ref()
-                    .is_none_or(|range| range.contains(&byte))
-        })
-        .filter(|binding| match binding.scope {
-            None => true,
-            Some(binding_scope) => scope_chain(facts, scope).any(|local| local == binding_scope),
-        })
-        .max_by_key(|binding| {
-            (
-                // The chain starts at the nearest scope; file bindings follow all
-                // lexical bindings. Keep declaration order within the selected scope.
-                std::cmp::Reverse(
-                    binding
-                        .scope
-                        .and_then(|s| scope_chain(facts, scope).position(|c| c == s))
-                        .unwrap_or(usize::MAX),
-                ),
-                binding.line,
-                binding.value_byte,
-            )
-        })
+        let active = |binding: &Binding| {
+            *binding.name == *name
+                && binding.line <= line
+                && (byte == facts::NO_BYTE
+                    || binding
+                        .visibility
+                        .as_ref()
+                        .is_none_or(|range| range.contains(&byte)))
+        };
+        // The chain starts at the nearest scope; file bindings follow all lexical bindings.
+        // Declaration order decides within the selected scope: the last of equal keys wins.
+        let mut best: Option<(&'a Binding, BindingRank)> = None;
+        let mut consider = |binding: &'a Binding, rank: usize| {
+            let key = (std::cmp::Reverse(rank), binding.line, binding.value_byte);
+            if best.as_ref().is_none_or(|(_, current)| key >= *current) {
+                best = Some((binding, key));
+            }
+        };
+        let rank_of = |binding: &Binding| match binding.scope {
+            None => Some(usize::MAX),
+            Some(binding_scope) => {
+                scope_chain(facts, scope).position(|local| local == binding_scope)
+            }
+        };
+        let order = &self.named[file as usize].bindings;
+        if order.is_empty() {
+            // A small file is scanned in position order.
+            for binding in &facts.bindings {
+                if active(binding)
+                    && let Some(rank) = rank_of(binding)
+                {
+                    consider(binding, rank);
+                }
+            }
+        } else {
+            // Sorted by name, scope and position.
+            let start =
+                order.partition_point(|&index| *facts.bindings[index as usize].name < *name);
+            let end = start
+                + order[start..]
+                    .partition_point(|&index| *facts.bindings[index as usize].name == *name);
+            let named = &order[start..end];
+            if named.len() <= SCANNED_RECORDS {
+                for &index in named {
+                    let binding = &facts.bindings[index as usize];
+                    if active(binding)
+                        && let Some(rank) = rank_of(binding)
+                    {
+                        consider(binding, rank);
+                    }
+                }
+            } else {
+                // A name declared in many functions reads only the scopes on the chain.
+                let scopes = scope_chain(facts, scope)
+                    .enumerate()
+                    .map(|(rank, local)| (rank, Some(local)))
+                    .chain(std::iter::once((usize::MAX, None)));
+                for (rank, wanted) in scopes {
+                    let from = named
+                        .partition_point(|&index| facts.bindings[index as usize].scope < wanted);
+                    let to = from
+                        + named[from..].partition_point(|&index| {
+                            facts.bindings[index as usize].scope == wanted
+                        });
+                    for &index in &named[from..to] {
+                        let binding = &facts.bindings[index as usize];
+                        if active(binding) {
+                            consider(binding, rank);
+                        }
+                    }
+                }
+            }
+        }
+        best.map(|(binding, _)| binding)
     }
 
     fn unique_fallback(
@@ -4989,10 +5030,27 @@ fn sorted_by_name<'n>(count: usize, name: impl Fn(usize) -> &'n str) -> Box<[u32
     order.into_boxed_slice()
 }
 
+/// Preference of a visible binding: nearest scope, then latest line, then latest value byte.
+type BindingRank = (std::cmp::Reverse<usize>, u32, u32);
+
+/// Bindings ordered by name, scope (file scope first) and position, so a lookup reads one name's
+/// bindings scope by scope; small files are simply scanned.
+fn sorted_bindings(bindings: &[Binding]) -> Box<[u32]> {
+    if bindings.len() <= SCANNED_RECORDS {
+        return Box::default();
+    }
+    let mut order: Ids = (0..bindings.len() as u32).collect();
+    order.sort_by(|&a, &b| {
+        let (left, right) = (&bindings[a as usize], &bindings[b as usize]);
+        (&*left.name, left.scope, a).cmp(&(&*right.name, right.scope, b))
+    });
+    order.into_boxed_slice()
+}
+
 impl FileNames {
     fn new(facts: &Facts) -> Self {
         Self {
-            bindings: sorted_by_name(facts.bindings.len(), |index| &facts.bindings[index].name),
+            bindings: sorted_bindings(&facts.bindings),
             symbols: sorted_by_name(facts.symbols.len(), |index| &facts.symbols[index].name),
         }
     }

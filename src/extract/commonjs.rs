@@ -4,6 +4,7 @@ use tree_sitter::Node;
 
 use super::engine::{Parsed, unquote};
 use crate::domain::facts::{Import, SourceIdentity, SourceIdentityKind, SymKind};
+use crate::domain::hash::FastMap;
 
 pub(super) fn post_parse(source: &[u8], root: Node, parsed: &mut Parsed, _: bool) {
     if root.has_error() || parsed.facts.coverage != crate::domain::facts::Coverage::Complete {
@@ -16,18 +17,19 @@ pub(super) fn post_parse(source: &[u8], root: Node, parsed: &mut Parsed, _: bool
         .any(|import| import.alias.is_some())
         && unshadowed_require(root, source)
     {
-        for index in 0..parsed.facts.imports.len() {
-            if stable_require_binding(root, source, &parsed.facts.imports[index])
-                && let Ok(index) = u32::try_from(index)
-            {
-                add_identity(
-                    parsed,
-                    SourceIdentityKind::CommonJsRequire,
+        let stable: Vec<SourceIdentity> =
+            stable_require_bindings(root, source, &parsed.facts.imports)
+                .into_iter()
+                .enumerate()
+                .filter(|&(_, stable)| stable)
+                .filter_map(|(index, _)| u32::try_from(index).ok())
+                .map(|index| SourceIdentity {
+                    kind: SourceIdentityKind::CommonJsRequire,
                     index,
-                    "unshadowed".to_owned(),
-                );
-            }
-        }
+                    identity: "unshadowed".to_owned(),
+                })
+                .collect();
+        add_identities(parsed, stable);
     }
     if memchr::memmem::find(source, b"exports").is_none()
         || memchr::memmem::find(source, b"module").is_none()
@@ -51,16 +53,26 @@ pub(super) fn post_parse(source: &[u8], root: Node, parsed: &mut Parsed, _: bool
 }
 
 fn add_identity(parsed: &mut Parsed, kind: SourceIdentityKind, index: u32, identity: String) {
+    add_identities(
+        parsed,
+        vec![SourceIdentity {
+            kind,
+            index,
+            identity,
+        }],
+    );
+}
+
+fn add_identities(parsed: &mut Parsed, added: Vec<SourceIdentity>) {
+    if added.is_empty() {
+        return;
+    }
     let mut identities = parsed
         .facts
         .source_identities
         .take()
         .map_or_else(Vec::new, |items| items.into_vec());
-    identities.push(SourceIdentity {
-        kind,
-        index,
-        identity,
-    });
+    identities.extend(added);
     identities.sort_unstable_by_key(|item| (item.kind, item.index));
     parsed.facts.source_identities = Some(identities.into_boxed_slice());
 }
@@ -74,42 +86,108 @@ fn contains_name(node: Node, source: &[u8], name: &str) -> bool {
     })
 }
 
-fn stable_require_binding(root: Node, source: &[u8], import: &Import) -> bool {
-    let Some(name) = import.alias.as_deref().filter(|_| import.names.is_empty()) else {
-        return false;
-    };
-    let mut declarations = 0;
-    for node in nodes(root) {
-        if node.kind() == "variable_declarator"
-            && node
-                .child_by_field_name("name")
-                .is_some_and(|binding| contains_name(binding, source, name))
-        {
-            if !require_declaration(node, source, name, import) {
-                return false;
-            }
-            declarations += 1;
-        } else if writes_name(node, source, name)
-            || (node.kind() == "formal_parameters" && contains_name(node, source, name))
-            || (node.kind() == "catch_clause"
-                && node
-                    .child_by_field_name("parameter")
-                    .is_some_and(|binding| contains_name(binding, source, name)))
-            || (matches!(
-                node.kind(),
-                "function_declaration" | "function_expression" | "class_declaration" | "class"
-            ) && node
-                .child_by_field_name("name")
-                .is_some_and(|binding| contains_name(binding, source, name)))
-            || (node.kind() == "arrow_function"
-                && node
-                    .child_by_field_name("parameter")
-                    .is_some_and(|binding| contains_name(binding, source, name)))
-        {
-            return false;
+/// Per import: whether its alias names exactly one binding in the file, a top-level
+/// `require` of its own specifier, and nothing else declares, assigns or shadows that name.
+/// One walk serves every import, so the cost is linear in the tree, not in imports times tree.
+fn stable_require_bindings(root: Node, source: &[u8], imports: &[Import]) -> Vec<bool> {
+    struct Binding<'tree> {
+        declarators: Vec<Node<'tree>>,
+        shadowed: bool,
+    }
+    let mut bindings: FastMap<&str, Binding> = FastMap::default();
+    for import in imports {
+        if let Some(name) = import.alias.as_deref().filter(|_| import.names.is_empty()) {
+            bindings.entry(name).or_insert_with(|| Binding {
+                declarators: Vec::new(),
+                shadowed: false,
+            });
         }
     }
-    declarations == 1
+    if bindings.is_empty() {
+        return vec![false; imports.len()];
+    }
+    let mut named = Vec::new();
+    for node in nodes(root) {
+        named.clear();
+        let declarator = node.kind() == "variable_declarator";
+        let binding = if declarator {
+            node.child_by_field_name("name")
+        } else {
+            shadowing_binding(node)
+        };
+        let Some(binding) = binding else {
+            continue;
+        };
+        bound_names(binding, source, &bindings, &mut named);
+        for name in &named {
+            let Some(entry) = bindings.get_mut(name) else {
+                continue;
+            };
+            if declarator {
+                entry.declarators.push(node);
+            } else {
+                entry.shadowed = true;
+            }
+        }
+    }
+    imports
+        .iter()
+        .map(|import| {
+            let Some(name) = import.alias.as_deref().filter(|_| import.names.is_empty()) else {
+                return false;
+            };
+            bindings.get(name).is_some_and(|entry| {
+                !entry.shadowed
+                    && matches!(entry.declarators.as_slice(), [only] if require_declaration(*only, source, name, import))
+            })
+        })
+        .collect()
+}
+
+/// The subtree of a non-declarator node that binds or writes names: assignment targets,
+/// parameters, catch parameters, function and class names.
+fn shadowing_binding(node: Node<'_>) -> Option<Node<'_>> {
+    match node.kind() {
+        "assignment_expression"
+        | "augmented_assignment_expression"
+        | "update_expression"
+        | "for_in_statement" => node
+            .child_by_field_name("left")
+            .or_else(|| node.named_child(0))
+            .filter(|left| {
+                matches!(
+                    left.kind(),
+                    "identifier" | "array_pattern" | "object_pattern"
+                )
+            }),
+        "formal_parameters" => Some(node),
+        "catch_clause" => node.child_by_field_name("parameter"),
+        "function_declaration" | "function_expression" | "class_declaration" | "class" => {
+            node.child_by_field_name("name")
+        }
+        "arrow_function" => node.child_by_field_name("parameter"),
+        _ => None,
+    }
+}
+
+/// Tracked names occurring as identifiers in a binding subtree, each once.
+fn bound_names<'s>(
+    binding: Node,
+    source: &'s [u8],
+    tracked: &FastMap<&str, impl Sized>,
+    named: &mut Vec<&'s str>,
+) {
+    for node in nodes(binding) {
+        if matches!(
+            node.kind(),
+            "identifier" | "shorthand_property_identifier_pattern"
+        ) && let Ok(text) = node.utf8_text(source)
+            && tracked.contains_key(text)
+            && !named.contains(&text)
+        {
+            named.push(text);
+        }
+    }
 }
 
 fn require_declaration(node: Node, source: &[u8], name: &str, import: &Import) -> bool {
@@ -164,13 +242,28 @@ fn writes_name(node: Node, source: &[u8], name: &str) -> bool {
         })
 }
 
+/// Named nodes of the subtree in preorder, through one cursor without per-node allocation.
 fn nodes(root: Node<'_>) -> impl Iterator<Item = Node<'_>> {
-    let mut pending = vec![root];
+    let mut cursor = root.walk();
+    let mut finished = false;
     std::iter::from_fn(move || {
-        let node = pending.pop()?;
-        let mut cursor = node.walk();
-        pending.extend(node.named_children(&mut cursor));
-        Some(node)
+        loop {
+            if finished {
+                return None;
+            }
+            let node = cursor.node();
+            if !cursor.goto_first_child() {
+                while !cursor.goto_next_sibling() {
+                    if !cursor.goto_parent() {
+                        finished = true;
+                        break;
+                    }
+                }
+            }
+            if node.is_named() {
+                return Some(node);
+            }
+        }
     })
 }
 

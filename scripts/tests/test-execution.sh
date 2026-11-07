@@ -41,6 +41,7 @@ print(executables[0])
 PYTHON
 )"
 bash "${REPO_ROOT}/scripts/benchmarks/check-instructions.sh" "${binary}"
+bash "${REPO_ROOT}/scripts/benchmarks/check-scaling.sh" "${binary}"
 [[ "${mode}" == all ]] || exit 0
 bash "${REPO_ROOT}/scripts/tests/test-prune-cache.sh"
 bash "${REPO_ROOT}/scripts/tests/test-instruction-guard.sh"
