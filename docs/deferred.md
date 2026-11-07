@@ -30,5 +30,7 @@ Considered and deliberately not in `docs/spec.md`. Each entry names the evidence
 | Lua lexical scope (locals, `do` blocks, branch writes, table aliases); a per-reference backward scan cost +87 % instructions on Penlight and quadratic time on large files, and still lost real relations | a pinned Lua precision corpus with false facts traced to missing scope, solved by one linear scope pass |
 | Python parameters as bindings (a parameter shadowing a same-named function); pytest injects fixtures by parameter name, so they need fixture injection alongside | false parameter-shadowing edges measured on a pinned corpus; the 48 corpora showed none, while the bindings alone removed 72 real fixture relations |
 | Language meta-knowledge (error propagation, cleanup and lifecycle relations) | a source-labelled agent question whose required facts `find`, `show` or a chain cannot reach today |
+| Clone collapse in `find`: byte-identical hit lines from byte-identical files print once with `= path:line` | the file hash available at query time and a token gain at unchanged required evidence on the frozen questions |
+| Attention excerpt in `find`: excerpt lines chosen by their edges to other shown hits instead of the first lines | a proof-chain or behavior miss traced to the excerpt lines |
 | Typo-tolerant search | evaluation misses caused by misspelled terms |
 | Media durations of WebM, Matroska, MP3 and Ogg | agent questions that need these durations (format is reported) |
