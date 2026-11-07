@@ -1,0 +1,4 @@
+[package]
+name = "oracle_associated_type_identities"
+version = "0.0.0"
+edition = "2024"

@@ -1,0 +1,261 @@
+{
+  "provenance": {
+    "generator": "rust-analyzer 1.99.1 (58cf8f9c 2026-10-13)",
+    "source_sha256": {
+      "Cargo.toml": "02b8064eda40069d9bd2499dcb99948a665baf7b07feed2137a9fbbf595f3b08",
+      "src/lib.rs": "e17d646ea39ebf32cbe128cf46db7e374ff97aebb354701630f277127df9826e",
+      "src/other.rs": "35d1b1c80f717fb677eb19a2e3e7fe2697a0f06e83df7be92aaeee95a6fbfe5f"
+    }
+  },
+  "documents": [
+    {
+      "language": "rust",
+      "relative_path": "src/lib.rs",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            5,
+            0
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_associated_type_identities 0.0.0 crate/",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            5,
+            0
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            0,
+            10,
+            18
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_associated_type_identities 0.0.0 Provider#",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            3,
+            1
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            1,
+            9,
+            13
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_associated_type_identities 0.0.0 Provider#Item#",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            1,
+            4,
+            14
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            7,
+            12
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_associated_type_identities 0.0.0 Provider#value().",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            2,
+            4,
+            34
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            14,
+            18
+          ],
+          "TypedRange": null,
+          "symbol": "local 0",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            2,
+            13,
+            18
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            23,
+            27
+          ],
+          "TypedRange": null,
+          "symbol": "local 1",
+          "enclosing_range": [
+            0,
+            0,
+            3,
+            1
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            2,
+            29,
+            33
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_associated_type_identities 0.0.0 Provider#Item#",
+          "enclosing_range": [
+            1,
+            4,
+            14
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            4,
+            8,
+            13
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_associated_type_identities 0.0.0 other/",
+          "TypedEnclosingRange": null
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "rust-analyzer cargo oracle_associated_type_identities 0.0.0 crate/",
+          "kind": 29,
+          "signature_documentation": {
+            "language": "rust",
+            "text": "extern crate oracle_associated_type_identities"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_associated_type_identities 0.0.0 Provider#",
+          "kind": 53,
+          "display_name": "Provider",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "pub trait Provider"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_associated_type_identities 0.0.0 Provider#Item#",
+          "kind": 3,
+          "display_name": "Item",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "pub type Item"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_associated_type_identities 0.0.0 Provider#value().",
+          "kind": 70,
+          "display_name": "value",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "pub fn value(&self) -> Self::Item"
+          }
+        },
+        {
+          "symbol": "local 0",
+          "kind": 44,
+          "display_name": "self",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "self: &Self"
+          },
+          "enclosing_symbol": "rust-analyzer cargo oracle_associated_type_identities 0.0.0 Provider#value()."
+        },
+        {
+          "symbol": "local 1",
+          "kind": 58,
+          "display_name": "Self",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "Self: Provider + ?Sized"
+          },
+          "enclosing_symbol": "rust-analyzer cargo oracle_associated_type_identities 0.0.0 Provider#"
+        }
+      ],
+      "position_encoding": 1
+    },
+    {
+      "language": "rust",
+      "relative_path": "src/other.rs",
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            1,
+            0
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_associated_type_identities 0.0.0 other/",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            1,
+            0
+          ],
+          "TypedEnclosingRange": null
+        },
+        {
+          "range": [
+            0,
+            10,
+            19
+          ],
+          "TypedRange": null,
+          "symbol": "rust-analyzer cargo oracle_associated_type_identities 0.0.0 other/UNRELATED.",
+          "symbol_roles": 1,
+          "enclosing_range": [
+            0,
+            0,
+            28
+          ],
+          "TypedEnclosingRange": null
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "rust-analyzer cargo oracle_associated_type_identities 0.0.0 other/",
+          "kind": 29,
+          "display_name": "other",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "pub mod other"
+          }
+        },
+        {
+          "symbol": "rust-analyzer cargo oracle_associated_type_identities 0.0.0 other/UNRELATED.",
+          "kind": 8,
+          "display_name": "UNRELATED",
+          "signature_documentation": {
+            "language": "rust",
+            "text": "pub const UNRELATED: u8"
+          }
+        }
+      ],
+      "position_encoding": 1
+    }
+  ]
+}

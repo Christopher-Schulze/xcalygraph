@@ -123,6 +123,27 @@ with tempfile.TemporaryDirectory(prefix="edge-oracle-regression.", dir=cache) as
         assert all(row[3].startswith(prefix) for row in rows), rows
         actual = {row[2]: row[4] for row in rows}
         assert expected.items() <= actual.items(), (name, actual, expected)
+    associated = repo / "tests/fixtures/oracle/associated-type-identities"
+    recorded = json.loads((associated / "compiler.json").read_text())
+    for relative, expected_hash in recorded["provenance"]["source_sha256"].items():
+        assert hashlib.sha256((associated / relative).read_bytes()).hexdigest() == expected_hash, relative
+    for order, documents in [
+        ("recorded", recorded["documents"]),
+        ("reversed", list(reversed(recorded["documents"]))),
+    ]:
+        compiler = work / (order + ".scip.json")
+        with compiler.open("x") as output:
+            json.dump({"documents": documents}, output)
+        empty = work / (order + ".edges.tsv")
+        empty.touch(exist_ok=False)
+        verdicts = work / (order + ".verdicts.tsv")
+        subprocess.run(
+            [sys.executable, "-I", "-", order, "rust", str(compiler), str(empty), str(verdicts)],
+            input=program, text=True, capture_output=True, env=dict(os.environ, HOME=str(home)), check=True,
+        )
+        rows = list(csv.reader((work / (order + ".missed.tsv")).open(), delimiter="\t"))
+        item = [row for row in rows if row[1:3] == ["src/lib.rs", "src/lib.rs:2"]]
+        assert len(item) == 1 and item[0][0] == "recall-types" and item[0][4] == "3", (order, rows)
     for fixture_name, language, kind, cases in [
         ("accessor-identities", "typescript", "calls", [("index.ts", 3, "index.ts", 1, "first", 2, "Box", "target")]),
         ("local-accessor-identities", "typescript", "calls", [

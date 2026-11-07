@@ -226,12 +226,12 @@ missing_scopes = set()
 for document in index["documents"]:
     path = document["relative_path"]
     scopes = []
-    kinds = {info["symbol"]: info.get("kind", 0) for info in document.get("symbols") or []}
+    document_kinds = {info["symbol"]: info.get("kind", 0) for info in document.get("symbols") or []}
     for occurrence in document["occurrences"] or []:
         symbol = occurrence["symbol"]
         # SCIP Function/Method/Constructor/Getter/Setter kinds include local symbols whose
         # descriptor contains only an ID. Missing accessor ranges must not bless their parent.
-        callable_kind = kinds.get(symbol) in {9, 17, 18, 26, 45, 80}
+        callable_kind = document_kinds.get(symbol) in {9, 17, 18, 26, 45, 80}
         if not occurrence.get("symbol_roles", 0) & DEFINITION or not (
                 callable_kind or symbol.endswith((").", "#", "/", "__init__:"))):
             continue
