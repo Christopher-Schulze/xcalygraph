@@ -50,6 +50,80 @@ fn an_export_alias_finds_its_declaration() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn exported_aliases_report_ambiguity_and_respect_file_qualification() -> TestResult {
+    let root = support::exclusive_dir("export-alias-ambiguity")?;
+    write(
+        &root,
+        &[
+            (
+                "a.ts",
+                b"function first() {}\nexport { first as Shared };\n",
+            ),
+            (
+                "b.ts",
+                b"function second() {}\nexport { second as Shared };\n",
+            ),
+        ],
+    )?;
+    let ambiguous = support::command(BINARY, &root)
+        .args(["show", "Shared", "-C"])
+        .arg(&root)
+        .output()?;
+    let candidates = String::from_utf8(ambiguous.stdout)?;
+    assert_eq!(ambiguous.status.code(), Some(3), "{candidates}");
+    assert!(
+        candidates.contains("first") && candidates.contains("second"),
+        "{candidates}"
+    );
+    let first = query(&root, &["show", "a.ts::Shared"])?;
+    assert!(
+        first.contains("first") && !first.contains("second"),
+        "{first}"
+    );
+    let second = query(&root, &["show", "Shared", "-p", "b.ts"])?;
+    assert!(
+        second.contains("second") && !second.contains("first"),
+        "{second}"
+    );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn a_damaged_alias_search_shard_is_not_reported_as_absence() -> TestResult {
+    let work = support::exclusive_dir("export-alias-damaged")?;
+    let root = work.join("source");
+    let index = work.join("index");
+    fs::create_dir(&root)?;
+    write(
+        &root,
+        &[(
+            "a.ts",
+            b"function first() {}\nexport { first as Shared };\n",
+        )],
+    )?;
+    let run = |args: &[&str]| {
+        support::command(BINARY, &work)
+            .args(args)
+            .arg("-C")
+            .arg(&root)
+            .arg("--index-dir")
+            .arg(&index)
+            .output()
+    };
+    assert!(run(&["index"])?.status.success());
+    let store = fs::read_dir(&index)?.next().ok_or("missing index")??.path();
+    let shard = xxhash_rust::xxh3::xxh3_64(b"a.ts") % 64;
+    let damaged = if shard == 0 { 1 } else { 0 };
+    fs::write(store.join(format!("facts/{damaged:02}")), b"corrupt")?;
+    let output = run(&["show", "MissingAlias", "--read-only"])?;
+    assert_ne!(output.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("fact shard"));
+    fs::remove_dir_all(work)?;
+    Ok(())
+}
+
 const SHADOW: &[u8] = b"<script>\nclass Outer { run() { return 1 } }\nclass Inner { run() { return 2 } }\nfunction check() { const value = new Outer(); { const value = new Inner(); value.run(); } value.run(); }\n</script>";
 
 #[test]

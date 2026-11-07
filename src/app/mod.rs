@@ -226,12 +226,22 @@ fn run_query(
         CommandName::Show => {
             let node = match query::names::resolve_one(index, filter, &args[0], json, ambiguity) {
                 Err(AppError::NoMatch(message)) => {
-                    query::names::export_alias(index, filter, &workspace.store, &args[0]).ok_or(
-                        AppError::NoMatch(with_coverage(
-                            message,
-                            query::not_parsed_note(index, filter),
-                        )),
-                    )?
+                    match query::names::export_alias(
+                        index,
+                        filter,
+                        &workspace.store,
+                        &args[0],
+                        json,
+                        ambiguity,
+                    ) {
+                        Err(AppError::NoMatch(_)) => {
+                            return Err(AppError::NoMatch(with_coverage(
+                                message,
+                                query::not_parsed_note(index, filter),
+                            )));
+                        }
+                        resolved => resolved?,
+                    }
                 }
                 resolved => resolved?,
             };

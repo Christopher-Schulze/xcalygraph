@@ -125,8 +125,6 @@ fn in_file(index: &Index, filter: &Filter, path: &str, name: &str) -> Vec<u32> {
 /// Candidate list budget of an ambiguous NAME, lowered by a smaller `-b`.
 pub const AMBIGUITY_BUDGET: usize = 600;
 
-/// Exactly one node for NAME; ambiguity lists the candidates (exit 3) within `budget`, no match
-/// is exit 4.
 /// The declaration behind `export { local as name }`, only on a miss: scanning the facts costs a
 /// read of every shard.
 pub fn export_alias(
@@ -134,24 +132,49 @@ pub fn export_alias(
     filter: &Filter,
     store: &crate::infra::store::Store,
     name: &str,
-) -> Option<u32> {
+    json: bool,
+    budget: usize,
+) -> Result<u32, AppError> {
+    let name = name.trim();
+    let (path, alias) = match name.split_once("::") {
+        Some((path, alias)) if file_index(index, path).is_some() => {
+            (Some(path.trim_start_matches("./")), alias)
+        }
+        _ => (None, name),
+    };
+    let mut found = Vec::new();
     for shard in 0..crate::infra::store::SHARDS {
-        for (path, _, facts) in store.read_shard(shard).ok()? {
-            let local = facts.imports.iter().find_map(|import| {
-                (import.reexport && import.spec.is_empty() && import.alias.as_deref() == Some(name))
-                    .then(|| import.names.first())
-                    .flatten()
-            });
-            if let Some(local) = local
-                && let [node] = in_file(index, filter, &path, local)[..]
-            {
-                return Some(node);
+        if path.is_some_and(|path| crate::infra::store::shard_of(path) != shard) {
+            continue;
+        }
+        let records = store.read_shard(shard).map_err(|error| {
+            AppError::RecoverFacts(format!(
+                "fact shard {shard:02} cannot be read ({error}); run 'xcalygraph index'"
+            ))
+        })?;
+        for (file, _, facts) in records {
+            if path.is_some_and(|path| path != file) {
+                continue;
+            }
+            for import in &facts.imports {
+                if import.reexport
+                    && import.spec.is_empty()
+                    && import.alias.as_deref() == Some(alias)
+                    && let Some(local) = import.names.first()
+                {
+                    found.extend(in_file(index, filter, &file, local));
+                }
             }
         }
     }
-    None
+    found.sort_unstable();
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|&node| seen.insert(index.derived.interface_canonical(node)));
+    resolve_candidates(index, name, json, budget, prefer_definitions(index, found))
 }
 
+/// Exactly one node for NAME; ambiguity lists the candidates (exit 3) within `budget`, no match
+/// is exit 4.
 pub fn resolve_one(
     index: &Index,
     filter: &Filter,
@@ -160,6 +183,16 @@ pub fn resolve_one(
     budget: usize,
 ) -> Result<u32, AppError> {
     let found = lookup(index, filter, name);
+    resolve_candidates(index, name, json, budget, found)
+}
+
+fn resolve_candidates(
+    index: &Index,
+    name: &str,
+    json: bool,
+    budget: usize,
+    found: Vec<u32>,
+) -> Result<u32, AppError> {
     match found.as_slice() {
         [only] => Ok(*only),
         [] => Err(AppError::NoMatch(format!(
