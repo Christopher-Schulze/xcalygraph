@@ -13,6 +13,10 @@ pub fn is_project_config(name: &str) -> bool {
     name.ends_with(".json") && (name.starts_with("tsconfig") || name.starts_with("jsconfig"))
 }
 
+pub fn is_deno_config(name: &str) -> bool {
+    matches!(name, "deno.json" | "deno.jsonc")
+}
+
 /// Parses a manifest by file name; `None` for manifests without a parser.
 pub fn parse(name: &str, text: &str) -> Option<Manifest> {
     if matches!(name, "tsconfig.json" | "package.json") {
@@ -56,6 +60,9 @@ fn parse_other(name: &str, text: &str) -> Option<Manifest> {
     if is_project_config(name) {
         return Some(tsconfig(&json::parse_complete(text)?));
     }
+    if is_deno_config(name) {
+        return deno_config(&json::parse_complete(text)?);
+    }
     match name {
         "go.mod" => Some(go_mod(text)),
         "go.work" => Some(go_work(text)),
@@ -94,6 +101,45 @@ fn parse_other(name: &str, text: &str) -> Option<Manifest> {
         }
         _ => None,
     }
+}
+
+/// Deno settings may apply from a command's working directory; retain potential remappings
+/// without assuming which config a caller used or treating the values as proven targets.
+fn deno_config(value: &Value) -> Option<Manifest> {
+    let mut links = typescript_candidate_links(value)?;
+    links.push("deno_map=v1".to_owned());
+    if value.get("importMap").is_some() {
+        links.push("deno_unproven".to_owned());
+    }
+    let mut add_keys = |map: &Value| {
+        if !matches!(map, Value::Object(_)) {
+            links.push("deno_unproven".to_owned());
+            return;
+        }
+        for (key, _, _) in map.entries() {
+            if key.is_empty() {
+                links.push("deno_unproven".to_owned());
+            } else {
+                links.push(format!("deno_key={key}"));
+            }
+        }
+    };
+    if let Some(imports) = value.get("imports") {
+        add_keys(imports);
+    }
+    if let Some(scopes) = value.get("scopes") {
+        if matches!(scopes, Value::Object(_)) {
+            for (_, _, map) in scopes.entries() {
+                add_keys(map);
+            }
+        } else {
+            links.push("deno_unproven".to_owned());
+        }
+    }
+    Some(Manifest {
+        project_links: links,
+        ..Manifest::default()
+    })
 }
 
 fn tsconfig_project_scope(value: &Value) -> String {

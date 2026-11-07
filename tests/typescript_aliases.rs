@@ -34,6 +34,107 @@ const CALL: &str = "import { who } from \"@/api\";\nexport function entry() { re
 const WHO: &str = "export function who() { return 1; }\n";
 
 #[test]
+fn deno_import_maps_do_not_select_a_different_package_entry() -> TestResult {
+    let root = support::exclusive_dir("alias-deno-map")?;
+    let noise: String = (0..405)
+        .map(|number| format!("\"noise{number}\":0,"))
+        .collect();
+    let config = format!(
+        r#"{{/* map */{noise}"imports":{{"shared":"./dist/bundle.js","shared/":"./other/"}},"compilerOptions":{{"paths":{{"@/*":["./*"]}}}},}}"#
+    );
+    write(
+        &root,
+        &[
+            (
+                "package.json",
+                r#"{"name":"shared","module":"./runtime.ts"}"#,
+            ),
+            ("runtime.ts", WHO),
+            ("sub.ts", WHO),
+            ("app/deno.jsonc", &config),
+            ("app/tsconfig.json", r#"{"extends":"./deno.jsonc"}"#),
+            ("app/api.ts", WHO),
+            (
+                "app/main.ts",
+                "import { who } from 'shared';\nexport function denoEntry() { return who(); }\n",
+            ),
+            (
+                "app/prefix.ts",
+                "import { who } from 'shared/sub';\nexport function prefixEntry() { return who(); }\n",
+            ),
+            (
+                "app/tsconfig-entry.ts",
+                "import { who } from '@/api';\nexport function tsconfigEntry() { return who(); }\n",
+            ),
+            (
+                "other/main.ts",
+                "import { who } from 'shared';\nexport function nodeEntry() { return who(); }\n",
+            ),
+        ],
+    )?;
+    let mapped = show(&root, "denoEntry")?;
+    assert!(!mapped.contains("> who runtime.ts"), "{mapped}");
+    let prefix = show(&root, "prefixEntry")?;
+    assert!(!prefix.contains("> who sub.ts"), "{prefix}");
+    let inherited = show(&root, "tsconfigEntry")?;
+    assert!(inherited.contains("> who app/api.ts:1"), "{inherited}");
+    let other = show(&root, "nodeEntry")?;
+    assert!(other.contains("> who runtime.ts:1"), "{other}");
+    fs::write(
+        root.join("app/deno.jsonc"),
+        r#"{"imports":{"other":"./x.ts"}}"#,
+    )?;
+    let unrelated = show(&root, "denoEntry")?;
+    assert!(unrelated.contains("> who runtime.ts:1"), "{unrelated}");
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn deno_scopes_external_maps_and_relative_keys_do_not_prove_targets() -> TestResult {
+    let root = support::exclusive_dir("alias-deno-uncertain")?;
+    write(
+        &root,
+        &[
+            (
+                "package.json",
+                r#"{"name":"shared","module":"./runtime.ts"}"#,
+            ),
+            ("runtime.ts", WHO),
+            ("app/thing.ts", WHO),
+            (
+                "app/main.ts",
+                "import { who as one } from 'shared';\nimport { who as two } from './thing.ts';\nexport function denoEntry() { return one() + two(); }\n",
+            ),
+            (
+                "app/deno.json",
+                r#"{"scopes":{"./":{"shared":"./other.ts"}}}"#,
+            ),
+        ],
+    )?;
+    let scoped = show(&root, "denoEntry")?;
+    assert!(!scoped.contains("> who runtime.ts"), "{scoped}");
+    assert!(scoped.contains("> who app/thing.ts:1"), "{scoped}");
+    fs::write(root.join("app/deno.json"), r#"{"importMap":"./map.json"}"#)?;
+    let external = show(&root, "denoEntry")?;
+    assert!(!external.contains("> who runtime.ts"), "{external}");
+    assert!(!external.contains("> who app/thing.ts"), "{external}");
+    fs::write(
+        root.join("app/deno.json"),
+        r#"{"imports":{"./thing.ts":"./other.ts"}}"#,
+    )?;
+    let relative = show(&root, "denoEntry")?;
+    assert!(!relative.contains("> who app/thing.ts"), "{relative}");
+    assert!(relative.contains("> who runtime.ts:1"), "{relative}");
+    fs::write(root.join("app/deno.json"), "{ invalid")?;
+    let invalid = show(&root, "denoEntry")?;
+    assert!(!invalid.contains("> who runtime.ts"), "{invalid}");
+    assert!(!invalid.contains("> who app/thing.ts"), "{invalid}");
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
 fn each_app_uses_its_own_alias_table() -> TestResult {
     let root = support::exclusive_dir("alias-apps")?;
     let config = r#"{"compilerOptions":{"paths":{"@/*":["./src/*"]}}}"#;

@@ -11,7 +11,7 @@ use super::{Imports, Index, Input, Target};
 use crate::domain::facts::{Facts, Manifest, SymKind, TypeScriptProjectConfig};
 use crate::domain::filetype::FileType;
 use crate::domain::role;
-use crate::extract::manifest::is_project_config;
+use crate::extract::manifest::{is_deno_config, is_project_config};
 
 /// Extensions a specifier may omit or name with a `.js` stand-in.
 const STRIP: [&str; 14] = [
@@ -51,6 +51,14 @@ pub struct JsTables {
     svelte_dirs: HashSet<String>,
     /// (package name, root-relative entry as declared, package directory).
     packages: Vec<(String, String, String)>,
+    /// Potential remappings of a Deno invocation from each ancestor directory.
+    deno_maps: HashMap<String, DenoMap>,
+}
+
+#[derive(Debug, Default)]
+struct DenoMap {
+    unknown: bool,
+    keys: Vec<String>,
 }
 
 /// One project config with its `extends` chain applied.
@@ -280,6 +288,26 @@ pub fn tables(input: &Input) -> JsTables {
                 .insert(parent_dir(&record.path).to_owned());
         }
         let dir = parent_dir(&record.path);
+        if is_deno_config(name) {
+            let map = tables.deno_maps.entry(dir.to_owned()).or_default();
+            match facts.as_ref().and_then(|facts| facts.manifest.as_ref()) {
+                Some(manifest)
+                    if manifest
+                        .project_links
+                        .iter()
+                        .any(|link| link == "deno_map=v1") =>
+                {
+                    for link in &manifest.project_links {
+                        if link == "deno_unproven" {
+                            map.unknown = true;
+                        } else if let Some(key) = link.strip_prefix("deno_key=") {
+                            map.keys.push(key.to_owned());
+                        }
+                    }
+                }
+                _ => map.unknown = true,
+            }
+        }
         if name == "tsconfig.json"
             || (name == "jsconfig.json" && !tables.config_of_dir.contains_key(dir))
         {
@@ -396,6 +424,33 @@ fn project_holds(_: &str, _: &TypeScriptProjectConfig, _: &str) -> bool {
 }
 
 impl JsTables {
+    /// Deno chooses configuration from the invocation directory, which a file alone cannot prove.
+    /// Any possible ancestor remapping makes a guessed target unsafe.
+    fn deno_may_remap(&self, path: &str, spec: &str) -> bool {
+        if self.deno_maps.is_empty() {
+            return false;
+        }
+        let mut dir = parent_dir(path);
+        loop {
+            if self.deno_maps.get(dir).is_some_and(|map| {
+                map.unknown
+                    || map.keys.iter().any(|key| {
+                        key == spec
+                            || (spec.starts_with('.') && key.starts_with(['.', '/']))
+                            || spec
+                                .strip_prefix(key.as_str())
+                                .is_some_and(|suffix| key.ends_with('/') || suffix.starts_with('/'))
+                    })
+            }) {
+                return true;
+            }
+            if dir.is_empty() {
+                return false;
+            }
+            dir = parent_dir(dir);
+        }
+    }
+
     /// The config answering for `path`: the nearest ancestor config; with `references`, the
     /// referenced or own project that holds the file. `Ok(None)` means no config exists;
     /// `Err(())` means a project exists but its alias choice is not proven.
@@ -601,9 +656,13 @@ impl Index<'_> {
     }
 
     fn js_import_target(&self, file: u32, spec: &str) -> Option<JsImportTarget> {
-        let dir = parent_dir(&self.input.files[file as usize].path);
+        let path = &self.input.files[file as usize].path;
+        let dir = parent_dir(path);
         let typescript = self.file_type(file) != Some(FileType::JavaScript);
         let tables = &self.js_tables;
+        if tables.deno_may_remap(path, spec) {
+            return None;
+        }
         let mut bases: Vec<String> = Vec::new();
         if spec.starts_with('.') {
             bases.push(normalize(&join(dir, spec)));

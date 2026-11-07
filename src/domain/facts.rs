@@ -763,8 +763,7 @@ pub struct Manifest {
     pub entrypoints: Vec<String>,
     /// Cargo crate roots with library identity retained for module resolution.
     pub rust_target_roots: Vec<RustTargetRoot>,
-    /// `tsconfig` and `jsconfig` scope as `key=value`: `extends`, `reference`, `file`, `include`,
-    /// `exclude`, and `has=KEY` for a key that is present, even when empty.
+    /// TypeScript project scope and Deno remapping evidence encoded as tagged strings.
     pub project_links: Vec<String>,
 }
 

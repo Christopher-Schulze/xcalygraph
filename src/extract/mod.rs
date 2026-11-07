@@ -38,7 +38,7 @@ use crate::domain::role::{self, Role};
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
 /// Rows of a CSV or TSV file that reach search.
 const CSV_INDEXED_ROWS: usize = 2000;
-const EXTRACTION_VERSION: u32 = 139;
+const EXTRACTION_VERSION: u32 = 140;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -351,7 +351,8 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
     facts.lines = count_lines(content);
     if record.role == Role::Manifest
         || (record.role == Role::Config
-            && manifest::is_project_config(role::file_name(&record.path)))
+            && (manifest::is_project_config(role::file_name(&record.path))
+                || manifest::is_deno_config(role::file_name(&record.path))))
     {
         let name = role::file_name(&record.path);
         let text = String::from_utf8_lossy(content);
