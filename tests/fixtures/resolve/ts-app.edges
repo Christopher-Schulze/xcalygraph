@@ -1,5 +1,7 @@
 file:lib/app.js -imports-> file:lib/util.js @1
 file:lib/format.js -imports-> file:lib/util.js @1
+file:lib/format.js -uses-> lib/format.format @8
+file:lib/util.js -uses-> lib/util.trim @4
 file:src/geometry/index.ts -imports-> file:src/geometry/shapes.ts @1
 file:src/geometry/use.ts -imports-> file:src/geometry/index.ts @1
 file:src/service.ts -imports-> file:lib/format.js @1

@@ -27,6 +27,8 @@ Considered and deliberately not in `docs/spec.md`. Each entry names the evidence
 | Calls inside macro token trees (Rust test macros such as `rgtest!(name, \|dir, cmd\| ...)`, about 200 of ripgrep's missed call pairs) | a source-labelled agent question that needs them; a macro expander is out of scope for a parser without compilation |
 | Property reads as call edges (Python `response.text`, about 87 of httpx's 150 missed pairs) | a source-labelled agent question reachable only through the getter; decided together with property read and write roles |
 | Types of callback parameters from the callee's declared callback signature (`streamSSE(c, async (stream) => ...)`, hono) | a source-labelled agent question whose required fact needs the parameter type |
+| Lua lexical scope (locals, `do` blocks, branch writes, table aliases); a per-reference backward scan cost +87 % instructions on Penlight and quadratic time on large files, and still lost real relations | a pinned Lua precision corpus with false facts traced to missing scope, solved by one linear scope pass |
+| Python parameters as bindings (a parameter shadowing a same-named function); pytest injects fixtures by parameter name, so they need fixture injection alongside | false parameter-shadowing edges measured on a pinned corpus; the 48 corpora showed none, while the bindings alone removed 72 real fixture relations |
 | Language meta-knowledge (error propagation, cleanup and lifecycle relations) | a source-labelled agent question whose required facts `find`, `show` or a chain cannot reach today |
 | Typo-tolerant search | evaluation misses caused by misspelled terms |
 | Media durations of WebM, Matroska, MP3 and Ogg | agent questions that need these durations (format is reported) |

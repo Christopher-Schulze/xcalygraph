@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 134;
+pub const RESOLVE_VERSION: u32 = 139;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -2154,7 +2154,8 @@ impl<'a> Index<'a> {
                         } else {
                             kind
                         };
-                        if target == source || self.is_trivial(source, target, kind) {
+                        if target == source || self.is_trivial(source, target, kind, reference.kind)
+                        {
                             continue;
                         }
                         // One base list names the superclass and the interfaces (Pascal
@@ -2173,6 +2174,12 @@ impl<'a> Index<'a> {
                                 Some(FileType::Pascal | FileType::Ruby)
                             )
                             && self.symbols[target as usize].kind.is_callable()
+                            && (self.file_type(file) != Some(FileType::Pascal)
+                                || parameter_count(
+                                    &self.symbols[target as usize].signature,
+                                    &self.symbols[target as usize].name,
+                                )
+                                .is_none_or(|(required, _, _)| required == 0))
                         {
                             // Pascal and Ruby call parameterless routines without parentheses.
                             if source_is_test {
@@ -2897,14 +2904,27 @@ impl<'a> Index<'a> {
             || scope.is_some_and(|scope| self.is_test(self.base[file as usize] + scope))
     }
 
-    /// Edges that carry no information: a file using its own symbols (impl headers) and a
+    /// Edges that carry no information: file-level type annotations (impl headers) and a
     /// method using its own owner type.
-    fn is_trivial(&self, source: u32, target: u32, kind: EdgeKind) -> bool {
+    fn is_trivial(
+        &self,
+        source: u32,
+        target: u32,
+        kind: EdgeKind,
+        reference_kind: RefKind,
+    ) -> bool {
         let symbols = self.symbols.len() as u32;
         if source >= symbols {
             // Top-level script code calling its own functions is real control flow (Bash test
-            // scripts, `if __name__ == "__main__": run()`); a file using its own types is not.
-            return !matches!(kind, EdgeKind::Calls | EdgeKind::Tests)
+            // scripts, `if __name__ == "__main__": run()`). Passing its own callable as a value
+            // is also real usage, even though it proves no invocation, where extraction records
+            // the local bindings that could shadow it (Lua's `local f = load(...)` is not `f`).
+            let value_use = reference_kind == RefKind::Value
+                && self
+                    .file_type(source - symbols)
+                    .is_some_and(crate::extract::lang::records_local_bindings);
+            return !value_use
+                && !matches!(kind, EdgeKind::Calls | EdgeKind::Tests)
                 && target < symbols
                 && self.symbols[target as usize].file == source - symbols;
         }

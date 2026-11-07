@@ -80,6 +80,8 @@
 ; Identifiers used as values in callback positions: arguments, literals, returns, assignments.
 (argument_list (identifier) @name @reference.value)
 (keyword_argument value: (identifier) @name @reference.value)
+(default_parameter value: (identifier) @name @reference.value)
+(typed_default_parameter value: (identifier) @name @reference.value)
 (argument_list (attribute object: (_) @qualifier attribute: (identifier) @name) @reference.value)
 (return_statement (identifier) @name @reference.value)
 (assignment right: (identifier) @name @reference.value)

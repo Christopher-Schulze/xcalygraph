@@ -161,6 +161,27 @@ const PACKS: &[&Pack] = &[
 /// One lazily compiled query per pack: a refresh compiles only the languages it extracts.
 static QUERIES: [OnceLock<Option<Query>>; PACKS.len()] = [const { OnceLock::new() }; PACKS.len()];
 
+/// Whether extraction of this file type records local bindings (`@binding.name`), so a local
+/// variable can shadow a same-named function. Without them a bare name is not evidence of the
+/// function it names. File types without a pack of their own (HTML, Vue, Svelte, Astro) are
+/// extracted through their embedded script packs, which record bindings.
+pub fn records_local_bindings(file_type: FileType) -> bool {
+    static WITHOUT: OnceLock<Vec<FileType>> = OnceLock::new();
+    !WITHOUT
+        .get_or_init(|| {
+            PACKS
+                .iter()
+                .map(|pack| pack.file_type)
+                .filter(|&file_type| {
+                    !PACKS.iter().any(|pack| {
+                        pack.file_type == file_type && pack.query.contains("@binding.name")
+                    })
+                })
+                .collect()
+        })
+        .contains(&file_type)
+}
+
 /// Pack and compiled query for a file type; `None` when the grammar is not compiled in or its
 /// query fails to compile (covered by tests).
 pub fn lookup(
