@@ -528,8 +528,11 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             | SourceIdentityKind::InterfaceMembers
             | SourceIdentityKind::InterfaceGroup
             | SourceIdentityKind::InterfaceGenericFields
-            | SourceIdentityKind::TypeScriptAugmentation => facts.symbols.len(),
-            SourceIdentityKind::Reference => facts.refs.len(),
+            | SourceIdentityKind::TypeScriptAugmentation
+            | SourceIdentityKind::PythonDirectDefinition => facts.symbols.len(),
+            SourceIdentityKind::Reference
+            | SourceIdentityKind::PythonShadowedImport
+            | SourceIdentityKind::PythonCallableImportFallback => facts.refs.len(),
             SourceIdentityKind::TypeScriptScope
             | SourceIdentityKind::TypeScriptComplexExports
             | SourceIdentityKind::TypeScriptModuleSyntax
@@ -537,7 +540,12 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             | SourceIdentityKind::TypeScriptGlobalAugmentationScope
             | SourceIdentityKind::TypeScriptPackageType
             | SourceIdentityKind::CommonJsExport => 1,
-            SourceIdentityKind::CommonJsRequire => facts.imports.len(),
+            SourceIdentityKind::CommonJsRequire
+            | SourceIdentityKind::PythonDirectImport
+            | SourceIdentityKind::PythonImportScope
+            | SourceIdentityKind::PythonImportAfterTry
+            | SourceIdentityKind::PythonImportOptionalTry
+            | SourceIdentityKind::PythonImportNoModuleWrite => facts.imports.len(),
             SourceIdentityKind::TypeScriptGlobalAugmentation => facts.symbols.len(),
         };
         if usize::try_from(index).map_or(true, |index| index >= limit)
@@ -560,6 +568,48 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
         let identity = decoder.string()?;
         if identity.is_empty() {
             return Err(DecodeError("empty source identity"));
+        }
+        if kind == SourceIdentityKind::PythonDirectImport && identity != "direct" {
+            return Err(DecodeError("Python direct import"));
+        }
+        if kind == SourceIdentityKind::PythonImportNoModuleWrite && identity != "unwritten" {
+            return Err(DecodeError("Python module import write"));
+        }
+        if kind == SourceIdentityKind::PythonDirectDefinition
+            && (identity != "direct"
+                || facts
+                    .symbols
+                    .get(index as usize)
+                    .is_none_or(|symbol| symbol.kind() != SymKind::Fn || symbol.parent.is_some()))
+        {
+            return Err(DecodeError("Python direct definition"));
+        }
+        if kind == SourceIdentityKind::PythonCallableImportFallback
+            && (facts.refs.get(index as usize).is_none_or(|reference| {
+                reference.kind != RefKind::Call || reference.qualifier.is_some()
+            }) || identity
+                .split_once(':')
+                .and_then(|(first, second)| {
+                    Some((first.parse::<usize>().ok()?, second.parse::<usize>().ok()?))
+                })
+                .is_none_or(|(first, second)| {
+                    first == second || first >= facts.imports.len() || second >= facts.imports.len()
+                }))
+        {
+            return Err(DecodeError("Python callable import fallback"));
+        }
+        if kind == SourceIdentityKind::PythonShadowedImport && identity != "shadowed" {
+            return Err(DecodeError("Python shadowed import"));
+        }
+        if matches!(
+            kind,
+            SourceIdentityKind::PythonImportScope
+                | SourceIdentityKind::PythonImportAfterTry
+                | SourceIdentityKind::PythonImportOptionalTry
+        ) && crate::domain::facts::python_import_scope(&identity).is_none_or(|(owner, _)| {
+            owner.is_some_and(|index| index as usize >= facts.symbols.len())
+        }) {
+            return Err(DecodeError("Python import scope"));
         }
         if kind == SourceIdentityKind::TypeScriptScope
             && !matches!(
@@ -883,6 +933,156 @@ mod tests {
         assert_eq!(decode(&mut decoder)?, facts);
         assert_eq!(decode(&mut decoder)?, Facts::default());
         assert!(decoder.is_done());
+        Ok(())
+    }
+
+    #[test]
+    fn python_direct_import_identity_round_trips_and_is_validated() -> DecodeResult<()> {
+        let mut facts = Facts {
+            imports: vec![Import {
+                spec: "pkg".into(),
+                ..Import::default()
+            }],
+            source_identities: Some(
+                vec![SourceIdentity {
+                    kind: SourceIdentityKind::PythonDirectImport,
+                    index: 0,
+                    identity: "direct".to_owned(),
+                }]
+                .into_boxed_slice(),
+            ),
+            ..Facts::default()
+        };
+        let mut encoder = Encoder::default();
+        encode(&mut encoder, &facts);
+        assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
+        facts
+            .source_identities
+            .as_mut()
+            .ok_or(DecodeError("identity"))?[0]
+            .identity = "unknown".to_owned();
+        let mut invalid = Encoder::default();
+        encode(&mut invalid, &facts);
+        assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
+        facts.source_identities = Some(
+            vec![SourceIdentity {
+                kind: SourceIdentityKind::PythonImportNoModuleWrite,
+                index: 0,
+                identity: "unwritten".to_owned(),
+            }]
+            .into_boxed_slice(),
+        );
+        let mut encoder = Encoder::default();
+        encode(&mut encoder, &facts);
+        assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
+        facts
+            .source_identities
+            .as_mut()
+            .ok_or(DecodeError("identity"))?[0]
+            .identity = "unknown".to_owned();
+        let mut invalid = Encoder::default();
+        encode(&mut invalid, &facts);
+        assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn python_direct_definition_round_trips_and_rejects_nested_symbols() -> DecodeResult<()> {
+        let mut facts = Facts {
+            symbols: vec![Symbol {
+                kind: Some(SymKind::Fn),
+                ..Symbol::default()
+            }],
+            source_identities: Some(
+                vec![SourceIdentity {
+                    kind: SourceIdentityKind::PythonDirectDefinition,
+                    index: 0,
+                    identity: "direct".to_owned(),
+                }]
+                .into_boxed_slice(),
+            ),
+            ..Facts::default()
+        };
+        let mut encoder = Encoder::default();
+        encode(&mut encoder, &facts);
+        assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
+        facts.symbols[0].parent = Some(0);
+        let mut invalid = Encoder::default();
+        encode(&mut invalid, &facts);
+        assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn python_callable_import_fallback_round_trips_and_rejects_invalid_indices() -> DecodeResult<()>
+    {
+        let mut facts = sample();
+        facts.imports.push(Import::default());
+        facts.refs[0].qualifier = None;
+        facts.source_identities = Some(
+            vec![SourceIdentity {
+                kind: SourceIdentityKind::PythonCallableImportFallback,
+                index: 0,
+                identity: "0:1".to_owned(),
+            }]
+            .into_boxed_slice(),
+        );
+        let mut encoder = Encoder::default();
+        encode(&mut encoder, &facts);
+        assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
+        for invalid in ["0:0", "0:2", "2:0", "0:1:2", "bad"] {
+            facts
+                .source_identities
+                .as_mut()
+                .ok_or(DecodeError("identity"))?[0]
+                .identity = invalid.to_owned();
+            let mut encoder = Encoder::default();
+            encode(&mut encoder, &facts);
+            assert!(
+                decode(&mut Decoder::new(&encoder.bytes)).is_err(),
+                "{invalid}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn python_import_scope_identity_round_trips_and_rejects_invalid_bounds() -> DecodeResult<()> {
+        let mut facts = Facts {
+            imports: vec![Import {
+                spec: "pkg".into(),
+                ..Import::default()
+            }],
+            symbols: vec![Symbol {
+                kind: Some(SymKind::Fn),
+                ..Symbol::default()
+            }],
+            source_identities: Some(
+                vec![SourceIdentity {
+                    kind: SourceIdentityKind::PythonImportScope,
+                    index: 0,
+                    identity: "1:10:20".to_owned(),
+                }]
+                .into_boxed_slice(),
+            ),
+            ..Facts::default()
+        };
+        let mut encoder = Encoder::default();
+        encode(&mut encoder, &facts);
+        assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
+        for invalid in ["2:10:20", "1:20:10", "1:10:10", "1:10:20:0"] {
+            facts
+                .source_identities
+                .as_mut()
+                .ok_or(DecodeError("identity"))?[0]
+                .identity = invalid.to_owned();
+            let mut encoder = Encoder::default();
+            encode(&mut encoder, &facts);
+            assert!(
+                decode(&mut Decoder::new(&encoder.bytes)).is_err(),
+                "{invalid}"
+            );
+        }
         Ok(())
     }
 

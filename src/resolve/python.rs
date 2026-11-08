@@ -2,12 +2,25 @@
 //! `__init__` modules, dotted qualifiers through the package tree.
 
 use super::Ids;
-use super::{Imports, Index, MAX_DISPATCH, Pair, Target};
+use super::{Imports, Index, MAX_DISPATCH, Outcome, Pair, Target};
 use crate::domain::facts;
 use crate::domain::facts::{Facts, SourceIdentityKind, SymKind};
 use crate::domain::filetype::FileType;
 use crate::domain::graph::Confidence;
 use crate::domain::hash::FastSet as HashSet;
+
+pub(super) struct PythonImport {
+    index: u32,
+    owner: Option<u32>,
+    range: Option<std::ops::Range<u32>>,
+    after_try: Option<std::ops::Range<u32>>,
+    optional_try: Option<std::ops::Range<u32>>,
+    line: u32,
+    direct: bool,
+    type_only: bool,
+    redefined: bool,
+    target: Option<Target>,
+}
 
 /// Modules a re-exported name is followed through (`pkg/__init__` -> `pkg/api` -> `pkg/impl`).
 const MAX_REEXPORT_DEPTH: usize = 3;
@@ -140,8 +153,17 @@ impl Index<'_> {
         let is_package = self.input.files[file as usize]
             .path
             .ends_with("__init__.py");
-        for import in &facts.imports {
+        for (index, import) in facts.imports.iter().enumerate() {
             let Some(module_path) = absolute(&import.spec, &current, is_package) else {
+                let local = import
+                    .alias
+                    .as_deref()
+                    .or_else(|| import.names.first().map(|name| name.as_str()))
+                    .or_else(|| import.spec.split('.').next())
+                    .filter(|name| !name.is_empty() && *name != "*");
+                if let Some(local) = local {
+                    self.record_python_import(facts, imports, index, local.to_owned(), None);
+                }
                 continue;
             };
             if import.names.is_empty() {
@@ -159,7 +181,13 @@ impl Index<'_> {
                 };
                 match self.python_module(&bound) {
                     Some(module) => {
-                        imports.names.insert(local, Target::Module(module));
+                        self.record_python_import(
+                            facts,
+                            imports,
+                            index,
+                            local,
+                            Some(Target::Module(module)),
+                        );
                         if let Some(full) = self.python_module(&module_path) {
                             imports.modules.push(full);
                         }
@@ -170,7 +198,13 @@ impl Index<'_> {
                             .next()
                             .unwrap_or(&module_path)
                             .to_owned();
-                        imports.names.insert(local, Target::External(top.clone()));
+                        self.record_python_import(
+                            facts,
+                            imports,
+                            index,
+                            local,
+                            Some(Target::External(top.clone())),
+                        );
                         imports.externals.push(top);
                     }
                 }
@@ -206,29 +240,368 @@ impl Index<'_> {
                         Some(Target::External(top))
                     }
                 };
-                if let Some(target) = target {
-                    if let Target::Module(module) = &target {
-                        imports.modules.push(*module);
-                    }
-                    imports.names.insert(local.to_string(), target);
+                if let Some(Target::Module(module)) = &target {
+                    imports.modules.push(*module);
                 }
+                self.record_python_import(facts, imports, index, local.to_string(), target);
             }
         }
+    }
+
+    fn record_python_import(
+        &self,
+        facts: &Facts,
+        imports: &mut Imports,
+        index: usize,
+        local: String,
+        target: Option<Target>,
+    ) {
+        let import = &facts.imports[index];
+        let Ok(index) = u32::try_from(index) else {
+            return;
+        };
+        let direct =
+            facts.source_identity(SourceIdentityKind::PythonDirectImport, index) == Some("direct");
+        let scope = facts
+            .source_identity(SourceIdentityKind::PythonImportScope, index)
+            .and_then(facts::python_import_scope);
+        let after_try = facts
+            .source_identity(SourceIdentityKind::PythonImportAfterTry, index)
+            .and_then(facts::python_import_scope)
+            .filter(|(owner, _)| scope.as_ref().is_none_or(|(other, _)| owner == other));
+        let optional_try = facts
+            .source_identity(SourceIdentityKind::PythonImportOptionalTry, index)
+            .and_then(facts::python_import_scope)
+            .filter(|(owner, _)| {
+                scope
+                    .as_ref()
+                    .or(after_try.as_ref())
+                    .is_none_or(|(other, _)| owner == other)
+            });
+        let owner = scope
+            .as_ref()
+            .or(after_try.as_ref())
+            .or(optional_try.as_ref())
+            .map(|(owner, _)| *owner)
+            .unwrap_or_else(|| {
+                if direct {
+                    return None;
+                }
+                facts
+                    .symbols
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, symbol)| {
+                        matches!(
+                            symbol.kind(),
+                            SymKind::Fn | SymKind::Method | SymKind::Class
+                        ) && symbol.line <= import.line
+                            && import.line <= symbol.end_line
+                    })
+                    .min_by_key(|(_, symbol)| symbol.end_line.saturating_sub(symbol.line))
+                    .and_then(|(index, _)| u32::try_from(index).ok())
+            });
+        let type_only = import.type_only && self.python_module("typing").is_none();
+        let redefined = target.as_ref().is_some_and(|target| {
+            let Target::Symbols(symbols) = target else {
+                return false;
+            };
+            let [id] = symbols.as_slice() else {
+                return false;
+            };
+            let symbol = &self.symbols[*id as usize];
+            self.file_type(symbol.file) == Some(FileType::Python)
+                && self
+                    .by_module
+                    .get(&(self.module_of(symbol.file), symbol.name.as_str()))
+                    .is_some_and(|symbols| symbols.len() > 1)
+        });
+        if (direct || type_only)
+            && let Some(target) = &target
+        {
+            imports.names.insert(local.clone(), target.clone());
+        }
+        imports
+            .python_names
+            .get_or_insert_with(Default::default)
+            .entry(local)
+            .or_default()
+            .push(PythonImport {
+                index,
+                owner,
+                range: scope.map(|(_, range)| range),
+                after_try: after_try.map(|(_, range)| range),
+                optional_try: optional_try.map(|(_, range)| range),
+                line: import.line,
+                direct,
+                type_only,
+                redefined,
+                target,
+            });
+    }
+
+    pub(super) fn python_callable_import_fallback(
+        &self,
+        facts: &Facts,
+        imports: &Imports,
+        identity: &str,
+    ) -> Outcome {
+        let Some((selected, fallback)) =
+            identity.split_once(':').and_then(|(selected, fallback)| {
+                Some((selected.parse::<u32>().ok()?, fallback.parse::<u32>().ok()?))
+            })
+        else {
+            return Outcome::Ambiguous;
+        };
+        let Some(names) = imports.python_names.as_ref() else {
+            return Outcome::Ambiguous;
+        };
+        let mut targets = super::Targets::new();
+        for index in [selected, fallback] {
+            let Some(import) = facts.imports.get(index as usize) else {
+                return Outcome::Ambiguous;
+            };
+            let Some(name) = import
+                .alias
+                .as_deref()
+                .or_else(|| import.names.first().map(|name| name.as_str()))
+                .or_else(|| import.spec.split('.').next())
+            else {
+                return Outcome::Ambiguous;
+            };
+            let Some(Target::Symbols(symbols)) = names
+                .get(name)
+                .and_then(|items| items.iter().find(|item| item.index == index))
+                .and_then(|item| item.target.as_ref())
+            else {
+                return Outcome::Ambiguous;
+            };
+            let [symbol] = symbols.as_slice() else {
+                return Outcome::Ambiguous;
+            };
+            let kind = self.symbols[*symbol as usize].kind;
+            if !kind.is_callable() && !kind.is_type() {
+                return Outcome::Ambiguous;
+            }
+            if !targets.iter().any(|(target, _)| target == symbol) {
+                targets.push((*symbol, Confidence::Inferred));
+            }
+        }
+        Outcome::Targets(targets, Confidence::Inferred)
+    }
+
+    pub(super) fn python_import_reference(
+        &self,
+        file: u32,
+        facts: &Facts,
+        imports: &Imports,
+        reference: &facts::Ref,
+    ) -> Option<Outcome> {
+        if !matches!(
+            reference.kind,
+            facts::RefKind::Call
+                | facts::RefKind::Value
+                | facts::RefKind::Type
+                | facts::RefKind::Inherit
+        ) {
+            return None;
+        }
+        let head = reference
+            .qualifier
+            .as_deref()
+            .map_or(reference.name.as_str(), |qualifier| {
+                qualifier.split('.').next().unwrap_or_default()
+            });
+        let candidates = imports.python_names.as_ref()?.get(head)?;
+        let callable = reference
+            .scope
+            .and_then(|scope| facts.symbols.get(scope as usize))
+            .is_some_and(|symbol| symbol.kind().is_callable());
+        let owners = super::scope_chain(facts, reference.scope)
+            .map(Some)
+            .chain(std::iter::once(None));
+        for owner in owners {
+            if callable
+                && owner != reference.scope
+                && owner
+                    .and_then(|scope| facts.symbols.get(scope as usize))
+                    .is_some_and(|symbol| symbol.kind() == SymKind::Class)
+            {
+                continue;
+            }
+            if !candidates.iter().any(|candidate| candidate.owner == owner) {
+                continue;
+            }
+            let chosen = candidates
+                .iter()
+                .filter(|candidate| candidate.owner == owner)
+                .filter(|candidate| {
+                    if candidate.type_only {
+                        reference.kind == facts::RefKind::Type
+                    } else {
+                        candidate
+                            .range
+                            .as_ref()
+                            .is_some_and(|range| range.contains(&reference.byte))
+                            || candidate
+                                .after_try
+                                .as_ref()
+                                .is_some_and(|range| range.contains(&reference.byte))
+                            || (reference.kind == facts::RefKind::Call
+                                && candidate
+                                    .optional_try
+                                    .as_ref()
+                                    .is_some_and(|range| range.contains(&reference.byte)))
+                            || (candidate.direct
+                                && owner.is_none()
+                                && (callable || candidate.line <= reference.line))
+                    }
+                })
+                .max_by_key(|candidate| candidate.line);
+            let Some(chosen) = chosen else {
+                return Some(Outcome::Ambiguous);
+            };
+            if candidates
+                .iter()
+                .filter(|candidate| candidate.owner == owner && candidate.line == chosen.line)
+                .count()
+                != 1
+                || candidates.iter().any(|candidate| {
+                    candidate.owner == owner
+                        && candidate.line > chosen.line
+                        && (callable && owner.is_none() || candidate.line <= reference.line)
+                })
+            {
+                return Some(Outcome::Ambiguous);
+            }
+            let Some(target) = chosen.target.as_ref() else {
+                return Some(Outcome::Ambiguous);
+            };
+            let optional = chosen
+                .optional_try
+                .as_ref()
+                .is_some_and(|range| range.contains(&reference.byte))
+                && !chosen
+                    .range
+                    .as_ref()
+                    .is_some_and(|range| range.contains(&reference.byte))
+                && !chosen
+                    .after_try
+                    .as_ref()
+                    .is_some_and(|range| range.contains(&reference.byte));
+            let inferred = optional || chosen.redefined;
+            if reference.qualifier.is_some() {
+                if chosen.direct && imports.names.get(head) == Some(target) {
+                    return None;
+                }
+                let mut local = Imports::default();
+                local.names.clone_from(&imports.names);
+                local.globs.clone_from(&imports.globs);
+                local.modules.clone_from(&imports.modules);
+                local.names.insert(head.to_owned(), target.clone());
+                let outcome = match reference.kind {
+                    facts::RefKind::Value => self.resolve_value(file, &local, reference),
+                    facts::RefKind::Inherit => self.resolve_supertype(file, &local, reference),
+                    _ => self.resolve_ref(file, &local, reference),
+                };
+                return Some(if inferred {
+                    match outcome {
+                        Outcome::Targets(targets, _) => Outcome::Targets(
+                            targets
+                                .into_iter()
+                                .map(|(target, _)| (target, Confidence::Inferred))
+                                .collect(),
+                            Confidence::Inferred,
+                        ),
+                        other => other,
+                    }
+                } else {
+                    outcome
+                });
+            }
+            return Some(match target {
+                Target::Symbols(symbols) => {
+                    let selected: Ids = symbols
+                        .iter()
+                        .copied()
+                        .filter(|&index| {
+                            let kind = self.symbols[index as usize].kind;
+                            match reference.kind {
+                                facts::RefKind::Type | facts::RefKind::Inherit => kind.is_type(),
+                                facts::RefKind::Value => {
+                                    kind.is_callable()
+                                        || kind.is_type()
+                                        || matches!(kind, SymKind::Const | SymKind::Var)
+                                }
+                                _ => kind.is_callable() || kind.is_type(),
+                            }
+                        })
+                        .collect();
+                    super::pick(
+                        &selected,
+                        if inferred {
+                            Confidence::Inferred
+                        } else {
+                            Confidence::Exact
+                        },
+                    )
+                }
+                Target::Module(_) | Target::External(_) => Outcome::External,
+            });
+        }
+        Some(Outcome::Ambiguous)
     }
 
     /// Symbols a module offers as `name`: its own definitions, else names it imports itself
     /// (`__init__.py` and facade re-exports such as `from .install import claude_install`),
     /// followed through at most a few modules.
     fn python_exported(&self, module: u32, name: &str, depth: usize) -> Ids {
-        let own: Ids = self
+        let mut own: Ids = self
             .module_symbol(module, name, None)
             .into_iter()
             .filter(|&symbol| self.symbols[symbol as usize].kind != SymKind::Mod)
             .collect();
-        if !own.is_empty() || depth >= MAX_REEXPORT_DEPTH {
+        if own.len() > 1 {
+            let file = self.symbols[own[0] as usize].file;
+            let direct = self.input.facts[file as usize]
+                .as_ref()
+                .is_some_and(|facts| {
+                    own.iter().all(|symbol| {
+                        let item = &self.symbols[*symbol as usize];
+                        item.file == file
+                            && item.kind == SymKind::Fn
+                            && symbol
+                                .checked_sub(self.base[file as usize])
+                                .and_then(|local| {
+                                    facts.source_identity(
+                                        SourceIdentityKind::PythonDirectDefinition,
+                                        local,
+                                    )
+                                })
+                                == Some("direct")
+                    })
+                });
+            if direct
+                && let Some(&last) = own.iter().max_by_key(|id| self.symbols[**id as usize].line)
+            {
+                let line = self.symbols[last as usize].line;
+                if own
+                    .iter()
+                    .filter(|id| self.symbols[**id as usize].line == line)
+                    .count()
+                    == 1
+                {
+                    own.clear();
+                    own.push(last);
+                }
+            }
+        }
+        if depth >= MAX_REEXPORT_DEPTH {
             return own;
         }
         let current = self.modules.modules[module as usize].name.clone();
+        let mut exported = own.clone();
+        let mut uncertain = false;
         for (file, &file_module) in self.modules.file_module.iter().enumerate() {
             if file_module != module {
                 continue;
@@ -236,8 +609,12 @@ impl Index<'_> {
             let Some(facts) = self.input.facts[file].as_ref() else {
                 continue;
             };
+            uncertain |= facts.coverage != facts::Coverage::Complete;
             let is_package = self.input.files[file].path.ends_with("__init__.py");
-            for import in &facts.imports {
+            for (index, import) in facts.imports.iter().enumerate() {
+                if import.type_only {
+                    continue;
+                }
                 // `from .models import *` offers the public names of that module.
                 let star = import.names.iter().any(|imported| imported == "*");
                 let original =
@@ -250,20 +627,94 @@ impl Index<'_> {
                     } else {
                         continue;
                     };
+                // A function or class body binds its imports locally; its name is not a
+                // module export merely because the import appears in this file.
+                if facts.symbols.iter().any(|symbol| {
+                    matches!(
+                        symbol.kind(),
+                        SymKind::Fn | SymKind::Method | SymKind::Class
+                    ) && symbol.line <= import.line
+                        && import.line <= symbol.end_line
+                }) {
+                    continue;
+                }
+                if let [symbol] = own.as_slice() {
+                    let definition = &self.symbols[*symbol as usize];
+                    if definition.file as usize == file
+                        && definition.line > import.line
+                        && symbol.checked_sub(self.base[file]).and_then(|local| {
+                            facts.source_identity(SourceIdentityKind::PythonDirectDefinition, local)
+                        }) == Some("direct")
+                    {
+                        continue;
+                    }
+                }
+                let overwrites = u32::try_from(index).ok().and_then(|index| {
+                    facts.source_identity(SourceIdentityKind::PythonDirectImport, index)
+                }) == Some("direct")
+                    && facts
+                        .imports
+                        .iter()
+                        .filter(|other| {
+                            other.line == import.line
+                                && other.names.iter().any(|original| {
+                                    (original == "*" && !name.starts_with('_'))
+                                        || other.alias.as_deref().unwrap_or(original.as_str())
+                                            == name
+                                })
+                        })
+                        .count()
+                        == 1;
+                let replaces_own = own.is_empty()
+                    || (u32::try_from(index).ok().and_then(|index| {
+                        facts.source_identity(SourceIdentityKind::PythonImportNoModuleWrite, index)
+                    }) == Some("unwritten")
+                        && own.iter().all(|symbol| {
+                            let symbol = &self.symbols[*symbol as usize];
+                            symbol.file as usize == file && symbol.line < import.line
+                        }));
+                if overwrites && !star && replaces_own {
+                    exported.clear();
+                    uncertain = false;
+                }
                 let Some(source) = absolute(&import.spec, &current, is_package)
                     .and_then(|path| self.python_module(&path))
                 else {
+                    if star {
+                        continue;
+                    }
+                    uncertain = true;
                     continue;
                 };
-                if source != module {
-                    let found = self.python_exported(source, original, depth + 1);
-                    if !found.is_empty() {
-                        return found;
+                if source == module {
+                    if star {
+                        continue;
                     }
+                    uncertain = true;
+                    continue;
                 }
+                let found = self.python_exported(source, original, depth + 1);
+                if found.is_empty() {
+                    if star {
+                        continue;
+                    }
+                    uncertain = true;
+                    continue;
+                }
+                if overwrites && star && replaces_own {
+                    exported.clear();
+                    uncertain = false;
+                }
+                exported.extend(found);
             }
         }
-        Ids::new()
+        exported.sort_unstable();
+        exported.dedup();
+        if !uncertain && exported.len() == 1 {
+            exported
+        } else {
+            Ids::new()
+        }
     }
 
     fn python_module(&self, dotted: &str) -> Option<u32> {
@@ -377,6 +828,93 @@ impl<'a> Index<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn python_branch_imports_resolve_at_their_own_call_sites() {
+        use crate::domain::corpus::FileRecord;
+        use crate::domain::graph::{Confidence, EdgeKind};
+        use crate::domain::role::Role;
+
+        let sources = [
+            (
+                "app.py",
+                "def branches(flag):\n    if flag:\n        from left import left as call\n        call()\n    else:\n        from right import right as call\n        call()\n\ndef after_branch(flag):\n    if flag:\n        from left import left as call\n    else:\n        from right import right as call\n    call()\n\ndef repeated_import():\n    from api import repeated\n    repeated()\n\ndef conditional_import():\n    from conditional import disputed\n    disputed()\n",
+            ),
+            ("left.py", "def left(): pass\n"),
+            ("right.py", "def right(): pass\n"),
+            ("api.py", "def repeated(): pass\n\ndef repeated(): pass\n"),
+            (
+                "conditional.py",
+                "def disputed(): pass\nif flag:\n    def disputed(): pass\n",
+            ),
+        ];
+        let mut files = Vec::new();
+        let mut facts = Vec::new();
+        for (path, source) in sources {
+            let record = FileRecord {
+                path: path.to_owned(),
+                size: source.len() as u64,
+                mtime_ns: 0,
+                identity: None,
+                hash: 0,
+                role: Role::Src,
+                file_type: Some(FileType::Python),
+            };
+            facts.push(Some(Box::new(crate::extract::extract(
+                &record,
+                source.as_bytes(),
+            ))));
+            files.push(record);
+        }
+        let graph = super::super::build(&files, facts);
+        let mut calls: Vec<_> = graph
+            .edges
+            .iter()
+            .filter_map(|edge| {
+                let source = graph.symbols.get(edge.source as usize)?;
+                let target = graph.symbols.get(edge.target as usize)?;
+                (source.qualified == "app.branches" && edge.kind == EdgeKind::Calls)
+                    .then(|| (edge.line, target.qualified.to_string(), edge.confidence))
+            })
+            .collect();
+        calls.sort_unstable();
+        assert_eq!(
+            calls,
+            [
+                (4, "left.left".to_owned(), Confidence::Exact),
+                (7, "right.right".to_owned(), Confidence::Exact)
+            ]
+        );
+        assert!(!graph.edges.iter().any(|edge| {
+            graph
+                .symbols
+                .get(edge.source as usize)
+                .is_some_and(|symbol| {
+                    symbol.qualified == "app.after_branch"
+                        && edge.kind == EdgeKind::Calls
+                        && edge.confidence == Confidence::Exact
+                })
+        }));
+        let repeated: Vec<_> = graph
+            .edges
+            .iter()
+            .filter_map(|edge| {
+                let source = graph.symbols.get(edge.source as usize)?;
+                let target = graph.symbols.get(edge.target as usize)?;
+                (source.qualified == "app.repeated_import" && edge.kind == EdgeKind::Calls)
+                    .then_some((target.line, edge.confidence))
+            })
+            .collect();
+        assert_eq!(repeated, [(3, Confidence::Inferred)]);
+        assert!(!graph.edges.iter().any(|edge| {
+            graph
+                .symbols
+                .get(edge.source as usize)
+                .is_some_and(|symbol| symbol.qualified == "app.conditional_import")
+                && edge.kind == EdgeKind::Calls
+                && edge.confidence == Confidence::Exact
+        }));
+    }
 
     #[test]
     fn structural_protocol_requires_all_methods_with_matching_shapes() -> std::io::Result<()> {

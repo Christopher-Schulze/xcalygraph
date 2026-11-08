@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 145;
+pub const RESOLVE_VERSION: u32 = 146;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -144,6 +144,8 @@ struct Imports {
     inferred_files: Option<Box<Ids>>,
     /// Possible direct named targets; never used for type or receiver resolution.
     inferred_names: Option<Box<HashMap<String, (Ids, bool)>>>,
+    /// Python import candidates retain lexical ownership and visibility.
+    python_names: Option<Box<HashMap<String, Vec<python::PythonImport>>>>,
 }
 
 struct Resolved {
@@ -2015,7 +2017,42 @@ impl<'a> Index<'a> {
             let julia_builtin = local_reference.filter(|&index| {
                 self.file_type(file) == Some(FileType::Julia) && facts.is_julia_builtin_call(index)
             });
-            let mut outcome = if let Some(reference_index) = julia_builtin {
+            let python_shadowed = self.file_type(file) == Some(FileType::Python)
+                && local_reference.and_then(|index| {
+                    facts.source_identity(SourceIdentityKind::PythonShadowedImport, index)
+                }) == Some("shadowed");
+            let python_fallback = (self.file_type(file) == Some(FileType::Python))
+                .then(|| {
+                    local_reference.and_then(|index| {
+                        facts.source_identity(
+                            SourceIdentityKind::PythonCallableImportFallback,
+                            index,
+                        )
+                    })
+                })
+                .flatten()
+                .map(|identity| self.python_callable_import_fallback(facts, imports, identity));
+            let python_import = if python_fallback.is_some() {
+                python_fallback
+            } else if python_shadowed {
+                let receiver_bound = reference
+                    .qualifier
+                    .as_deref()
+                    .and_then(|qualifier| qualifier.split('.').next())
+                    .is_some_and(|head| {
+                        self.binding(file, reference.scope, head, reference.line, reference.byte)
+                            .is_some()
+                    });
+                (!receiver_bound).then_some(Outcome::Ambiguous)
+            } else {
+                (self.file_type(file) == Some(FileType::Python)
+                    && source_identity != Some("python-list-global"))
+                .then(|| self.python_import_reference(file, facts, imports, reference))
+                .flatten()
+            };
+            let mut outcome = if let Some(outcome) = python_import {
+                outcome
+            } else if let Some(reference_index) = julia_builtin {
                 self.resolve_julia_base_call(file, imports, facts, reference_index, reference)
             } else {
                 match reference.kind {

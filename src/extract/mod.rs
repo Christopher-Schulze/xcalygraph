@@ -40,7 +40,7 @@ use crate::domain::role::{self, Role};
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
 /// Rows of a CSV or TSV file that reach search.
 const CSV_INDEXED_ROWS: usize = 2000;
-const EXTRACTION_VERSION: u32 = 158;
+const EXTRACTION_VERSION: u32 = 159;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -200,6 +200,20 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
         .map(|(pack, language, query)| {
             let post_parse: Option<engine::PostParse> =
                 capture_sql.then_some(sql::post_parse as engine::PostParse);
+            #[cfg(feature = "lang-python")]
+            let post_parse = if pack.file_type == FileType::Python {
+                let hook: engine::PostParse = if capture_sql {
+                    |source, root, parsed, capture_identities| {
+                        lang::python::post_parse(source, root, parsed, capture_identities);
+                        sql::post_parse(source, root, parsed, capture_identities);
+                    }
+                } else {
+                    lang::python::post_parse
+                };
+                Some(hook)
+            } else {
+                post_parse
+            };
             #[cfg(feature = "lang-javascript")]
             let post_parse =
                 if pack.file_type == FileType::JavaScript && !record.path.ends_with(".mjs") {

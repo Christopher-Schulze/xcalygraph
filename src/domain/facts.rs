@@ -157,7 +157,7 @@ pub struct Import {
     pub line: u32,
     /// `pub use` and similar re-exports.
     pub reexport: bool,
-    /// An explicit TypeScript type-only import or re-export.
+    /// A TypeScript type-only import or source-proven Python TYPE_CHECKING import.
     pub type_only: bool,
 }
 
@@ -315,6 +315,22 @@ pub enum SourceIdentityKind {
     CommonJsExport,
     /// Import-indexed proof of an unshadowed require and stable top-level module binding.
     CommonJsRequire,
+    /// Import-indexed proof of a direct Python module-level import statement.
+    PythonDirectImport,
+    /// Import-indexed Python lexical owner and source range after the import.
+    PythonImportScope,
+    /// Reference-indexed proof that a Python import name is shadowed or rebound.
+    PythonShadowedImport,
+    /// Import-indexed continuation after a try whose exception handlers always exit.
+    PythonImportAfterTry,
+    /// Import-indexed continuation when each import failure binds the same name to None.
+    PythonImportOptionalTry,
+    /// Import-indexed proof that no non-definition module write targets its binding.
+    PythonImportNoModuleWrite,
+    /// Reference-indexed possible import and callable fallback, as two import indices.
+    PythonCallableImportFallback,
+    /// Symbol-indexed proof of a direct, unchanged Python module function definition.
+    PythonDirectDefinition,
 }
 
 impl SourceIdentityKind {
@@ -350,9 +366,37 @@ impl SourceIdentityKind {
             }
             value if value == Self::CommonJsExport as u8 => Some(Self::CommonJsExport),
             value if value == Self::CommonJsRequire as u8 => Some(Self::CommonJsRequire),
+            value if value == Self::PythonDirectImport as u8 => Some(Self::PythonDirectImport),
+            value if value == Self::PythonImportScope as u8 => Some(Self::PythonImportScope),
+            value if value == Self::PythonShadowedImport as u8 => Some(Self::PythonShadowedImport),
+            value if value == Self::PythonImportAfterTry as u8 => Some(Self::PythonImportAfterTry),
+            value if value == Self::PythonImportOptionalTry as u8 => {
+                Some(Self::PythonImportOptionalTry)
+            }
+            value if value == Self::PythonImportNoModuleWrite as u8 => {
+                Some(Self::PythonImportNoModuleWrite)
+            }
+            value if value == Self::PythonCallableImportFallback as u8 => {
+                Some(Self::PythonCallableImportFallback)
+            }
+            value if value == Self::PythonDirectDefinition as u8 => {
+                Some(Self::PythonDirectDefinition)
+            }
             _ => None,
         }
     }
+}
+
+/// Decodes a Python import's enclosing symbol and its containing block's remaining byte range.
+pub fn python_import_scope(identity: &str) -> Option<(Option<u32>, std::ops::Range<u32>)> {
+    let mut fields = identity.split(':');
+    let owner = fields.next()?.parse::<u32>().ok()?.checked_sub(1);
+    let start = fields.next()?.parse::<u32>().ok()?;
+    let end = fields.next()?.parse::<u32>().ok()?;
+    if fields.next().is_some() || start >= end {
+        return None;
+    }
+    Some((owner, start..end))
 }
 
 /// Source-backed `tsconfig.json` options needed to prove script membership and module scope.
