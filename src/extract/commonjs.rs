@@ -394,7 +394,7 @@ fn local_export(value: Node, source: &[u8], root: Node, parsed: &Parsed) -> Opti
         .iter()
         .filter(|symbol| symbol.parent.is_none() && symbol.name.as_ref() == name);
     let definition = definitions.next()?;
-    if definitions.next().is_some() || definition.kind() != SymKind::Fn {
+    if definitions.next().is_some() || !matches!(definition.kind(), SymKind::Fn | SymKind::Class) {
         return None;
     }
     for node in nodes(root) {

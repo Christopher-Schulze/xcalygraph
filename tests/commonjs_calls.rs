@@ -310,3 +310,84 @@ fn commonjs_callable_exports_keep_their_identity_and_namespace() -> Result<(), B
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+fn commonjs_class_exports_require_constructor_syntax() -> Result<(), Box<dyn Error>> {
+    let root = support::exclusive_dir("commonjs-class-constructor")?;
+    for (name, provider, main, expected) in [
+        (
+            "constructor",
+            "class Service {}\nmodule.exports = Service;\n",
+            "const renamed = require('./provider');\nfunction caller() { new renamed(); }\n",
+            true,
+        ),
+        (
+            "bare-call",
+            "class Service {}\nmodule.exports = Service;\n",
+            "const renamed = require('./provider');\nfunction caller() { renamed(); }\n",
+            false,
+        ),
+        (
+            "nested-constructor",
+            "class Service {}\nmodule.exports = Service;\n",
+            "const renamed = require('./provider');\nfunction caller() { return [1].map(() => new renamed()); }\n",
+            true,
+        ),
+        (
+            "function-constructor",
+            "function Service() {}\nmodule.exports = Service;\n",
+            "const renamed = require('./provider');\nfunction caller() { new renamed(); }\n",
+            true,
+        ),
+        (
+            "shadowed-alias",
+            "class Service {}\nmodule.exports = Service;\n",
+            "const renamed = require('./provider');\nfunction caller(renamed) { new renamed(); }\n",
+            false,
+        ),
+        (
+            "reassigned-export",
+            "class Service {}\nmodule.exports = Service;\nmodule.exports = other;\n",
+            "const renamed = require('./provider');\nfunction caller() { new renamed(); }\n",
+            false,
+        ),
+        (
+            "conditional-export",
+            "class Service {}\nif (enabled) module.exports = Service;\n",
+            "const renamed = require('./provider');\nfunction caller() { new renamed(); }\n",
+            false,
+        ),
+        (
+            "shadowed-module",
+            "const module = {};\nclass Service {}\nmodule.exports = Service;\n",
+            "const renamed = require('./provider');\nfunction caller() { new renamed(); }\n",
+            false,
+        ),
+        (
+            "forwarded",
+            "module.exports = require('./leaf');\n",
+            "const renamed = require('./provider');\nfunction caller() { new renamed(); }\n",
+            true,
+        ),
+    ] {
+        let directory = root.join(name);
+        fs::create_dir(&directory)?;
+        fs::write(directory.join("provider.js"), provider)?;
+        fs::write(directory.join("main.js"), main)?;
+        if name == "forwarded" {
+            fs::write(
+                directory.join("leaf.js"),
+                "class Service {}\nmodule.exports = Service;\n",
+            )?;
+        }
+        let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &root)
+            .args(["show", "caller", "--exact", "-C"])
+            .arg(&directory)
+            .output()?;
+        let text = String::from_utf8(output.stdout)?;
+        assert!(output.status.success(), "{name}: {text}");
+        assert_eq!(text.contains("> Service "), expected, "{name}: {text}");
+    }
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

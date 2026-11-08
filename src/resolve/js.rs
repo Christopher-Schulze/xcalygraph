@@ -573,7 +573,7 @@ impl Index<'_> {
     }
 
     /// Resolve only explicit CommonJS callable evidence; namespace member lookup stays separate.
-    pub(super) fn commonjs_callable(&self, module: u32, depth: usize) -> Ids {
+    pub(super) fn commonjs_callable(&self, module: u32, depth: usize, construct: bool) -> Ids {
         if depth >= 8 {
             return Ids::new();
         }
@@ -614,7 +614,8 @@ impl Index<'_> {
             if let Some(name) = identity.strip_prefix("local:") {
                 let targets = self.module_symbol(module, name, None);
                 return if targets.len() == 1
-                    && self.symbols[targets[0] as usize].kind == SymKind::Fn
+                    && (self.symbols[targets[0] as usize].kind == SymKind::Fn
+                        || (construct && self.symbols[targets[0] as usize].kind == SymKind::Class))
                 {
                     targets
                 } else {
@@ -622,9 +623,9 @@ impl Index<'_> {
                 };
             }
             if let Some(spec) = identity.strip_prefix("module:") {
-                return self
-                    .js_module(file, spec)
-                    .map_or_else(Ids::new, |target| self.commonjs_callable(target, depth + 1));
+                return self.js_module(file, spec).map_or_else(Ids::new, |target| {
+                    self.commonjs_callable(target, depth + 1, construct)
+                });
             }
         }
         Ids::new()

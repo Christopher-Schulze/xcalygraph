@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 141;
+pub const RESOLVE_VERSION: u32 = 142;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -3025,7 +3025,7 @@ impl<'a> Index<'a> {
             };
         }
         match reference.qualifier.as_deref() {
-            None => self.resolve_plain(file, imports, reference, wants_type, false),
+            None => self.resolve_plain(file, imports, reference, wants_type, false, false),
             Some(qualifier) => self.resolve_qualified(file, imports, reference, qualifier),
         }
     }
@@ -3037,6 +3037,16 @@ impl<'a> Index<'a> {
         reference: &Ref,
         identity: &str,
     ) -> Outcome {
+        if identity == "js:new" {
+            if self.file_type(file) != Some(FileType::JavaScript) || reference.kind != RefKind::Call
+            {
+                return Outcome::Unresolved;
+            }
+            return match reference.qualifier.as_deref() {
+                None => self.resolve_plain(file, imports, reference, false, false, true),
+                Some(qualifier) => self.resolve_qualified(file, imports, reference, qualifier),
+            };
+        }
         if let Some(value) = identity.strip_prefix("js-local:") {
             let Ok(index) = value.parse::<u32>() else {
                 return Outcome::Unresolved;
@@ -3111,7 +3121,7 @@ impl<'a> Index<'a> {
             && identity == "rust:macro"
             && lookup.qualifier.is_none()
         {
-            self.resolve_plain(file, imports, &lookup, false, true)
+            self.resolve_plain(file, imports, &lookup, false, true, false)
         } else {
             self.resolve_ref(file, imports, &lookup)
         };
@@ -3199,6 +3209,7 @@ impl<'a> Index<'a> {
         reference: &Ref,
         wants_type: bool,
         wants_macro: bool,
+        construct: bool,
     ) -> Outcome {
         let name = reference.name.as_str();
         if !wants_type
@@ -3410,7 +3421,7 @@ impl<'a> Index<'a> {
                         && self.file_type(file) == Some(FileType::JavaScript)
                         && self.commonjs_require(file, name) =>
                 {
-                    let targets = self.commonjs_callable(*module, 0);
+                    let targets = self.commonjs_callable(*module, 0, construct);
                     if targets.is_empty() {
                         Outcome::External
                     } else {
@@ -3619,7 +3630,7 @@ impl<'a> Index<'a> {
                     None => Outcome::Unresolved,
                 }
             }
-            None => self.resolve_plain(file, imports, reference, false, false),
+            None => self.resolve_plain(file, imports, reference, false, false, false),
         };
         match outcome {
             Outcome::Targets(targets, Confidence::Exact) => {

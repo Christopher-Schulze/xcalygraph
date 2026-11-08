@@ -1291,7 +1291,9 @@ fn assemble(assembly: Assembly) -> Parsed {
             let mut ancestor = root.named_descendant_for_byte_range(entry.position, end);
             while let Some(node) = ancestor {
                 if let Some(definition) = definitions.get(&(node.id(), reference.name.as_str())) {
-                    if let Some(index) = definition.filter(|_| entry.identity.is_none()) {
+                    if let Some(index) = definition.filter(|_| {
+                        entry.identity.is_none() || entry.identity.as_deref() == Some("js:new")
+                    }) {
                         entry.identity = Some(format!("js-local:{index}"));
                         return true;
                     }
@@ -2096,6 +2098,16 @@ fn source_reference_identity(
     source: &[u8],
     arity: u8,
 ) -> (String, Option<String>) {
+    if kind == Some(RefKind::Call)
+        && node.kind() == "new_expression"
+        && path.rsplit('.').next().is_some_and(|extension| {
+            ["js", "jsx", "mjs", "cjs"]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        })
+    {
+        return (name, Some("js:new".to_owned()));
+    }
     if path.ends_with(".rs") && kind == Some(RefKind::Call) {
         let identity = if node.kind() == "macro_invocation" {
             "rust:macro"

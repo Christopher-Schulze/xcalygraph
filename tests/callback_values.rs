@@ -231,7 +231,7 @@ fn callback_inner_function_can_shadow_a_parameter() -> Result<(), Box<dyn Error>
     fs::create_dir(&root)?;
     fs::write(
         root.join("callbacks.js"),
-        "function middleware() {}\nregister(function(middleware) {\n function middleware() {}\n function inside() { middleware(); }\n inside();\n});\nregister(middleware);\n",
+        "function middleware() {}\nregister(function(middleware) {\n function middleware() {}\n function inside() { middleware(); }\n function inside2() { new middleware(); }\n inside(); inside2();\n});\nregister(middleware);\n",
     )?;
     let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
         .args(["show", "callbacks.js:3", "--json", "--exact", "-C"])
@@ -244,6 +244,12 @@ fn callback_inner_function_can_shadow_a_parameter() -> Result<(), Box<dyn Error>
     assert!(
         text.lines().any(|line| line.contains("\"rel\":\"in\"")
             && line.contains("\"line\":4,")
+            && line.contains("\"kind\":\"calls\"")),
+        "{text}"
+    );
+    assert!(
+        text.lines().any(|line| line.contains("\"rel\":\"in\"")
+            && line.contains("\"line\":5,")
             && line.contains("\"kind\":\"calls\"")),
         "{text}"
     );
