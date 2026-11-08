@@ -17,10 +17,31 @@ pub(super) enum ChainFailure {
     External,
 }
 
+/// Steps of a tagged chain qualifier payload: head-first `name`, `name()` and trailing `?`
+/// markers joined by `,`; `None` for a malformed payload.
+fn tagged_steps(payload: &str) -> Option<smallvec::SmallVec<[Step<'_>; 4]>> {
+    let mut steps = smallvec::SmallVec::new();
+    for part in payload.split(',') {
+        let name = part.trim_end_matches('?');
+        let tries = part.len() - name.len();
+        let (name, call) = name
+            .strip_suffix("()")
+            .map_or((name, false), |base| (base, true));
+        if name.is_empty() {
+            return None;
+        }
+        steps.push(Step { name, call, tries });
+    }
+    (!steps.is_empty()).then_some(steps)
+}
+
 /// Splits a receiver expression at its top-level member accesses; `None` for anything else, such
 /// as an index or an operator. Rust try operators are retained; TypeScript's non-null assertion
 /// and optional access do not change the recorded type.
 pub(super) fn receiver_steps(qualifier: &str) -> Option<smallvec::SmallVec<[Step<'_>; 4]>> {
+    if let Some(payload) = qualifier.strip_prefix(crate::domain::facts::CHAIN_QUALIFIER_PREFIX) {
+        return tagged_steps(payload);
+    }
     let text = qualifier.trim();
     let text = text.strip_prefix("new ").map_or(text, str::trim_start);
     let bytes = text.as_bytes();
@@ -352,5 +373,30 @@ mod tests {
         for rejected in ["a + b", "(a).b", "f(", "", "foo().", "foo() .  ", "a."] {
             assert_eq!(names(rejected), None, "{rejected}");
         }
+    }
+
+    #[test]
+    fn tagged_chain_payload_splits_at_commas() {
+        let tagged = format!(
+            "{}Builder::new(),step0(),middle?,finish",
+            crate::domain::facts::CHAIN_QUALIFIER_PREFIX
+        );
+        let steps = receiver_steps(&tagged).unwrap_or_default();
+        assert!(!steps.is_empty(), "tagged steps parse");
+        let names: Vec<(&str, bool, usize)> = steps
+            .iter()
+            .map(|step| (step.name, step.call, step.tries))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("Builder::new", true, 0),
+                ("step0", true, 0),
+                ("middle", false, 1),
+                ("finish", false, 0),
+            ]
+        );
+        let bad = format!("{}a,,b", crate::domain::facts::CHAIN_QUALIFIER_PREFIX);
+        assert_eq!(receiver_steps(&bad), None);
     }
 }

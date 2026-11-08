@@ -57,6 +57,14 @@ def lua(n):
     lines += [f"local function f{i}(a)\n  local x = m{i % n}.run(a)\n  if x > 2 then x = x - 1 end\n  return f{max(i - 1, 0)}(x)\nend" for i in range(n * 10)]
     return "\n".join(lines + ["return { f0 = f0 }"])
 
+def rust_chains(links):
+    lines = ["struct B;", "impl B {", "    fn new() -> B { B }",
+             "    fn s(self, x: u32) -> B { let _ = x; B }",
+             "    fn done(self) -> u32 { 0 }", "}", "fn run(x: u32) -> u32 {"]
+    for c in range(20):
+        lines.append("    let y%d = B::new()%s.done();" % (c, ".s(x)" * links))
+    return "\n".join(lines + ["    y0", "}"])
+
 for name, extension, generate in [
     ("javascript", "js", javascript), ("typescript", "ts", typescript), ("python", "py", python),
     ("rust", "rs", rust), ("go", "go", go), ("lua", "lua", lua),
@@ -65,6 +73,10 @@ for name, extension, generate in [
         root = work / f"{name}-{scale}"
         root.mkdir()
         (root / f"main.{extension}").write_text(generate(size) + "\n")
+for scale, links in (("small", 20), ("large", 80)):
+    root = work / f"rust-chains-{scale}"
+    root.mkdir()
+    (root / "main.rs").write_text(rust_chains(links) + "\n")
 PYTHON
 
 # Retired instructions of one fresh build, empty when the platform does not report them.
@@ -75,7 +87,7 @@ measure() {
 }
 
 failed=0
-for language in javascript typescript python rust go lua; do
+for language in javascript typescript python rust go lua rust-chains; do
   small="$(measure "${work}/${language}-small")"
   large="$(measure "${work}/${language}-large")"
   if [[ -z "${small}" || -z "${large}" ]]; then

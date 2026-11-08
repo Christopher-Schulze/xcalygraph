@@ -234,6 +234,14 @@ pub const NO_BYTE: u32 = u32::MAX;
 /// prefixed fields: the declared logical module suffix and the inline path context.
 pub const RUST_MODULE_PATH_REF_PREFIX: &str = "xcalygraph:rust-module-path:";
 
+/// Qualifier source-text budget in characters; longer member-call chains are recorded as steps.
+pub const QUALIFIER_TEXT_BUDGET: usize = 80;
+
+/// Internal qualifier tag for member-call chains that exceed [`QUALIFIER_TEXT_BUDGET`].
+/// The payload is head-first steps joined by `,`: `name`, `name()` for calls and trailing
+/// `?` per try operator.
+pub const CHAIN_QUALIFIER_PREFIX: &str = "xcalygraph:chain:";
+
 pub fn rust_module_path_ref_qualifier(module_path: &str, inline_path: &str) -> String {
     let mut qualifier = String::with_capacity(
         RUST_MODULE_PATH_REF_PREFIX.len()

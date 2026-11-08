@@ -629,6 +629,152 @@ fn awaited_call(source: &[u8], start: usize) -> bool {
     })
 }
 
+/// Longest member-call chain recorded as steps; longer chains keep clipped source text.
+const CHAIN_STEP_BUDGET: usize = 32;
+
+/// Member-call node shapes of one language: the call node with its callee field, the member
+/// node with its object and member fields, and the generic-call wrapper with its callee field.
+struct ChainKinds {
+    call: &'static str,
+    callee: &'static str,
+    member: &'static str,
+    object: &'static str,
+    name: &'static str,
+    generic: &'static str,
+}
+
+fn chain_kinds(path: &str) -> Option<ChainKinds> {
+    if path.ends_with(".rs") {
+        Some(ChainKinds {
+            call: "call_expression",
+            callee: "function",
+            member: "field_expression",
+            object: "value",
+            name: "field",
+            generic: "generic_function",
+        })
+    } else if super::bindings::javascript(path) {
+        Some(ChainKinds {
+            call: "call_expression",
+            callee: "function",
+            member: "member_expression",
+            object: "object",
+            name: "property",
+            generic: "generic_function",
+        })
+    } else if path.ends_with(".py") {
+        Some(ChainKinds {
+            call: "call",
+            callee: "function",
+            member: "attribute",
+            object: "object",
+            name: "attribute",
+            generic: "generic_function",
+        })
+    } else if path.ends_with(".go") {
+        Some(ChainKinds {
+            call: "call_expression",
+            callee: "function",
+            member: "selector_expression",
+            object: "operand",
+            name: "field",
+            generic: "generic_function",
+        })
+    } else {
+        None
+    }
+}
+
+/// Whether `text` is a bare chain step (identifier or `::` path): anything else would need the
+/// source-text form with its quoting and bracket rules.
+fn is_chain_step(text: &str) -> bool {
+    !text.is_empty()
+        && text.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(byte, b'_' | b'#' | b'$' | b':')
+                || byte >= 0x80
+        })
+}
+
+/// Tagged chain steps of `qualifier`, head first, or `None` when the qualifier is no pure
+/// member-call chain within budget: try operators only wrap Rust steps, anything else (index,
+/// operator, macro, over-long chain) keeps the clipped source-text form.
+fn tagged_chain(path: &str, qualifier: Node, source: &[u8]) -> Option<String> {
+    let kinds = chain_kinds(path)?;
+    let rust = path.ends_with(".rs");
+    // (name, call, tries), tail first.
+    let mut steps: Vec<(String, bool, usize)> = Vec::new();
+    let mut tries = 0usize;
+    let mut node = qualifier;
+    loop {
+        if steps.len() >= CHAIN_STEP_BUDGET {
+            return None;
+        }
+        let kind = node.kind();
+        if kind == kinds.call {
+            let mut function = node.child_by_field_name(kinds.callee)?;
+            if function.kind() == kinds.generic {
+                function = function.child_by_field_name(kinds.callee)?;
+            }
+            if function.kind() == kinds.member {
+                let member = function.child_by_field_name(kinds.name)?;
+                steps.push((
+                    member.utf8_text(source).unwrap_or_default().into(),
+                    true,
+                    tries,
+                ));
+                tries = 0;
+                node = function.child_by_field_name(kinds.object)?;
+            } else {
+                steps.push((
+                    function.utf8_text(source).unwrap_or_default().into(),
+                    true,
+                    tries,
+                ));
+                break;
+            }
+        } else if kind == kinds.member {
+            let member = node.child_by_field_name(kinds.name)?;
+            steps.push((
+                member.utf8_text(source).unwrap_or_default().into(),
+                false,
+                tries,
+            ));
+            tries = 0;
+            node = node.child_by_field_name(kinds.object)?;
+        } else if rust && kind == "try_expression" {
+            tries += 1;
+            node = node.named_child(0)?;
+        } else if rust && kind == "await_expression" {
+            node = node.named_child(0)?;
+        } else {
+            steps.push((
+                node.utf8_text(source).unwrap_or_default().into(),
+                false,
+                tries,
+            ));
+            break;
+        }
+    }
+    if steps.len() < 2 || steps.iter().any(|(name, _, _)| !is_chain_step(name)) {
+        return None;
+    }
+    let mut tagged = String::from(facts::CHAIN_QUALIFIER_PREFIX);
+    for (index, (name, call, tries)) in steps.iter().rev().enumerate() {
+        if index > 0 {
+            tagged.push(',');
+        }
+        tagged.push_str(name);
+        if *call {
+            tagged.push_str("()");
+        }
+        for _ in 0..*tries {
+            tagged.push('?');
+        }
+    }
+    Some(tagged)
+}
+
 /// `(#parent? @capture "kind" "grandparent kind"...)`: a pattern rooted at the declaration with
 /// this check costs a query far less than one rooted at its container, whose open match
 /// follows every child of every container (`scripts/benchmarks/measure-query-cost.sh`).
@@ -960,7 +1106,16 @@ fn collect(
                 } else {
                     qualifier_text
                 };
-                reference.qualifier = Some(facts::clip_space(&qualifier_text, 80).into());
+                let tagged = (qualifier_text.chars().count() > facts::QUALIFIER_TEXT_BUDGET)
+                    .then(|| tagged_chain(path, qualifier, source))
+                    .flatten();
+                reference.qualifier = Some(
+                    tagged
+                        .unwrap_or_else(|| {
+                            facts::clip_space(&qualifier_text, facts::QUALIFIER_TEXT_BUDGET)
+                        })
+                        .into(),
+                );
             }
             if path.ends_with(".jl")
                 && kind == Some(RefKind::Call)
