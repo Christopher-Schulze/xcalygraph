@@ -350,6 +350,9 @@ fn collect(
     // Local variables and parameters (`@local`): a bare value reference of that name in the same
     // scope reads the local, not a method (Ruby `x = 1; x`).
     let mut locals: Vec<LocalCapture> = Vec::new();
+    let mut python_list_locals: Vec<(usize, String)> = Vec::new();
+    let mut python_list_lambdas: Vec<(usize, usize, String)> = Vec::new();
+    let mut python_list_globals: Vec<(usize, String)> = Vec::new();
     let mut cursor = QueryCursor::new();
     cursor.set_match_limit(4096);
     let mut matches = cursor.matches(query, root, source);
@@ -363,6 +366,80 @@ fn collect(
             .filter(|capture| names[capture.index as usize] == "assigned")
         {
             assigned.push(text(capture.node).to_owned());
+        }
+        for capture in captures
+            .iter()
+            .filter(|capture| names[capture.index as usize] == "python_list_global")
+        {
+            python_list_globals.push((capture.node.start_byte(), text(capture.node).to_owned()));
+        }
+        for capture in captures
+            .iter()
+            .filter(|capture| names[capture.index as usize] == "python_list_local")
+        {
+            let mut ancestor = capture.node.parent();
+            let mut lambda_parameter = false;
+            while let Some(node) = ancestor {
+                if node.kind() == "lambda_parameters" {
+                    lambda_parameter = true;
+                    break;
+                }
+                if matches!(node.kind(), "function_definition" | "lambda" | "module") {
+                    break;
+                }
+                ancestor = node.parent();
+            }
+            if lambda_parameter {
+                continue;
+            }
+            let mut walk = capture.node.walk();
+            'walk: loop {
+                let node = walk.node();
+                if node.kind() == "identifier" {
+                    python_list_locals.push((node.start_byte(), text(node).to_owned()));
+                }
+                if walk.goto_first_child() {
+                    continue;
+                }
+                loop {
+                    if walk.node().id() == capture.node.id() {
+                        break 'walk;
+                    }
+                    if walk.goto_next_sibling() {
+                        break;
+                    }
+                    if !walk.goto_parent() {
+                        break 'walk;
+                    }
+                }
+            }
+        }
+        for capture in captures
+            .iter()
+            .filter(|capture| names[capture.index as usize] == "python_list_lambda")
+        {
+            let mut parent = capture.node.parent();
+            while let Some(node) = parent {
+                if node.kind() == "lambda" {
+                    let name = if capture.node.kind() == "identifier" {
+                        Some(capture.node)
+                    } else {
+                        capture.node.named_child(0)
+                    };
+                    if let (Some(name), Some(body)) = (
+                        name.filter(|name| name.kind() == "identifier"),
+                        node.child_by_field_name("body"),
+                    ) {
+                        python_list_lambdas.push((
+                            body.start_byte(),
+                            body.end_byte(),
+                            text(name).to_owned(),
+                        ));
+                    }
+                    break;
+                }
+                parent = node.parent();
+            }
         }
         for capture in captures
             .iter()
@@ -780,6 +857,9 @@ fn collect(
         fields,
         envs,
         locals,
+        python_list_locals,
+        python_list_lambdas,
+        python_list_globals,
     });
     #[cfg(feature = "lang-go")]
     if path.ends_with(".go") {
@@ -888,6 +968,9 @@ struct Assembly<'a, 'tree> {
     fields: FastMap<usize, RawField>,
     envs: FastMap<usize, (String, usize, u32)>,
     locals: Vec<LocalCapture>,
+    python_list_locals: Vec<(usize, String)>,
+    python_list_lambdas: Vec<(usize, usize, String)>,
+    python_list_globals: Vec<(usize, String)>,
 }
 
 fn assemble(assembly: Assembly) -> Parsed {
@@ -907,6 +990,9 @@ fn assemble(assembly: Assembly) -> Parsed {
         fields,
         envs,
         locals,
+        python_list_locals,
+        python_list_lambdas,
+        python_list_globals,
     } = assembly;
     let text = |node: Node| node.utf8_text(source).unwrap_or_default();
     let mut defs: Vec<RawDef> = defs
@@ -1170,12 +1256,47 @@ fn assemble(assembly: Assembly) -> Parsed {
             } else {
                 Vec::new()
             };
+            let mut scope = scope_of(raw.position);
+            if path.ends_with(".py")
+                && kind == RefKind::Value
+                && let Some(current) = scope
+                && let Some(list) = root
+                    .named_descendant_for_byte_range(raw.position, raw.position + 1)
+                    .and_then(|node| node.parent())
+                    .filter(|parent| parent.kind() == "list")
+            {
+                let decorator = defs[current as usize]
+                    .node
+                    .is_some_and(|node| raw.position < node.start_byte());
+                let mut ancestor = list.parent();
+                let mut default = false;
+                while let Some(node) = ancestor {
+                    if matches!(node.kind(), "default_parameter" | "typed_default_parameter")
+                        && node.child_by_field_name("value").is_some_and(|value| {
+                            value.start_byte() <= raw.position && raw.position < value.end_byte()
+                        })
+                        && node
+                            .parent()
+                            .is_some_and(|parent| parent.kind() == "parameters")
+                    {
+                        default = true;
+                        break;
+                    }
+                    if matches!(node.kind(), "function_definition" | "lambda" | "module") {
+                        break;
+                    }
+                    ancestor = node.parent();
+                }
+                if decorator || default {
+                    scope = symbols[current as usize].parent;
+                }
+            }
             Some(AssembledRef {
                 reference: Ref {
                     kind,
                     name: raw.name,
                     qualifier: raw.qualifier,
-                    scope: scope_of(raw.position),
+                    scope,
                     line: raw.line,
                     byte: u32::try_from(raw.position).unwrap_or(facts::NO_BYTE),
                     arity: raw.arity,
@@ -1187,6 +1308,83 @@ fn assemble(assembly: Assembly) -> Parsed {
             })
         })
         .collect();
+    if !python_list_locals.is_empty()
+        || !python_list_lambdas.is_empty()
+        || !python_list_globals.is_empty()
+    {
+        let shadowed: HashSet<(Option<u32>, &str)> = python_list_locals
+            .iter()
+            .map(|(position, name)| (scope_of(*position), name.as_str()))
+            .collect();
+        let globals: HashSet<(Option<u32>, &str)> = python_list_globals
+            .iter()
+            .map(|(position, name)| (scope_of(*position), name.as_str()))
+            .collect();
+        let mut definitions: FastMap<(Option<u32>, &str), u32> = FastMap::default();
+        let mut lambdas: FastMap<&str, Vec<(usize, usize)>> = FastMap::default();
+        for (start, end, name) in &python_list_lambdas {
+            lambdas
+                .entry(name.as_str())
+                .or_default()
+                .push((*start, *end));
+        }
+        for spans in lambdas.values_mut() {
+            spans.sort_unstable();
+            let mut end = 0;
+            for span in spans {
+                end = end.max(span.1);
+                span.1 = end;
+            }
+        }
+        for symbol in &symbols {
+            if symbol.kind == Some(SymKind::Fn) {
+                definitions
+                    .entry((symbol.parent, symbol.name.as_ref()))
+                    .and_modify(|line| *line = (*line).min(symbol.line))
+                    .or_insert(symbol.line);
+            }
+        }
+        facts_refs.retain_mut(|entry| {
+            let reference = &entry.reference;
+            if reference.kind != RefKind::Value || reference.qualifier.is_some() {
+                return true;
+            }
+            let Some(end) = entry.position.checked_add(1) else {
+                return false;
+            };
+            let is_list = root
+                .named_descendant_for_byte_range(entry.position, end)
+                .and_then(|node| node.parent())
+                .is_some_and(|node| node.kind() == "list");
+            if !is_list {
+                return true;
+            }
+            if lambdas.get(reference.name.as_str()).is_some_and(|spans| {
+                let after = spans.partition_point(|span| span.0 <= entry.position);
+                after > 0 && entry.position < spans[after - 1].1
+            }) {
+                return false;
+            }
+            let mut scope = reference.scope;
+            loop {
+                if shadowed.contains(&(scope, reference.name.as_str())) {
+                    return false;
+                }
+                if globals.contains(&(scope, reference.name.as_str())) {
+                    entry.identity = Some("python-list-global".to_owned());
+                    return true;
+                }
+                if definitions
+                    .get(&(scope, reference.name.as_str()))
+                    .is_some_and(|line| *line < reference.line)
+                {
+                    return true;
+                }
+                let Some(current) = scope else { return true };
+                scope = symbols[current as usize].parent;
+            }
+        });
+    }
     if !locals.is_empty() {
         let local_names: std::collections::HashSet<(Option<u32>, &str)> = locals
             .iter()

@@ -86,3 +86,25 @@
 (return_statement (identifier) @name @reference.value)
 (assignment right: (identifier) @name @reference.value)
 (pair value: (identifier) @name @reference.value)
+(list (identifier) @name @reference.value)
+(parameters (identifier) @python_list_local)
+(parameters (list_splat_pattern) @python_list_local)
+(parameters (dictionary_splat_pattern) @python_list_local)
+(lambda_parameters (identifier) @python_list_lambda)
+(lambda_parameters (list_splat_pattern) @python_list_lambda)
+(lambda_parameters (dictionary_splat_pattern) @python_list_lambda)
+(lambda_parameters (default_parameter name: (identifier) @python_list_lambda))
+(default_parameter name: (_) @python_list_local)
+(typed_parameter (identifier) @python_list_local)
+(typed_default_parameter name: (_) @python_list_local)
+(assignment left: (_) @python_list_local)
+(augmented_assignment left: (_) @python_list_local)
+(for_statement left: (_) @python_list_local)
+(for_in_clause left: (_) @python_list_local)
+(named_expression name: (_) @python_list_local)
+(as_pattern_target (identifier) @python_list_local)
+(import_statement) @python_list_local
+(import_from_statement) @python_list_local
+(delete_statement) @python_list_local
+(case_pattern) @python_list_local
+(global_statement (identifier) @python_list_global)
