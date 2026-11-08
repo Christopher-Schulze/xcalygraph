@@ -25,6 +25,8 @@ pub struct ModuleInfo {
 pub struct ModuleMap {
     pub modules: Vec<ModuleInfo>,
     pub file_module: Vec<u32>,
+    /// Files of each module in ascending file order; the inverse of `file_module`.
+    module_files: Vec<Vec<u32>>,
     pub by_key: HashMap<String, u32>,
     /// Go module paths (from `go.mod`) with their directory, longest first.
     pub go_modules: Vec<(String, String)>,
@@ -47,6 +49,13 @@ enum CargoRootKind {
 impl ModuleMap {
     pub fn get(&self, key: &str) -> Option<u32> {
         self.by_key.get(key).copied()
+    }
+
+    /// Files of `module` in ascending order.
+    pub fn files_of(&self, module: u32) -> &[u32] {
+        self.module_files
+            .get(module as usize)
+            .map_or(&[], Vec::as_slice)
     }
 
     /// The explicit Cargo target root outside `src/` whose directory holds `path`.
@@ -113,6 +122,7 @@ pub fn assign(files: &[FileRecord], facts: &[Option<Box<Facts>>]) -> ModuleMap {
     let mut map = ModuleMap {
         modules: Vec::new(),
         file_module: Vec::with_capacity(files.len()),
+        module_files: Vec::new(),
         by_key: HashMap::new(),
         go_modules,
         crates,
@@ -131,7 +141,7 @@ pub fn assign(files: &[FileRecord], facts: &[Option<Box<Facts>>]) -> ModuleMap {
         for (record, mut info) in files.iter().zip(base_infos) {
             apply_rust_target_method_scope(record, &map, &root_scopes, &target_scopes, &mut info);
             let id = insert_module(&mut map, info);
-            map.file_module.push(id);
+            push_file_module(&mut map, id);
         }
         return map;
     }
@@ -149,7 +159,7 @@ pub fn assign(files: &[FileRecord], facts: &[Option<Box<Facts>>]) -> ModuleMap {
     }
     for info in infos {
         let id = insert_module(&mut map, info);
-        map.file_module.push(id);
+        push_file_module(&mut map, id);
     }
     for reference in &rust_path_refs {
         let (Ok(source), Ok(reference_index)) = (
@@ -294,6 +304,16 @@ fn apply_rust_target_method_scope(
     if let Some(scope) = found {
         info.method_scope.clone_from(scope);
     }
+}
+
+/// Assign the next file to `module`, keeping both directions of the mapping.
+fn push_file_module(map: &mut ModuleMap, module: u32) {
+    let file = map.file_module.len() as u32;
+    map.file_module.push(module);
+    if map.module_files.len() <= module as usize {
+        map.module_files.resize_with(module as usize + 1, Vec::new);
+    }
+    map.module_files[module as usize].push(file);
 }
 
 fn insert_module(map: &mut ModuleMap, info: ModuleInfo) -> u32 {

@@ -60,6 +60,9 @@
 ; `require(...)` binds an import, not a local of unknown type.
 (variable_declarator name: (identifier) @binding.name value: (call_expression function: (_) @binding.call) (#not-eq? @binding.call "require")) @binding
 (variable_declarator name: (identifier) @binding.name value: (await_expression (call_expression function: (_) @binding.call))) @binding
+; A reassignment is another write of the variable: it keeps the receiver type from being proven.
+(assignment_expression left: (identifier) @binding.name right: (new_expression constructor: (_) @binding.ctor)) @binding
+(assignment_expression left: (identifier) @binding.name right: (call_expression function: (_) @binding.call) (#not-eq? @binding.call "require")) @binding
 
 ; A lexical for-of target receives an array element, not the array's own type.
 (for_in_statement kind: ["const" "let"] left: (identifier) @binding.name

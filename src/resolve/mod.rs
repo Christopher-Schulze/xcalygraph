@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 148;
+pub const RESOLVE_VERSION: u32 = 149;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -55,6 +55,9 @@ pub struct Input<'a> {
     /// Facts parallel to `files`; `None` for files indexed by path only.
     pub facts: &'a [Option<Box<Facts>>],
 }
+
+/// `python_exported` results per (module, re-export depth), then name.
+type PythonExports = HashMap<(u32, usize), HashMap<Box<str>, Ids>>;
 
 /// Indexes over all symbols, shared by every file's resolution.
 struct Index<'a> {
@@ -108,6 +111,10 @@ struct Index<'a> {
     augmentation_field_files: HashMap<(u32, &'a str), u32>,
     /// Every (type symbol, field name), typed or not.
     field_names: HashSet<(u32, &'a str)>,
+    /// Module each Python import names, per file and import index; `None` outside the root.
+    python_import_sources: Vec<Box<[Option<u32>]>>,
+    /// Memoized `python_exported` per (module, depth) and name; cleared with the tables.
+    python_exports: Mutex<PythonExports>,
     /// Implementations of abstract types and supertypes of concrete ones.
     implementations: HashMap<u32, Ids>,
     supertypes: HashMap<u32, Ids>,
@@ -247,6 +254,10 @@ impl<'a> Index<'a> {
         self.field_types.clear();
         self.augmentation_field_files.clear();
         self.field_names.clear();
+        self.python_exports
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
         self.global_usings.clear();
         self.tables.clear();
         self.build_tables();
@@ -257,6 +268,7 @@ impl<'a> Index<'a> {
     }
 
     fn new(input: &'a Input<'a>, modules: modules::ModuleMap) -> Self {
+        let python_import_sources = python::import_sources(input, &modules);
         let mut rust_generic_parameters: HashMap<(u32, u32), Vec<Box<str>>> = HashMap::default();
         let mut rust_generic_bounds: HashMap<(u32, u32), Vec<RustGenericBound>> =
             HashMap::default();
@@ -439,6 +451,8 @@ impl<'a> Index<'a> {
             implementation_pairs: Vec::new(),
             file_imports: Vec::new(),
             js_tables: js::tables(input),
+            python_import_sources,
+            python_exports: Mutex::default(),
             path_index: input
                 .files
                 .iter()

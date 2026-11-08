@@ -199,6 +199,17 @@ impl<'tree> ScopeIndex<'tree> {
         let mut walk = root.walk();
         loop {
             let node = walk.node();
+            while positions
+                .get(next_position)
+                .is_some_and(|&position| position < node.start_byte())
+            {
+                next_position += 1;
+            }
+            // Every target starts at a recorded position, so a subtree without one holds none.
+            let pending = positions
+                .get(next_position)
+                .copied()
+                .filter(|&position| position < node.end_byte());
             if node.is_named() && targets.contains(&node.id()) {
                 index.contexts.insert(
                     node.id(),
@@ -208,7 +219,7 @@ impl<'tree> ScopeIndex<'tree> {
                     },
                 );
             }
-            if node.is_named() && is_scope_context_node(node.kind()) {
+            if pending.is_some() && node.is_named() && is_scope_context_node(node.kind()) {
                 let frame = index.frames.len();
                 index.frames.push(ScopeFrame {
                     node,
@@ -216,16 +227,10 @@ impl<'tree> ScopeIndex<'tree> {
                 });
                 scope_stack.push(frame);
             }
-            while positions
-                .get(next_position)
-                .is_some_and(|&position| position < node.start_byte())
+            // Children ending at or before the next position hold no position: skip them.
+            if let Some(position) = pending
+                && walk.goto_first_child_for_byte(position).is_some()
             {
-                next_position += 1;
-            }
-            let contains_target = positions
-                .get(next_position)
-                .is_some_and(|&position| position < node.end_byte());
-            if contains_target && walk.goto_first_child() {
                 ancestors.push(node);
                 continue;
             }
@@ -413,6 +418,8 @@ struct RawBinding {
     position: usize,
     line: u32,
     visibility: Option<std::ops::Range<u32>>,
+    /// A JavaScript `x = value` write: it rebinds a declared local and declares nothing itself.
+    reassignment: bool,
 }
 
 #[derive(Default)]
@@ -493,6 +500,132 @@ pub fn extract_with_post_parse(
             }
             None => failed_parse(capture_identities),
         }
+    })
+}
+
+/// Where a binding statement sits: its enclosing function or module, and whether it runs only
+/// conditionally or repeatedly.
+struct BindingPlace {
+    owner: usize,
+    conditional: bool,
+    in_loop: bool,
+}
+
+fn binding_place(root: Node, position: usize) -> Option<BindingPlace> {
+    // One cursor descent plus cursor-parent reads: unlike `descendant_for_byte_range`
+    // plus `Node::parent`, this never re-descends from the root per level. The child
+    // may merely start after `position` (a gap between siblings): then the current
+    // node is the deepest container, matching `descendant_for_byte_range`.
+    let mut cursor = root.walk();
+    while cursor.goto_first_child_for_byte(position).is_some() {
+        let child = cursor.node();
+        if child.start_byte() > position || child.end_byte() <= position {
+            cursor.goto_parent();
+            break;
+        }
+    }
+    let (mut conditional, mut in_loop) = (false, false);
+    loop {
+        let node = cursor.node();
+        match node.kind() {
+            "function_definition"
+            | "lambda"
+            | "class_definition"
+            | "module"
+            | "program"
+            | "function_declaration"
+            | "generator_function_declaration"
+            | "function_expression"
+            | "generator_function"
+            | "arrow_function"
+            | "method_definition"
+            | "class_body" => {
+                return Some(BindingPlace {
+                    owner: node.id(),
+                    conditional,
+                    in_loop,
+                });
+            }
+            "for_statement" | "while_statement" | "for_in_statement" | "do_statement" => {
+                conditional = true;
+                in_loop = true;
+            }
+            "if_statement"
+            | "elif_clause"
+            | "else_clause"
+            | "try_statement"
+            | "except_clause"
+            | "finally_clause"
+            | "with_statement"
+            | "match_statement"
+            | "case_clause"
+            | "catch_clause"
+            | "switch_statement"
+            | "switch_case"
+            | "switch_default"
+            | "conditional_expression"
+            | "ternary_expression" => conditional = true,
+            _ => {}
+        }
+        if !cursor.goto_parent() {
+            return None;
+        }
+    }
+}
+
+/// A value bound to a dynamically typed variable is proven only while no other write of a
+/// different type can reach its uses: a conditional write after an earlier one may leave the
+/// earlier value in place, and a later write inside a loop flows back to the loop's start.
+/// Such bindings keep their type but lose the declared (exact) status.
+fn unprove_rebound_bindings(root: Node, bindings: &mut FastMap<usize, RawBinding>) {
+    let mut by_name: FastMap<&str, Vec<usize>> = FastMap::default();
+    for (&key, raw) in bindings.iter() {
+        if let Some(name) = raw.name.as_deref() {
+            by_name.entry(name).or_default().push(key);
+        }
+    }
+    let mut unproven = Vec::new();
+    for keys in by_name.values().filter(|keys| keys.len() > 1) {
+        let kind_of = |key: &usize| (&bindings[key].type_name, bindings[key].call);
+        if keys.iter().all(|key| kind_of(key) == kind_of(&keys[0])) {
+            continue;
+        }
+        let places: Vec<(usize, BindingPlace)> = keys
+            .iter()
+            .filter_map(|&key| Some((key, binding_place(root, bindings[&key].position)?)))
+            .collect();
+        for (key, place) in &places {
+            let position = bindings[key].position;
+            let reached = places.iter().any(|(other, other_place)| {
+                other_place.owner == place.owner
+                    && kind_of(other) != kind_of(key)
+                    && if bindings[other].position < position {
+                        place.conditional
+                    } else {
+                        other_place.in_loop
+                    }
+            });
+            if reached {
+                unproven.push(*key);
+            }
+        }
+    }
+    for key in unproven {
+        if let Some(raw) = bindings.get_mut(&key) {
+            raw.declared = false;
+        }
+    }
+}
+
+/// The Python call whose callee starts at `start` is awaited: the keyword `await` directly
+/// precedes it (`x = await f()`), read from the bytes instead of two root descents per binding.
+fn awaited_call(source: &[u8], start: usize) -> bool {
+    let before = source[..start.min(source.len())].trim_ascii_end();
+    before.strip_suffix(b"await").is_some_and(|head| {
+        before.len() < start
+            && !head
+                .last()
+                .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte >= 0x80)
     })
 }
 
@@ -881,6 +1014,8 @@ fn collect(
                     entry.position = primary_node.start_byte();
                     entry.line = line;
                     entry.visibility = super::bindings::visibility(path, primary_node);
+                    entry.reassignment = super::bindings::javascript(path)
+                        && primary_node.kind() == "assignment_expression";
                     if let Some(node) = get("binding.name") {
                         entry.name = Some(Name::new(text(node)));
                     }
@@ -933,12 +1068,7 @@ fn collect(
                                     Name::from(callee)
                                 }
                             }),
-                            (true, "assignment")
-                                if node
-                                    .parent()
-                                    .and_then(|call| call.parent())
-                                    .is_some_and(|parent| parent.kind() == "await") =>
-                            {
+                            (true, "assignment") if awaited_call(source, node.start_byte()) => {
                                 Some(format!("await:{}", facts::normalize_space(text(node))).into())
                             }
                             _ => Some(facts::normalize_space(text(node)).into()),
@@ -1021,11 +1151,25 @@ fn collect(
         }
     }
     drop(matches);
-    let python_list_context = path.ends_with(".py")
-        && (!python_list_values.is_empty()
-            || !python_list_local_captures.is_empty()
-            || !python_list_lambda_captures.is_empty()
-            || !python_list_globals.is_empty());
+    // List-value scoping only decides list values: without one, or for a binding that names none of
+    // them, the scope walk changes nothing.
+    let python_list_context = path.ends_with(".py") && !python_list_values.is_empty();
+    if python_list_context {
+        let names: HashSet<&str> = python_list_values
+            .iter()
+            .filter_map(|id| refs.get(id))
+            .map(|reference| reference.name.as_str())
+            .collect();
+        let binds_list_name = |node: &Node| {
+            let bound = text(*node);
+            names.iter().any(|name| bound.contains(name))
+        };
+        python_list_local_captures.retain(binds_list_name);
+        python_list_lambda_captures.retain(binds_list_name);
+    } else {
+        python_list_local_captures.clear();
+        python_list_lambda_captures.clear();
+    }
     let javascript_local_context = javascript_path && !locals.is_empty();
     let mut scope_targets = HashSet::new();
     let local_scope_names: HashSet<&str> = if javascript_local_context {
@@ -1056,8 +1200,25 @@ fn collect(
             }
         }
     }
+    // A local whose name no unqualified reference uses shadows nothing, so it needs no scope.
+    let referenced_names: HashSet<&str> = if javascript_local_context {
+        refs.values()
+            .filter(|reference| {
+                matches!(reference.kind, Some(RefKind::Value | RefKind::Call))
+                    && reference.qualifier.is_none()
+            })
+            .map(|reference| reference.name.as_str())
+            .collect()
+    } else {
+        HashSet::new()
+    };
     if javascript_local_context {
-        scope_targets.extend(locals.iter().map(|capture| capture.node.id()));
+        scope_targets.extend(
+            locals
+                .iter()
+                .filter(|capture| referenced_names.contains(capture.name.as_str()))
+                .map(|capture| capture.node.id()),
+        );
         scope_targets.extend(defs.values().filter_map(|definition| {
             definition
                 .node
@@ -1081,7 +1242,12 @@ fn collect(
             .iter()
             .filter(|(id, _)| scope_targets.contains(id))
             .map(|(_, reference)| reference.position)
-            .chain(locals.iter().map(|capture| capture.node.start_byte()))
+            .chain(
+                locals
+                    .iter()
+                    .filter(|capture| scope_targets.contains(&capture.node.id()))
+                    .map(|capture| capture.node.start_byte()),
+            )
             .chain(python_list_local_captures.iter().map(Node::start_byte))
             .chain(python_list_lambda_captures.iter().map(Node::start_byte))
             .chain(defs.values().filter_map(|definition| {
@@ -1148,6 +1314,9 @@ fn collect(
         Coverage::Complete
     };
     envs.retain(|_, (name, _, _)| !assigned.contains(name));
+    if path.ends_with(".py") || super::bindings::javascript(path) {
+        unprove_rebound_bindings(root, &mut bindings);
+    }
     let doc = file_doc(root, source);
     let mut parsed = assemble(Assembly {
         hooks,
@@ -1299,7 +1468,7 @@ fn assemble(assembly: Assembly) -> Parsed {
         impls,
         refs,
         imports,
-        bindings,
+        mut bindings,
         returns,
         fields,
         envs,
@@ -1931,6 +2100,29 @@ fn assemble(assembly: Assembly) -> Parsed {
             b.type_only,
         ))
     });
+    // A reassignment counts only beside a declaration of the same name in its scope; one of an
+    // outer variable (`root = mkdtemp()` in a callback) must not become a local declaration.
+    if bindings.values().any(|raw| raw.reassignment) {
+        let declared_locals: HashSet<(Option<u32>, &str)> = bindings
+            .values()
+            .filter(|raw| !raw.reassignment)
+            .filter_map(|raw| Some((scope_of(raw.position), raw.name.as_deref()?)))
+            .collect();
+        let outer: Vec<usize> = bindings
+            .iter()
+            .filter(|(_, raw)| {
+                raw.reassignment
+                    && !raw.name.as_deref().is_some_and(|name| {
+                        declared_locals.contains(&(scope_of(raw.position), name))
+                    })
+            })
+            .map(|(&key, _)| key)
+            .collect();
+        drop(declared_locals);
+        for key in outer {
+            bindings.remove(&key);
+        }
+    }
     let mut facts_bindings: Vec<Binding> = bindings
         .into_values()
         .filter_map(|raw| {

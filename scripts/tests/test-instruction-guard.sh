@@ -7,6 +7,7 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/xcalygraph-guard-test.XXXXXXXX")"
 trap 'rm -rf -- "${work}"' EXIT
 mkdir "${work}/root-one" "${work}/root-two"
 export XCALYGRAPH_GUARD_HOME_LOG="${work}/home.log"
+# shellcheck disable=SC2016  # the stand-in binary expands its own variables
 printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$HOME" >> "$XCALYGRAPH_GUARD_HOME_LOG"' 'exit 0' > "${work}/binary"
 chmod +x "${work}/binary"
 export XCALYGRAPH_INSTRUCTION_BASELINE="${work}/baseline.tsv"

@@ -132,25 +132,24 @@ pub(in crate::extract) fn post_parse(
     let mut external_writes: FastSet<&str> = FastSet::default();
     let mut expression_writes: FastMap<&str, Vec<std::ops::Range<u32>>> = FastMap::default();
     for &node in nodes {
-        let mut ancestors = Vec::new();
-        if matches!(
-            node.kind(),
-            "lambda_parameters"
-                | "for_in_clause"
-                | "try_statement"
-                | "import_statement"
-                | "import_from_statement"
-        ) {
-            let mut parent = node.parent();
-            while let Some(current) = parent {
-                if current.is_named() {
-                    ancestors.push(current);
-                }
-                parent = current.parent();
-            }
-            ancestors.reverse();
-        }
         let kind = node.kind();
+        // Most checks need only the nearest named ancestor; the full chain is built for imports
+        // below module level, the only case that inspects it.
+        let parent = matches!(
+            kind,
+            "lambda_parameters" | "try_statement" | "import_statement" | "import_from_statement"
+        )
+        .then(|| named_ancestors(node).next())
+        .flatten();
+        let ancestors: Vec<Node> = if matches!(kind, "import_statement" | "import_from_statement")
+            && parent.is_some_and(|parent| parent.kind() != "module")
+        {
+            let mut chain: Vec<Node> = named_ancestors(node).collect();
+            chain.reverse();
+            chain
+        } else {
+            Vec::new()
+        };
         if track_context_writes && kind == "decorated_definition" {
             context_managers.push(node);
         }
@@ -196,9 +195,7 @@ pub(in crate::extract) fn post_parse(
             });
         }
         if kind == "lambda_parameters" {
-            let range = ancestors
-                .last()
-                .copied()
+            let range = parent
                 .and_then(|lambda| lambda.child_by_field_name("body"))
                 .and_then(|body| {
                     Some(
@@ -221,7 +218,7 @@ pub(in crate::extract) fn post_parse(
         if kind == "for_in_clause"
             && let Some(target) = node.child_by_field_name("left")
         {
-            let parent = ancestors.iter().rev().copied().find(|item| {
+            let parent = named_ancestors(node).find(|item| {
                 matches!(
                     item.kind(),
                     "list_comprehension"
@@ -266,9 +263,7 @@ pub(in crate::extract) fn post_parse(
             });
         }
         if kind == "try_statement"
-            && ancestors
-                .last()
-                .is_some_and(|parent| parent.kind() == "module")
+            && parent.is_some_and(|parent| parent.kind() == "module")
             && let Some(fallback) = callable_import_fallback(node, source, parsed)
         {
             callable_fallbacks.push(fallback);
@@ -285,9 +280,7 @@ pub(in crate::extract) fn post_parse(
             writes.entry(owner).or_default().insert(name);
         }
         if matches!(kind, "import_statement" | "import_from_statement")
-            && ancestors
-                .last()
-                .is_some_and(|parent| parent.kind() != "module")
+            && parent.is_some_and(|parent| parent.kind() != "module")
             && let (Ok(text), Ok(line)) = (
                 node.utf8_text(source),
                 u32::try_from(node.start_position().row + 1),
@@ -602,6 +595,11 @@ pub(in crate::extract) fn post_parse(
     identities.dedup_by_key(|identity| (identity.kind, identity.index));
     parsed.facts.source_identities =
         (!identities.is_empty()).then(|| identities.into_boxed_slice());
+}
+
+/// Named ancestors of `node`, nearest first.
+fn named_ancestors(node: Node) -> impl Iterator<Item = Node> {
+    std::iter::successors(node.parent(), Node::parent).filter(Node::is_named)
 }
 
 fn context_binding_calls(

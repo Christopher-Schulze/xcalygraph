@@ -624,6 +624,26 @@ impl Index<'_> {
     /// (`__init__.py` and facade re-exports such as `from .install import claude_install`),
     /// followed through at most a few modules.
     fn python_exported(&self, module: u32, name: &str, depth: usize) -> Ids {
+        let cache = || {
+            self.python_exports
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        };
+        if let Some(found) = cache()
+            .get(&(module, depth))
+            .and_then(|names| names.get(name))
+        {
+            return found.clone();
+        }
+        let found = self.compute_python_exported(module, name, depth);
+        cache()
+            .entry((module, depth))
+            .or_default()
+            .insert(name.into(), found.clone());
+        found
+    }
+
+    fn compute_python_exported(&self, module: u32, name: &str, depth: usize) -> Ids {
         let mut own: Ids = self
             .module_symbol(module, name, None)
             .into_iter()
@@ -667,18 +687,14 @@ impl Index<'_> {
         if depth >= MAX_REEXPORT_DEPTH {
             return own;
         }
-        let current = self.modules.modules[module as usize].name.clone();
         let mut exported = own.clone();
         let mut uncertain = false;
-        for (file, &file_module) in self.modules.file_module.iter().enumerate() {
-            if file_module != module {
-                continue;
-            }
+        for &file in self.modules.files_of(module) {
+            let file = file as usize;
             let Some(facts) = self.input.facts[file].as_ref() else {
                 continue;
             };
             uncertain |= facts.coverage != facts::Coverage::Complete;
-            let is_package = self.input.files[file].path.ends_with("__init__.py");
             for (index, import) in facts.imports.iter().enumerate() {
                 if import.type_only {
                     continue;
@@ -745,8 +761,10 @@ impl Index<'_> {
                     exported.clear();
                     uncertain = false;
                 }
-                let Some(source) = absolute(&import.spec, &current, is_package)
-                    .and_then(|path| self.python_module(&path))
+                let Some(source) = self.python_import_sources[file]
+                    .get(index)
+                    .copied()
+                    .flatten()
                 else {
                     if star {
                         continue;
@@ -810,6 +828,37 @@ impl Index<'_> {
         let found = self.python_exported(module, name, 0);
         (!found.is_empty()).then_some(found)
     }
+}
+
+/// Module named by each import of each Python file (`None` when outside the root), resolved once
+/// so re-export lookups do not rebuild dotted paths per call.
+pub(super) fn import_sources(
+    input: &super::Input,
+    modules: &super::modules::ModuleMap,
+) -> Vec<Box<[Option<u32>]>> {
+    input
+        .facts
+        .iter()
+        .enumerate()
+        .map(|(file, facts)| {
+            let Some(facts) = facts
+                .as_deref()
+                .filter(|_| input.files[file].file_type == Some(FileType::Python))
+            else {
+                return Box::default();
+            };
+            let current = &modules.modules[modules.file_module[file] as usize].name;
+            let is_package = input.files[file].path.ends_with("__init__.py");
+            facts
+                .imports
+                .iter()
+                .map(|import| {
+                    absolute(&import.spec, current, is_package)
+                        .and_then(|path| modules.get(&format!("py:{path}")))
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Absolute dotted module of an import spec; leading dots climb from the current package.

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Fail when a full index build retires over 5 % more instructions than the blessed baseline; the
-# gate runs this so a pipeline regression cannot pass unnoticed. The count ignores machine load.
+# gate runs this so a pipeline regression cannot pass unnoticed. Builds run on one thread: idle
+# worker threads spin under load and would otherwise add a load-dependent share to the count.
 # Usage: scripts/benchmarks/check-instructions.sh BINARY
 #        scripts/benchmarks/check-instructions.sh --bless BINARY ROOT...
 # The baseline is local and machine-bound (.cache/instruction-baseline.tsv: root, instructions).
@@ -33,7 +34,7 @@ trap 'rm -rf -- "${work}"' EXIT
 measure() {
   local run count status
   run="$(mktemp -d "${work}/run.XXXXXXXX")"
-  if count="$(HOME="${run}" XCALYGRAPH_INDEX_DIR="${run}/index" /usr/bin/time -l "${binary}" index -C "$1" 2>&1 >/dev/null |
+  if count="$(RAYON_NUM_THREADS=1 HOME="${run}" XCALYGRAPH_INDEX_DIR="${run}/index" /usr/bin/time -l "${binary}" index -C "$1" 2>&1 >/dev/null |
     awk '/instructions retired/ { print $1 }')"; then
     rm -rf -- "${run}"
     printf '%s\n' "${count}"

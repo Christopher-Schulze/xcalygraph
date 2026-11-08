@@ -1000,10 +1000,8 @@ impl Index<'_> {
                 own
             };
         }
-        for (file, &file_module) in self.modules.file_module.iter().enumerate() {
-            if file_module != module {
-                continue;
-            }
+        for &file in self.modules.files_of(module) {
+            let file = file as usize;
             let Some(facts) = self.input.facts[file].as_ref() else {
                 continue;
             };

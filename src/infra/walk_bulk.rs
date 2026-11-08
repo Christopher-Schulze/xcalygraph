@@ -272,10 +272,11 @@ pub fn walk(root: &Path, excluded: &[PathBuf]) -> Option<Vec<Stat>> {
         found: Mutex::new(Vec::new()),
         fallback: AtomicBool::new(false),
     };
-    // Directory syscalls wait on the kernel, and efficiency cores slow the shared queue down.
+    // Directory syscalls wait on the kernel, and efficiency cores slow the shared queue down. A
+    // smaller global pool (`RAYON_NUM_THREADS`) caps it too, so a measurement can run serially.
     let start = root.to_path_buf();
     match rayon::ThreadPoolBuilder::new()
-        .num_threads(performance_cores())
+        .num_threads(performance_cores().min(rayon::current_num_threads()))
         .build()
     {
         Ok(pool) => pool.scope(|scope| walk.visit(scope, start, String::new(), parent, false)),
