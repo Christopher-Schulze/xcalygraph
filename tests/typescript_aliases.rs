@@ -135,7 +135,84 @@ fn deno_scopes_external_maps_and_relative_keys_do_not_prove_targets() -> TestRes
 }
 
 #[test]
-fn a_deno_conflicting_workspace_import_keeps_only_an_inferred_file_edge() -> TestResult {
+fn uncertain_workspace_symbols_are_only_inferred_at_the_direct_reference() -> TestResult {
+    let root = support::exclusive_dir("alias-deno-workspace-symbol")?;
+    write(
+        &root,
+        &[
+            (
+                "package.json",
+                r#"{"name":"shared","module":"./runtime.ts"}"#,
+            ),
+            (
+                "runtime.ts",
+                "export function who() { return 1; }\nfunction hidden() {}\nexport class Widget { run() {} }\n",
+            ),
+            (
+                "app/package.json",
+                r#"{"name":"app","devDependencies":{"shared":"workspace:*"}}"#,
+            ),
+            ("app/deno.json", r#"{"imports":{"shared":"./other.ts"}}"#),
+            (
+                "app/main.ts",
+                "import { who, hidden, Widget } from 'shared';\nexport function entry() { return who(); }\nexport function shadow(who: () => number) { return who(); }\nexport function unexported() { hidden(); }\nexport function construct() { return new Widget(); }\nexport function bareClass() { return Widget(); }\nexport function typed(value: Widget) { value.run(); }\n",
+            ),
+            (
+                "app/type-only.ts",
+                "import type { Widget } from 'shared';\nexport function invalidConstructor() { return new Widget(); }\n",
+            ),
+        ],
+    )?;
+    let output = support::command(BINARY, &root)
+        .args(["show", "entry", "--json", "-C"])
+        .arg(&root)
+        .output()?;
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout)?;
+    assert!(
+        text.lines()
+            .any(|line| line.contains("\"path\":\"runtime.ts\"")
+                && line.contains("\"kind\":\"calls\"")
+                && line.contains("\"conf\":\"inferred\"")),
+        "{text}"
+    );
+    let exact = support::command(BINARY, &root)
+        .args(["show", "entry", "--json", "--exact", "-C"])
+        .arg(&root)
+        .output()?;
+    assert!(exact.status.success());
+    assert!(!String::from_utf8(exact.stdout)?.contains("runtime.ts"));
+    for name in ["shadow", "unexported", "bareClass", "invalidConstructor"] {
+        let text = show(&root, name)?;
+        assert!(!text.contains("runtime.ts"), "{name}: {text}");
+    }
+    for (name, kind) in [("construct", "calls"), ("typed", "uses")] {
+        let output = support::command(BINARY, &root)
+            .args(["show", name, "--json", "-C"])
+            .arg(&root)
+            .output()?;
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout)?;
+        assert!(
+            text.lines()
+                .any(|line| line.contains("\"path\":\"runtime.ts\"")
+                    && line.contains(&format!("\"kind\":\"{kind}\""))
+                    && line.contains("\"conf\":\"inferred\"")),
+            "{name}: {text}"
+        );
+        assert!(
+            !text.lines().any(
+                |line| line.contains("\"name\":\"run\"") && line.contains("\"conf\":\"exact\"")
+            ),
+            "{name}: {text}"
+        );
+    }
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn a_deno_conflicting_workspace_import_keeps_inferred_edges_only() -> TestResult {
     let root = support::exclusive_dir("alias-deno-workspace")?;
     write(
         &root,
@@ -163,7 +240,13 @@ fn a_deno_conflicting_workspace_import_keeps_only_an_inferred_file_edge() -> Tes
         "{file}"
     );
     let symbol = show(&root, "denoEntry")?;
-    assert!(!symbol.contains("> who runtime.ts"), "{symbol}");
+    assert!(symbol.contains("> who runtime.ts:1?"), "{symbol}");
+    let exact_symbol = support::command(BINARY, &root)
+        .args(["show", "denoEntry", "--exact", "-C"])
+        .arg(&root)
+        .output()?;
+    assert!(exact_symbol.status.success());
+    assert!(!String::from_utf8(exact_symbol.stdout)?.contains("runtime.ts"));
     let exact = support::command(BINARY, &root)
         .args(["show", "app/main.ts", "--exact", "-C"])
         .arg(&root)

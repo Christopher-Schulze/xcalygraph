@@ -2101,7 +2101,7 @@ fn source_reference_identity(
     if kind == Some(RefKind::Call)
         && node.kind() == "new_expression"
         && path.rsplit('.').next().is_some_and(|extension| {
-            ["js", "jsx", "mjs", "cjs"]
+            ["js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "ets"]
                 .iter()
                 .any(|candidate| extension.eq_ignore_ascii_case(candidate))
         })

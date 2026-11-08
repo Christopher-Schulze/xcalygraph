@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 142;
+pub const RESOLVE_VERSION: u32 = 143;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -142,6 +142,8 @@ struct Imports {
     files: Vec<(u32, u32)>,
     /// Possible file targets whose runtime context is not proven; never used for name resolution.
     inferred_files: Option<Box<Ids>>,
+    /// Possible direct named targets; never used for type or receiver resolution.
+    inferred_names: Option<Box<HashMap<String, (Ids, bool)>>>,
 }
 
 struct Resolved {
@@ -2013,7 +2015,7 @@ impl<'a> Index<'a> {
             let julia_builtin = local_reference.filter(|&index| {
                 self.file_type(file) == Some(FileType::Julia) && facts.is_julia_builtin_call(index)
             });
-            let outcome = if let Some(reference_index) = julia_builtin {
+            let mut outcome = if let Some(reference_index) = julia_builtin {
                 self.resolve_julia_base_call(file, imports, facts, reference_index, reference)
             } else {
                 match reference.kind {
@@ -2085,6 +2087,40 @@ impl<'a> Index<'a> {
                     _ => Outcome::Unresolved,
                 }
             };
+            if matches!(outcome, Outcome::External | Outcome::Unresolved)
+                && matches!(reference.kind, RefKind::Call | RefKind::Type)
+                && reference.qualifier.is_none()
+                && (source_identity.is_none() || source_identity == Some("js:new"))
+                && let Some((targets, type_only)) = imports
+                    .inferred_names
+                    .as_ref()
+                    .and_then(|names| names.get(reference.name.as_str()))
+                && let [target] = targets.as_slice()
+                && self
+                    .binding(
+                        file,
+                        reference.scope,
+                        &reference.name,
+                        reference.line,
+                        reference.byte,
+                    )
+                    .is_none()
+            {
+                let kind = self.symbols[*target as usize].kind;
+                let allowed = if reference.kind == RefKind::Type {
+                    kind.is_type()
+                } else {
+                    !type_only
+                        && (kind.is_callable()
+                            || (kind == SymKind::Class && source_identity == Some("js:new")))
+                };
+                if allowed {
+                    outcome = Outcome::Targets(
+                        smallvec::smallvec![(*target, Confidence::Inferred)],
+                        Confidence::Inferred,
+                    );
+                }
+            }
             if reference.kind == RefKind::Path
                 || (reference.kind == RefKind::Mention && reference.name.contains('/'))
             {
@@ -3038,7 +3074,10 @@ impl<'a> Index<'a> {
         identity: &str,
     ) -> Outcome {
         if identity == "js:new" {
-            if self.file_type(file) != Some(FileType::JavaScript) || reference.kind != RefKind::Call
+            if !matches!(
+                self.file_type(file),
+                Some(FileType::JavaScript | FileType::TypeScript)
+            ) || reference.kind != RefKind::Call
             {
                 return Outcome::Unresolved;
             }

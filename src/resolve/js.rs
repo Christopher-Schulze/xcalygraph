@@ -700,6 +700,27 @@ impl Index<'_> {
                         .inferred_files
                         .get_or_insert_with(|| Box::new(Ids::new()))
                         .push(target);
+                    let module = self.module_of(target);
+                    for name in &import.names {
+                        if name.is_empty() || matches!(name.as_str(), "*" | "default") {
+                            continue;
+                        }
+                        let local = import.alias.unwrap_or(*name);
+                        let found: Ids = self
+                            .exported(module, name)
+                            .into_iter()
+                            .filter(|&symbol| self.symbols[symbol as usize].exported)
+                            .collect();
+                        if found.is_empty() {
+                            continue;
+                        }
+                        imports
+                            .inferred_names
+                            .get_or_insert_with(|| Box::new(HashMap::default()))
+                            .entry(local.to_string())
+                            .and_modify(|entry| entry.0.clear())
+                            .or_insert((found, import.type_only));
+                    }
                 }
                 let package = package_name(&import.spec);
                 if !package.is_empty() {
