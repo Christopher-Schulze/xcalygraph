@@ -74,11 +74,13 @@ index_corpus() {
         done < <(cd "${root}" && find . -mindepth 2 -maxdepth 3 -name tsconfig.json -not -path '*/node_modules/*' | sed 's|^\./||' | LC_ALL=C sort)
         (( ${#projects[@]} > 0 )) || { echo "measure-edge-oracle.sh: no TypeScript project" >&2; return 1; }
         printf '%s\n' "${projects[@]}" > "${output%.scip}.projects"
-        ( cd "${root}" && scip-typescript index "${projects[@]}" --output "${output}" )
+        ( cd "${root}" && scip-typescript index "${projects[@]}" --output "${output}" ) || return
+        for project in "${projects[@]}"; do rm -rf "${root:?}/${project}/node_modules"; done
         return
       fi
       ( cd "${root}" && bun install --no-save --ignore-scripts &&
-          scip-typescript index --infer-tsconfig --output "${output}" ) ;;
+          scip-typescript index --infer-tsconfig --output "${output}" ) || return
+      rm -rf "${root:?}/node_modules" ;;
     *) echo "measure-edge-oracle.sh: no indexer for ${language}" >&2; return 1 ;;
   esac
 }
