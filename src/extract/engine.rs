@@ -1867,6 +1867,30 @@ fn julia_arguments(arguments: Node, source: &[u8]) -> Vec<(u8, String)> {
 }
 
 fn source_definition_identity(path: &str, node: Node, name: &str, source: &[u8]) -> Option<String> {
+    if node.kind() == "function_expression"
+        && let Some(assignment) = node.parent().filter(|parent| {
+            parent.kind() == "assignment_expression"
+                && parent.child_by_field_name("right") == Some(node)
+        })
+        && assignment.child_by_field_name("left").is_some_and(|left| {
+            left.kind() == "member_expression"
+                && left.child_by_field_name("object").is_some_and(|object| {
+                    object.kind() == "identifier" && object.utf8_text(source).ok() == Some("module")
+                })
+                && left
+                    .child_by_field_name("property")
+                    .is_some_and(|property| property.utf8_text(source).ok() == Some("exports"))
+        })
+        && node
+            .child_by_field_name("name")
+            .is_some_and(|identifier| identifier.utf8_text(source).ok() == Some(name))
+    {
+        return Some(format!(
+            "js-expression:{}:{}",
+            node.start_byte(),
+            node.end_byte()
+        ));
+    }
     if path.rsplit('.').next().is_some_and(|extension| {
         extension.eq_ignore_ascii_case("html") || extension.eq_ignore_ascii_case("htm")
     }) && node.kind() == "function_declaration"

@@ -8,6 +8,11 @@
 ((export_statement (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function)) @_top (#parent? @_top "program"))
 ((variable_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function) @_top (#parent? @_top "program"))
 (class_declaration name: (identifier) @name) @definition.class
+; The name of an exported function expression is private to its body.
+((expression_statement (assignment_expression
+  left: (member_expression object: (identifier) @_module property: (property_identifier) @_exports)
+  right: (function_expression name: (identifier) @name) @definition.function)) @_top
+  (#eq? @_module "module") (#eq? @_exports "exports") (#parent? @_top "program"))
 ; CommonJS and object-member functions: `exports.f = function`, `module.exports.f = ...`,
 ; `app.handle = function handle()`; `Type.prototype.m = function` is a method of `Type`.
 ((expression_statement (assignment_expression

@@ -44,12 +44,38 @@ pub(super) fn post_parse(source: &[u8], root: Node, parsed: &mut Parsed, _: bool
     };
     let identity = match value.kind() {
         "identifier" => local_export(value, source, root, parsed),
+        "function_expression" => expression_export(value, source, parsed),
         "call_expression" => forwarded_export(value, source, root, parsed),
         _ => None,
     };
     if let Some(identity) = identity {
         add_identity(parsed, SourceIdentityKind::CommonJsExport, 0, identity);
     }
+}
+
+fn expression_export(value: Node, source: &[u8], parsed: &mut Parsed) -> Option<String> {
+    let name = value.child_by_field_name("name")?.utf8_text(source).ok()?;
+    let expected = format!("js-expression:{}:{}", value.start_byte(), value.end_byte());
+    let mut matches = parsed
+        .facts
+        .symbols
+        .iter()
+        .enumerate()
+        .filter(|(index, symbol)| {
+            symbol.name.as_ref() == name
+                && u32::try_from(*index).ok().is_some_and(|index| {
+                    parsed
+                        .facts
+                        .source_identity(SourceIdentityKind::Symbol, index)
+                        == Some(expected.as_str())
+                })
+        });
+    let (index, _) = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    parsed.facts.symbols[index].parent = None;
+    Some(format!("expression:{index}"))
 }
 
 fn add_identity(parsed: &mut Parsed, kind: SourceIdentityKind, index: u32, identity: String) {

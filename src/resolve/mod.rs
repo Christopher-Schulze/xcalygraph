@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 140;
+pub const RESOLVE_VERSION: u32 = 141;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -1259,7 +1259,12 @@ impl<'a> Index<'a> {
             .into_iter()
             .flatten()
             .copied()
-            .filter(|&symbol| want.is_none_or(|want| want(self.symbols[symbol as usize].kind)))
+            .filter(|&symbol| {
+                want.is_none_or(|want| want(self.symbols[symbol as usize].kind))
+                    && !self
+                        .source_identity_of_symbol(symbol)
+                        .is_some_and(|identity| identity.starts_with("js-expression:"))
+            })
             .collect();
         if found.len() > 1 {
             let non_test: Ids = found
@@ -2287,7 +2292,12 @@ impl<'a> Index<'a> {
                 .is_some_and(|file_type| file_type.is_code())
                 && self.file_type(symbol.file) != Some(FileType::Sql)
                 && self.input.files[symbol.file as usize].role == Role::Src;
-            if code && matches!(symbol.kind, SymKind::Fn | SymKind::Method) {
+            if code
+                && matches!(symbol.kind, SymKind::Fn | SymKind::Method)
+                && !self
+                    .source_identity_of_symbol(id as u32)
+                    .is_some_and(|identity| identity.starts_with("js-expression:"))
+            {
                 let key = normalize(&symbol.name);
                 let key = key
                     .strip_prefix("resolve")
@@ -3217,11 +3227,11 @@ impl<'a> Index<'a> {
             reference.kind == RefKind::Call && self.file_type(file) == Some(FileType::Lisp);
         let kind_ok = |symbol: u32| {
             let candidate = &self.symbols[symbol as usize];
-            if self.file_type(candidate.file) == Some(FileType::Html)
-                && let Some(bounds) = self
-                    .source_identity_of_symbol(symbol)
-                    .and_then(|identity| identity.strip_prefix("html-local:"))
-            {
+            if let Some(bounds) = self.source_identity_of_symbol(symbol).and_then(|identity| {
+                identity
+                    .strip_prefix("html-local:")
+                    .or_else(|| identity.strip_prefix("js-expression:"))
+            }) {
                 let visible = bounds
                     .split_once(':')
                     .and_then(|(start, end)| {

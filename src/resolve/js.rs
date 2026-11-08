@@ -592,6 +592,25 @@ impl Index<'_> {
         if let Some(identity) = self.facts(file).and_then(|facts| {
             facts.source_identity(crate::domain::facts::SourceIdentityKind::CommonJsExport, 0)
         }) {
+            if let Some(index) = identity
+                .strip_prefix("expression:")
+                .and_then(|value| value.parse::<u32>().ok())
+                && let Some(symbol) = self
+                    .facts(file)
+                    .and_then(|facts| facts.symbols.get(index as usize))
+                && symbol.kind() == SymKind::Fn
+                && self
+                    .facts(file)
+                    .and_then(|facts| {
+                        facts.source_identity(
+                            crate::domain::facts::SourceIdentityKind::Symbol,
+                            index,
+                        )
+                    })
+                    .is_some_and(|identity| identity.starts_with("js-expression:"))
+            {
+                return smallvec::smallvec![self.base[file as usize] + index];
+            }
             if let Some(name) = identity.strip_prefix("local:") {
                 let targets = self.module_symbol(module, name, None);
                 return if targets.len() == 1

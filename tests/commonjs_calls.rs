@@ -10,6 +10,21 @@ fn commonjs_callable_exports_keep_their_identity_and_namespace() -> Result<(), B
     let root = support::exclusive_dir("commonjs-callable")?;
     let cases = [
         (
+            "named-expression",
+            "module.exports = function selected() {};\n",
+            true,
+        ),
+        (
+            "conditional-expression",
+            "if (enabled) module.exports = function selected() {};\n",
+            false,
+        ),
+        (
+            "reassigned-expression",
+            "module.exports = function selected() {};\nmodule.exports = other;\n",
+            false,
+        ),
+        (
             "direct",
             "function selected() {}\nmodule.exports = selected;\n",
             true,
@@ -116,6 +131,66 @@ fn commonjs_callable_exports_keep_their_identity_and_namespace() -> Result<(), B
         assert!(output.status.success(), "{name}: {text}");
         assert_eq!(text.contains("> selected "), expected, "{name}: {text}");
     }
+    let directory = root.join("expression-name-scope");
+    fs::create_dir(&directory)?;
+    fs::write(
+        directory.join("provider.js"),
+        "module.exports = function selected() {};\nfunction unrelated() { selected(); }\n",
+    )?;
+    let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &root)
+        .args(["show", "unrelated", "--exact", "-C"])
+        .arg(&directory)
+        .output()?;
+    let text = String::from_utf8(output.stdout)?;
+    assert!(output.status.success(), "{text}");
+    assert!(!text.contains("selected"), "{text}");
+    let directory = root.join("expression-not-a-named-export");
+    fs::create_dir(&directory)?;
+    fs::write(
+        directory.join("provider.js"),
+        "module.exports = function selected() {};\n",
+    )?;
+    fs::write(
+        directory.join("main.js"),
+        "import { selected } from './provider.js';\nfunction caller() { selected(); }\n",
+    )?;
+    let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &root)
+        .args(["show", "caller", "--exact", "-C"])
+        .arg(&directory)
+        .output()?;
+    let text = String::from_utf8(output.stdout)?;
+    assert!(output.status.success(), "{text}");
+    assert!(!text.contains("selected"), "{text}");
+    let directory = root.join("embedded-expression-name-scope");
+    fs::create_dir(&directory)?;
+    fs::write(
+        directory.join("page.html"),
+        "<h1>Guide</h1>\n<script>module.exports = function selected() {};</script>\n<script>function unrelated() { selected(); }</script>\n",
+    )?;
+    let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &root)
+        .args(["show", "unrelated", "--exact", "-C"])
+        .arg(&directory)
+        .output()?;
+    let text = String::from_utf8(output.stdout)?;
+    assert!(output.status.success(), "{text}");
+    assert!(!text.contains("selected"), "{text}");
+    let directory = root.join("expression-is-not-a-proto-handler-by-name");
+    fs::create_dir(&directory)?;
+    fs::write(
+        directory.join("provider.js"),
+        "module.exports = function charge() {};\n",
+    )?;
+    fs::write(
+        directory.join("payment.proto"),
+        "syntax = \"proto3\";\nservice Payment {\n  rpc Charge(Request) returns (Response);\n}\nmessage Request {}\nmessage Response {}\n",
+    )?;
+    let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &root)
+        .args(["show", "charge", "--json", "-C"])
+        .arg(&directory)
+        .output()?;
+    let text = String::from_utf8(output.stdout)?;
+    assert!(output.status.success(), "{text}");
+    assert!(!text.contains("\"kind\":\"implements\""), "{text}");
     let directory = root.join("forward");
     fs::create_dir(&directory)?;
     fs::write(
