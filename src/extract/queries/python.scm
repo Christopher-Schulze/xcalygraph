@@ -43,6 +43,9 @@
   left: (identifier) @binding.name
   right: (call function: [(identifier) (attribute)] @binding.call)
   (#match? @binding.call "(^|[.])[a-z_][A-Za-z0-9_]*$")) @binding
+(assignment
+  left: (identifier) @binding.name
+  right: (await (call function: [(identifier) (attribute)] @binding.call))) @binding
 
 (assignment
   left: (attribute object: (identifier) @_self attribute: (identifier) @field.name)

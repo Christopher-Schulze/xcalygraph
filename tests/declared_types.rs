@@ -104,6 +104,50 @@ fn python_and_php_unions_are_never_exact() -> TestResult {
 }
 
 #[test]
+fn python_awaited_async_result_keeps_its_declared_receiver_type() -> TestResult {
+    let root = support::exclusive_dir("python-await-result")?;
+    fs::write(
+        root.join("a.py"),
+        "class Response:\n    def finish(self): pass\n\nclass Decoy:\n    def finish(self): pass\n\nclass Awaitable:\n    def finish(self): pass\n    def __await__(self):\n        if False: yield\n        return Response()\n\ndef sync_factory() -> Awaitable:\n    return Awaitable()\n\nasync def wrong():\n    result = await sync_factory()\n    result.finish()\n\ndef replace(fn):\n    async def replacement():\n        return Decoy()\n    return replacement\n\n@replace\nasync def decorated() -> Response:\n    return Response()\n\nasync def decorated_caller():\n    result = await decorated()\n    result.finish()\n\nclass Client:\n    async def __aenter__(self) -> Client:\n        return self\n    async def __aexit__(self, typ, value, traceback):\n        pass\n    async def send(self) -> Response:\n        return Response()\n    async def run(self):\n        result = await self.send()\n        result.finish()\n    def missing_await(self):\n        result = self.send()\n        result.finish()\n\nasync def context():\n    async with Client() as client:\n        await client.send()\n",
+    )?;
+    let found = calls(&root, "run")?;
+    assert!(
+        found
+            .iter()
+            .any(|edge| edge == "a.Response.finish inferred"),
+        "{found:?}"
+    );
+    let wrong = calls(&root, "wrong")?;
+    assert!(
+        !wrong
+            .iter()
+            .any(|edge| edge.starts_with("a.Awaitable.finish ")),
+        "{wrong:?}"
+    );
+    let decorated = calls(&root, "decorated_caller")?;
+    assert!(
+        !decorated
+            .iter()
+            .any(|edge| edge.starts_with("a.Response.finish ")),
+        "{decorated:?}"
+    );
+    let unawaited = calls(&root, "missing_await")?;
+    assert!(
+        !unawaited
+            .iter()
+            .any(|edge| edge.starts_with("a.Response.finish ")),
+        "{unawaited:?}"
+    );
+    let context = calls(&root, "context")?;
+    assert!(
+        context.iter().any(|edge| edge == "a.Client.send inferred"),
+        "{context:?}"
+    );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
 fn an_own_array_type_is_no_standard_container() -> TestResult {
     let root = support::exclusive_dir("declared-array")?;
     fs::write(

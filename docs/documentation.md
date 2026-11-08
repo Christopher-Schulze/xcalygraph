@@ -71,6 +71,8 @@ File-scope callback and export values retain their source-located `uses` edges, 
 
 Python identifiers in list literals can also name same-file values. Captured bindings and lambda parameters suppress shadowed references within their scope; an explicit `global` resolves at module scope when no conflicting binding is recorded. List values in decorators and function defaults belong to the enclosing scope, and lambda default values are evaluated outside the lambda body.
 
+For Python, a value assigned from an awaited call to a uniquely resolved, undecorated `async def` uses its declared result type with inferred confidence. A direct unawaited async call names a coroutine, not its declared eventual result. `async with` implicitly awaits `__aenter__`; decorated functions and synchronous factories returning awaitables do not establish an awaited result type.
+
 JavaScript and TypeScript callback parameters and captured loop bindings do not shadow same-named references outside their enclosing callback or loop; the same applies to embedded scripts. Functions declared inside a lexical block in an HTML script do not resolve outside that block, while script-level declarations remain visible to other scripts.
 
 A direct CommonJS export of a named function expression resolves to that function when the export and require binding are proven stable and unshadowed; its private name is neither a module binding nor evidence of a matching API contract. The same proof resolves an exported class when `new` constructs it, not when it is called without `new`.

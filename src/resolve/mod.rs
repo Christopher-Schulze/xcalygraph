@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 144;
+pub const RESOLVE_VERSION: u32 = 145;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -4416,7 +4416,8 @@ impl<'a> Index<'a> {
         if binding.type_name.starts_with("elements:") {
             return None;
         }
-        if let Some((call, _)) = chains::call_binding(&binding.type_name) {
+        let awaited = binding.type_name.strip_prefix("await:");
+        if let Some((call, _)) = chains::call_binding(awaited.unwrap_or(&binding.type_name)) {
             // Result of a call: resolve the callee, then its declared result type.
             let reference = receiver_call(call, scope, binding.line, binding.value_byte);
             // Rust constructors by convention (`Type::new()`, `Type::default()`, `Type::with_x()`,
@@ -4441,6 +4442,25 @@ impl<'a> Index<'a> {
             let Some(&(callee, _)) = callees.first() else {
                 return rust_self();
             };
+            if awaited.is_none()
+                && self.file_type(self.symbols[callee as usize].file) == Some(FileType::Python)
+                && self.symbols[callee as usize]
+                    .signature
+                    .starts_with("async def ")
+            {
+                return None;
+            }
+            if awaited.is_some()
+                && (self.file_type(file) != Some(FileType::Python)
+                    || callees.len() != 1
+                    || self.file_type(self.symbols[callee as usize].file) != Some(FileType::Python)
+                    || self.symbols[callee as usize].flags & facts::FLAG_PYTHON_DECORATED != 0
+                    || !self.symbols[callee as usize]
+                        .signature
+                        .starts_with("async def "))
+            {
+                return None;
+            }
             // A call of a type is a constructor: the result is the type itself.
             if self.symbols[callee as usize].kind.is_type() {
                 return Some((smallvec::smallvec![callee], Confidence::Inferred));

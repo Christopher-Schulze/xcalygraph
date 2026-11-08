@@ -284,6 +284,13 @@ fn raises_not_implemented(statement: Node, source: &[u8]) -> bool {
 }
 
 fn flags(definition: &Definition, context: &FileContext) -> u8 {
+    let decorated = if matches!(definition.kind, SymKind::Fn | SymKind::Method)
+        && definition.decorations.contains('@')
+    {
+        crate::domain::facts::FLAG_PYTHON_DECORATED
+    } else {
+        0
+    };
     // A registering decorator (`@app.route`, `@pytest.fixture`, `@click.command`) means the
     // framework calls the function: an entrypoint, never dead.
     let registered = definition
@@ -309,9 +316,9 @@ fn flags(definition: &Definition, context: &FileContext) -> u8 {
         && definition.name.starts_with("test"))
         || (definition.kind == SymKind::Class && definition.name.starts_with("Test"));
     if test_name && (test_file || matches!(definition.parent, Some((SymKind::Class, _)))) {
-        FLAG_TEST | entry
+        FLAG_TEST | entry | decorated
     } else {
-        entry
+        entry | decorated
     }
 }
 

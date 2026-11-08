@@ -756,7 +756,21 @@ fn collect(
                                 node,
                                 source,
                             )
-                            .map(Name::from),
+                            .map(|callee| {
+                                if callee.ends_with(".__aenter__") {
+                                    format!("await:{callee}").into()
+                                } else {
+                                    Name::from(callee)
+                                }
+                            }),
+                            (true, "assignment")
+                                if node
+                                    .parent()
+                                    .and_then(|call| call.parent())
+                                    .is_some_and(|parent| parent.kind() == "await") =>
+                            {
+                                Some(format!("await:{}", facts::normalize_space(text(node))).into())
+                            }
                             _ => Some(facts::normalize_space(text(node)).into()),
                         };
                         entry.call = true;
