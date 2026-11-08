@@ -94,6 +94,296 @@ fn module_callback_values_are_used_without_calling_or_unshadowing_them()
 }
 
 #[test]
+fn anonymous_callback_parameters_do_not_shadow_outer_middleware_uses() -> Result<(), Box<dyn Error>>
+{
+    for extension in [
+        "js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "ets", "JS",
+    ] {
+        let fixture = Fixture(support::exclusive_dir("anonymous-callback-scope")?);
+        let root = fixture.0.join("repo");
+        fs::create_dir(&root)?;
+        fs::write(
+            root.join(format!("callbacks.{extension}")),
+            "function middleware() { return 1; }\nregister(function(middleware) { consume(middleware); });\nregister(middleware);\n",
+        )?;
+        let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+            .args(["show", "middleware", "--json", "--exact", "-C"])
+            .arg(&root)
+            .arg("--index-dir")
+            .arg(fixture.0.join("index"))
+            .output()?;
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout)?;
+        let incoming: Vec<_> = text
+            .lines()
+            .filter(|line| line.contains("\"rel\":\"in\""))
+            .collect();
+        assert_eq!(incoming.len(), 1, "{extension}: {text}");
+        assert!(
+            incoming[0].contains("\"kind\":\"uses\"") && incoming[0].contains("\"line\":3,"),
+            "{extension}: {text}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn html_private_function_is_not_visible_in_another_script() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture(support::exclusive_dir("html-script-isolation")?);
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("callbacks.html"),
+        "<script>\nfunction visible() {}\n(function(hidden) {})(null);\nhidden();\n</script>\n<script>\n(function() { function hidden() {} })();\nvisible();\n</script>\n",
+    )?;
+    let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+        .args(["show", "hidden", "--json", "--exact", "-C"])
+        .arg(&root)
+        .arg("--index-dir")
+        .arg(fixture.0.join("index"))
+        .output()?;
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout)?;
+    assert!(
+        !text.lines().any(|line| line.contains("\"rel\":\"in\"")),
+        "{text}"
+    );
+    let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+        .args(["show", "visible", "--json", "--exact", "-C"])
+        .arg(&root)
+        .arg("--index-dir")
+        .arg(fixture.0.join("index"))
+        .output()?;
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout)?;
+    assert!(
+        text.lines()
+            .any(|line| line.contains("\"rel\":\"in\"") && line.contains("\"line\":8,")),
+        "{text}"
+    );
+    Ok(())
+}
+
+#[test]
+fn html_script_local_function_identity_survives_document_merge() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture(support::exclusive_dir("html-callback-identity")?);
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("callbacks.html"),
+        "<h1>Header</h1>\n<script>function first() {}</script>\n<script>\nfunction middleware() {}\nregister(function(middleware) {\n function middleware() {}\n function inside() { middleware(); }\n inside();\n});\n</script>\n",
+    )?;
+    let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+        .args(["show", "callbacks.html:6", "--json", "--exact", "-C"])
+        .arg(&root)
+        .arg("--index-dir")
+        .arg(fixture.0.join("index"))
+        .output()?;
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout)?;
+    assert!(
+        text.lines().any(|line| line.contains("\"rel\":\"in\"")
+            && line.contains("\"line\":7,")
+            && line.contains("\"kind\":\"calls\"")),
+        "{text}"
+    );
+    Ok(())
+}
+
+#[test]
+fn callback_bindings_do_not_leak_between_sibling_functions() -> Result<(), Box<dyn Error>> {
+    for extension in ["js", "ts"] {
+        let fixture = Fixture(support::exclusive_dir("sibling-callback-scope")?);
+        let root = fixture.0.join("repo");
+        fs::create_dir(&root)?;
+        fs::write(
+            root.join(format!("callbacks.{extension}")),
+            "function middleware() {}\nregister(function(middleware) { function inside() { consume(middleware); } inside(); });\nregister(function() { function middleware() {} consume(middleware); });\nregister(middleware);\n",
+        )?;
+        let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+            .args([
+                "show",
+                &format!("callbacks.{extension}:1"),
+                "--json",
+                "--exact",
+                "-C",
+            ])
+            .arg(&root)
+            .arg("--index-dir")
+            .arg(fixture.0.join("index"))
+            .output()?;
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout)?;
+        let incoming: Vec<_> = text
+            .lines()
+            .filter(|line| line.contains("\"rel\":\"in\""))
+            .collect();
+        assert_eq!(incoming.len(), 1, "{extension}: {text}");
+        assert!(incoming[0].contains("\"line\":4,"), "{extension}: {text}");
+    }
+    Ok(())
+}
+
+#[test]
+fn callback_inner_function_can_shadow_a_parameter() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture(support::exclusive_dir("callback-inner-declaration")?);
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("callbacks.js"),
+        "function middleware() {}\nregister(function(middleware) {\n function middleware() {}\n function inside() { middleware(); }\n inside();\n});\nregister(middleware);\n",
+    )?;
+    let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+        .args(["show", "callbacks.js:3", "--json", "--exact", "-C"])
+        .arg(&root)
+        .arg("--index-dir")
+        .arg(fixture.0.join("index"))
+        .output()?;
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout)?;
+    assert!(
+        text.lines().any(|line| line.contains("\"rel\":\"in\"")
+            && line.contains("\"line\":4,")
+            && line.contains("\"kind\":\"calls\"")),
+        "{text}"
+    );
+    Ok(())
+}
+
+#[test]
+fn callback_parameter_shadows_outer_function_inside_nested_named_function()
+-> Result<(), Box<dyn Error>> {
+    for extension in ["js", "ts"] {
+        let fixture = Fixture(support::exclusive_dir("nested-callback-scope")?);
+        let root = fixture.0.join("repo");
+        fs::create_dir(&root)?;
+        fs::write(
+            root.join(format!("callbacks.{extension}")),
+            "function middleware() {}\nregister(function(middleware) { function inside() { consume(middleware); } inside(); });\nregister(middleware);\n",
+        )?;
+        let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+            .args(["show", "middleware", "--json", "--exact", "-C"])
+            .arg(&root)
+            .arg("--index-dir")
+            .arg(fixture.0.join("index"))
+            .output()?;
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout)?;
+        let incoming: Vec<_> = text
+            .lines()
+            .filter(|line| line.contains("\"rel\":\"in\""))
+            .collect();
+        assert_eq!(incoming.len(), 1, "{extension}: {text}");
+        assert!(incoming[0].contains("\"line\":3,"), "{extension}: {text}");
+    }
+    Ok(())
+}
+
+#[test]
+fn named_function_expression_does_not_reference_an_outer_function() -> Result<(), Box<dyn Error>> {
+    for extension in ["js", "ts"] {
+        let fixture = Fixture(support::exclusive_dir("named-callback-scope")?);
+        let root = fixture.0.join("repo");
+        fs::create_dir(&root)?;
+        fs::write(
+            root.join(format!("callbacks.{extension}")),
+            "function middleware() {}\nregister(function middleware() { consume(middleware); });\nregister(middleware);\n",
+        )?;
+        let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+            .args(["show", "middleware", "--json", "--exact", "-C"])
+            .arg(&root)
+            .arg("--index-dir")
+            .arg(fixture.0.join("index"))
+            .output()?;
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout)?;
+        let incoming: Vec<_> = text
+            .lines()
+            .filter(|line| line.contains("\"rel\":\"in\""))
+            .collect();
+        assert_eq!(incoming.len(), 1, "{extension}: {text}");
+        assert!(incoming[0].contains("\"line\":3,"), "{extension}: {text}");
+    }
+    Ok(())
+}
+
+#[test]
+fn embedded_script_callbacks_keep_their_own_scope() -> Result<(), Box<dyn Error>> {
+    for (extension, source) in [
+        (
+            "vue",
+            "<script>\nfunction middleware() {}\nregister(function(middleware) { consume(middleware); });\nregister(middleware);\n</script>\n",
+        ),
+        (
+            "svelte",
+            "<script>\nfunction middleware() {}\nregister(function(middleware) { consume(middleware); });\nregister(middleware);\n</script>\n",
+        ),
+        (
+            "astro",
+            "---\nfunction middleware() {}\nregister(function(middleware) { consume(middleware); });\nregister(middleware);\n---\n",
+        ),
+        (
+            "html",
+            "<script>\nfunction middleware() {}\nregister(function(middleware) { consume(middleware); });\nregister(middleware);\n</script>\n",
+        ),
+    ] {
+        let fixture = Fixture(support::exclusive_dir("embedded-callback-scope")?);
+        let root = fixture.0.join("repo");
+        fs::create_dir(&root)?;
+        fs::write(root.join(format!("callbacks.{extension}")), source)?;
+        let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+            .args(["show", "middleware", "--json", "--exact", "-C"])
+            .arg(&root)
+            .arg("--index-dir")
+            .arg(fixture.0.join("index"))
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{extension}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8(output.stdout)?;
+        let incoming: Vec<_> = text
+            .lines()
+            .filter(|line| line.contains("\"rel\":\"in\""))
+            .collect();
+        assert_eq!(incoming.len(), 1, "{extension}: {text}");
+        assert!(incoming[0].contains("\"line\":4,"), "{extension}: {text}");
+    }
+    Ok(())
+}
+
+#[test]
+fn loop_bindings_do_not_name_an_outer_function() -> Result<(), Box<dyn Error>> {
+    for extension in ["js", "ts"] {
+        for source in [
+            "function middleware() {}\nregister(() => { for (const middleware of [1]) consume(middleware); });\nregister(middleware);\n",
+            "function middleware() {}\nregister(() => { for (const k of [1]) { var middleware = k; } consume(middleware); });\nregister(middleware);\n",
+        ] {
+            let fixture = Fixture(support::exclusive_dir("callback-loop-scope")?);
+            let root = fixture.0.join("repo");
+            fs::create_dir(&root)?;
+            fs::write(root.join(format!("callbacks.{extension}")), source)?;
+            let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+                .args(["show", "middleware", "--json", "--exact", "-C"])
+                .arg(&root)
+                .arg("--index-dir")
+                .arg(fixture.0.join("index"))
+                .output()?;
+            assert!(output.status.success());
+            let text = String::from_utf8(output.stdout)?;
+            let incoming: Vec<_> = text
+                .lines()
+                .filter(|line| line.contains("\"rel\":\"in\""))
+                .collect();
+            assert_eq!(incoming.len(), 1, "{extension}: {text}");
+            assert!(incoming[0].contains("\"line\":3,"), "{extension}: {text}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn values_without_recorded_local_bindings_do_not_name_same_file_functions()
 -> Result<(), Box<dyn Error>> {
     // Lua extraction records no local bindings, so `f` at line 2 may be the local of line 1

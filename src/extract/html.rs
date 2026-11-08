@@ -3,7 +3,7 @@
 use std::ops::Range;
 
 use crate::domain::corpus::FileRecord;
-use crate::domain::facts::{Facts, SymKind};
+use crate::domain::facts::{Facts, SourceIdentityKind, SymKind};
 use crate::domain::filetype::FileType;
 
 use super::{engine, lang, markup, prose};
@@ -302,6 +302,52 @@ fn merge_script(
 fn merge_facts(document: &mut Facts, script: &mut Facts, line_offset: u32, byte_offset: u32) {
     document.coverage = document.coverage.max(script.coverage);
     let symbol_offset = u32::try_from(document.symbols.len()).unwrap_or(u32::MAX);
+    let reference_offset = u32::try_from(document.refs.len()).unwrap_or(u32::MAX);
+    let mut identities = document
+        .source_identities
+        .take()
+        .map_or_else(Vec::new, |items| items.into_vec());
+    if let Some(items) = script.source_identities.take() {
+        for mut identity in items.into_vec() {
+            if identity.kind == SourceIdentityKind::Reference
+                && identity.identity.starts_with("js-local:")
+            {
+                let target = identity
+                    .identity
+                    .strip_prefix("js-local:")
+                    .and_then(|value| value.parse::<u32>().ok())
+                    .and_then(|index| index.checked_add(symbol_offset));
+                identity.index = identity.index.saturating_add(reference_offset);
+                identity.identity = target.map_or_else(
+                    || "js-local:invalid".to_owned(),
+                    |index| format!("js-local:{index}"),
+                );
+            } else if identity.kind == SourceIdentityKind::Symbol
+                && identity.identity.starts_with("html-local:")
+            {
+                let bounds = identity
+                    .identity
+                    .strip_prefix("html-local:")
+                    .and_then(|value| value.split_once(':'))
+                    .and_then(|(start, end)| {
+                        Some((
+                            start.parse::<u32>().ok()?.checked_add(byte_offset)?,
+                            end.parse::<u32>().ok()?.checked_add(byte_offset)?,
+                        ))
+                    });
+                identity.index = identity.index.saturating_add(symbol_offset);
+                identity.identity = bounds.map_or_else(
+                    || "html-local:invalid".to_owned(),
+                    |(start, end)| format!("html-local:{start}:{end}"),
+                );
+            } else {
+                continue;
+            }
+            identities.push(identity);
+        }
+    }
+    identities.sort_unstable_by_key(|item| (item.kind, item.index));
+    document.source_identities = (!identities.is_empty()).then(|| identities.into_boxed_slice());
     for symbol in &mut script.symbols {
         symbol.line = symbol.line.saturating_add(line_offset);
         symbol.end_line = symbol.end_line.saturating_add(line_offset);

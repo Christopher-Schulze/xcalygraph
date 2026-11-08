@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 139;
+pub const RESOLVE_VERSION: u32 = 140;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -3027,6 +3027,34 @@ impl<'a> Index<'a> {
         reference: &Ref,
         identity: &str,
     ) -> Outcome {
+        if let Some(value) = identity.strip_prefix("js-local:") {
+            let Ok(index) = value.parse::<u32>() else {
+                return Outcome::Unresolved;
+            };
+            if !matches!(
+                self.file_type(file),
+                Some(
+                    FileType::JavaScript
+                        | FileType::TypeScript
+                        | FileType::Vue
+                        | FileType::Svelte
+                        | FileType::Astro
+                        | FileType::Html
+                )
+            ) {
+                return Outcome::Unresolved;
+            }
+            let Some(symbol) = self
+                .facts(file)
+                .and_then(|facts| facts.symbols.get(index as usize))
+            else {
+                return Outcome::Unresolved;
+            };
+            if symbol.name != reference.name || !symbol.kind().is_callable() {
+                return Outcome::Unresolved;
+            }
+            return exact(self.base[file as usize] + index);
+        }
         if reference.kind == RefKind::Value && self.file_type(file) == Some(FileType::ObjC) {
             let Some(candidates) = self.by_name.get(reference.name.as_str()) else {
                 return Outcome::Unresolved;
@@ -3188,7 +3216,28 @@ impl<'a> Index<'a> {
         let lisp_call =
             reference.kind == RefKind::Call && self.file_type(file) == Some(FileType::Lisp);
         let kind_ok = |symbol: u32| {
-            let kind = self.symbols[symbol as usize].kind;
+            let candidate = &self.symbols[symbol as usize];
+            if self.file_type(candidate.file) == Some(FileType::Html)
+                && let Some(bounds) = self
+                    .source_identity_of_symbol(symbol)
+                    .and_then(|identity| identity.strip_prefix("html-local:"))
+            {
+                let visible = bounds
+                    .split_once(':')
+                    .and_then(|(start, end)| {
+                        Some((start.parse::<u32>().ok()?, end.parse::<u32>().ok()?))
+                    })
+                    .is_some_and(|(start, end)| {
+                        candidate.file == file
+                            && reference.byte != facts::NO_BYTE
+                            && start <= reference.byte
+                            && reference.byte < end
+                    });
+                if !visible {
+                    return false;
+                }
+            }
+            let kind = candidate.kind;
             if wants_macro {
                 kind == SymKind::Macro
             } else if wants_type {

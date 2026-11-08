@@ -107,6 +107,9 @@
   (parenthesized_expression (member_expression object: (identifier) @name) @reference.value))
 
 ; Parameters and function locals shadow module names (`onResponse?.(x)` calls the parameter).
+(for_in_statement kind: ["const" "let"] left: (identifier) @local)
+(function_expression name: (identifier) @local)
+(generator_function name: (identifier) @local)
 (required_parameter pattern: (identifier) @local)
 (optional_parameter pattern: (identifier) @local)
 (arrow_function parameter: (identifier) @local)

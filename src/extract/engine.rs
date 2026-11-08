@@ -163,6 +163,10 @@ struct AssembledRef {
     position: usize,
 }
 
+type LocalCapture = (usize, String, Option<(usize, usize, usize)>);
+type LocalSpanIndex<'a> = FastMap<&'a str, Vec<(usize, usize)>>;
+type LocalDefinitions<'a> = FastMap<(usize, &'a str), Option<u32>>;
+
 #[derive(Default)]
 struct RawImport<'tree> {
     path: Option<String>,
@@ -345,7 +349,7 @@ fn collect(
     let mut assigned: Vec<String> = Vec::new();
     // Local variables and parameters (`@local`): a bare value reference of that name in the same
     // scope reads the local, not a method (Ruby `x = 1; x`).
-    let mut locals: Vec<(usize, String)> = Vec::new();
+    let mut locals: Vec<LocalCapture> = Vec::new();
     let mut cursor = QueryCursor::new();
     cursor.set_match_limit(4096);
     let mut matches = cursor.matches(query, root, source);
@@ -364,7 +368,43 @@ fn collect(
             .iter()
             .filter(|capture| names[capture.index as usize] == "local")
         {
-            locals.push((capture.node.start_byte(), text(capture.node).to_owned()));
+            let mut parent = capture.node.parent();
+            let mut anonymous = None;
+            if path.rsplit('.').next().is_some_and(|extension| {
+                [
+                    "js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "ets", "vue", "svelte",
+                    "astro", "html", "htm",
+                ]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+            }) {
+                while let Some(node) = parent {
+                    if node.kind() == "for_in_statement"
+                        && node
+                            .child_by_field_name("left")
+                            .is_some_and(|left| left.id() == capture.node.id())
+                    {
+                        anonymous = Some((node.start_byte(), node.end_byte(), node.id()));
+                        break;
+                    }
+                    if matches!(
+                        node.kind(),
+                        "function_expression" | "arrow_function" | "generator_function"
+                    ) {
+                        anonymous = Some((node.start_byte(), node.end_byte(), node.id()));
+                        break;
+                    }
+                    if matches!(node.kind(), "function_declaration" | "method_definition") {
+                        break;
+                    }
+                    parent = node.parent();
+                }
+            }
+            locals.push((
+                capture.node.start_byte(),
+                text(capture.node).to_owned(),
+                anonymous,
+            ));
         }
         let Some((primary, primary_node)) = captures.iter().find_map(|capture| {
             let name = names[capture.index as usize];
@@ -728,6 +768,7 @@ fn collect(
         hooks,
         path,
         source,
+        root,
         capture_identities,
         package,
         defs,
@@ -835,6 +876,7 @@ struct Assembly<'a, 'tree> {
     hooks: &'a Hooks,
     path: &'a str,
     source: &'a [u8],
+    root: Node<'tree>,
     capture_identities: bool,
     package: Option<String>,
     defs: FastMap<usize, RawDef<'tree>>,
@@ -845,7 +887,7 @@ struct Assembly<'a, 'tree> {
     returns: Vec<(usize, String)>,
     fields: FastMap<usize, RawField>,
     envs: FastMap<usize, (String, usize, u32)>,
-    locals: Vec<(usize, String)>,
+    locals: Vec<LocalCapture>,
 }
 
 fn assemble(assembly: Assembly) -> Parsed {
@@ -853,6 +895,7 @@ fn assemble(assembly: Assembly) -> Parsed {
         hooks,
         path,
         source,
+        root,
         capture_identities,
         package,
         defs,
@@ -1147,21 +1190,119 @@ fn assemble(assembly: Assembly) -> Parsed {
     if !locals.is_empty() {
         let local_names: std::collections::HashSet<(Option<u32>, &str)> = locals
             .iter()
-            .map(|(position, name)| (scope_of(*position), name.as_str()))
+            .filter(|(_, _, bounds)| bounds.is_none())
+            .map(|(position, name, _)| (scope_of(*position), name.as_str()))
             .collect();
+        let mut anonymous: LocalSpanIndex<'_> = FastMap::default();
+        let mut scoped_locals = HashSet::new();
+        for (_, name, bounds) in &locals {
+            if let Some((start, end, scope)) = bounds {
+                anonymous
+                    .entry(name.as_str())
+                    .or_default()
+                    .push((*start, *end));
+                scoped_locals.insert((*scope, name.as_str()));
+            }
+        }
+        for spans in anonymous.values_mut() {
+            spans.sort_unstable();
+            let mut end = 0;
+            for span in spans {
+                end = end.max(span.1);
+                span.1 = end;
+            }
+        }
+        let mut definitions: LocalDefinitions<'_> = FastMap::default();
+        let mut lexical_names = HashSet::new();
+        if !anonymous.is_empty() {
+            let mut counts = FastMap::default();
+            for def in &defs {
+                if def
+                    .node
+                    .is_some_and(|node| node.kind() == "function_declaration")
+                {
+                    *counts.entry(def.name.as_str()).or_insert(0usize) += 1;
+                }
+            }
+            for (index, def) in defs.iter().enumerate() {
+                let Some(node) = def
+                    .node
+                    .filter(|node| node.kind() == "function_declaration")
+                else {
+                    continue;
+                };
+                let Some(block) = node
+                    .parent()
+                    .filter(|node| matches!(node.kind(), "statement_block" | "program"))
+                else {
+                    continue;
+                };
+                if counts.get(def.name.as_str()).copied().unwrap_or(0) > 1 {
+                    let mut owner = block.parent();
+                    while let Some(parent) = owner {
+                        if matches!(
+                            parent.kind(),
+                            "function_expression" | "arrow_function" | "generator_function"
+                        ) {
+                            lexical_names.insert(def.name.as_str());
+                            break;
+                        }
+                        if matches!(parent.kind(), "function_declaration" | "method_definition") {
+                            break;
+                        }
+                        owner = parent.parent();
+                    }
+                }
+                let Ok(index) = u32::try_from(index) else {
+                    continue;
+                };
+                definitions
+                    .entry((block.id(), def.name.as_str()))
+                    .and_modify(|entry| *entry = None)
+                    .or_insert(Some(index));
+            }
+        }
         // A local shadows every unqualified use of its name (`count := rc.Len; count()`); in
         // Ruby only bare names, since `foo(1)` calls the method even when a local `foo` exists.
         let ruby = path.ends_with(".rb");
-        facts_refs.retain(|entry| {
+        facts_refs.retain_mut(|entry| {
             let reference = &entry.reference;
             let shadowable = match reference.kind {
                 RefKind::Value => true,
                 RefKind::Call => !ruby || reference.arity == facts::NO_ARITY,
                 _ => false,
             };
-            !shadowable
-                || reference.qualifier.is_some()
-                || !local_names.contains(&(reference.scope, reference.name.as_str()))
+            if !shadowable || reference.qualifier.is_some() {
+                return true;
+            }
+            if local_names.contains(&(reference.scope, reference.name.as_str())) {
+                return false;
+            }
+            let shadowed = anonymous.get(reference.name.as_str()).is_some_and(|spans| {
+                let after = spans.partition_point(|span| span.0 <= entry.position);
+                after > 0 && entry.position < spans[after - 1].1
+            });
+            if !shadowed && !lexical_names.contains(reference.name.as_str()) {
+                return true;
+            }
+            let Some(end) = entry.position.checked_add(1) else {
+                return false;
+            };
+            let mut ancestor = root.named_descendant_for_byte_range(entry.position, end);
+            while let Some(node) = ancestor {
+                if let Some(definition) = definitions.get(&(node.id(), reference.name.as_str())) {
+                    if let Some(index) = definition.filter(|_| entry.identity.is_none()) {
+                        entry.identity = Some(format!("js-local:{index}"));
+                        return true;
+                    }
+                    return false;
+                }
+                if scoped_locals.contains(&(node.id(), reference.name.as_str())) {
+                    return false;
+                }
+                ancestor = node.parent();
+            }
+            false
         });
     }
     for (impl_node, target, trait_name) in &impls {
@@ -1726,6 +1867,19 @@ fn julia_arguments(arguments: Node, source: &[u8]) -> Vec<(u8, String)> {
 }
 
 fn source_definition_identity(path: &str, node: Node, name: &str, source: &[u8]) -> Option<String> {
+    if path.rsplit('.').next().is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("html") || extension.eq_ignore_ascii_case("htm")
+    }) && node.kind() == "function_declaration"
+        && let Some(block) = node
+            .parent()
+            .filter(|parent| parent.kind() == "statement_block")
+    {
+        return Some(format!(
+            "html-local:{}:{}",
+            block.start_byte(),
+            block.end_byte()
+        ));
+    }
     if path.ends_with(".rs") {
         return Some(if node.kind() == "macro_definition" {
             "rust:macro".to_owned()
