@@ -445,12 +445,13 @@ pub fn render_diff(
 }
 
 /// Reference kinds through which code depends on a definition.
-const DEPENDING_REFS: [RefKind; 5] = [
+const DEPENDING_REFS: [RefKind; 6] = [
     RefKind::Call,
     RefKind::Type,
     RefKind::Inherit,
     RefKind::Implement,
     RefKind::Value,
+    RefKind::ImplementLiteral,
 ];
 
 /// Current symbols (or files) that still name a removed definition and whose reference resolves

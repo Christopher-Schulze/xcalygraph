@@ -1,0 +1,5 @@
+handler.handler -uses-> handler.Handler @4
+handler.handler.close -implements-> handler.Handler.close @5
+handler.run -calls-> handler.Handler.close @11
+handler.run -calls?-> handler.handler.close @11
+handler.run -uses-> handler.Handler @10

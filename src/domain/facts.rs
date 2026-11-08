@@ -180,9 +180,11 @@ pub enum RefKind {
     Contract,
     /// Identifier used as a value (callback argument, returned or assigned function, constant).
     Value,
+    /// Method of an interface-annotated object literal (name is the interface).
+    ImplementLiteral,
 }
 
-pub const REF_KINDS: [RefKind; 10] = [
+pub const REF_KINDS: [RefKind; 11] = [
     RefKind::Call,
     RefKind::Type,
     RefKind::Inherit,
@@ -193,6 +195,7 @@ pub const REF_KINDS: [RefKind; 10] = [
     RefKind::Mention,
     RefKind::Contract,
     RefKind::Value,
+    RefKind::ImplementLiteral,
 ];
 
 impl RefKind {

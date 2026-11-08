@@ -870,6 +870,7 @@ fn collect(
     };
     let mut defs: FastMap<usize, RawDef> = FastMap::default();
     let mut impls: Vec<(Node, String, Option<String>)> = Vec::new();
+    let mut literal_impls: Vec<(Node, String, String)> = Vec::new();
     let mut refs: FastMap<usize, RawRef> = FastMap::default();
     let mut imports: FastMap<usize, RawImport> = FastMap::default();
     let mut bindings: FastMap<usize, RawBinding> = FastMap::default();
@@ -1159,6 +1160,44 @@ fn collect(
                             && entry.2.is_none()
                         {
                             entry.2 = tr;
+                        }
+                    }
+                }
+                "literal" => {
+                    // Methods of an interface-annotated object literal; resolve links each
+                    // method to the same-named interface member (implements edge, dispatch).
+                    if let (Some(const_node), Some(iface_node)) =
+                        (get("literal.const"), get("literal.iface"))
+                        && let Some(object) = primary_node
+                            .child_by_field_name("value")
+                            .filter(|node| node.kind() == "object")
+                    {
+                        let mut cursor = object.walk();
+                        for child in object.named_children(&mut cursor) {
+                            let (key, is_method) = match child.kind() {
+                                "pair" => (
+                                    child.child_by_field_name("key"),
+                                    child.child_by_field_name("value").is_some_and(|value| {
+                                        matches!(
+                                            value.kind(),
+                                            "arrow_function" | "function_expression"
+                                        )
+                                    }),
+                                ),
+                                "method_definition" => (child.child_by_field_name("name"), true),
+                                _ => (None, false),
+                            };
+                            if !is_method {
+                                continue;
+                            }
+                            if let Some(key) = key.filter(|key| key.kind() == "property_identifier")
+                            {
+                                literal_impls.push((
+                                    child,
+                                    format!("{}.{}", text(const_node), text(key)),
+                                    text(iface_node).to_owned(),
+                                ));
+                            }
                         }
                     }
                 }
@@ -1527,6 +1566,7 @@ fn collect(
         package,
         defs,
         impls,
+        literal_impls,
         refs,
         imports,
         bindings,
@@ -1645,6 +1685,7 @@ struct Assembly<'a, 'tree> {
     package: Option<String>,
     defs: FastMap<usize, RawDef<'tree>>,
     impls: Vec<(Node<'tree>, String, Option<String>)>,
+    literal_impls: Vec<(Node<'tree>, String, String)>,
     refs: FastMap<usize, RawRef>,
     imports: FastMap<usize, RawImport<'tree>>,
     bindings: FastMap<usize, RawBinding>,
@@ -1667,6 +1708,7 @@ fn assemble(assembly: Assembly) -> Parsed {
         package,
         defs,
         impls,
+        literal_impls,
         refs,
         imports,
         mut bindings,
@@ -2200,6 +2242,24 @@ fn assemble(assembly: Assembly) -> Parsed {
             });
         }
     }
+    for (method_node, qualifier, iface) in &literal_impls {
+        facts_refs.push(AssembledRef {
+            reference: Ref {
+                kind: RefKind::ImplementLiteral,
+                name: Name::new(iface),
+                qualifier: Some(Name::new(qualifier)),
+                scope: None,
+                line: row(*method_node),
+                byte: u32::try_from(method_node.start_byte()).unwrap_or(facts::NO_BYTE),
+                arity: facts::NO_ARITY,
+            },
+            identity: None,
+            julia_builtin: false,
+            arguments: Vec::new(),
+            position: method_node.start_byte(),
+            node_id: method_node.id(),
+        });
+    }
     facts_refs.sort_by(|a, b| {
         (
             a.reference.line,
@@ -2477,7 +2537,7 @@ fn is_primary(name: &str) -> bool {
         || name.starts_with("reference.")
         || matches!(
             name,
-            "impl" | "import" | "binding" | "return" | "field" | "env" | "package"
+            "impl" | "import" | "binding" | "return" | "field" | "env" | "package" | "literal"
         )
 }
 

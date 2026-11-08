@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 151;
+pub const RESOLVE_VERSION: u32 = 152;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -86,6 +86,9 @@ struct Index<'a> {
     /// Required module paths of all `go.mod` files, longest first.
     go_requires: Vec<String>,
     implementation_pairs: Vec<(u32, u32, Confidence, u32)>,
+    /// Methods of interface-annotated object literals per implemented interface.
+    literal_implementations: HashMap<u32, Ids>,
+    literal_pairs: Vec<(u32, u32, Confidence, u32)>,
     /// Import environment per file, for resolving names written in other files.
     file_imports: Vec<Imports>,
     js_tables: js::JsTables,
@@ -449,6 +452,8 @@ impl<'a> Index<'a> {
             package_names,
             go_requires,
             implementation_pairs: Vec::new(),
+            literal_implementations: HashMap::default(),
+            literal_pairs: Vec::new(),
             file_imports: Vec::new(),
             js_tables: js::tables(input),
             python_import_sources,
@@ -4054,6 +4059,18 @@ impl<'a> Index<'a> {
                             }
                             fan_out.extend(self.members_direct(implementation, name));
                         }
+                        // Methods of interface-annotated object literals (`const h: Handler`).
+                        if let Some(methods) = self.literal_implementations.get(&type_symbol) {
+                            for &method in methods {
+                                if self.symbols[method as usize].name.as_str() != name {
+                                    continue;
+                                }
+                                if self.is_test(method) && !caller_is_test {
+                                    continue;
+                                }
+                                fan_out.push(method);
+                            }
+                        }
                         if fan_out.len() <= MAX_DISPATCH {
                             targets.extend(
                                 fan_out
@@ -4781,6 +4798,9 @@ impl<'a> Index<'a> {
     fn link_implementations(&mut self) {
         let (pairs, inherited) = self.implementation_candidates();
         self.store_implementations(pairs, inherited);
+        let (literal_pairs, literal_index) = self.literal_implementation_pairs();
+        self.literal_pairs = literal_pairs;
+        self.literal_implementations = literal_index;
     }
 
     /// Implementation pairs (emitted as `implements` edges) and declared supertypes (`inherits`
@@ -4888,6 +4908,95 @@ impl<'a> Index<'a> {
         self.implementation_pairs = pairs;
     }
 
+    /// Methods of interface-annotated object literals (`const h: Handler = { close() {} }`):
+    /// each method implements the same-named interface member (exact edge) and serves as a
+    /// dispatch target for calls through the interface.
+    fn literal_implementation_pairs(&self) -> (Vec<Pair>, HashMap<u32, Ids>) {
+        let mut pairs: Vec<Pair> = Vec::new();
+        let mut index: HashMap<u32, Ids> = HashMap::default();
+        for (file, facts) in self.input.facts.iter().enumerate() {
+            if facts.is_none() {
+                continue;
+            }
+            let file = file as u32;
+            for reference in lock(&self.input.refs[file as usize]).iter() {
+                if reference.kind != RefKind::ImplementLiteral {
+                    continue;
+                }
+                let Some(qualifier) = reference.qualifier.as_deref() else {
+                    continue;
+                };
+                let Some((const_name, method_name)) = qualifier.split_once('.') else {
+                    continue;
+                };
+                let consts: Ids = self
+                    .by_name
+                    .get(const_name)
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|&symbol| {
+                        self.symbols[symbol as usize].file == file
+                            && matches!(
+                                self.symbols[symbol as usize].kind,
+                                SymKind::Const | SymKind::Var
+                            )
+                    })
+                    .collect();
+                if consts.len() != 1 {
+                    continue;
+                }
+                let methods: Ids = self
+                    .by_name
+                    .get(method_name)
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|&symbol| {
+                        self.symbols[symbol as usize].file == file
+                            && self.symbols[symbol as usize].kind == SymKind::Method
+                            && self.symbols[symbol as usize].parent == consts[0]
+                            && self.symbols[symbol as usize].line == reference.line
+                    })
+                    .collect();
+                if methods.is_empty() {
+                    continue;
+                }
+                let Some((traits, confidence)) = self.resolve_type(
+                    file,
+                    Some(&self.file_imports[file as usize]),
+                    None,
+                    &reference.name,
+                ) else {
+                    continue;
+                };
+                for &trait_symbol in &traits {
+                    if self.symbols[trait_symbol as usize].kind != SymKind::Iface {
+                        continue;
+                    }
+                    let members = self.members(trait_symbol, method_name);
+                    if members.is_empty() {
+                        continue;
+                    }
+                    for &member in &members {
+                        for &method in &methods {
+                            pairs.push((method, member, confidence, reference.line));
+                        }
+                    }
+                    index
+                        .entry(trait_symbol)
+                        .or_default()
+                        .extend(methods.iter().copied());
+                }
+            }
+        }
+        for methods in index.values_mut() {
+            methods.sort_unstable();
+            methods.dedup();
+        }
+        (pairs, index)
+    }
+
     fn into_graph(mut self, resolved: Vec<Resolved>) -> Graph {
         // Before the symbols move into the graph.
         let contract_edges = self.contract_edges();
@@ -4971,7 +5080,9 @@ impl<'a> Index<'a> {
                 }
             }
         }
-        for &(type_symbol, trait_symbol, confidence, line) in &self.implementation_pairs {
+        for &(type_symbol, trait_symbol, confidence, line) in
+            self.implementation_pairs.iter().chain(&self.literal_pairs)
+        {
             edges.push(Edge {
                 source: type_symbol,
                 target: trait_symbol,

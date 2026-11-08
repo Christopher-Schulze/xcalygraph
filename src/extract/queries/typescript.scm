@@ -33,6 +33,15 @@
 (class_declaration (class_heritage (implements_clause (generic_type name: (type_identifier) @name) @reference.implementation)))
 (abstract_class_declaration (class_heritage (implements_clause (type_identifier) @name @reference.implementation)))
 (abstract_class_declaration (class_heritage (implements_clause (generic_type name: (type_identifier) @name) @reference.implementation)))
+; Methods of an interface-annotated object literal (`const h: Handler = { close() {} }`).
+(variable_declarator
+  name: (identifier) @literal.const
+  type: (type_annotation (type_identifier) @literal.iface)
+  value: (object)) @literal
+(variable_declarator
+  name: (identifier) @literal.const
+  type: (type_annotation (generic_type name: (type_identifier) @literal.iface))
+  value: (object)) @literal
 (extends_type_clause (type_identifier) @name @reference.inherit)
 (extends_type_clause (generic_type name: (type_identifier) @name) @reference.inherit)
 
