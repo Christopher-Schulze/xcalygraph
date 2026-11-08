@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 150;
+pub const RESOLVE_VERSION: u32 = 151;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -3701,6 +3701,29 @@ impl<'a> Index<'a> {
                                                 || call.ends_with(".__aenter__")
                                         }) =>
                             {
+                                let mut found: Ids = types
+                                    .iter()
+                                    .flat_map(|&type_symbol| {
+                                        self.members(type_symbol, &reference.name)
+                                    })
+                                    .collect();
+                                found.sort_unstable();
+                                found.dedup();
+                                return match found.len() {
+                                    0 => Outcome::Unresolved,
+                                    1 => pick_members(
+                                        self,
+                                        found,
+                                        Confidence::Inferred,
+                                        reference.arity,
+                                    ),
+                                    _ => Outcome::Ambiguous,
+                                };
+                            }
+                            Receiver::Known(types, Confidence::Inferred) => {
+                                // Same member read on an inferred receiver (a call result,
+                                // a property chain): the member must exist on the type,
+                                // the edge stays inferred.
                                 let mut found: Ids = types
                                     .iter()
                                     .flat_map(|&type_symbol| {

@@ -696,6 +696,29 @@ fn is_chain_step(text: &str) -> bool {
         })
 }
 
+/// Callee text when every branch of a conditional expression calls the same callee;
+/// anything else (disagreeing branches, non-call branches) keeps no type.
+fn agreeing_callee(node: Node, source: &[u8]) -> Option<String> {
+    if node.kind() == "call" {
+        let function = node.child_by_field_name("function")?;
+        return match function.kind() {
+            "identifier" | "attribute" => Some(function.utf8_text(source).ok()?.to_owned()),
+            _ => None,
+        };
+    }
+    if node.kind() != "conditional_expression" {
+        return None;
+    }
+    let mut cursor = node.walk();
+    let branches: Vec<Node> = node.named_children(&mut cursor).collect();
+    let [consequence, _, alternative] = branches.as_slice() else {
+        return None;
+    };
+    let first = agreeing_callee(*consequence, source)?;
+    let second = agreeing_callee(*alternative, source)?;
+    (first == second).then_some(first)
+}
+
 /// Tagged chain steps of `qualifier`, head first, or `None` when the qualifier is no pure
 /// member-call chain within budget: try operators only wrap Rust steps, anything else (index,
 /// operator, macro, over-long chain) keeps the clipped source-text form.
@@ -1235,6 +1258,23 @@ fn collect(
                                 .and_then(|call| call.parent())
                                 .is_some_and(|parent| parent.kind() == "try_expression");
                         entry.declared = false;
+                    } else if let Some(node) = get("binding.cond")
+                        && let Some(callee) = agreeing_callee(node, source)
+                    {
+                        // A conditional whose branches call the same callee types like the
+                        // call itself; disagreeing branches keep no type.
+                        if callee
+                            .rsplit('.')
+                            .next()
+                            .is_some_and(|name| name.starts_with(|ch: char| ch.is_uppercase()))
+                        {
+                            entry.type_name = Some(type_name(&callee).into());
+                            entry.declared = true;
+                        } else {
+                            entry.type_name = Some(callee.into());
+                            entry.call = true;
+                            entry.declared = false;
+                        }
                     }
                 }
                 "return" => {
@@ -1289,6 +1329,12 @@ fn collect(
                         {
                             entry.type_name = declared_type(path, text(node)).unwrap_or_default();
                         }
+                    }
+                    if entry.type_name.is_empty()
+                        && let Some(node) = get("field.cond")
+                        && let Some(callee) = agreeing_callee(node, source)
+                    {
+                        entry.type_name = declared_type(path, &callee).unwrap_or_default();
                     }
                 }
                 "env" => {

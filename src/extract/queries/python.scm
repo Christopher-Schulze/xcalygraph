@@ -52,6 +52,9 @@
 (assignment
   left: (identifier) @binding.name
   right: (await (call function: [(identifier) (attribute)] @binding.call))) @binding
+(assignment
+  left: (identifier) @binding.name
+  right: (conditional_expression) @binding.cond) @binding
 
 (assignment
   left: (attribute object: (identifier) @_self attribute: (identifier) @field.name)
@@ -60,6 +63,10 @@
 (assignment
   left: (attribute object: (identifier) @_self attribute: (identifier) @field.name)
   type: (type) @field.type
+  (#eq? @_self "self")) @field
+(assignment
+  left: (attribute object: (identifier) @_self attribute: (identifier) @field.name)
+  right: (conditional_expression) @field.cond
   (#eq? @_self "self")) @field
 
 (call

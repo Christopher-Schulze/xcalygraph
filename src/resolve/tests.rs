@@ -451,6 +451,68 @@ fn python_receivers_flow_through_packages_context_managers_and_properties() -> i
 }
 
 #[test]
+fn python_value_reads_flow_through_call_results() -> io::Result<()> {
+    let root = crate::infra::testdir::TestDir::new("python-value-flow")?;
+    fs::write(
+        root.path().join("use.py"),
+        "class Resp:\n    def text(self):\n        return 1\n\n\
+         class Decoy:\n    def text(self):\n        return 2\n\n\
+         def make() -> Resp:\n    return Resp()\n\n\
+         class Client:\n    def get(self) -> Resp:\n        return Resp()\n\n\
+         def plain():\n    r = make()\n    return r.text\n\n\
+         def method():\n    c = Client()\n    r = c.get()\n    return r.text\n",
+    )?;
+    let graph = graph_of(root.path())?;
+    let text = render(&graph);
+    for expected in [
+        "use.plain -uses?-> use.Resp.text",
+        "use.method -uses?-> use.Resp.text",
+    ] {
+        assert!(
+            text.lines().any(|line| line.contains(expected)),
+            "{expected}\n{text}"
+        );
+    }
+    assert!(
+        !text.lines().any(|line| line.contains("use.Decoy.text")),
+        "decoy must not match\n{text}"
+    );
+    Ok(())
+}
+
+#[test]
+fn python_conditional_call_results_type_when_branches_agree() -> io::Result<()> {
+    let root = crate::infra::testdir::TestDir::new("python-cond-call")?;
+    fs::write(
+        root.path().join("use.py"),
+        "class URL:\n    @property\n    def host(self):\n        return 1\n\n\
+         class Other:\n    pass\n\n\
+         class Req:\n    def __init__(self, flag):\n        self.u = URL() if flag else URL()\n        self.v = URL() if flag else Other()\n\n\
+         def agree():\n    r = Req(True)\n    return r.u.host\n\n\
+         def disagree():\n    r = Req(True)\n    return r.v.host\n\n\
+         def local():\n    u = URL() if True else URL()\n    return u.host\n",
+    )?;
+    let graph = graph_of(root.path())?;
+    let text = render(&graph);
+    for expected in [
+        "use.agree -uses-> use.URL.host",
+        "use.local -uses-> use.URL.host",
+    ] {
+        assert!(
+            text.lines().any(|line| line.contains(expected)),
+            "{expected}\n{text}"
+        );
+    }
+    assert!(
+        !text
+            .lines()
+            .any(|line| line.contains("use.disagree") && line.contains("use.URL.host")),
+        "disagreeing branches must not type\n{text}"
+    );
+    Ok(())
+}
+
+#[test]
 fn receivers_flow_through_return_types_getters_and_private_fields() -> io::Result<()> {
     let root = crate::infra::testdir::TestDir::new("receiver-chains")?;
     fs::write(

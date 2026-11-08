@@ -40,7 +40,7 @@ use crate::domain::role::{self, Role};
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
 /// Rows of a CSV or TSV file that reach search.
 const CSV_INDEXED_ROWS: usize = 2000;
-const EXTRACTION_VERSION: u32 = 163;
+const EXTRACTION_VERSION: u32 = 164;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
