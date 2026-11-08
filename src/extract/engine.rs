@@ -161,11 +161,237 @@ struct AssembledRef {
     julia_builtin: bool,
     arguments: Vec<(u8, String)>,
     position: usize,
+    node_id: usize,
 }
 
-type LocalCapture = (usize, String, Option<(usize, usize, usize)>);
+struct LocalCapture<'tree> {
+    node: Node<'tree>,
+    name: String,
+    bounds: Option<(usize, usize, usize)>,
+}
+
+#[derive(Clone, Copy)]
+struct ScopeContext<'tree> {
+    parent: Option<Node<'tree>>,
+    frame: Option<usize>,
+}
+
+struct ScopeFrame<'tree> {
+    node: Node<'tree>,
+    parent: Option<usize>,
+}
+
+#[derive(Default)]
+struct ScopeIndex<'tree> {
+    contexts: FastMap<usize, ScopeContext<'tree>>,
+    frames: Vec<ScopeFrame<'tree>>,
+}
+
 type LocalSpanIndex<'a> = FastMap<&'a str, Vec<(usize, usize)>>;
 type LocalDefinitions<'a> = FastMap<(usize, &'a str), Option<u32>>;
+
+impl<'tree> ScopeIndex<'tree> {
+    fn build(root: Node<'tree>, targets: &HashSet<usize>, positions: &[usize]) -> Self {
+        let mut index = Self::default();
+        let mut ancestors = Vec::new();
+        let mut scope_stack = Vec::new();
+        let mut next_position = 0;
+        let mut walk = root.walk();
+        loop {
+            let node = walk.node();
+            if node.is_named() && targets.contains(&node.id()) {
+                index.contexts.insert(
+                    node.id(),
+                    ScopeContext {
+                        parent: ancestors.last().copied(),
+                        frame: scope_stack.last().copied(),
+                    },
+                );
+            }
+            if node.is_named() && is_scope_context_node(node.kind()) {
+                let frame = index.frames.len();
+                index.frames.push(ScopeFrame {
+                    node,
+                    parent: scope_stack.last().copied(),
+                });
+                scope_stack.push(frame);
+            }
+            while positions
+                .get(next_position)
+                .is_some_and(|&position| position < node.start_byte())
+            {
+                next_position += 1;
+            }
+            let contains_target = positions
+                .get(next_position)
+                .is_some_and(|&position| position < node.end_byte());
+            if contains_target && walk.goto_first_child() {
+                ancestors.push(node);
+                continue;
+            }
+            loop {
+                let leaving = walk.node();
+                if walk.goto_next_sibling() {
+                    if ancestors
+                        .last()
+                        .is_some_and(|parent: &Node| parent.id() == leaving.id())
+                    {
+                        ancestors.pop();
+                    }
+                    if scope_stack
+                        .last()
+                        .is_some_and(|&frame| index.frames[frame].node.id() == leaving.id())
+                    {
+                        scope_stack.pop();
+                    }
+                    break;
+                }
+                if !walk.goto_parent() {
+                    return index;
+                }
+                if ancestors
+                    .last()
+                    .is_some_and(|parent: &Node| parent.id() == leaving.id())
+                {
+                    ancestors.pop();
+                }
+                if scope_stack
+                    .last()
+                    .is_some_and(|&frame| index.frames[frame].node.id() == leaving.id())
+                {
+                    scope_stack.pop();
+                }
+            }
+        }
+    }
+
+    fn local_bounds(&self, node: Node<'tree>) -> Option<(usize, usize, usize)> {
+        let mut frame = self.contexts.get(&node.id())?.frame;
+        while let Some(index) = frame {
+            let current = self.frames[index].node;
+            if current.kind() == "catch_clause"
+                && current
+                    .child_by_field_name("parameter")
+                    .is_some_and(|parameter| {
+                        parameter.start_byte() <= node.start_byte()
+                            && node.end_byte() <= parameter.end_byte()
+                    })
+                && let Some(body) = current.child_by_field_name("body")
+            {
+                return Some((body.start_byte(), body.end_byte(), current.id()));
+            }
+            if current.kind() == "for_in_statement"
+                && current
+                    .child_by_field_name("left")
+                    .is_some_and(|left| left.id() == node.id())
+            {
+                return Some((current.start_byte(), current.end_byte(), current.id()));
+            }
+            if matches!(
+                current.kind(),
+                "function_expression" | "arrow_function" | "generator_function"
+            ) {
+                return Some((current.start_byte(), current.end_byte(), current.id()));
+            }
+            if matches!(current.kind(), "function_declaration" | "method_definition") {
+                break;
+            }
+            frame = self.frames[index].parent;
+        }
+        None
+    }
+
+    fn python_list_local_is_lambda_parameter(&self, node: Node<'tree>) -> bool {
+        let Some(context) = self.contexts.get(&node.id()) else {
+            return false;
+        };
+        let mut frame = context.frame;
+        while let Some(index) = frame {
+            let current = self.frames[index].node;
+            if current.kind() == "lambda_parameters" {
+                return true;
+            }
+            if matches!(current.kind(), "function_definition" | "lambda" | "module") {
+                return false;
+            }
+            frame = self.frames[index].parent;
+        }
+        false
+    }
+
+    fn python_list_lambda_body(&self, node: Node<'tree>) -> Option<Node<'tree>> {
+        let mut frame = self.contexts.get(&node.id())?.frame;
+        while let Some(index) = frame {
+            let current = self.frames[index].node;
+            if current.kind() == "lambda" {
+                return current.child_by_field_name("body");
+            }
+            frame = self.frames[index].parent;
+        }
+        None
+    }
+
+    fn python_list_is_default_value(&self, node_id: usize, position: usize) -> bool {
+        let Some(context) = self.contexts.get(&node_id) else {
+            return false;
+        };
+        let Some(list) = context.parent.filter(|parent| parent.kind() == "list") else {
+            return false;
+        };
+        let mut frame = context.frame;
+        while let Some(index) = frame {
+            let current = self.frames[index].node;
+            if current.id() == list.id() {
+                frame = self.frames[index].parent;
+                break;
+            }
+            frame = self.frames[index].parent;
+        }
+        while let Some(index) = frame {
+            let current = self.frames[index].node;
+            if matches!(
+                current.kind(),
+                "default_parameter" | "typed_default_parameter"
+            ) && current
+                .child_by_field_name("value")
+                .is_some_and(|value| value.start_byte() <= position && position < value.end_byte())
+                && self.frames[index]
+                    .parent
+                    .is_some_and(|parent| self.frames[parent].node.kind() == "parameters")
+            {
+                return true;
+            }
+            if matches!(current.kind(), "function_definition" | "lambda" | "module") {
+                return false;
+            }
+            frame = self.frames[index].parent;
+        }
+        false
+    }
+}
+
+fn is_scope_context_node(kind: &str) -> bool {
+    matches!(
+        kind,
+        "list"
+            | "default_parameter"
+            | "typed_default_parameter"
+            | "parameters"
+            | "lambda"
+            | "lambda_parameters"
+            | "function_definition"
+            | "module"
+            | "statement_block"
+            | "program"
+            | "function_expression"
+            | "function_declaration"
+            | "arrow_function"
+            | "generator_function"
+            | "method_definition"
+            | "for_in_statement"
+            | "catch_clause"
+    )
+}
 
 #[derive(Default)]
 struct RawImport<'tree> {
@@ -321,6 +547,11 @@ fn collect(
         .iter()
         .any(|suffix| path.ends_with(suffix));
     let names = query.capture_names();
+    #[cfg(feature = "lang-python")]
+    let python_post_parse_capture = names
+        .iter()
+        .position(|name| *name == "python_post_parse")
+        .and_then(|index| u32::try_from(index).ok());
     let text = |node: Node| node.utf8_text(source).unwrap_or_default();
     let return_type = |node: Node| {
         #[cfg(feature = "lang-python")]
@@ -349,16 +580,37 @@ fn collect(
     let mut assigned: Vec<String> = Vec::new();
     // Local variables and parameters (`@local`): a bare value reference of that name in the same
     // scope reads the local, not a method (Ruby `x = 1; x`).
-    let mut locals: Vec<LocalCapture> = Vec::new();
+    let javascript_path = path.rsplit('.').next().is_some_and(|extension| {
+        [
+            "js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "ets", "vue", "svelte", "astro",
+            "html", "htm",
+        ]
+        .iter()
+        .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+    });
+    let mut locals: Vec<LocalCapture<'_>> = Vec::new();
+    let mut python_list_values = HashSet::new();
+    let mut python_list_local_captures = Vec::new();
+    let mut python_list_lambda_captures = Vec::new();
     let mut python_list_locals: Vec<(usize, String)> = Vec::new();
     let mut python_list_lambdas: Vec<(usize, usize, String)> = Vec::new();
     let mut python_list_globals: Vec<(usize, String)> = Vec::new();
+    #[cfg(feature = "lang-python")]
+    let mut python_post_parse_nodes = Vec::new();
     let mut cursor = QueryCursor::new();
     cursor.set_match_limit(4096);
     let mut matches = cursor.matches(query, root, source);
     while let Some(found) = matches.next() {
         let captures = found.captures();
         if !parents_match(query, found.pattern_index, captures) {
+            continue;
+        }
+        #[cfg(feature = "lang-python")]
+        if let Some(index) = python_post_parse_capture
+            && let [capture] = captures
+            && capture.index == index
+        {
+            python_post_parse_nodes.push(capture.node);
             continue;
         }
         for capture in captures
@@ -375,113 +627,31 @@ fn collect(
         }
         for capture in captures
             .iter()
+            .filter(|capture| names[capture.index as usize] == "python_list_value")
+        {
+            python_list_values.insert(capture.node.id());
+        }
+        for capture in captures
+            .iter()
             .filter(|capture| names[capture.index as usize] == "python_list_local")
         {
-            let mut ancestor = capture.node.parent();
-            let mut lambda_parameter = false;
-            while let Some(node) = ancestor {
-                if node.kind() == "lambda_parameters" {
-                    lambda_parameter = true;
-                    break;
-                }
-                if matches!(node.kind(), "function_definition" | "lambda" | "module") {
-                    break;
-                }
-                ancestor = node.parent();
-            }
-            if lambda_parameter {
-                continue;
-            }
-            let mut walk = capture.node.walk();
-            'walk: loop {
-                let node = walk.node();
-                if node.kind() == "identifier" {
-                    python_list_locals.push((node.start_byte(), text(node).to_owned()));
-                }
-                if walk.goto_first_child() {
-                    continue;
-                }
-                loop {
-                    if walk.node().id() == capture.node.id() {
-                        break 'walk;
-                    }
-                    if walk.goto_next_sibling() {
-                        break;
-                    }
-                    if !walk.goto_parent() {
-                        break 'walk;
-                    }
-                }
-            }
+            python_list_local_captures.push(capture.node);
         }
         for capture in captures
             .iter()
             .filter(|capture| names[capture.index as usize] == "python_list_lambda")
         {
-            let mut parent = capture.node.parent();
-            while let Some(node) = parent {
-                if node.kind() == "lambda" {
-                    let name = if capture.node.kind() == "identifier" {
-                        Some(capture.node)
-                    } else {
-                        capture.node.named_child(0)
-                    };
-                    if let (Some(name), Some(body)) = (
-                        name.filter(|name| name.kind() == "identifier"),
-                        node.child_by_field_name("body"),
-                    ) {
-                        python_list_lambdas.push((
-                            body.start_byte(),
-                            body.end_byte(),
-                            text(name).to_owned(),
-                        ));
-                    }
-                    break;
-                }
-                parent = node.parent();
-            }
+            python_list_lambda_captures.push(capture.node);
         }
         for capture in captures
             .iter()
             .filter(|capture| names[capture.index as usize] == "local")
         {
-            let mut parent = capture.node.parent();
-            let mut anonymous = None;
-            if path.rsplit('.').next().is_some_and(|extension| {
-                [
-                    "js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "ets", "vue", "svelte",
-                    "astro", "html", "htm",
-                ]
-                .iter()
-                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
-            }) {
-                while let Some(node) = parent {
-                    if node.kind() == "for_in_statement"
-                        && node
-                            .child_by_field_name("left")
-                            .is_some_and(|left| left.id() == capture.node.id())
-                    {
-                        anonymous = Some((node.start_byte(), node.end_byte(), node.id()));
-                        break;
-                    }
-                    if matches!(
-                        node.kind(),
-                        "function_expression" | "arrow_function" | "generator_function"
-                    ) {
-                        anonymous = Some((node.start_byte(), node.end_byte(), node.id()));
-                        break;
-                    }
-                    if matches!(node.kind(), "function_declaration" | "method_definition") {
-                        break;
-                    }
-                    parent = node.parent();
-                }
-            }
-            locals.push((
-                capture.node.start_byte(),
-                text(capture.node).to_owned(),
-                anonymous,
-            ));
+            locals.push(LocalCapture {
+                node: capture.node,
+                name: text(capture.node).to_owned(),
+                bounds: None,
+            });
         }
         let Some((primary, primary_node)) = captures.iter().find_map(|capture| {
             let name = names[capture.index as usize];
@@ -798,7 +968,13 @@ fn collect(
                     {
                         continue;
                     }
-                    let entry = fields.entry(key).or_default();
+                    // Java and Go permit several field names in one declaration.
+                    let field_key = if path.ends_with(".java") || path.ends_with(".go") {
+                        get("field.name").map_or(key, |node| node.id())
+                    } else {
+                        key
+                    };
+                    let entry = fields.entry(field_key).or_default();
                     entry.position = primary_node.start_byte();
                     if let Some(node) = get("field.name") {
                         if let Some(literal) = get("field.literal") {
@@ -845,6 +1021,124 @@ fn collect(
         }
     }
     drop(matches);
+    let python_list_context = path.ends_with(".py")
+        && (!python_list_values.is_empty()
+            || !python_list_local_captures.is_empty()
+            || !python_list_lambda_captures.is_empty()
+            || !python_list_globals.is_empty());
+    let javascript_local_context = javascript_path && !locals.is_empty();
+    let mut scope_targets = HashSet::new();
+    let local_scope_names: HashSet<&str> = if javascript_local_context {
+        locals
+            .iter()
+            .map(|capture| capture.name.as_str())
+            .chain(defs.values().filter_map(|definition| {
+                definition
+                    .node
+                    .filter(|node| node.kind() == "function_declaration")
+                    .map(|_| definition.name.as_str())
+            }))
+            .collect()
+    } else {
+        HashSet::new()
+    };
+    if python_list_context || javascript_local_context {
+        for (&id, reference) in &refs {
+            let relevant = if python_list_context {
+                python_list_values.contains(&id)
+            } else {
+                matches!(reference.kind, Some(RefKind::Value | RefKind::Call))
+                    && reference.qualifier.is_none()
+                    && local_scope_names.contains(reference.name.as_str())
+            };
+            if relevant {
+                scope_targets.insert(id);
+            }
+        }
+    }
+    if javascript_local_context {
+        scope_targets.extend(locals.iter().map(|capture| capture.node.id()));
+        scope_targets.extend(defs.values().filter_map(|definition| {
+            definition
+                .node
+                .filter(|node| node.kind() == "function_declaration")
+                .map(|node| node.id())
+        }));
+    }
+    if python_list_context {
+        scope_targets.extend(python_list_values.iter().copied());
+        scope_targets.extend(
+            python_list_local_captures
+                .iter()
+                .chain(&python_list_lambda_captures)
+                .map(Node::id),
+        );
+    }
+    let scope_index = if scope_targets.is_empty() {
+        ScopeIndex::default()
+    } else {
+        let mut positions: Vec<usize> = refs
+            .iter()
+            .filter(|(id, _)| scope_targets.contains(id))
+            .map(|(_, reference)| reference.position)
+            .chain(locals.iter().map(|capture| capture.node.start_byte()))
+            .chain(python_list_local_captures.iter().map(Node::start_byte))
+            .chain(python_list_lambda_captures.iter().map(Node::start_byte))
+            .chain(defs.values().filter_map(|definition| {
+                definition
+                    .node
+                    .filter(|node| scope_targets.contains(&node.id()))
+                    .map(|node| node.start_byte())
+            }))
+            .collect();
+        positions.sort_unstable();
+        positions.dedup();
+        ScopeIndex::build(root, &scope_targets, &positions)
+    };
+    for capture in python_list_local_captures {
+        if scope_index.python_list_local_is_lambda_parameter(capture) {
+            continue;
+        }
+        let mut walk = capture.walk();
+        'walk: loop {
+            let node = walk.node();
+            if node.kind() == "identifier" {
+                python_list_locals.push((node.start_byte(), text(node).to_owned()));
+            }
+            if walk.goto_first_child() {
+                continue;
+            }
+            loop {
+                if walk.node().id() == capture.id() {
+                    break 'walk;
+                }
+                if walk.goto_next_sibling() {
+                    break;
+                }
+                if !walk.goto_parent() {
+                    break 'walk;
+                }
+            }
+        }
+    }
+    for capture in python_list_lambda_captures {
+        let name = if capture.kind() == "identifier" {
+            Some(capture)
+        } else {
+            capture.named_child(0)
+        };
+        if let (Some(name), Some(body)) = (
+            name.filter(|name| name.kind() == "identifier"),
+            scope_index.python_list_lambda_body(capture),
+        ) {
+            python_list_lambdas.push((body.start_byte(), body.end_byte(), text(name).to_owned()));
+        }
+    }
+    if javascript_local_context {
+        for capture in &mut locals {
+            capture.bounds = scope_index.local_bounds(capture.node);
+        }
+    }
     let incomplete = capture_identities && (root.has_error() || cursor.did_exceed_match_limit());
     let coverage = if cursor.did_exceed_match_limit() {
         Coverage::MatchLimit
@@ -859,7 +1153,6 @@ fn collect(
         hooks,
         path,
         source,
-        root,
         capture_identities,
         package,
         defs,
@@ -870,6 +1163,7 @@ fn collect(
         returns,
         fields,
         envs,
+        scope_index,
         locals,
         python_list_locals,
         python_list_lambdas,
@@ -963,6 +1257,13 @@ fn collect(
     if incomplete {
         parsed.identities.fill(None);
     }
+    #[cfg(feature = "lang-python")]
+    if path.ends_with(".py") {
+        python_post_parse_nodes
+            .sort_unstable_by_key(|node| (node.start_byte(), std::cmp::Reverse(node.end_byte())));
+        python_post_parse_nodes.dedup_by_key(|node| node.id());
+        super::lang::python::post_parse(source, root, &mut parsed, &python_post_parse_nodes);
+    }
     parsed
 }
 
@@ -970,7 +1271,6 @@ struct Assembly<'a, 'tree> {
     hooks: &'a Hooks,
     path: &'a str,
     source: &'a [u8],
-    root: Node<'tree>,
     capture_identities: bool,
     package: Option<String>,
     defs: FastMap<usize, RawDef<'tree>>,
@@ -981,7 +1281,8 @@ struct Assembly<'a, 'tree> {
     returns: Vec<(usize, String)>,
     fields: FastMap<usize, RawField>,
     envs: FastMap<usize, (String, usize, u32)>,
-    locals: Vec<LocalCapture>,
+    scope_index: ScopeIndex<'tree>,
+    locals: Vec<LocalCapture<'tree>>,
     python_list_locals: Vec<(usize, String)>,
     python_list_lambdas: Vec<(usize, usize, String)>,
     python_list_globals: Vec<(usize, String)>,
@@ -992,7 +1293,6 @@ fn assemble(assembly: Assembly) -> Parsed {
         hooks,
         path,
         source,
-        root,
         capture_identities,
         package,
         defs,
@@ -1003,6 +1303,7 @@ fn assemble(assembly: Assembly) -> Parsed {
         returns,
         fields,
         envs,
+        scope_index,
         locals,
         python_list_locals,
         python_list_lambdas,
@@ -1253,7 +1554,7 @@ fn assemble(assembly: Assembly) -> Parsed {
     let mut facts_refs: Vec<AssembledRef> = refs
         .into_iter()
         .filter(|(name_node, _)| !def_name_nodes.contains(name_node))
-        .filter_map(|(_, mut raw)| {
+        .filter_map(|(node_id, mut raw)| {
             let kind = raw.kind?;
             let builtin = raw.qualifier.is_none() && (hooks.builtin)(&raw.name);
             let local_function = local_functions.contains(&(
@@ -1274,33 +1575,16 @@ fn assemble(assembly: Assembly) -> Parsed {
             if path.ends_with(".py")
                 && kind == RefKind::Value
                 && let Some(current) = scope
-                && let Some(list) = root
-                    .named_descendant_for_byte_range(raw.position, raw.position + 1)
-                    .and_then(|node| node.parent())
-                    .filter(|parent| parent.kind() == "list")
+                && scope_index
+                    .contexts
+                    .get(&node_id)
+                    .and_then(|context| context.parent)
+                    .is_some_and(|parent| parent.kind() == "list")
             {
                 let decorator = defs[current as usize]
                     .node
                     .is_some_and(|node| raw.position < node.start_byte());
-                let mut ancestor = list.parent();
-                let mut default = false;
-                while let Some(node) = ancestor {
-                    if matches!(node.kind(), "default_parameter" | "typed_default_parameter")
-                        && node.child_by_field_name("value").is_some_and(|value| {
-                            value.start_byte() <= raw.position && raw.position < value.end_byte()
-                        })
-                        && node
-                            .parent()
-                            .is_some_and(|parent| parent.kind() == "parameters")
-                    {
-                        default = true;
-                        break;
-                    }
-                    if matches!(node.kind(), "function_definition" | "lambda" | "module") {
-                        break;
-                    }
-                    ancestor = node.parent();
-                }
+                let default = scope_index.python_list_is_default_value(node_id, raw.position);
                 if decorator || default {
                     scope = symbols[current as usize].parent;
                 }
@@ -1319,6 +1603,7 @@ fn assemble(assembly: Assembly) -> Parsed {
                 julia_builtin,
                 arguments,
                 position: raw.position,
+                node_id,
             })
         })
         .collect();
@@ -1363,12 +1648,10 @@ fn assemble(assembly: Assembly) -> Parsed {
             if reference.kind != RefKind::Value || reference.qualifier.is_some() {
                 return true;
             }
-            let Some(end) = entry.position.checked_add(1) else {
-                return false;
-            };
-            let is_list = root
-                .named_descendant_for_byte_range(entry.position, end)
-                .and_then(|node| node.parent())
+            let is_list = scope_index
+                .contexts
+                .get(&entry.node_id)
+                .and_then(|context| context.parent)
                 .is_some_and(|node| node.kind() == "list");
             if !is_list {
                 return true;
@@ -1402,18 +1685,18 @@ fn assemble(assembly: Assembly) -> Parsed {
     if !locals.is_empty() {
         let local_names: std::collections::HashSet<(Option<u32>, &str)> = locals
             .iter()
-            .filter(|(_, _, bounds)| bounds.is_none())
-            .map(|(position, name, _)| (scope_of(*position), name.as_str()))
+            .filter(|capture| capture.bounds.is_none())
+            .map(|capture| (scope_of(capture.node.start_byte()), capture.name.as_str()))
             .collect();
         let mut anonymous: LocalSpanIndex<'_> = FastMap::default();
         let mut scoped_locals = HashSet::new();
-        for (_, name, bounds) in &locals {
-            if let Some((start, end, scope)) = bounds {
+        for capture in &locals {
+            if let Some((start, end, scope)) = capture.bounds {
                 anonymous
-                    .entry(name.as_str())
+                    .entry(capture.name.as_str())
                     .or_default()
-                    .push((*start, *end));
-                scoped_locals.insert((*scope, name.as_str()));
+                    .push((start, end));
+                scoped_locals.insert((scope, capture.name.as_str()));
             }
         }
         for spans in anonymous.values_mut() {
@@ -1443,15 +1726,22 @@ fn assemble(assembly: Assembly) -> Parsed {
                 else {
                     continue;
                 };
-                let Some(block) = node
-                    .parent()
+                let Some(context) = scope_index.contexts.get(&node.id()) else {
+                    continue;
+                };
+                let Some(block) = context
+                    .parent
                     .filter(|node| matches!(node.kind(), "statement_block" | "program"))
                 else {
                     continue;
                 };
                 if counts.get(def.name.as_str()).copied().unwrap_or(0) > 1 {
-                    let mut owner = block.parent();
-                    while let Some(parent) = owner {
+                    let mut owner = context
+                        .frame
+                        .filter(|&frame| scope_index.frames[frame].node.id() == block.id())
+                        .and_then(|frame| scope_index.frames[frame].parent);
+                    while let Some(frame) = owner {
+                        let parent = scope_index.frames[frame].node;
                         if matches!(
                             parent.kind(),
                             "function_expression" | "arrow_function" | "generator_function"
@@ -1462,7 +1752,7 @@ fn assemble(assembly: Assembly) -> Parsed {
                         if matches!(parent.kind(), "function_declaration" | "method_definition") {
                             break;
                         }
-                        owner = parent.parent();
+                        owner = scope_index.frames[frame].parent;
                     }
                 }
                 let Ok(index) = u32::try_from(index) else {
@@ -1497,11 +1787,12 @@ fn assemble(assembly: Assembly) -> Parsed {
             if !shadowed && !lexical_names.contains(reference.name.as_str()) {
                 return true;
             }
-            let Some(end) = entry.position.checked_add(1) else {
-                return false;
-            };
-            let mut ancestor = root.named_descendant_for_byte_range(entry.position, end);
-            while let Some(node) = ancestor {
+            let mut ancestor = scope_index
+                .contexts
+                .get(&entry.node_id)
+                .and_then(|context| context.frame);
+            while let Some(frame) = ancestor {
+                let node = scope_index.frames[frame].node;
                 if let Some(definition) = definitions.get(&(node.id(), reference.name.as_str())) {
                     if let Some(index) = definition.filter(|_| {
                         entry.identity.is_none() || entry.identity.as_deref() == Some("js:new")
@@ -1514,7 +1805,7 @@ fn assemble(assembly: Assembly) -> Parsed {
                 if scoped_locals.contains(&(node.id(), reference.name.as_str())) {
                     return false;
                 }
-                ancestor = node.parent();
+                ancestor = scope_index.frames[frame].parent;
             }
             false
         });
@@ -1535,6 +1826,7 @@ fn assemble(assembly: Assembly) -> Parsed {
                 julia_builtin: false,
                 arguments: Vec::new(),
                 position: impl_node.start_byte(),
+                node_id: impl_node.id(),
             });
         }
     }

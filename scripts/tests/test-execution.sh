@@ -40,7 +40,25 @@ if len(executables) != 1:
 print(executables[0])
 PYTHON
 )"
-bash "${REPO_ROOT}/scripts/benchmarks/check-instructions.sh" "${binary}"
+bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
+CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+  RUSTFLAGS="-Dwarnings" cargo build --release --locked --bin xcalygraph --message-format=json \
+  > "${work}/release-build.jsonl"
+instruction_binary="$(python3 -I - "${work}/release-build.jsonl" <<'PYTHON'
+import json
+import sys
+
+artifacts = [json.loads(line) for line in open(sys.argv[1])]
+executables = [item["executable"] for item in artifacts
+               if item.get("reason") == "compiler-artifact"
+               and item["target"]["name"] == "xcalygraph"
+               and "bin" in item["target"]["kind"] and item.get("executable")]
+if len(executables) != 1:
+    raise SystemExit("test.sh: Cargo did not report exactly one release xcalygraph binary")
+print(executables[0])
+PYTHON
+)"
+bash "${REPO_ROOT}/scripts/benchmarks/check-instructions.sh" "${instruction_binary}"
 bash "${REPO_ROOT}/scripts/benchmarks/check-scaling.sh" "${binary}"
 [[ "${mode}" == all ]] || exit 0
 bash "${REPO_ROOT}/scripts/tests/test-prune-cache.sh"

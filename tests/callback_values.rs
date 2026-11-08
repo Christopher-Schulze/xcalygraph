@@ -304,6 +304,72 @@ fn html_script_local_function_identity_survives_document_merge() -> Result<(), B
 }
 
 #[test]
+fn catch_parameters_shadow_only_inside_their_block() -> Result<(), Box<dyn Error>> {
+    for extension in ["js", "ts"] {
+        for parameter in ["handler", "{handler}", "[handler]"] {
+            let fixture = Fixture(support::exclusive_dir("catch-parameter-scope")?);
+            let root = fixture.0.join("repo");
+            fs::create_dir(&root)?;
+            fs::write(
+                root.join(format!("callbacks.{extension}")),
+                format!(
+                    "function handler() {{}}\nfunction before() {{ handler(); }}\nfunction guarded() {{ try {{ throw 1; }} catch ({parameter}) {{\n handler();\n function inner() {{ handler(); }}\n inner();\n}} }}\nfunction after() {{ handler(); }}\n"
+                ),
+            )?;
+            let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+                .args(["show", "handler", "--json", "--exact", "-C"])
+                .arg(&root)
+                .arg("--index-dir")
+                .arg(fixture.0.join("index"))
+                .output()?;
+            assert!(output.status.success());
+            let text = String::from_utf8(output.stdout)?;
+            let incoming: Vec<_> = text
+                .lines()
+                .filter(|line| line.contains("\"rel\":\"in\""))
+                .collect();
+            assert_eq!(incoming.len(), 2, "{extension}: {text}");
+            assert!(
+                incoming.iter().any(|line| line.contains("\"line\":2,")),
+                "{text}"
+            );
+            assert!(
+                incoming.iter().any(|line| line.contains("\"line\":8,")),
+                "{text}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn nested_named_function_parameter_shadows_outer_declaration_in_html() -> Result<(), Box<dyn Error>>
+{
+    let fixture = Fixture(support::exclusive_dir("html-nested-parameter")?);
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("callbacks.html"),
+        "<script>\n(function() {\nfunction timestamp() {}\nfunction createGeneratedString(timestamp) { consume(timestamp); }\nregister(timestamp);\n})();\n</script>\n",
+    )?;
+    let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+        .args(["show", "timestamp", "--json", "--exact", "-C"])
+        .arg(&root)
+        .arg("--index-dir")
+        .arg(fixture.0.join("index"))
+        .output()?;
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout)?;
+    let incoming: Vec<_> = text
+        .lines()
+        .filter(|line| line.contains("\"rel\":\"in\""))
+        .collect();
+    assert_eq!(incoming.len(), 1, "{text}");
+    assert!(incoming[0].contains("\"line\":5,"), "{text}");
+    Ok(())
+}
+
+#[test]
 fn callback_bindings_do_not_leak_between_sibling_functions() -> Result<(), Box<dyn Error>> {
     for extension in ["js", "ts"] {
         let fixture = Fixture(support::exclusive_dir("sibling-callback-scope")?);

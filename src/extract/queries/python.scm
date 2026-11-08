@@ -1,5 +1,11 @@
 ; Python facts for the extraction engine (src/extract/engine.rs capture convention).
 
+[(assignment) (augmented_assignment) (for_statement) (named_expression)
+ (as_pattern_target) (delete_statement) (parameters) (case_pattern)
+ (lambda_parameters) (for_in_clause) (global_statement) (nonlocal_statement)
+ (try_statement) (function_definition) (class_definition) (import_statement)
+ (import_from_statement) (decorated_definition)] @python_post_parse
+
 (function_definition name: (identifier) @name) @definition.function
 (function_definition return_type: (type) @return.type) @return
 (class_definition name: (identifier) @name) @definition.class
@@ -89,7 +95,7 @@
 (return_statement (identifier) @name @reference.value)
 (assignment right: (identifier) @name @reference.value)
 (pair value: (identifier) @name @reference.value)
-(list (identifier) @name @reference.value)
+(list (identifier) @name @reference.value @python_list_value)
 (parameters (identifier) @python_list_local)
 (parameters (list_splat_pattern) @python_list_local)
 (parameters (dictionary_splat_pattern) @python_list_local)

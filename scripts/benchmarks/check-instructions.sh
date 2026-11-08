@@ -25,18 +25,39 @@ fi
 readonly binary="$1"
 shift
 
-work="$(mktemp -d "${TMPDIR:-/tmp}/xcalygraph-instructions.XXXXXXXX")"
+work="$(mktemp -d "${REPO_ROOT}/.cache/instruction-check.XXXXXXXX")"
 readonly work
 trap 'rm -rf -- "${work}"' EXIT
 
 # Retired instructions of one fresh build, empty when the platform does not report them.
 measure() {
-  rm -rf -- "${work}/index"
-  XCALYGRAPH_INDEX_DIR="${work}/index" /usr/bin/time -l "${binary}" index -C "$1" 2>&1 >/dev/null |
-    awk '/instructions retired/ { print $1 }'
+  local run count status
+  run="$(mktemp -d "${work}/run.XXXXXXXX")"
+  if count="$(HOME="${run}" XCALYGRAPH_INDEX_DIR="${run}/index" /usr/bin/time -l "${binary}" index -C "$1" 2>&1 >/dev/null |
+    awk '/instructions retired/ { print $1 }')"; then
+    rm -rf -- "${run}"
+    printf '%s\n' "${count}"
+  else
+    status=$?
+    rm -rf -- "${run}"
+    return "${status}"
+  fi
+}
+
+corpus_name() {
+  local root="$1" name=""
+  if [[ -f "${REPO_ROOT}/.cache/edge-baseline/roots.tsv" ]]; then
+    name="$(awk -F '\t' -v root="${root}" '$4 == root { print $1; exit }' \
+      "${REPO_ROOT}/.cache/edge-baseline/roots.tsv")"
+  fi
+  printf '%s\n' "${name:-$(basename -- "${root}")}"
 }
 
 if (( bless )); then
+  if [[ -e "${BASELINE}" || -L "${BASELINE}" ]]; then
+    echo "check-instructions.sh: baseline already exists; move it aside before blessing a replacement" >&2
+    exit 1
+  fi
   : > "${work}/baseline"
   for root in "$@"; do
     # The lower of two runs: the first one pays for cold pages.
@@ -58,7 +79,7 @@ while IFS=$'\t' read -r root blessed; do
     count="$(measure "${root}")"
   fi
   if (( count * 100 > blessed * (100 + LIMIT_PERCENT) )); then
-    echo "check-instructions.sh: $(( (count - blessed) * 100 / blessed )) % more instructions than the baseline on $(basename "${root}"): ${blessed} -> ${count}" >&2
+    echo "check-instructions.sh: $(( (count - blessed) * 100 / blessed )) % more instructions than the baseline on $(corpus_name "${root}"): ${blessed} -> ${count}" >&2
     exit 1
   fi
 done < "${BASELINE}"

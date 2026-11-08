@@ -30,7 +30,7 @@ pub(in crate::extract) fn post_parse(
     source: &[u8],
     root: Node,
     parsed: &mut crate::extract::engine::Parsed,
-    _: bool,
+    nodes: &[Node],
 ) {
     if root.has_error() || parsed.facts.coverage != Coverage::Complete {
         return;
@@ -131,481 +131,477 @@ pub(in crate::extract) fn post_parse(
     let mut context_managers = Vec::new();
     let mut external_writes: FastSet<&str> = FastSet::default();
     let mut expression_writes: FastMap<&str, Vec<std::ops::Range<u32>>> = FastMap::default();
-    let mut walk = root.walk();
-    loop {
-        let node = walk.node();
-        if node.is_named() {
-            if track_context_writes && node.kind() == "decorated_definition" {
-                context_managers.push(node);
+    for &node in nodes {
+        let mut ancestors = Vec::new();
+        if matches!(
+            node.kind(),
+            "lambda_parameters"
+                | "for_in_clause"
+                | "try_statement"
+                | "import_statement"
+                | "import_from_statement"
+        ) {
+            let mut parent = node.parent();
+            while let Some(current) = parent {
+                if current.is_named() {
+                    ancestors.push(current);
+                }
+                parent = current.parent();
             }
-            let target = match node.kind() {
-                "assignment" | "augmented_assignment" | "for_statement" => {
-                    node.child_by_field_name("left")
-                }
-                "named_expression" => node.child_by_field_name("name"),
-                "as_pattern_target" | "delete_statement" | "parameters" | "case_pattern" => {
-                    Some(node)
-                }
-                _ => None,
-            };
-            if let Some(target) = target {
-                let owner = import_owner(target.start_byte(), parsed);
-                let optional_fallback = is_optional_import_fallback(node, source);
-                if track_context_writes {
-                    collect_written_attributes(target, source, &mut |object, name| {
-                        context_attribute_writes.push((owner, object, name));
-                    });
-                }
-                if !optional_fallback
-                    && target.kind() == "attribute"
-                    && target
-                        .child_by_field_name("object")
-                        .and_then(|item| item.utf8_text(source).ok())
-                        == Some("typing")
-                    && target
-                        .child_by_field_name("attribute")
-                        .and_then(|item| item.utf8_text(source).ok())
-                        == Some("TYPE_CHECKING")
-                {
-                    external_writes.insert("typing");
-                }
-                collect_written_names(target, source, &mut |name| {
-                    if track_context_writes {
-                        context_writes.entry(owner).or_default().insert(name);
-                    }
-                    if owner.is_none() {
-                        *module_write_counts.entry(name).or_default() += 1;
-                    }
-                    if !optional_fallback {
-                        writes.entry(owner).or_default().insert(name);
-                    }
+            ancestors.reverse();
+        }
+        let kind = node.kind();
+        if track_context_writes && kind == "decorated_definition" {
+            context_managers.push(node);
+        }
+        let target = match kind {
+            "assignment" | "augmented_assignment" | "for_statement" => {
+                node.child_by_field_name("left")
+            }
+            "named_expression" => node.child_by_field_name("name"),
+            "as_pattern_target" | "delete_statement" | "parameters" | "case_pattern" => Some(node),
+            _ => None,
+        };
+        if let Some(target) = target {
+            let owner = import_owner(target.start_byte(), parsed);
+            let optional_fallback = is_optional_import_fallback(node, source);
+            if track_context_writes {
+                collect_written_attributes(target, source, &mut |object, name| {
+                    context_attribute_writes.push((owner, object, name));
                 });
             }
-            if node.kind() == "lambda_parameters" {
-                let range = node
-                    .parent()
-                    .and_then(|lambda| lambda.child_by_field_name("body"))
-                    .and_then(|body| {
-                        Some(
-                            u32::try_from(body.start_byte()).ok()?
-                                ..u32::try_from(body.end_byte()).ok()?,
-                        )
-                    });
-                let owner = import_owner(node.start_byte(), parsed);
-                collect_written_names(node, source, &mut |name| {
-                    if let Some(range) = &range {
-                        expression_writes
-                            .entry(name)
-                            .or_default()
-                            .push(range.clone());
-                    } else {
-                        writes.entry(owner).or_default().insert(name);
-                    }
-                });
-            }
-            if node.kind() == "for_in_clause"
-                && let Some(target) = node.child_by_field_name("left")
+            if !optional_fallback
+                && target.kind() == "attribute"
+                && target
+                    .child_by_field_name("object")
+                    .and_then(|item| item.utf8_text(source).ok())
+                    == Some("typing")
+                && target
+                    .child_by_field_name("attribute")
+                    .and_then(|item| item.utf8_text(source).ok())
+                    == Some("TYPE_CHECKING")
             {
-                let mut parent = node.parent();
-                while parent.is_some_and(|item| {
-                    !matches!(
+                external_writes.insert("typing");
+            }
+            collect_written_names(target, source, &mut |name| {
+                if track_context_writes {
+                    context_writes.entry(owner).or_default().insert(name);
+                }
+                if owner.is_none() {
+                    *module_write_counts.entry(name).or_default() += 1;
+                }
+                if !optional_fallback {
+                    writes.entry(owner).or_default().insert(name);
+                }
+            });
+        }
+        if kind == "lambda_parameters" {
+            let range = ancestors
+                .last()
+                .copied()
+                .and_then(|lambda| lambda.child_by_field_name("body"))
+                .and_then(|body| {
+                    Some(
+                        u32::try_from(body.start_byte()).ok()?
+                            ..u32::try_from(body.end_byte()).ok()?,
+                    )
+                });
+            let owner = import_owner(node.start_byte(), parsed);
+            collect_written_names(node, source, &mut |name| {
+                if let Some(range) = &range {
+                    expression_writes
+                        .entry(name)
+                        .or_default()
+                        .push(range.clone());
+                } else {
+                    writes.entry(owner).or_default().insert(name);
+                }
+            });
+        }
+        if kind == "for_in_clause"
+            && let Some(target) = node.child_by_field_name("left")
+        {
+            let parent = ancestors.iter().rev().copied().find(|item| {
+                matches!(
+                    item.kind(),
+                    "list_comprehension"
+                        | "set_comprehension"
+                        | "dictionary_comprehension"
+                        | "generator_expression"
+                        | "function_definition"
+                        | "module"
+                )
+            });
+            let range = parent
+                .filter(|item| {
+                    matches!(
                         item.kind(),
                         "list_comprehension"
                             | "set_comprehension"
                             | "dictionary_comprehension"
                             | "generator_expression"
-                            | "function_definition"
-                            | "module"
                     )
-                }) {
-                    parent = parent.and_then(|item| item.parent());
-                }
-                let range = parent
-                    .filter(|item| {
-                        matches!(
-                            item.kind(),
-                            "list_comprehension"
-                                | "set_comprehension"
-                                | "dictionary_comprehension"
-                                | "generator_expression"
-                        )
-                    })
-                    .and_then(|item| {
-                        Some(
-                            u32::try_from(item.start_byte()).ok()?
-                                ..u32::try_from(item.end_byte()).ok()?,
-                        )
-                    });
-                let owner = import_owner(node.start_byte(), parsed);
-                collect_written_names(target, source, &mut |name| {
-                    if let Some(range) = &range {
-                        expression_writes
-                            .entry(name)
-                            .or_default()
-                            .push(range.clone());
-                    } else {
-                        writes.entry(owner).or_default().insert(name);
-                    }
+                })
+                .and_then(|item| {
+                    Some(
+                        u32::try_from(item.start_byte()).ok()?
+                            ..u32::try_from(item.end_byte()).ok()?,
+                    )
                 });
-            }
-            if matches!(node.kind(), "global_statement" | "nonlocal_statement") {
-                collect_written_names(node, source, &mut |name| {
-                    external_writes.insert(name);
-                });
-            }
-            if node.kind() == "try_statement"
-                && node
-                    .parent()
-                    .is_some_and(|parent| parent.kind() == "module")
-                && let Some(fallback) = callable_import_fallback(node, source, parsed)
-            {
-                callable_fallbacks.push(fallback);
-            }
-            if matches!(node.kind(), "function_definition" | "class_definition")
-                && let Some(name) = node.child_by_field_name("name")
-                && let Ok(name) = name.utf8_text(source)
-            {
-                let owner = import_owner(node.start_byte(), parsed)
-                    .and_then(|index| parsed.facts.symbols.get(index as usize)?.parent);
-                if owner.is_none() {
-                    *module_definition_counts.entry(name).or_default() += 1;
+            let owner = import_owner(node.start_byte(), parsed);
+            collect_written_names(target, source, &mut |name| {
+                if let Some(range) = &range {
+                    expression_writes
+                        .entry(name)
+                        .or_default()
+                        .push(range.clone());
+                } else {
+                    writes.entry(owner).or_default().insert(name);
                 }
-                writes.entry(owner).or_default().insert(name);
-            }
-            if matches!(node.kind(), "import_statement" | "import_from_statement")
-                && node
-                    .parent()
-                    .is_some_and(|parent| parent.kind() != "module")
-                && let (Ok(text), Ok(line)) = (
-                    node.utf8_text(source),
-                    u32::try_from(node.start_position().row + 1),
-                )
-            {
-                let identity = import_scope_identity(node, parsed);
-                let after_try = import_after_try_identity(node, parsed);
-                let type_checking = is_type_checking_import(node, source);
-                let start = parsed
-                    .facts
-                    .imports
-                    .partition_point(|import| import.line < line);
-                let end = parsed
-                    .facts
-                    .imports
-                    .partition_point(|import| import.line <= line);
-                for import in expand_import(text, line, false) {
-                    let optional_try = import_optional_try_identity(node, &import, source, parsed);
-                    for (offset, _) in parsed.facts.imports[start..end]
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, found)| **found == import)
-                    {
-                        let index = start + offset;
-                        if scopes[index].is_some()
-                            || after_tries[index].is_some()
-                            || optional_tries[index].is_some()
-                            || type_candidates[index]
-                        {
-                            repeated[index] = true;
-                        } else {
-                            scopes[index] = identity.clone();
-                            after_tries[index] = after_try.clone();
-                            optional_tries[index] = optional_try.clone();
-                            type_candidates[index] = type_checking;
-                        }
-                    }
-                }
-            }
-            if walk.goto_first_child() {
-                continue;
-            }
+            });
         }
-        while !walk.goto_next_sibling() {
-            if !walk.goto_parent() {
-                for node in context_managers {
-                    if let Some(identity) = context_manager_identity(
-                        node,
-                        source,
-                        parsed,
-                        &direct_imports,
-                        &writes,
-                        (&context_writes, &context_attribute_writes),
-                        &external_writes,
-                    ) {
-                        identities.push(identity);
-                    }
-                }
-                for (index, import) in parsed.facts.imports.iter().enumerate() {
-                    let Some(name) = bound_import_name(import) else {
-                        continue;
-                    };
-                    if module_definition_counts.contains_key(name)
-                        && !module_write_counts.contains_key(name)
-                        && !external_writes.contains(name)
-                        && let Ok(index) = u32::try_from(index)
-                        && direct_imports[index as usize]
-                    {
-                        identities.push(SourceIdentity {
-                            kind: SourceIdentityKind::PythonImportNoModuleWrite,
-                            index,
-                            identity: "unwritten".to_owned(),
-                        });
-                    }
-                }
-                let typing_imports: Vec<_> = parsed
-                    .facts
-                    .imports
+        if matches!(kind, "global_statement" | "nonlocal_statement") {
+            collect_written_names(node, source, &mut |name| {
+                external_writes.insert(name);
+            });
+        }
+        if kind == "try_statement"
+            && ancestors
+                .last()
+                .is_some_and(|parent| parent.kind() == "module")
+            && let Some(fallback) = callable_import_fallback(node, source, parsed)
+        {
+            callable_fallbacks.push(fallback);
+        }
+        if matches!(kind, "function_definition" | "class_definition")
+            && let Some(name) = node.child_by_field_name("name")
+            && let Ok(name) = name.utf8_text(source)
+        {
+            let owner = import_owner(node.start_byte(), parsed)
+                .and_then(|index| parsed.facts.symbols.get(index as usize)?.parent);
+            if owner.is_none() {
+                *module_definition_counts.entry(name).or_default() += 1;
+            }
+            writes.entry(owner).or_default().insert(name);
+        }
+        if matches!(kind, "import_statement" | "import_from_statement")
+            && ancestors
+                .last()
+                .is_some_and(|parent| parent.kind() != "module")
+            && let (Ok(text), Ok(line)) = (
+                node.utf8_text(source),
+                u32::try_from(node.start_position().row + 1),
+            )
+        {
+            let identity = import_scope_identity(node, &ancestors, parsed);
+            let after_try = import_after_try_identity(node, &ancestors, parsed);
+            let type_checking = is_type_checking_import(&ancestors, source);
+            let start = parsed
+                .facts
+                .imports
+                .partition_point(|import| import.line < line);
+            let end = parsed
+                .facts
+                .imports
+                .partition_point(|import| import.line <= line);
+            for import in expand_import(text, line, false) {
+                let optional_try =
+                    import_optional_try_identity(node, &import, &ancestors, source, parsed);
+                for (offset, _) in parsed.facts.imports[start..end]
                     .iter()
                     .enumerate()
-                    .filter(|(_, import)| {
-                        import
-                            .alias
-                            .as_deref()
-                            .or_else(|| import.names.first().map(|name| name.as_str()))
-                            .or_else(|| import.spec.split('.').next())
-                            == Some("typing")
-                    })
-                    .collect();
-                let typing_proven = matches!(typing_imports.as_slice(), [(index, import)]
-                    if import.spec == "typing" && import.names.is_empty() && direct_imports[*index])
-                    && !writes
-                        .get(&None)
-                        .is_some_and(|names| names.contains("typing"))
-                    && !external_writes.contains("typing");
-                if typing_proven {
-                    for (index, candidate) in type_candidates.iter().enumerate() {
-                        if *candidate && !repeated[index] {
-                            parsed.facts.imports[index].type_only = true;
-                        }
-                    }
-                }
-                for (index, identity) in scopes.into_iter().enumerate() {
-                    let import = &parsed.facts.imports[index];
-                    let name = import
-                        .alias
-                        .as_deref()
-                        .or_else(|| import.names.first().map(|name| name.as_str()))
-                        .or_else(|| import.spec.split('.').next());
-                    let safe = identity
-                        .as_deref()
-                        .and_then(crate::domain::facts::python_import_scope)
-                        .zip(name)
-                        .is_some_and(|((owner, _), name)| {
-                            !writes.get(&owner).is_some_and(|names| names.contains(name))
-                                && !external_writes.contains(name)
-                        });
-                    if safe
-                        && !repeated[index]
-                        && let (Some(identity), Ok(index)) = (identity, u32::try_from(index))
+                    .filter(|(_, found)| **found == import)
+                {
+                    let index = start + offset;
+                    if scopes[index].is_some()
+                        || after_tries[index].is_some()
+                        || optional_tries[index].is_some()
+                        || type_candidates[index]
                     {
-                        identities.push(SourceIdentity {
-                            kind: SourceIdentityKind::PythonImportScope,
-                            index,
-                            identity,
-                        });
+                        repeated[index] = true;
+                    } else {
+                        scopes[index] = identity.clone();
+                        after_tries[index] = after_try.clone();
+                        optional_tries[index] = optional_try.clone();
+                        type_candidates[index] = type_checking;
                     }
                 }
-                for (index, identity) in after_tries.into_iter().enumerate() {
-                    let import = &parsed.facts.imports[index];
-                    let name = import
-                        .alias
-                        .as_deref()
-                        .or_else(|| import.names.first().map(|name| name.as_str()))
-                        .or_else(|| import.spec.split('.').next());
-                    let safe = identity
-                        .as_deref()
-                        .and_then(crate::domain::facts::python_import_scope)
-                        .zip(name)
-                        .is_some_and(|((owner, _), name)| {
-                            !writes.get(&owner).is_some_and(|names| names.contains(name))
-                                && !external_writes.contains(name)
-                        });
-                    if safe
-                        && !repeated[index]
-                        && let (Some(identity), Ok(index)) = (identity, u32::try_from(index))
-                    {
-                        identities.push(SourceIdentity {
-                            kind: SourceIdentityKind::PythonImportAfterTry,
-                            index,
-                            identity,
-                        });
-                    }
-                }
-                for (index, identity) in optional_tries.into_iter().enumerate() {
-                    let import = &parsed.facts.imports[index];
-                    let name = bound_import_name(import);
-                    let safe = identity
-                        .as_deref()
-                        .and_then(crate::domain::facts::python_import_scope)
-                        .zip(name)
-                        .is_some_and(|((owner, _), name)| {
-                            !writes.get(&owner).is_some_and(|names| names.contains(name))
-                                && !external_writes.contains(name)
-                        });
-                    if safe
-                        && !repeated[index]
-                        && let (Some(identity), Ok(index)) = (identity, u32::try_from(index))
-                    {
-                        identities.push(SourceIdentity {
-                            kind: SourceIdentityKind::PythonImportOptionalTry,
-                            index,
-                            identity,
-                        });
-                    }
-                }
-                let imported: FastSet<&str> = parsed
-                    .facts
-                    .imports
-                    .iter()
-                    .filter_map(|import| {
-                        import
-                            .alias
-                            .as_deref()
-                            .or_else(|| import.names.first().map(|name| name.as_str()))
-                            .or_else(|| import.spec.split('.').next())
-                    })
-                    .collect();
-                for index in direct_definitions {
-                    let name = parsed.facts.symbols[index].name.as_str();
-                    if (imported.contains(name)
-                        || module_definition_counts
-                            .get(name)
-                            .is_some_and(|count| *count > 1))
-                        && !module_write_counts.contains_key(name)
-                        && !external_writes.contains(name)
-                        && let Ok(index) = u32::try_from(index)
-                    {
-                        identities.push(SourceIdentity {
-                            kind: SourceIdentityKind::PythonDirectDefinition,
-                            index,
-                            identity: "direct".to_owned(),
-                        });
-                    }
-                }
-                let callable_fallbacks: Vec<_> = callable_fallbacks
-                    .into_iter()
-                    .filter(|(selected, fallback, _)| {
-                        let Some(selected_name) =
-                            bound_import_name(&parsed.facts.imports[*selected])
-                        else {
-                            return false;
-                        };
-                        let Some(fallback_name) =
-                            bound_import_name(&parsed.facts.imports[*fallback])
-                        else {
-                            return false;
-                        };
-                        selected_name != fallback_name
-                            && module_write_counts.get(selected_name) == Some(&1)
-                            && !module_definition_counts.contains_key(selected_name)
-                            && !writes
-                                .get(&None)
-                                .is_some_and(|names| names.contains(fallback_name))
-                            && !external_writes.contains(selected_name)
-                            && !external_writes.contains(fallback_name)
-                            && direct_imports[*fallback]
-                            && parsed.facts.imports[*fallback].line
-                                < parsed.facts.imports[*selected].line
-                            && parsed
-                                .facts
-                                .imports
-                                .iter()
-                                .filter(|import| bound_import_name(import) == Some(selected_name))
-                                .count()
-                                == 1
-                            && parsed
-                                .facts
-                                .imports
-                                .iter()
-                                .filter(|import| bound_import_name(import) == Some(fallback_name))
-                                .count()
-                                == 1
-                    })
-                    .collect();
-                let mut shadowed_refs = FastSet::default();
-                for (index, reference) in parsed.facts.refs.iter().enumerate() {
-                    let head = reference
-                        .qualifier
-                        .as_deref()
-                        .map_or(reference.name.as_str(), |qualifier| {
-                            qualifier.split('.').next().unwrap_or_default()
-                        });
-                    if !imported.contains(head) {
-                        continue;
-                    }
-                    let callable = reference
-                        .scope
-                        .and_then(|scope| parsed.facts.symbols.get(scope as usize))
-                        .is_some_and(|symbol| symbol.kind().is_callable());
-                    let mut owner = reference.scope;
-                    let mut shadowed = external_writes.contains(head)
-                        || expression_writes.get(head).is_some_and(|ranges| {
-                            ranges.iter().any(|range| range.contains(&reference.byte))
-                        });
-                    let mut local_shadowed = shadowed;
-                    loop {
-                        let skip_class = callable
-                            && owner != reference.scope
-                            && owner
-                                .and_then(|index| parsed.facts.symbols.get(index as usize))
-                                .is_some_and(|symbol| symbol.kind() == SymKind::Class);
-                        if !skip_class
-                            && writes.get(&owner).is_some_and(|names| names.contains(head))
-                        {
-                            shadowed = true;
-                            if owner.is_some() {
-                                local_shadowed = true;
-                            }
-                        }
-                        let Some(current) = owner else { break };
-                        owner = parsed
-                            .facts
-                            .symbols
-                            .get(current as usize)
-                            .and_then(|symbol| symbol.parent);
-                    }
-                    if callable
-                        && !local_shadowed
-                        && reference.kind == crate::domain::facts::RefKind::Call
-                        && reference.qualifier.is_none()
-                        && let Some((selected, fallback, _)) =
-                            callable_fallbacks.iter().find(|(selected, _, end)| {
-                                reference.byte >= *end
-                                    && bound_import_name(&parsed.facts.imports[*selected])
-                                        == Some(head)
-                            })
-                        && let Ok(index) = u32::try_from(index)
-                    {
-                        identities.push(SourceIdentity {
-                            kind: SourceIdentityKind::PythonCallableImportFallback,
-                            index,
-                            identity: format!("{selected}:{fallback}"),
-                        });
-                    }
-                    if shadowed && let Ok(index) = u32::try_from(index) {
-                        shadowed_refs.insert(index);
-                        identities.push(SourceIdentity {
-                            kind: SourceIdentityKind::PythonShadowedImport,
-                            index,
-                            identity: "shadowed".to_owned(),
-                        });
-                    }
-                }
-                context_binding_calls(
-                    parsed,
-                    &writes,
-                    &external_writes,
-                    &shadowed_refs,
-                    &context_attribute_writes,
-                    &mut identities,
-                );
-                identities.sort_unstable_by_key(|identity| (identity.kind, identity.index));
-                identities.dedup_by_key(|identity| (identity.kind, identity.index));
-                parsed.facts.source_identities =
-                    (!identities.is_empty()).then(|| identities.into_boxed_slice());
-                return;
             }
         }
     }
+    for node in context_managers {
+        if let Some(identity) = context_manager_identity(
+            node,
+            source,
+            parsed,
+            &direct_imports,
+            &writes,
+            (&context_writes, &context_attribute_writes),
+            &external_writes,
+        ) {
+            identities.push(identity);
+        }
+    }
+    for (index, import) in parsed.facts.imports.iter().enumerate() {
+        let Some(name) = bound_import_name(import) else {
+            continue;
+        };
+        if module_definition_counts.contains_key(name)
+            && !module_write_counts.contains_key(name)
+            && !external_writes.contains(name)
+            && let Ok(index) = u32::try_from(index)
+            && direct_imports[index as usize]
+        {
+            identities.push(SourceIdentity {
+                kind: SourceIdentityKind::PythonImportNoModuleWrite,
+                index,
+                identity: "unwritten".to_owned(),
+            });
+        }
+    }
+    let typing_imports: Vec<_> = parsed
+        .facts
+        .imports
+        .iter()
+        .enumerate()
+        .filter(|(_, import)| {
+            import
+                .alias
+                .as_deref()
+                .or_else(|| import.names.first().map(|name| name.as_str()))
+                .or_else(|| import.spec.split('.').next())
+                == Some("typing")
+        })
+        .collect();
+    let typing_proven = matches!(typing_imports.as_slice(), [(index, import)]
+                    if import.spec == "typing" && import.names.is_empty() && direct_imports[*index])
+        && !writes
+            .get(&None)
+            .is_some_and(|names| names.contains("typing"))
+        && !external_writes.contains("typing");
+    if typing_proven {
+        for (index, candidate) in type_candidates.iter().enumerate() {
+            if *candidate && !repeated[index] {
+                parsed.facts.imports[index].type_only = true;
+            }
+        }
+    }
+    for (index, identity) in scopes.into_iter().enumerate() {
+        let import = &parsed.facts.imports[index];
+        let name = import
+            .alias
+            .as_deref()
+            .or_else(|| import.names.first().map(|name| name.as_str()))
+            .or_else(|| import.spec.split('.').next());
+        let safe = identity
+            .as_deref()
+            .and_then(crate::domain::facts::python_import_scope)
+            .zip(name)
+            .is_some_and(|((owner, _), name)| {
+                !writes.get(&owner).is_some_and(|names| names.contains(name))
+                    && !external_writes.contains(name)
+            });
+        if safe
+            && !repeated[index]
+            && let (Some(identity), Ok(index)) = (identity, u32::try_from(index))
+        {
+            identities.push(SourceIdentity {
+                kind: SourceIdentityKind::PythonImportScope,
+                index,
+                identity,
+            });
+        }
+    }
+    for (index, identity) in after_tries.into_iter().enumerate() {
+        let import = &parsed.facts.imports[index];
+        let name = import
+            .alias
+            .as_deref()
+            .or_else(|| import.names.first().map(|name| name.as_str()))
+            .or_else(|| import.spec.split('.').next());
+        let safe = identity
+            .as_deref()
+            .and_then(crate::domain::facts::python_import_scope)
+            .zip(name)
+            .is_some_and(|((owner, _), name)| {
+                !writes.get(&owner).is_some_and(|names| names.contains(name))
+                    && !external_writes.contains(name)
+            });
+        if safe
+            && !repeated[index]
+            && let (Some(identity), Ok(index)) = (identity, u32::try_from(index))
+        {
+            identities.push(SourceIdentity {
+                kind: SourceIdentityKind::PythonImportAfterTry,
+                index,
+                identity,
+            });
+        }
+    }
+    for (index, identity) in optional_tries.into_iter().enumerate() {
+        let import = &parsed.facts.imports[index];
+        let name = bound_import_name(import);
+        let safe = identity
+            .as_deref()
+            .and_then(crate::domain::facts::python_import_scope)
+            .zip(name)
+            .is_some_and(|((owner, _), name)| {
+                !writes.get(&owner).is_some_and(|names| names.contains(name))
+                    && !external_writes.contains(name)
+            });
+        if safe
+            && !repeated[index]
+            && let (Some(identity), Ok(index)) = (identity, u32::try_from(index))
+        {
+            identities.push(SourceIdentity {
+                kind: SourceIdentityKind::PythonImportOptionalTry,
+                index,
+                identity,
+            });
+        }
+    }
+    let imported: FastSet<&str> = parsed
+        .facts
+        .imports
+        .iter()
+        .filter_map(|import| {
+            import
+                .alias
+                .as_deref()
+                .or_else(|| import.names.first().map(|name| name.as_str()))
+                .or_else(|| import.spec.split('.').next())
+        })
+        .collect();
+    for index in direct_definitions {
+        let name = parsed.facts.symbols[index].name.as_str();
+        if (imported.contains(name)
+            || module_definition_counts
+                .get(name)
+                .is_some_and(|count| *count > 1))
+            && !module_write_counts.contains_key(name)
+            && !external_writes.contains(name)
+            && let Ok(index) = u32::try_from(index)
+        {
+            identities.push(SourceIdentity {
+                kind: SourceIdentityKind::PythonDirectDefinition,
+                index,
+                identity: "direct".to_owned(),
+            });
+        }
+    }
+    let callable_fallbacks: Vec<_> = callable_fallbacks
+        .into_iter()
+        .filter(|(selected, fallback, _)| {
+            let Some(selected_name) = bound_import_name(&parsed.facts.imports[*selected]) else {
+                return false;
+            };
+            let Some(fallback_name) = bound_import_name(&parsed.facts.imports[*fallback]) else {
+                return false;
+            };
+            selected_name != fallback_name
+                && module_write_counts.get(selected_name) == Some(&1)
+                && !module_definition_counts.contains_key(selected_name)
+                && !writes
+                    .get(&None)
+                    .is_some_and(|names| names.contains(fallback_name))
+                && !external_writes.contains(selected_name)
+                && !external_writes.contains(fallback_name)
+                && direct_imports[*fallback]
+                && parsed.facts.imports[*fallback].line < parsed.facts.imports[*selected].line
+                && parsed
+                    .facts
+                    .imports
+                    .iter()
+                    .filter(|import| bound_import_name(import) == Some(selected_name))
+                    .count()
+                    == 1
+                && parsed
+                    .facts
+                    .imports
+                    .iter()
+                    .filter(|import| bound_import_name(import) == Some(fallback_name))
+                    .count()
+                    == 1
+        })
+        .collect();
+    let mut shadowed_refs = FastSet::default();
+    for (index, reference) in parsed.facts.refs.iter().enumerate() {
+        let head = reference
+            .qualifier
+            .as_deref()
+            .map_or(reference.name.as_str(), |qualifier| {
+                qualifier.split('.').next().unwrap_or_default()
+            });
+        if !imported.contains(head) {
+            continue;
+        }
+        let callable = reference
+            .scope
+            .and_then(|scope| parsed.facts.symbols.get(scope as usize))
+            .is_some_and(|symbol| symbol.kind().is_callable());
+        let mut owner = reference.scope;
+        let mut shadowed = external_writes.contains(head)
+            || expression_writes
+                .get(head)
+                .is_some_and(|ranges| ranges.iter().any(|range| range.contains(&reference.byte)));
+        let mut local_shadowed = shadowed;
+        loop {
+            let skip_class = callable
+                && owner != reference.scope
+                && owner
+                    .and_then(|index| parsed.facts.symbols.get(index as usize))
+                    .is_some_and(|symbol| symbol.kind() == SymKind::Class);
+            if !skip_class && writes.get(&owner).is_some_and(|names| names.contains(head)) {
+                shadowed = true;
+                if owner.is_some() {
+                    local_shadowed = true;
+                }
+            }
+            let Some(current) = owner else { break };
+            owner = parsed
+                .facts
+                .symbols
+                .get(current as usize)
+                .and_then(|symbol| symbol.parent);
+        }
+        if callable
+            && !local_shadowed
+            && reference.kind == crate::domain::facts::RefKind::Call
+            && reference.qualifier.is_none()
+            && let Some((selected, fallback, _)) =
+                callable_fallbacks.iter().find(|(selected, _, end)| {
+                    reference.byte >= *end
+                        && bound_import_name(&parsed.facts.imports[*selected]) == Some(head)
+                })
+            && let Ok(index) = u32::try_from(index)
+        {
+            identities.push(SourceIdentity {
+                kind: SourceIdentityKind::PythonCallableImportFallback,
+                index,
+                identity: format!("{selected}:{fallback}"),
+            });
+        }
+        if shadowed && let Ok(index) = u32::try_from(index) {
+            shadowed_refs.insert(index);
+            identities.push(SourceIdentity {
+                kind: SourceIdentityKind::PythonShadowedImport,
+                index,
+                identity: "shadowed".to_owned(),
+            });
+        }
+    }
+    context_binding_calls(
+        parsed,
+        &writes,
+        &external_writes,
+        &shadowed_refs,
+        &context_attribute_writes,
+        &mut identities,
+    );
+    identities.sort_unstable_by_key(|identity| (identity.kind, identity.index));
+    identities.dedup_by_key(|identity| (identity.kind, identity.index));
+    parsed.facts.source_identities =
+        (!identities.is_empty()).then(|| identities.into_boxed_slice());
 }
 
 fn context_binding_calls(
@@ -1157,17 +1153,17 @@ fn optional_import_try(statement: Node, name: &str, source: &[u8]) -> bool {
     handlers > 0
 }
 
-fn is_type_checking_import(node: Node, source: &[u8]) -> bool {
-    let Some(block) = node.parent() else {
+fn is_type_checking_import(ancestors: &[Node], source: &[u8]) -> bool {
+    let Some(block) = ancestors.last().copied() else {
         return false;
     };
-    let Some(statement) = block.parent() else {
+    let Some(statement) = ancestors.get(ancestors.len().saturating_sub(2)).copied() else {
         return false;
     };
     if block.kind() != "block"
         || statement.kind() != "if_statement"
-        || statement
-            .parent()
+        || ancestors
+            .get(ancestors.len().saturating_sub(3))
             .is_none_or(|parent| parent.kind() != "module")
         || statement.child_by_field_name("consequence") != Some(block)
     {
@@ -1187,11 +1183,15 @@ fn is_type_checking_import(node: Node, source: &[u8]) -> bool {
             == Some("TYPE_CHECKING")
 }
 
-fn import_scope_identity(node: Node, parsed: &crate::extract::engine::Parsed) -> Option<String> {
-    let mut parent = node.parent()?;
-    while parent.kind() != "block" {
-        parent = parent.parent()?;
-    }
+fn import_scope_identity(
+    node: Node,
+    ancestors: &[Node],
+    parsed: &crate::extract::engine::Parsed,
+) -> Option<String> {
+    let parent = ancestors
+        .iter()
+        .rev()
+        .find(|parent| parent.kind() == "block")?;
     let start = u32::try_from(node.end_byte()).ok()?;
     let end = u32::try_from(parent.end_byte()).ok()?;
     if start >= end {
@@ -1206,10 +1206,11 @@ fn import_scope_identity(node: Node, parsed: &crate::extract::engine::Parsed) ->
 
 fn import_after_try_identity(
     node: Node,
+    ancestors: &[Node],
     parsed: &crate::extract::engine::Parsed,
 ) -> Option<String> {
-    let body = node.parent()?;
-    let statement = body.parent()?;
+    let body = ancestors.last().copied()?;
+    let statement = ancestors.get(ancestors.len().checked_sub(2)?).copied()?;
     if body.kind() != "block"
         || statement.kind() != "try_statement"
         || statement.child_by_field_name("body") != Some(body)
@@ -1246,7 +1247,7 @@ fn import_after_try_identity(
     if handlers == 0 {
         return None;
     }
-    let outer = statement.parent()?;
+    let outer = ancestors.get(ancestors.len().checked_sub(3)?).copied()?;
     if !matches!(outer.kind(), "block" | "module") {
         return None;
     }
@@ -1265,11 +1266,12 @@ fn import_after_try_identity(
 fn import_optional_try_identity(
     node: Node,
     import: &Import,
+    ancestors: &[Node],
     source: &[u8],
     parsed: &crate::extract::engine::Parsed,
 ) -> Option<String> {
-    let body = node.parent()?;
-    let statement = body.parent()?;
+    let body = ancestors.last().copied()?;
+    let statement = ancestors.get(ancestors.len().checked_sub(2)?).copied()?;
     if body.kind() != "block"
         || statement.child_by_field_name("body") != Some(body)
         || !(optional_import_try(statement, bound_import_name(import)?, source)
@@ -1277,7 +1279,7 @@ fn import_optional_try_identity(
     {
         return None;
     }
-    let outer = statement.parent()?;
+    let outer = ancestors.get(ancestors.len().checked_sub(3)?).copied()?;
     if !matches!(outer.kind(), "block" | "module") {
         return None;
     }

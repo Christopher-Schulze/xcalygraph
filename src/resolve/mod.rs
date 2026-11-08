@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 147;
+pub const RESOLVE_VERSION: u32 = 148;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -107,7 +107,7 @@ struct Index<'a> {
     /// Declaration file for a field contributed by a cross-file TypeScript augmentation.
     augmentation_field_files: HashMap<(u32, &'a str), u32>,
     /// Every (type symbol, field name), typed or not.
-    field_names: HashSet<(u32, String)>,
+    field_names: HashSet<(u32, &'a str)>,
     /// Implementations of abstract types and supertypes of concrete ones.
     implementations: HashMap<u32, Ids>,
     supertypes: HashMap<u32, Ids>,
@@ -622,7 +622,7 @@ impl<'a> Index<'a> {
             for fields in &facts.fields {
                 let owner = self.canonical_interface(base + fields.owner);
                 for name in fields.names.iter().filter_map(|name| name.text()) {
-                    self.field_names.insert((owner, name.to_owned()));
+                    self.field_names.insert((owner, name));
                 }
                 for (name, kind) in fields.names.iter().zip(&fields.types) {
                     if !kind.is_empty()
@@ -1287,6 +1287,11 @@ impl<'a> Index<'a> {
     fn members(&self, type_symbol: u32, name: &str) -> Ids {
         let mut found = self.members_direct(type_symbol, name);
         if found.is_empty() {
+            if self.file_type(self.symbols[type_symbol as usize].file) == Some(FileType::Go)
+                && self.field_names.contains(&(type_symbol, name))
+            {
+                return found;
+            }
             let supertypes = if self.interface_canonical.contains_key(&type_symbol) {
                 self.interface_ancestors(type_symbol)
                     .into_iter()
@@ -2929,7 +2934,7 @@ impl<'a> Index<'a> {
                     && types.iter().all(|&type_symbol| {
                         self.members(type_symbol, member).is_empty()
                             && !self.field_types.contains_key(&(type_symbol, member))
-                            && !self.field_names.contains(&(type_symbol, member.to_owned()))
+                            && !self.field_names.contains(&(type_symbol, member))
                     })
             }
             _ => false,
