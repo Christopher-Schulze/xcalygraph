@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 146;
+pub const RESOLVE_VERSION: u32 = 147;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -4452,6 +4452,11 @@ impl<'a> Index<'a> {
         // A declared array is a container, not a value of its element type.
         if binding.type_name.starts_with("elements:") {
             return None;
+        }
+        if self.file_type(file) == Some(FileType::Python)
+            && let Some(types) = self.python_context_manager_result(file, imports, scope, binding)
+        {
+            return Some((types, Confidence::Inferred));
         }
         let awaited = binding.type_name.strip_prefix("await:");
         if let Some((call, _)) = chains::call_binding(awaited.unwrap_or(&binding.type_name)) {

@@ -331,6 +331,10 @@ pub enum SourceIdentityKind {
     PythonCallableImportFallback,
     /// Symbol-indexed proof of a direct, unchanged Python module function definition.
     PythonDirectDefinition,
+    /// Symbol-indexed source evidence for a standard-library Python context-manager decorator.
+    PythonContextManager,
+    /// Binding-indexed proof of the original context-manager call's source location.
+    PythonContextBindingCall,
 }
 
 impl SourceIdentityKind {
@@ -381,6 +385,10 @@ impl SourceIdentityKind {
             }
             value if value == Self::PythonDirectDefinition as u8 => {
                 Some(Self::PythonDirectDefinition)
+            }
+            value if value == Self::PythonContextManager as u8 => Some(Self::PythonContextManager),
+            value if value == Self::PythonContextBindingCall as u8 => {
+                Some(Self::PythonContextBindingCall)
             }
             _ => None,
         }

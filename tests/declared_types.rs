@@ -574,6 +574,106 @@ fn python_awaited_async_result_keeps_its_declared_receiver_type() -> TestResult 
 }
 
 #[test]
+fn python_contextmanager_yield_types_resolve_calls() -> TestResult {
+    let root = support::exclusive_dir("python-contextmanager-yield")?;
+    fs::write(
+        root.join("a.py"),
+        "from contextlib import contextmanager, asynccontextmanager\nfrom typing import Iterator, AsyncIterator\nSQL = 'SELECT id FROM events'\n\nclass Response:\n    def finish(self): pass\n\nclass Decoy:\n    def finish(self): pass\n\n@contextmanager\ndef managed() -> Iterator[Response]:\n    yield Response()\n\n@asynccontextmanager\nasync def async_managed() -> AsyncIterator[Response]:\n    yield Response()\n\ndef caller():\n    with managed() as result:\n        result.finish()\n\nasync def async_caller():\n    async with async_managed() as result:\n        result.finish()\n",
+    )?;
+    let positive = ["caller", "async_caller"]
+        .map(|caller| calls(&root, caller).map(|found| (caller, found)))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+    fs::remove_dir_all(root)?;
+    let root = support::exclusive_dir("python-contextmanager-negatives")?;
+    fs::write(
+        root.join("a.py"),
+        "from contextlib import contextmanager\nfrom typing import Iterator\n\nclass Response:\n    def finish(self): pass\n\nclass Decoy:\n    def finish(self): pass\n\ndef replace(fn):\n    @contextmanager\n    def wrapper():\n        yield Decoy()\n    return wrapper\n\n@replace\n@contextmanager\ndef stacked() -> Iterator[Response]:\n    yield Response()\n\ndef caller():\n    with stacked() as result:\n        result.finish()\n",
+    )?;
+    fs::write(
+        root.join("b.py"),
+        "from contextlib import contextmanager\nfrom typing import Iterator\n\nclass Response:\n    def finish(self): pass\n\nclass Decoy:\n    def finish(self): pass\n\ndef contextmanager(fn):\n    return fn\n\n@contextmanager\ndef managed() -> Iterator[Response]:\n    yield Response()\n\ndef caller_rebound():\n    with managed() as result:\n        result.finish()\n",
+    )?;
+    fs::write(
+        root.join("c.py"),
+        "from contextlib import contextmanager\nfrom typing import Iterator\n\nclass Response:\n    def finish(self): pass\n\nclass Decoy:\n    def finish(self): pass\n\n@contextmanager\ndef managed() -> Iterator[Response]:\n    yield Response()\n\n@contextmanager\ndef alternative() -> Iterator[Decoy]:\n    yield Decoy()\n\nmanaged = alternative\n\ndef caller_replaced():\n    with managed() as result:\n        result.finish()\n",
+    )?;
+    fs::write(
+        root.join("d.py"),
+        "from contextlib import contextmanager\nfrom typing import Iterator\n\nclass Response:\n    def finish(self): pass\n\nclass Decoy:\n    def finish(self): pass\n\n@contextmanager\ndef selected() -> Iterator[Response]:\n    yield Response()\n\ndef caller_parameter(selected):\n    with selected() as result:\n        result.finish()\n\ndef caller_local_assignment():\n    selected = lambda: None\n    with selected() as result:\n        result.finish()\n",
+    )?;
+    fs::write(
+        root.join("e.py"),
+        "from d import selected\nselected = lambda: None\ndef caller_import_parameter(selected):\n    with selected() as result:\n        result.finish()\n\ndef caller_import_rebound():\n    with selected() as result:\n        result.finish()\n",
+    )?;
+    fs::write(
+        root.join("f.py"),
+        "from contextlib import contextmanager\nfrom typing import Iterator\n\nclass Response:\n    def finish(self): pass\n\nclass Decoy:\n    def finish(self): pass\n\nclass Service:\n    @contextmanager\n    def take(self) -> Iterator[Response]:\n        yield Response()\n\n@contextmanager\ndef replacement(self) -> Iterator[Decoy]:\n    yield Decoy()\n\nService.take = replacement\n\ndef caller_method_rebound(service: Service):\n    with service.take() as result:\n        result.finish()\n",
+    )?;
+    fs::write(
+        root.join("g.py"),
+        "from contextlib import contextmanager\nfrom typing import Iterator\n\nclass Response:\n    def finish(self): pass\n\nclass Decoy:\n    def finish(self): pass\n\nclass Service:\n    @contextmanager\n    def take(self) -> Iterator[Response]:\n        yield Response()\n\n@contextmanager\ndef replacement() -> Iterator[Decoy]:\n    yield Decoy()\n\ndef caller_instance_rebound(service: Service):\n    service.take = replacement\n    with service.take() as result:\n        result.finish()\n",
+    )?;
+    fs::write(
+        root.join("h.py"),
+        "from contextlib import contextmanager\nfrom typing import Iterator\nclass Response:\n    def finish(self): pass\nclass Decoy:\n    def finish(self): pass\nclass Service:\n    @contextmanager\n    def take(self) -> Iterator[Response]:\n        yield Response()\n@contextmanager\ndef replacement() -> Iterator[Decoy]:\n    yield Decoy()\n",
+    )?;
+    fs::write(
+        root.join("i.py"),
+        "from h import Service, replacement\ndef caller_cross_file_rebound(service: Service):\n    service.take = replacement\n    with service.take() as result:\n        result.finish()\n",
+    )?;
+    let results = [
+        "caller",
+        "caller_rebound",
+        "caller_replaced",
+        "caller_parameter",
+        "caller_local_assignment",
+        "caller_import_parameter",
+        "caller_import_rebound",
+        "caller_method_rebound",
+        "caller_instance_rebound",
+        "caller_cross_file_rebound",
+    ]
+    .map(|caller| calls(&root, caller).map(|found| (caller, found)))
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
+    fs::remove_dir_all(root)?;
+    for (caller, found) in results {
+        assert!(
+            !found.iter().any(|edge| edge.contains("Response.finish ")),
+            "{caller}: {found:?}"
+        );
+    }
+    let shadowed = support::exclusive_dir("python-contextmanager-local-module")?;
+    fs::write(
+        shadowed.join("contextlib.py"),
+        "def contextmanager(fn): return fn\n",
+    )?;
+    fs::write(
+        shadowed.join("app.py"),
+        "from contextlib import contextmanager\nfrom typing import Iterator\nclass Response:\n    def finish(self): pass\nclass Decoy:\n    def finish(self): pass\n@contextmanager\ndef managed() -> Iterator[Response]:\n    yield Response()\ndef caller_local_module():\n    with managed() as result:\n        result.finish()\n",
+    )?;
+    let local_module = calls(&shadowed, "caller_local_module")?;
+    fs::remove_dir_all(shadowed)?;
+    assert!(
+        !local_module
+            .iter()
+            .any(|edge| edge.contains("Response.finish ")),
+        "{local_module:?}"
+    );
+    let missing: Vec<_> = positive
+        .iter()
+        .filter(|(_, found)| {
+            !found
+                .iter()
+                .any(|edge| edge == "a.Response.finish inferred")
+        })
+        .collect();
+    assert!(missing.is_empty(), "{missing:?}");
+    Ok(())
+}
+
+#[test]
 fn an_own_array_type_is_no_standard_container() -> TestResult {
     let root = support::exclusive_dir("declared-array")?;
     fs::write(

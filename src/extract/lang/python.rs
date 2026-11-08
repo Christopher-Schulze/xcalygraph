@@ -114,15 +114,30 @@ pub(in crate::extract) fn post_parse(
     let mut repeated = vec![false; parsed.facts.imports.len()];
     let mut type_candidates = vec![false; parsed.facts.imports.len()];
     let mut writes: FastMap<Option<u32>, FastSet<&str>> = FastMap::default();
+    let track_context_writes = parsed
+        .facts
+        .imports
+        .iter()
+        .any(|import| import.spec == "contextlib")
+        || parsed.facts.bindings.iter().any(|binding| {
+            binding.type_name.ends_with("().__enter__()")
+                || binding.type_name.ends_with("().__aenter__()")
+        });
+    let mut context_writes: FastMap<Option<u32>, FastSet<&str>> = FastMap::default();
+    let mut context_attribute_writes = Vec::new();
     let mut module_write_counts: FastMap<&str, usize> = FastMap::default();
     let mut module_definition_counts: FastMap<&str, usize> = FastMap::default();
     let mut callable_fallbacks = Vec::new();
+    let mut context_managers = Vec::new();
     let mut external_writes: FastSet<&str> = FastSet::default();
     let mut expression_writes: FastMap<&str, Vec<std::ops::Range<u32>>> = FastMap::default();
     let mut walk = root.walk();
     loop {
         let node = walk.node();
         if node.is_named() {
+            if track_context_writes && node.kind() == "decorated_definition" {
+                context_managers.push(node);
+            }
             let target = match node.kind() {
                 "assignment" | "augmented_assignment" | "for_statement" => {
                     node.child_by_field_name("left")
@@ -136,6 +151,11 @@ pub(in crate::extract) fn post_parse(
             if let Some(target) = target {
                 let owner = import_owner(target.start_byte(), parsed);
                 let optional_fallback = is_optional_import_fallback(node, source);
+                if track_context_writes {
+                    collect_written_attributes(target, source, &mut |object, name| {
+                        context_attribute_writes.push((owner, object, name));
+                    });
+                }
                 if !optional_fallback
                     && target.kind() == "attribute"
                     && target
@@ -150,6 +170,9 @@ pub(in crate::extract) fn post_parse(
                     external_writes.insert("typing");
                 }
                 collect_written_names(target, source, &mut |name| {
+                    if track_context_writes {
+                        context_writes.entry(owner).or_default().insert(name);
+                    }
                     if owner.is_none() {
                         *module_write_counts.entry(name).or_default() += 1;
                     }
@@ -298,6 +321,19 @@ pub(in crate::extract) fn post_parse(
         }
         while !walk.goto_next_sibling() {
             if !walk.goto_parent() {
+                for node in context_managers {
+                    if let Some(identity) = context_manager_identity(
+                        node,
+                        source,
+                        parsed,
+                        &direct_imports,
+                        &writes,
+                        (&context_writes, &context_attribute_writes),
+                        &external_writes,
+                    ) {
+                        identities.push(identity);
+                    }
+                }
                 for (index, import) in parsed.facts.imports.iter().enumerate() {
                     let Some(name) = bound_import_name(import) else {
                         continue;
@@ -485,6 +521,7 @@ pub(in crate::extract) fn post_parse(
                                 == 1
                     })
                     .collect();
+                let mut shadowed_refs = FastSet::default();
                 for (index, reference) in parsed.facts.refs.iter().enumerate() {
                     let head = reference
                         .qualifier
@@ -545,6 +582,7 @@ pub(in crate::extract) fn post_parse(
                         });
                     }
                     if shadowed && let Ok(index) = u32::try_from(index) {
+                        shadowed_refs.insert(index);
                         identities.push(SourceIdentity {
                             kind: SourceIdentityKind::PythonShadowedImport,
                             index,
@@ -552,11 +590,335 @@ pub(in crate::extract) fn post_parse(
                         });
                     }
                 }
+                context_binding_calls(
+                    parsed,
+                    &writes,
+                    &external_writes,
+                    &shadowed_refs,
+                    &context_attribute_writes,
+                    &mut identities,
+                );
                 identities.sort_unstable_by_key(|identity| (identity.kind, identity.index));
                 identities.dedup_by_key(|identity| (identity.kind, identity.index));
                 parsed.facts.source_identities =
                     (!identities.is_empty()).then(|| identities.into_boxed_slice());
                 return;
+            }
+        }
+    }
+}
+
+fn context_binding_calls(
+    parsed: &crate::extract::engine::Parsed,
+    writes: &FastMap<Option<u32>, FastSet<&str>>,
+    external_writes: &FastSet<&str>,
+    shadowed_refs: &FastSet<u32>,
+    attribute_writes: &[(Option<u32>, &str, &str)],
+    identities: &mut Vec<SourceIdentity>,
+) {
+    if !parsed.facts.bindings.iter().any(|binding| {
+        binding.type_name.ends_with("().__enter__()")
+            || binding.type_name.ends_with("().__aenter__()")
+    }) {
+        return;
+    }
+    let mut calls = FastMap::default();
+    for (index, reference) in parsed.facts.refs.iter().enumerate() {
+        if reference.kind != crate::domain::facts::RefKind::Call {
+            continue;
+        }
+        let key = (reference.byte, reference.scope);
+        calls
+            .entry(key)
+            .and_modify(|value| *value = None)
+            .or_insert(Some(index));
+    }
+    for (index, binding) in parsed.facts.bindings.iter().enumerate() {
+        let call = binding
+            .type_name
+            .strip_prefix("await:")
+            .unwrap_or(&binding.type_name);
+        let Some(callee) = call
+            .strip_suffix("().__enter__()")
+            .or_else(|| call.strip_suffix("().__aenter__()"))
+        else {
+            continue;
+        };
+        let (qualifier, name, offset) = match callee.rsplit_once('.') {
+            Some((qualifier, name)) => (Some(qualifier), name, qualifier.len() + 1),
+            None => (None, callee, 0),
+        };
+        let Some(byte) = u32::try_from(offset)
+            .ok()
+            .and_then(|offset| binding.value_byte.checked_add(offset))
+        else {
+            continue;
+        };
+        let Some(Some(reference_index)) = calls.get(&(byte, binding.scope)) else {
+            continue;
+        };
+        let Some(reference) = parsed.facts.refs.get(*reference_index) else {
+            continue;
+        };
+        let Ok(reference_index) = u32::try_from(*reference_index) else {
+            continue;
+        };
+        if reference.name != name
+            || reference.qualifier.as_deref() != qualifier
+            || shadowed_refs.contains(&reference_index)
+            || external_writes.contains(callee.split('.').next().unwrap_or_default())
+            || qualifier.is_some_and(|qualifier| {
+                attribute_writes
+                    .iter()
+                    .any(|(_, object, member)| *object == qualifier && *member == name)
+            })
+        {
+            continue;
+        }
+        if qualifier.is_none() {
+            let mut owner = binding.scope;
+            let mut shadowed = false;
+            while let Some(scope) = owner {
+                if writes
+                    .get(&Some(scope))
+                    .is_some_and(|names| names.contains(name))
+                {
+                    shadowed = true;
+                    break;
+                }
+                owner = parsed
+                    .facts
+                    .symbols
+                    .get(scope as usize)
+                    .and_then(|symbol| symbol.parent);
+            }
+            if shadowed {
+                continue;
+            }
+        }
+        if let Ok(index) = u32::try_from(index) {
+            identities.push(SourceIdentity {
+                kind: SourceIdentityKind::PythonContextBindingCall,
+                index,
+                identity: format!("{reference_index}:{}:{}", reference.byte, reference.line),
+            });
+        }
+    }
+}
+
+type ContextWriteEvidence<'a, 'source> = (
+    &'a FastMap<Option<u32>, FastSet<&'source str>>,
+    &'a [(Option<u32>, &'source str, &'source str)],
+);
+
+fn context_manager_identity(
+    wrapper: Node,
+    source: &[u8],
+    parsed: &crate::extract::engine::Parsed,
+    direct_imports: &[bool],
+    writes: &FastMap<Option<u32>, FastSet<&str>>,
+    context_writes: ContextWriteEvidence<'_, '_>,
+    external_writes: &FastSet<&str>,
+) -> Option<SourceIdentity> {
+    let mut cursor = wrapper.walk();
+    let children: Vec<_> = wrapper
+        .named_children(&mut cursor)
+        .filter(|node| node.kind() != "comment")
+        .collect();
+    let [decorator, function] = children.as_slice() else {
+        return None;
+    };
+    if decorator.kind() != "decorator" || function.kind() != "function_definition" {
+        return None;
+    }
+    let decorator = decorator.named_child(0)?;
+    if decorator.kind() != "identifier" {
+        return None;
+    }
+    let name = decorator.utf8_text(source).ok()?;
+    let mut cursor = function.walk();
+    let asynchronous = function
+        .children(&mut cursor)
+        .any(|node| node.kind() == "async");
+    let expected = if asynchronous {
+        "asynccontextmanager"
+    } else {
+        "contextmanager"
+    };
+    let line = u32::try_from(wrapper.start_position().row + 1).ok()?;
+    let imported = |name: &str, module: &str, member: Option<&str>| {
+        let found: Vec<_> = parsed
+            .facts
+            .imports
+            .iter()
+            .enumerate()
+            .filter(|(_, import)| bound_import_name(import) == Some(name))
+            .collect();
+        matches!(found.as_slice(), [(index, import)]
+        if direct_imports[*index] && import.line < line && import.spec == module
+            && match member {
+                Some(member) => import.names.len() == 1 && import.names[0] == member,
+                None => import.names.is_empty(),
+            })
+            && !writes.values().any(|names| names.contains(name))
+            && !external_writes.contains(name)
+    };
+    if !imported(name, "contextlib", Some(expected))
+        || parsed
+            .facts
+            .imports
+            .iter()
+            .any(|import| import.line < line && import.names.iter().any(|name| name == "*"))
+        || !context_manager_has_yield(function.child_by_field_name("body")?)
+    {
+        return None;
+    }
+    let annotation = function
+        .child_by_field_name("return_type")?
+        .utf8_text(source)
+        .ok()?
+        .trim();
+    let (container, result) = annotation.split_once('[')?;
+    let result = result.strip_suffix(']')?.trim();
+    if result.is_empty()
+        || !result.split('.').all(|part| {
+            let mut chars = part.chars();
+            chars
+                .next()
+                .is_some_and(|ch| ch == '_' || ch.is_alphabetic())
+                && chars.all(|ch| ch == '_' || ch.is_alphanumeric())
+        })
+    {
+        return None;
+    }
+    let expected_container = if asynchronous {
+        "AsyncIterator"
+    } else {
+        "Iterator"
+    };
+    let container = container.trim();
+    let valid_container = match container.split_once('.') {
+        Some((module, member)) => member == expected_container && imported(module, "typing", None),
+        None => imported(container, "typing", Some(expected_container)),
+    };
+    if !valid_container {
+        return None;
+    }
+    let index = parsed
+        .spans
+        .partition_point(|(start, _)| *start < wrapper.start_byte());
+    let symbol = parsed.facts.symbols.get(index)?;
+    if parsed.spans.get(index)?.0 != wrapper.start_byte() || !symbol.kind().is_callable() {
+        return None;
+    }
+    if context_attribute_mutated(parsed, symbol, context_writes.1)
+        || context_writes
+            .0
+            .get(&symbol.parent)
+            .is_some_and(|names| names.contains(symbol.name.as_str()))
+        || external_writes.contains(symbol.name.as_str())
+        || parsed
+            .facts
+            .symbols
+            .iter()
+            .filter(|other| other.parent == symbol.parent && other.name == symbol.name)
+            .count()
+            != 1
+        || parsed
+            .facts
+            .imports
+            .iter()
+            .any(|import| bound_import_name(import) == Some(symbol.name.as_str()))
+    {
+        return None;
+    }
+    Some(SourceIdentity {
+        kind: SourceIdentityKind::PythonContextManager,
+        index: u32::try_from(index).ok()?,
+        identity: format!("{}:{result}", if asynchronous { "async" } else { "sync" }),
+    })
+}
+
+fn collect_written_attributes<'a>(
+    node: Node,
+    source: &'a [u8],
+    add: &mut impl FnMut(&'a str, &'a str),
+) {
+    if node.kind() == "attribute" {
+        if let (Some(object), Some(name)) = (
+            node.child_by_field_name("object")
+                .filter(|item| item.kind() == "identifier")
+                .and_then(|item| item.utf8_text(source).ok()),
+            node.child_by_field_name("attribute")
+                .and_then(|item| item.utf8_text(source).ok()),
+        ) {
+            add(object, name);
+        }
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_written_attributes(child, source, add);
+    }
+}
+
+fn context_attribute_mutated(
+    parsed: &crate::extract::engine::Parsed,
+    symbol: &crate::domain::facts::Symbol,
+    writes: &[(Option<u32>, &str, &str)],
+) -> bool {
+    let Some(class_index) = symbol.parent else {
+        return false;
+    };
+    let Some(class) = parsed.facts.symbols.get(class_index as usize) else {
+        return true;
+    };
+    if class.kind() != SymKind::Class {
+        return false;
+    }
+    writes.iter().any(|(scope, object, name)| {
+        if *name != symbol.name.as_str() {
+            return false;
+        }
+        if *object == class.name.as_str() {
+            return true;
+        }
+        if *object == "self" {
+            let mut current = *scope;
+            while let Some(index) = current {
+                if index == class_index {
+                    return true;
+                }
+                current = parsed
+                    .facts
+                    .symbols
+                    .get(index as usize)
+                    .and_then(|item| item.parent);
+            }
+        }
+        parsed.facts.bindings.iter().any(|binding| {
+            binding.name == *object && binding.type_name == class.name && binding.declared
+        })
+    })
+}
+
+fn context_manager_has_yield(body: Node) -> bool {
+    let mut cursor = body.walk();
+    loop {
+        let node = cursor.node();
+        if node.kind() == "yield" {
+            return true;
+        }
+        if !matches!(
+            node.kind(),
+            "function_definition" | "class_definition" | "lambda"
+        ) && cursor.goto_first_child()
+        {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return false;
             }
         }
     }
@@ -1498,6 +1860,25 @@ mod tests {
             }
         }
         assert_eq!(facts.imports.len(), 5);
+        let source = "from contextlib import contextmanager, asynccontextmanager\nfrom typing import Iterator, AsyncIterator\nSQL = 'SELECT id FROM events'\n@contextmanager\ndef managed() -> Iterator[Resource]:\n    yield Resource()\n@asynccontextmanager\nasync def async_managed() -> AsyncIterator[Resource]:\n    yield Resource()\n";
+        let facts = crate::extract::extract(&record, source.as_bytes());
+        assert!(facts.refs.iter().any(|reference| reference.kind
+            == crate::domain::facts::RefKind::Query
+            && reference.line == 3));
+        for (name, expected) in [
+            ("managed", "sync:Resource"),
+            ("async_managed", "async:Resource"),
+        ] {
+            let index = facts
+                .symbols
+                .iter()
+                .position(|symbol| symbol.name == name)
+                .ok_or("missing function")?;
+            assert_eq!(
+                facts.source_identity(SourceIdentityKind::PythonContextManager, index as u32),
+                Some(expected)
+            );
+        }
         Ok(())
     }
 

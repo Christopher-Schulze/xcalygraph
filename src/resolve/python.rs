@@ -26,6 +26,74 @@ pub(super) struct PythonImport {
 const MAX_REEXPORT_DEPTH: usize = 3;
 
 impl Index<'_> {
+    pub(super) fn python_context_manager_result(
+        &self,
+        file: u32,
+        imports: &Imports,
+        scope: Option<u32>,
+        binding: &facts::Binding,
+    ) -> Option<Ids> {
+        if self.python_module("contextlib").is_some() || self.python_module("typing").is_some() {
+            return None;
+        }
+        let facts = self.facts(file)?;
+        let start = facts
+            .bindings
+            .partition_point(|item| item.line < binding.line);
+        let index = facts.bindings[start..]
+            .iter()
+            .take_while(|item| item.line == binding.line)
+            .position(|item| std::ptr::eq(item, binding))?
+            + start;
+        let identity = facts.source_identity(
+            SourceIdentityKind::PythonContextBindingCall,
+            u32::try_from(index).ok()?,
+        )?;
+        let (_, location) = identity.split_once(':')?;
+        let (byte, line) = location.split_once(':')?;
+        let byte = byte.parse::<u32>().ok()?;
+        let line = line.parse::<u32>().ok()?;
+        let (callee, prefix) = if let Some(callee) = binding
+            .type_name
+            .strip_prefix("await:")
+            .and_then(|value| value.strip_suffix("().__aenter__()"))
+        {
+            (callee, "async:")
+        } else {
+            (binding.type_name.strip_suffix("().__enter__()")?, "sync:")
+        };
+        let reference = super::receiver_call(callee, scope, line, byte);
+        if let Some(qualifier) = reference.qualifier.as_deref() {
+            let head = qualifier.split('.').next()?;
+            if head != "self"
+                && self.binding(file, scope, head, line, byte).is_none()
+                && !matches!(imports.names.get(head), Some(Target::Module(_)))
+            {
+                return None;
+            }
+        }
+        let outcome = self
+            .python_import_reference(file, facts, imports, &reference)
+            .unwrap_or_else(|| self.resolve_ref(file, imports, &reference));
+        let Outcome::Targets(targets, _) = outcome else {
+            return None;
+        };
+        let [(callee, _)] = targets.as_slice() else {
+            return None;
+        };
+        let symbol = self.symbols.get(*callee as usize)?;
+        if self.file_type(symbol.file) != Some(FileType::Python) {
+            return None;
+        }
+        let local = callee.checked_sub(self.base[symbol.file as usize])?;
+        let result = self
+            .facts(symbol.file)?
+            .source_identity(SourceIdentityKind::PythonContextManager, local)?
+            .strip_prefix(prefix)?;
+        self.resolve_result_type(symbol.file, Some(local), result)
+            .map(|(types, _)| types)
+    }
+
     pub(super) fn python_structural_implementations(&self) -> Vec<Pair> {
         let mut protocols = Vec::new();
         let mut concrete = Vec::new();

@@ -87,6 +87,54 @@ fn read_opt_u32(decoder: &mut Decoder) -> DecodeResult<Option<u32>> {
     }
 }
 
+fn valid_python_context_binding(facts: &Facts, index: u32, identity: &str) -> bool {
+    let Some(binding) = facts.bindings.get(index as usize) else {
+        return false;
+    };
+    let call = binding
+        .type_name
+        .strip_prefix("await:")
+        .unwrap_or(&binding.type_name);
+    let Some(callee) = call
+        .strip_suffix("().__enter__()")
+        .or_else(|| call.strip_suffix("().__aenter__()"))
+    else {
+        return false;
+    };
+    let (qualifier, name) = callee
+        .rsplit_once('.')
+        .map_or((None, callee), |(q, n)| (Some(q), n));
+    let Some((reference_index, byte, line)) =
+        identity.split_once(':').and_then(|(index, location)| {
+            let (byte, line) = location.split_once(':')?;
+            Some((
+                index.parse::<usize>().ok()?,
+                byte.parse::<u32>().ok()?,
+                line.parse::<u32>().ok()?,
+            ))
+        })
+    else {
+        return false;
+    };
+    let offset = qualifier.map_or(0, |qualifier| qualifier.len() + 1);
+    if u32::try_from(offset)
+        .ok()
+        .and_then(|offset| binding.value_byte.checked_add(offset))
+        != Some(byte)
+    {
+        return false;
+    }
+    line > 0
+        && facts.refs.get(reference_index).is_some_and(|reference| {
+            reference.kind == RefKind::Call
+                && reference.byte == byte
+                && reference.line == line
+                && reference.scope == binding.scope
+                && reference.name == name
+                && reference.qualifier.as_deref() == qualifier
+        })
+}
+
 pub fn encode(encoder: &mut Encoder, facts: &Facts) {
     encoder.opt_str(facts.package.as_deref());
     encoder.var_u32(facts.lines);
@@ -529,7 +577,9 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             | SourceIdentityKind::InterfaceGroup
             | SourceIdentityKind::InterfaceGenericFields
             | SourceIdentityKind::TypeScriptAugmentation
-            | SourceIdentityKind::PythonDirectDefinition => facts.symbols.len(),
+            | SourceIdentityKind::PythonDirectDefinition
+            | SourceIdentityKind::PythonContextManager => facts.symbols.len(),
+            SourceIdentityKind::PythonContextBindingCall => facts.bindings.len(),
             SourceIdentityKind::Reference
             | SourceIdentityKind::PythonShadowedImport
             | SourceIdentityKind::PythonCallableImportFallback => facts.refs.len(),
@@ -583,6 +633,22 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
                     .is_none_or(|symbol| symbol.kind() != SymKind::Fn || symbol.parent.is_some()))
         {
             return Err(DecodeError("Python direct definition"));
+        }
+        if kind == SourceIdentityKind::PythonContextManager
+            && (facts.symbols.get(index as usize).is_none_or(|symbol| {
+                !symbol.kind().is_callable()
+                    || symbol.flags & crate::domain::facts::FLAG_PYTHON_DECORATED == 0
+            }) || identity
+                .strip_prefix("sync:")
+                .or_else(|| identity.strip_prefix("async:"))
+                .is_none_or(str::is_empty))
+        {
+            return Err(DecodeError("Python context manager"));
+        }
+        if kind == SourceIdentityKind::PythonContextBindingCall
+            && !valid_python_context_binding(&facts, index, &identity)
+        {
+            return Err(DecodeError("Python context binding call"));
         }
         if kind == SourceIdentityKind::PythonCallableImportFallback
             && (facts.refs.get(index as usize).is_none_or(|reference| {
@@ -1007,6 +1073,79 @@ mod tests {
         encode(&mut encoder, &facts);
         assert_eq!(decode(&mut Decoder::new(&encoder.bytes))?, facts);
         facts.symbols[0].parent = Some(0);
+        let mut invalid = Encoder::default();
+        encode(&mut invalid, &facts);
+        assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
+        facts.symbols[0].parent = None;
+        facts.symbols[0].flags = crate::domain::facts::FLAG_PYTHON_DECORATED;
+        facts.source_identities = Some(
+            vec![SourceIdentity {
+                kind: SourceIdentityKind::PythonContextManager,
+                index: 0,
+                identity: "sync:Resource".to_owned(),
+            }]
+            .into_boxed_slice(),
+        );
+        let mut valid = Encoder::default();
+        encode(&mut valid, &facts);
+        assert_eq!(decode(&mut Decoder::new(&valid.bytes))?, facts);
+        facts.symbols[0].flags = 0;
+        let mut invalid = Encoder::default();
+        encode(&mut invalid, &facts);
+        assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
+        facts.bindings.push(Binding {
+            scope: None,
+            name: "result".into(),
+            type_name: "managed().__enter__()".into(),
+            line: 1,
+            visibility: None,
+            value_byte: 0,
+            declared: false,
+        });
+        facts.refs.push(Ref {
+            kind: RefKind::Call,
+            name: "managed".into(),
+            qualifier: None,
+            scope: None,
+            line: 1,
+            byte: 0,
+            arity: crate::domain::facts::NO_ARITY,
+        });
+        facts.source_identities = Some(
+            vec![SourceIdentity {
+                kind: SourceIdentityKind::PythonContextBindingCall,
+                index: 0,
+                identity: "0:0:1".to_owned(),
+            }]
+            .into_boxed_slice(),
+        );
+        let mut valid = Encoder::default();
+        encode(&mut valid, &facts);
+        assert_eq!(decode(&mut Decoder::new(&valid.bytes))?, facts);
+        facts.bindings[0].line = 2;
+        facts.refs[0].line = 2;
+        facts.refs.push(Ref {
+            kind: RefKind::Query,
+            name: "events".into(),
+            qualifier: None,
+            scope: None,
+            line: 1,
+            byte: 0,
+            arity: crate::domain::facts::NO_ARITY,
+        });
+        facts
+            .source_identities
+            .as_mut()
+            .ok_or(DecodeError("identity"))?[0]
+            .identity = "0:0:2".to_owned();
+        let mut out_of_order = Encoder::default();
+        encode(&mut out_of_order, &facts);
+        assert_eq!(decode(&mut Decoder::new(&out_of_order.bytes))?, facts);
+        facts
+            .source_identities
+            .as_mut()
+            .ok_or(DecodeError("identity"))?[0]
+            .index = 1;
         let mut invalid = Encoder::default();
         encode(&mut invalid, &facts);
         assert!(decode(&mut Decoder::new(&invalid.bytes)).is_err());
