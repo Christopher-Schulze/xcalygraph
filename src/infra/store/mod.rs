@@ -32,6 +32,14 @@ pub fn index_dir(base: &Path, canonical_root: &Path) -> PathBuf {
     base.join(format!("{name}-{hash:016x}"))
 }
 
+#[allow(dead_code)]
+pub const SEGMENTS: u16 = 128;
+
+#[allow(dead_code)]
+pub fn segment_of(path: &str) -> u16 {
+    (xxh3_64(path.as_bytes()) % u64::from(SEGMENTS)) as u16
+}
+
 pub fn shard_of(path: &str) -> usize {
     (xxh3_64(path.as_bytes()) % SHARDS as u64) as usize
 }
