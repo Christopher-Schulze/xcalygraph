@@ -36,5 +36,25 @@ fn config_yaml_keys_are_surfaced() -> Result<(), Box<dyn std::error::Error>> {
         text.contains("ConfigYAML") || text.contains("server.port"),
         "expected config ghost, got: {text}"
     );
+    fs::write(
+        root.join("schema.json"),
+        "{\n  \"name\": \"app\",\n  \"version\": \"1.0\"\n}\n",
+    )?;
+    let out2 = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+        .args(["show", "schema.json", "--json", "--all", "-C"])
+        .arg(&root)
+        .arg("--index-dir")
+        .arg(fixture.0.join("index"))
+        .output()?;
+    assert!(
+        out2.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
+    let text2 = String::from_utf8(out2.stdout)?;
+    assert!(
+        text2.contains("SchemaJSON") || text2.contains("version"),
+        "expected schema ghost, got: {text2}"
+    );
     Ok(())
 }
