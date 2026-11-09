@@ -1,8 +1,8 @@
 //! Surface type for TASK 217 incremental tiers.
 //!
-//! The surface behind one query session: fingerprint of its definition,
-//! build age, dirty condition, warm read set and elapsed time; seven measured
-//! refresh costs stay in the caller and never enter the hash.
+//! Tier1 = definition fingerprint only (body only), Tier2 = + name index,
+//! Tier3 = + fallback full rebuild. The hash below is the Tier2 name index
+//! hash; Tier1 hash uses fingerprint+build_age only.
 
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -26,6 +26,23 @@ pub struct Surface {
 }
 
 impl Surface {
+    /// Tier1 hash: definition only (body only, no name index).
+    #[allow(dead_code)]
+    pub fn tier1_hash(&self) -> u64 {
+        let mut h = xxh3_64(&self.fingerprint.to_le_bytes());
+        h ^= xxh3_64(&self.build_age.to_le_bytes());
+        h.wrapping_mul(0x9e3779b97f4a7c15)
+    }
+    /// Tier2 hash: name index (Tier1 + warm read set).
+    #[allow(dead_code)]
+    pub fn tier2_hash(&self) -> u64 {
+        self.hash()
+    }
+    /// Tier3 = full fallback (no hash, always rebuild).
+    #[allow(dead_code)]
+    pub fn tier3_fallback(&self) -> bool {
+        true
+    }
     /// Repeatable surface hash over the definition and warm set only;
     /// elapsed time and refresh costs are excluded by design.
     #[allow(dead_code)]
