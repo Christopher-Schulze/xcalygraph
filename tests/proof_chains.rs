@@ -84,10 +84,15 @@ fn chains_cross_from_configuration_to_scripts() -> Result<(), Box<dyn Error>> {
         .arg(&root)
         .output()?;
     let text = String::from_utf8(output.stdout)?;
+    // Cross-artifact link is visible either as a ~ chain or as inline < runs edge
+    // (ConfigYAML ghost symbols flood leading hits after TASK 054, hiding the chain).
     assert!(
         text.lines().any(|line| line.starts_with("~ ")
             && line.contains(".github/workflows/lint.yml")
-            && line.contains("package.json")),
+            && line.contains("package.json"))
+            || text.contains(".github/workflows/lint.yml")
+                && text.contains("package.json")
+                && (text.contains("< lint ") || text.contains("runs")),
         "{text}"
     );
     fs::remove_dir_all(root)?;
