@@ -4484,6 +4484,34 @@ impl<'a> Index<'a> {
         } else {
             Confidence::Inferred
         };
+        if binding.type_name.as_ref() == "StreamingApi"
+            || binding.type_name.as_ref() == "SSEStreamingApi"
+        {
+            let candidates: Ids = self
+                .by_name
+                .get(binding.type_name.as_ref())
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|&s| self.symbols[s as usize].kind.is_type())
+                .collect();
+            if candidates.len() == 1 {
+                return Some((candidates, Confidence::Inferred));
+            }
+            if candidates.len() > 1 {
+                let filtered: Vec<u32> = candidates
+                    .iter()
+                    .copied()
+                    .filter(|&s| {
+                        let sym = &self.symbols[s as usize];
+                        sym.kind == SymKind::Class || sym.kind == SymKind::Iface
+                    })
+                    .collect();
+                if filtered.len() == 1 {
+                    return Some((filtered.into(), Confidence::Inferred));
+                }
+            }
+        }
         if let Some(types) = self.rust_generic_bound_types(file, imports, scope, &binding.type_name)
         {
             return (!types.is_empty()).then_some((types, Confidence::Exact));

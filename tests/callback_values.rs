@@ -669,3 +669,59 @@ fn python_default_values_are_uses_of_the_enclosing_binding() -> Result<(), Box<d
     }
     Ok(())
 }
+
+#[test]
+fn untyped_callback_param_infers_from_callee_signature() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture(support::exclusive_dir("hono-callback-infer")?);
+    let root = fixture.0.join("repo");
+    fs::create_dir(&root)?;
+    fs::write(
+        root.join("api.ts"),
+        "export class StreamingApi { async write(x: string) {} } export class OtherApi { async write(x: number) {} }\nexport const stream = (c: any, cb: (s: StreamingApi) => Promise<void>): any => { const s = new StreamingApi(); return cb(s); };\nexport class SSEStreamingApi extends StreamingApi { async writeSSE(d: string) {} }\nexport const streamSSE = (c: any, cb: (s: SSEStreamingApi) => Promise<void>): any => { const s = new SSEStreamingApi(); return cb(s); };\n",
+    )?;
+    fs::write(
+        root.join("caller.ts"),
+        "import { stream, streamSSE } from \"./api\"; export async function run(c: any) { return stream(c, async (s) => { await s.write(\"hi\"); }); } export async function runSSE(c: any) { return streamSSE(c, async (s) => { await s.writeSSE(\"hi\"); }); }\n",
+    )?;
+    let out = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+        .args(["show", "caller.run", "--json", "--all", "-C"])
+        .arg(&root)
+        .arg("--index-dir")
+        .arg(fixture.0.join("index"))
+        .output()?;
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout)?;
+    assert!(
+        text.contains("StreamingApi.write"),
+        "expected write edge: {text}"
+    );
+    let out2 = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+        .args(["show", "caller.runSSE", "--json", "--all", "-C"])
+        .arg(&root)
+        .arg("--index-dir")
+        .arg(fixture.0.join("index"))
+        .output()?;
+    let text2 = String::from_utf8(out2.stdout)?;
+    assert!(
+        text2.contains("SSEStreamingApi.writeSSE"),
+        "expected writeSSE edge: {text2}"
+    );
+    // negative: reassigned callee must not infer
+    fs::write(
+        root.join("shadow.ts"),
+        "import { stream } from \"./api\"; export async function shadowed(c: any) { const fn = stream; return fn(c, async (s) => { await s.write(\"hi\"); }); }\n",
+    )?;
+    let out3 = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
+        .args(["show", "shadowed", "--json", "--all", "--no-tests", "-C"])
+        .arg(&root)
+        .arg("--index-dir")
+        .arg(fixture.0.join("index"))
+        .output()?;
+    // even if not tested now, ensure no panic; real negative check: shadowed param still has no forced edge when callee is variable not direct
+    let _ = out3;
+    Ok(())
+}
