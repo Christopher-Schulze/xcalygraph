@@ -1,8 +1,10 @@
 //! Word-level structural index for TASK 225 (slice 1).
 
+#[allow(dead_code)]
 pub fn is_identifier_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }
+#[allow(dead_code)]
 pub fn is_whitespace_byte(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
 }
