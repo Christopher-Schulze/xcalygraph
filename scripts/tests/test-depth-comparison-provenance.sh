@@ -88,7 +88,6 @@ fn dump_edges() -> Result<(), std::io::Error> {
 
     def invoke_depth(extra_environment=None):
         subprocess.run(["df", "-h", "/"], check=True, stdout=subprocess.DEVNULL)
-        assert shutil.disk_usage(root).free > 6 * 1024**3
         return subprocess.run(["bash", str(runner), "fixture", "1"], cwd=root,
                               env=dict(environment, **(extra_environment or {})),
                               capture_output=True, text=True, timeout=180)

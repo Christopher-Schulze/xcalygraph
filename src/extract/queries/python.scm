@@ -34,6 +34,7 @@
 (typed_parameter (identifier) @binding.name type: (type) @binding.type) @binding
 (typed_default_parameter name: (identifier) @binding.name type: (type) @binding.type) @binding
 (assignment left: (identifier) @binding.name type: (type) @binding.type) @binding
+(assignment left: (identifier) @binding.name right: (identifier)) @binding
 ; A context target receives __enter__/__aenter__'s result, not the manager's type.
 (with_item value: (as_pattern
   (call function: [(identifier) (attribute)] @binding.call)

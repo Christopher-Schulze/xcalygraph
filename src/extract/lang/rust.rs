@@ -285,20 +285,34 @@ pub fn variant_pattern_binding(source: &[u8], binding: Node, variant: Node) -> O
         }
     };
     let typed = tuple.child_by_field_name("type")?;
+    // Fields after `..` are counted from the end of the variant declaration.
     let mut index = None;
-    let mut position = 0u32;
+    let mut position = 0i64;
+    let mut after_rest = false;
     let mut cursor = tuple.walk();
     for child in tuple.children(&mut cursor) {
-        if !child.is_named() || child.id() == typed.id() {
+        let kind = child.kind();
+        if matches!(kind, "remaining_field_pattern" | "..") {
+            after_rest = true;
+            position = 0;
+            continue;
+        }
+        if child.is_extra() || (!child.is_named() && kind != "_") || child.id() == typed.id() {
             continue;
         }
         if child.start_byte() <= binding.start_byte() && binding.end_byte() <= child.end_byte() {
             index = Some(position);
-            break;
+            if !after_rest {
+                break;
+            }
         }
         position += 1;
     }
-    let index = index?;
+    let index = if after_rest {
+        index? - position
+    } else {
+        index?
+    };
     let mut coded = format!("{PATTERN_BINDING}{path}#{index}");
     if let Some(scrutinee) = match_scrutinee(tuple) {
         let scrutinee = normalize_space(scrutinee.utf8_text(source).unwrap_or_default());

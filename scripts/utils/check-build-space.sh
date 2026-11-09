@@ -1,20 +1,36 @@
 #!/usr/bin/env bash
 # Check the root, Cargo target and intermediate filesystems before a build.
-# Usage: scripts/utils/check-build-space.sh [MIN_BUILD_KIB]
+# Usage: scripts/utils/check-build-space.sh [--profile debug|release] [MIN_BUILD_KIB]
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
 REPO_ROOT="${REPO_ROOT%.}"
 readonly REPO_ROOT
 readonly MIN_FREE_KIB=$((2 * 1024 * 1024))
-readonly FRESH_BUILD_KIB=$((4 * 1024 * 1024))
-estimate="${1:-${FRESH_BUILD_KIB}}"
-if (( $# > 1 )) || [[ ! "${estimate}" =~ ^[0-9]{1,12}$ ]] || (( 10#${estimate} == 0 )); then
-  echo "usage: check-build-space.sh [MIN_BUILD_KIB]" >&2
+
+usage() {
+  echo "usage: check-build-space.sh [--profile debug|release] [MIN_BUILD_KIB]" >&2
   exit 2
+}
+
+profile=""
+clean_args=(--locked --package xcalygraph)
+if [[ "${1:-}" == --profile ]]; then
+  case "${2:-}" in
+    debug) clean_args+=(--profile dev) ;;
+    release) clean_args+=(--profile release) ;;
+    *) usage ;;
+  esac
+  profile="$2"
+  shift 2
 fi
-estimate=$((10#${estimate}))
-(( estimate >= FRESH_BUILD_KIB )) || estimate="${FRESH_BUILD_KIB}"
+estimate=0
+if (( $# )); then
+  if (( $# > 1 )) || [[ ! "$1" =~ ^[0-9]{1,12}$ ]] || (( 10#$1 == 0 )); then
+    usage
+  fi
+  estimate=$((10#$1))
+fi
 
 available_kib() {
   local value
@@ -56,12 +72,12 @@ directory_size() {
 
 check_filesystems() {
   root_free="$(available_kib /)"
-  target_parent "${target}"
+  target_parent "${target_artifacts}"
   target_free="$(available_kib "${target_probe}")"
-  if [[ "${build}" == "${target}" ]]; then
+  if [[ "${build_artifacts}" == "${target_artifacts}" ]]; then
     build_free="${target_free}"
   else
-    target_parent "${build}"
+    target_parent "${build_artifacts}"
     build_free="$(available_kib "${target_probe}")"
   fi
 }
@@ -74,14 +90,16 @@ target="$(python3 -I -c 'import json,sys; from pathlib import Path; sys.stdout.w
 build="$(python3 -I -c 'import json,sys; from pathlib import Path; sys.stdout.write(str(Path(json.load(sys.stdin)["build_directory"]).resolve()) + ".")' <<< "${cargo_metadata}")"
 target="${target%.}"
 build="${build%.}"
-target_size="$(directory_size "${target}" target)"
-if [[ "${build}" == "${target}" ]]; then
+target_artifacts="${target}${profile:+/${profile}}"
+build_artifacts="${build}${profile:+/${profile}}"
+target_size="$(directory_size "${target_artifacts}" target)"
+if [[ "${build_artifacts}" == "${target_artifacts}" ]]; then
   build_size="${target_size}"
 else
-  build_size="$(directory_size "${build}" 'build directory')"
+  build_size="$(directory_size "${build_artifacts}" 'build directory')"
 fi
-if [[ "${target}" == / || "${build}" == / || "${target}" == "${build}" \
-      || "${target}" == "${build}/"* || "${build}" == "${target}/"* ]]; then
+if [[ "${target_artifacts}" == / || "${build_artifacts}" == / || "${target_artifacts}" == "${build_artifacts}" \
+      || "${target_artifacts}" == "${build_artifacts}/"* || "${build_artifacts}" == "${target_artifacts}/"* ]]; then
   if (( target_size >= build_size )); then
     combined_size="${target_size}"
   else
@@ -90,18 +108,21 @@ if [[ "${target}" == / || "${build}" == / || "${target}" == "${build}" \
 else
   combined_size=$((target_size + build_size))
 fi
+if [[ -n "${profile}" && ! -d "${target_artifacts}" && ! -d "${build_artifacts}" ]]; then
+  combined_size="$(directory_size "${REPO_ROOT}/target/${profile}" 'reference build profile')"
+fi
 (( combined_size <= estimate )) || estimate="${combined_size}"
 check_filesystems
 if (( root_free < MIN_FREE_KIB || target_free < MIN_FREE_KIB + estimate || build_free < MIN_FREE_KIB + estimate )); then
   echo "check-build-space.sh: insufficient space for ${target}; cleaning this package's build artifacts (intermediates: ${build})" >&2
-  if ! cargo clean --locked --package xcalygraph --target-dir "${target}"; then
+  if ! cargo clean "${clean_args[@]}" --target-dir "${target}"; then
     echo "check-build-space.sh: build aborted; Cargo could not safely clean ${target}" >&2
     exit 1
   fi
   df -h / >&2
   check_filesystems
   if (( root_free < MIN_FREE_KIB || target_free < MIN_FREE_KIB + estimate || build_free < MIN_FREE_KIB + estimate )); then
-    echo "check-build-space.sh: build aborted; free at least 2 GiB plus the estimated build size for ${target} and ${build}" >&2
+    echo "check-build-space.sh: build aborted; free at least 2 GiB plus ${estimate} KiB estimated for ${target_artifacts} and ${build_artifacts}" >&2
     exit 1
   fi
 fi

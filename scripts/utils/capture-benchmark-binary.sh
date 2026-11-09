@@ -17,7 +17,7 @@ destination="$2"
 build_args=()
 [[ "${profile}" == --release ]] && build_args+=(--release)
 cd "${REPO_ROOT}"
-bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
+bash "${REPO_ROOT}/scripts/utils/check-build-space.sh" --profile "${profile#--}"
 binary="$(RUSTFLAGS="-Dwarnings" cargo build "${build_args[@]}" --locked --bin xcalygraph --message-format=json -q \
   | bash "${REPO_ROOT}/scripts/utils/cargo-artifact.sh")"
 python3 -I - "${binary}" "${destination}" "${profile#--}" \

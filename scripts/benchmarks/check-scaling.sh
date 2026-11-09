@@ -60,7 +60,9 @@ def lua(n):
 def rust_chains(links):
     lines = ["struct B;", "impl B {", "    fn new() -> B { B }",
              "    fn s(self, x: u32) -> B { let _ = x; B }",
-             "    fn done(self) -> u32 { 0 }", "}", "fn run(x: u32) -> u32 {"]
+             "    fn done(self) -> u32 { 0 }", "}",
+             "struct Decoy;", "impl Decoy { fn done(self) -> u32 { 1 } }",
+             "fn run(x: u32) -> u32 {"]
     for c in range(20):
         lines.append("    let y%d = B::new()%s.done();" % (c, ".s(x)" * links))
     return "\n".join(lines + ["    y0", "}"])
@@ -73,6 +75,7 @@ for name, extension, generate in [
         root = work / f"{name}-{scale}"
         root.mkdir()
         (root / f"main.{extension}").write_text(generate(size) + "\n")
+# Verify the endpoint after each timed build, including the long chain.
 for scale, links in (("small", 20), ("large", 80)):
     root = work / f"rust-chains-{scale}"
     root.mkdir()
@@ -82,8 +85,17 @@ PYTHON
 # Retired instructions of one fresh build, empty when the platform does not report them.
 measure() {
   rm -rf -- "${work}/index"
-  XCALYGRAPH_INDEX_DIR="${work}/index" /usr/bin/time -l "${binary}" index -C "$1" 2>&1 >/dev/null |
-    awk '/instructions retired/ { print $1 }'
+  local count answer
+  count="$(XCALYGRAPH_INDEX_DIR="${work}/index" /usr/bin/time -l "${binary}" index -C "$1" 2>&1 >/dev/null |
+    awk '/instructions retired/ { print $1 }')" || return
+  if [[ "$1" == "${work}"/rust-chains-* ]]; then
+    answer="$(XCALYGRAPH_INDEX_DIR="${work}/index" "${binary}" show run --json --all --read-only -C "$1")" || return
+    if [[ "${answer}" != *'"kind":"calls","name":"crate::B::done"'* ]]; then
+      echo "check-scaling.sh: missing Rust chain endpoint in $(basename -- "$1")" >&2
+      return 1
+    fi
+  fi
+  printf '%s\n' "${count}"
 }
 
 failed=0

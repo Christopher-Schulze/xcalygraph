@@ -426,6 +426,7 @@ struct RawBinding {
 struct RawField {
     name: Option<FieldName>,
     type_name: String,
+    conditional_callee: Option<String>,
     position: usize,
 }
 
@@ -637,8 +638,8 @@ fn awaited_call(source: &[u8], start: usize) -> bool {
     })
 }
 
-/// Longest member-call chain recorded as steps; longer chains keep clipped source text.
-const CHAIN_STEP_BUDGET: usize = 32;
+/// Limit for languages without shared receiver prefixes.
+const FLAT_CHAIN_STEP_BUDGET: usize = 32;
 
 /// Member-call node shapes of one language: the call node with its callee field, the member
 /// node with its object and member fields, and the generic-call wrapper with its callee field.
@@ -727,9 +728,61 @@ fn agreeing_callee(node: Node, source: &[u8]) -> Option<String> {
     (first == second).then_some(first)
 }
 
-/// Tagged chain steps of `qualifier`, head first, or `None` when the qualifier is no pure
-/// member-call chain within budget: try operators only wrap Rust steps, anything else (index,
-/// operator, macro, over-long chain) keeps the clipped source-text form.
+/// Share a long Rust receiver with its preceding method reference. Field accesses and try
+/// operators between the references belong to this link.
+fn rust_chain_link(mut node: Node, source: &[u8]) -> Option<String> {
+    let mut fields = smallvec::SmallVec::<[(&str, usize); 4]>::new();
+    let mut tries = 0;
+    loop {
+        match node.kind() {
+            "try_expression" => {
+                tries += 1;
+                node = node.named_child(0)?;
+            }
+            "await_expression" => node = node.named_child(0)?,
+            "field_expression" => {
+                let name = node.child_by_field_name("field")?.utf8_text(source).ok()?;
+                if !is_chain_step(name) {
+                    return None;
+                }
+                fields.push((name, tries));
+                tries = 0;
+                node = node.child_by_field_name("value")?;
+            }
+            "call_expression" => break,
+            _ => return None,
+        }
+    }
+    let mut method = node.child_by_field_name("function")?;
+    if method.kind() == "generic_function" {
+        method = method.child_by_field_name("function")?;
+    }
+    if method.kind() != "field_expression" {
+        return None;
+    }
+    let inner = method.child_by_field_name("value")?;
+    source
+        .get(inner.byte_range())?
+        .iter()
+        .filter(|&&byte| byte & 0xc0 != 0x80)
+        .nth(facts::QUALIFIER_TEXT_BUDGET)?;
+    let field = method.child_by_field_name("field")?;
+    if field.kind() != "field_identifier" {
+        return None;
+    }
+    let byte = field.start_byte();
+    let mut link = format!("{}@{byte}:{tries}", facts::CHAIN_QUALIFIER_PREFIX);
+    for (name, tries) in fields.into_iter().rev() {
+        link.push(',');
+        link.push_str(name);
+        for _ in 0..tries {
+            link.push('?');
+        }
+    }
+    Some(link)
+}
+
+/// Head-first steps for a pure member-call chain. Unsupported syntax keeps the text form.
 fn tagged_chain(path: &str, qualifier: Node, source: &[u8]) -> Option<String> {
     let kinds = chain_kinds(path)?;
     let rust = path.ends_with(".rs");
@@ -738,7 +791,7 @@ fn tagged_chain(path: &str, qualifier: Node, source: &[u8]) -> Option<String> {
     let mut tries = 0usize;
     let mut node = qualifier;
     loop {
-        if steps.len() >= CHAIN_STEP_BUDGET {
+        if !rust && steps.len() >= FLAT_CHAIN_STEP_BUDGET {
             return None;
         }
         let kind = node.kind();
@@ -878,7 +931,7 @@ fn collect(
     };
     let mut defs: FastMap<usize, RawDef> = FastMap::default();
     let mut impls: Vec<(Node, String, Option<String>)> = Vec::new();
-    let mut literal_impls: Vec<(Node, String, String)> = Vec::new();
+    let mut literal_impls: Vec<(Node, Node, String)> = Vec::new();
     let mut refs: FastMap<usize, RawRef> = FastMap::default();
     let mut imports: FastMap<usize, RawImport> = FastMap::default();
     let mut bindings: FastMap<usize, RawBinding> = FastMap::default();
@@ -1114,38 +1167,48 @@ fn collect(
                 } else {
                     qualifier
                 };
-                let qualifier_text = {
+                let linked = (path.ends_with(".rs")
+                    && kind == Some(RefKind::Call)
+                    && qualifier.end_byte() - qualifier.start_byte()
+                        > facts::QUALIFIER_TEXT_BUDGET)
+                    .then(|| rust_chain_link(qualifier, source))
+                    .flatten();
+                let qualifier_text = || {
+                    let source_text = text(qualifier);
                     #[cfg(feature = "lang-typescript")]
                     if super::lang::typescript::is_typescript_path(path)
+                        && source_text.contains('\\')
                         && let Some(normalized) =
                             super::lang::typescript::normalize_member_qualifier(qualifier, source)
                     {
-                        normalized
+                        std::borrow::Cow::Owned(normalized)
                     } else {
-                        text(qualifier).to_owned()
+                        std::borrow::Cow::Borrowed(source_text)
                     }
                     #[cfg(not(feature = "lang-typescript"))]
                     {
-                        text(qualifier).to_owned()
+                        std::borrow::Cow::Borrowed(source_text)
                     }
                 };
-                // The path `self::f` is no receiver, unlike `self` in `self.f()`.
-                let qualifier_text = if qualifier_text == "self"
-                    && qualifier
-                        .parent()
-                        .is_some_and(|parent| parent.kind() == "scoped_identifier")
-                {
-                    "self::".to_owned()
-                } else {
-                    qualifier_text
-                };
-                let tagged = (qualifier_text.chars().count() > facts::QUALIFIER_TEXT_BUDGET)
-                    .then(|| tagged_chain(path, qualifier, source))
-                    .flatten();
                 reference.qualifier = Some(
-                    tagged
+                    linked
                         .unwrap_or_else(|| {
-                            facts::clip_space(&qualifier_text, facts::QUALIFIER_TEXT_BUDGET)
+                            let text = qualifier_text();
+                            // The path `self::f` is no receiver, unlike `self.f()`.
+                            if text == "self"
+                                && qualifier
+                                    .parent()
+                                    .is_some_and(|parent| parent.kind() == "scoped_identifier")
+                            {
+                                return "self::".to_owned();
+                            }
+                            if text.len() > facts::QUALIFIER_TEXT_BUDGET
+                                && text.chars().nth(facts::QUALIFIER_TEXT_BUDGET).is_some()
+                                && let Some(tagged) = tagged_chain(path, qualifier, source)
+                            {
+                                return tagged;
+                            }
+                            facts::clip_space(&text, facts::QUALIFIER_TEXT_BUDGET)
                         })
                         .into(),
                 );
@@ -1175,14 +1238,23 @@ fn collect(
                 "literal" => {
                     // Methods of an interface-annotated object literal; resolve links each
                     // method to the same-named interface member (implements edge, dispatch).
-                    if let (Some(const_node), Some(iface_node)) =
-                        (get("literal.const"), get("literal.iface"))
+                    if let Some(iface_node) = get("literal.iface")
                         && let Some(object) = primary_node
                             .child_by_field_name("value")
                             .filter(|node| node.kind() == "object")
                     {
                         let mut cursor = object.walk();
-                        for child in object.named_children(&mut cursor) {
+                        let children: Vec<_> = object.named_children(&mut cursor).collect();
+                        for child in children.into_iter().rev() {
+                            // An unknown key or a later spread may override an earlier method.
+                            if child.kind() == "spread_element"
+                                || child
+                                    .child_by_field_name("key")
+                                    .or_else(|| child.child_by_field_name("name"))
+                                    .is_some_and(|key| key.kind() == "computed_property_name")
+                            {
+                                break;
+                            }
                             let (key, is_method) = match child.kind() {
                                 "pair" => (
                                     child.child_by_field_name("key"),
@@ -1199,11 +1271,10 @@ fn collect(
                             if !is_method {
                                 continue;
                             }
-                            if let Some(key) = key.filter(|key| key.kind() == "property_identifier")
-                            {
+                            if key.is_some_and(|key| key.kind() == "property_identifier") {
                                 literal_impls.push((
                                     child,
-                                    format!("{}.{}", text(const_node), text(key)),
+                                    primary_node,
                                     text(iface_node).to_owned(),
                                 ));
                             }
@@ -1327,20 +1398,11 @@ fn collect(
                     } else if let Some(node) = get("binding.cond")
                         && let Some(callee) = agreeing_callee(node, source)
                     {
-                        // A conditional whose branches call the same callee types like the
-                        // call itself; disagreeing branches keep no type.
-                        if callee
-                            .rsplit('.')
-                            .next()
-                            .is_some_and(|name| name.starts_with(|ch: char| ch.is_uppercase()))
-                        {
-                            entry.type_name = Some(type_name(&callee).into());
-                            entry.declared = true;
-                        } else {
-                            entry.type_name = Some(callee.into());
-                            entry.call = true;
-                            entry.declared = false;
-                        }
+                        // Resolve the callee in the value namespace. Capitalization does
+                        // not prove a constructor, especially when a local function shadows it.
+                        entry.type_name = Some(callee.into());
+                        entry.call = true;
+                        entry.declared = false;
                     }
                 }
                 "return" => {
@@ -1399,8 +1461,9 @@ fn collect(
                     if entry.type_name.is_empty()
                         && let Some(node) = get("field.cond")
                         && let Some(callee) = agreeing_callee(node, source)
+                        && !callee.contains('.')
                     {
-                        entry.type_name = declared_type(path, &callee).unwrap_or_default();
+                        entry.conditional_callee = declared_type(path, &callee);
                     }
                 }
                 "variant" => {
@@ -1423,6 +1486,7 @@ fn collect(
                                 break;
                             }
                             if child.is_named()
+                                && !child.is_extra()
                                 && child.kind() != "attribute_item"
                                 && child.kind() != "visibility_modifier"
                             {
@@ -1741,7 +1805,7 @@ struct Assembly<'a, 'tree> {
     package: Option<String>,
     defs: FastMap<usize, RawDef<'tree>>,
     impls: Vec<(Node<'tree>, String, Option<String>)>,
-    literal_impls: Vec<(Node<'tree>, String, String)>,
+    literal_impls: Vec<(Node<'tree>, Node<'tree>, String)>,
     refs: FastMap<usize, RawRef>,
     imports: FastMap<usize, RawImport<'tree>>,
     bindings: FastMap<usize, RawBinding>,
@@ -1770,7 +1834,7 @@ fn assemble(assembly: Assembly) -> Parsed {
         imports,
         mut bindings,
         returns,
-        fields,
+        mut fields,
         variants,
         envs,
         scope_index,
@@ -2082,6 +2146,9 @@ fn assemble(assembly: Assembly) -> Parsed {
     if !python_list_locals.is_empty()
         || !python_list_lambdas.is_empty()
         || !python_list_globals.is_empty()
+        || fields
+            .values()
+            .any(|field| field.conditional_callee.is_some())
     {
         let shadowed: HashSet<(Option<u32>, &str)> = python_list_locals
             .iter()
@@ -2113,6 +2180,26 @@ fn assemble(assembly: Assembly) -> Parsed {
                     .entry((symbol.parent, symbol.name.as_ref()))
                     .and_modify(|line| *line = (*line).min(symbol.line))
                     .or_insert(symbol.line);
+            }
+        }
+        for field in fields.values_mut() {
+            let Some(callee) = field.conditional_callee.take() else {
+                continue;
+            };
+            if !field.type_name.is_empty() {
+                continue;
+            }
+            let mut scope = scope_of(field.position);
+            while let Some(local) = scope {
+                if shadowed.contains(&(scope, callee.as_str()))
+                    || definitions.contains_key(&(scope, callee.as_str()))
+                {
+                    break;
+                }
+                scope = symbols[local as usize].parent;
+            }
+            if scope.is_none() && !definitions.contains_key(&(None, callee.as_str())) {
+                field.type_name = callee;
             }
         }
         facts_refs.retain_mut(|entry| {
@@ -2302,13 +2389,29 @@ fn assemble(assembly: Assembly) -> Parsed {
             });
         }
     }
-    for (method_node, qualifier, iface) in &literal_impls {
+    for (method_node, declaration, iface) in &literal_impls {
+        let Some(method) = scope_of(method_node.start_byte()) else {
+            continue;
+        };
+        let Some(owner) = symbols[method as usize].parent else {
+            continue;
+        };
+        if symbols[method as usize].kind() != SymKind::Method
+            || !matches!(
+                symbols[owner as usize].kind(),
+                SymKind::Const | SymKind::Var
+            )
+            || ranges[method as usize].0 != method_node.start_byte()
+            || ranges[owner as usize].0 != declaration.start_byte()
+        {
+            continue;
+        }
         facts_refs.push(AssembledRef {
             reference: Ref {
                 kind: RefKind::ImplementLiteral,
                 name: Name::new(iface),
-                qualifier: Some(Name::new(qualifier)),
-                scope: None,
+                qualifier: None,
+                scope: Some(method),
                 line: row(*method_node),
                 byte: u32::try_from(method_node.start_byte()).unwrap_or(facts::NO_BYTE),
                 arity: facts::NO_ARITY,
@@ -2444,13 +2547,34 @@ fn assemble(assembly: Assembly) -> Parsed {
             bindings.remove(&key);
         }
     }
+    let unknown_writes: HashSet<_> = if path.ends_with(".py") || super::bindings::javascript(path) {
+        let typed: HashSet<_> = bindings
+            .values()
+            .filter_map(|raw| {
+                raw.type_name.as_ref().filter(|name| !name.is_empty())?;
+                Some((scope_of(raw.position), raw.name.as_deref()?))
+            })
+            .collect();
+        bindings
+            .iter()
+            .filter_map(|(&key, raw)| {
+                (raw.type_name.is_none()
+                    && typed.contains(&(scope_of(raw.position), raw.name.as_deref()?)))
+                .then_some(key)
+            })
+            .collect()
+    } else {
+        HashSet::new()
+    };
     let mut facts_bindings: Vec<Binding> = bindings
-        .into_values()
-        .filter_map(|raw| {
+        .into_iter()
+        .filter_map(|(key, raw)| {
             let name = raw.name?;
             let type_name = match raw.type_name.filter(|name| !name.is_empty()) {
                 Some(type_name) => type_name,
-                None if path.ends_with(".rs") => String::new().into(),
+                None if path.ends_with(".rs") || unknown_writes.contains(&key) => {
+                    String::new().into()
+                }
                 None => return None,
             };
             Some(Binding {
@@ -2532,9 +2656,7 @@ fn assemble(assembly: Assembly) -> Parsed {
         }
     }
     let mut variant_fields: Vec<VariantField> = Vec::new();
-    let mut raw_variants: Vec<RawVariantField> = variants.into_values().collect();
-    raw_variants.sort_by_key(|variant| variant.position);
-    for variant in raw_variants {
+    for variant in variants.into_values() {
         let (Some(name), Some(index), Some(mut owner)) =
             (variant.variant, variant.index, scope_of(variant.position))
         else {
@@ -2546,7 +2668,7 @@ fn assemble(assembly: Assembly) -> Parsed {
             };
             owner = parent;
         }
-        if symbols[owner as usize].kind() != SymKind::Enum || variant.type_name.is_empty() {
+        if symbols[owner as usize].kind() != SymKind::Enum {
             continue;
         }
         variant_fields.push(VariantField {
@@ -2556,6 +2678,9 @@ fn assemble(assembly: Assembly) -> Parsed {
             type_name: variant.type_name,
         });
     }
+    variant_fields.sort_unstable_by(|a, b| {
+        (a.owner, &a.variant, a.index).cmp(&(b.owner, &b.variant, b.index))
+    });
     let mut facts_envs: Vec<EnvRead> = envs
         .into_values()
         .filter(|(name, _, _)| !name.is_empty())

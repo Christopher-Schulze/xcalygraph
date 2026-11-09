@@ -242,7 +242,8 @@ pub const QUALIFIER_TEXT_BUDGET: usize = 80;
 
 /// Internal qualifier tag for member-call chains that exceed [`QUALIFIER_TEXT_BUDGET`].
 /// The payload is head-first steps joined by `,`: `name`, `name()` for calls and trailing
-/// `?` per try operator.
+/// `?` per try operator. A Rust payload starting with `@byte:tries` shares a preceding
+/// method reference and appends any intervening field steps.
 pub const CHAIN_QUALIFIER_PREFIX: &str = "xcalygraph:chain:";
 
 pub fn rust_module_path_ref_qualifier(module_path: &str, inline_path: &str) -> String {

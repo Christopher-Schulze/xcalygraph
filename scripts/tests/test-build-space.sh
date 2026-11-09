@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exercise real disk checks and Cargo target discovery without starting a build.
+# Exercise real disk checks, Cargo target discovery and profile-scoped cleanup.
 # Usage: scripts/tests/test-build-space.sh
 set -euo pipefail
 (( $# == 0 )) || { echo "usage: test-build-space.sh" >&2; exit 2; }
@@ -104,12 +104,18 @@ with tempfile.TemporaryDirectory(prefix="build-space.", dir=repo / ".cache") as 
     assert (split_target / "debug/xcalygraph").is_file() and (split_build / "debug").is_dir()
     intermediate_artifacts = list((split_build / "debug/deps").glob("xcalygraph-*"))
     assert intermediate_artifacts
-    split_forced = subprocess.run([shell, str(check), str(shutil.disk_usage(split_target).free // 1024 + 8 * 1024 * 1024)],
+    subprocess.run(["cargo", "build", "--release", "--locked", "--bin", "xcalygraph"],
+                   cwd=root, env=split_environment, capture_output=True, text=True, check=True)
+    release_binary = split_target / "release/xcalygraph"
+    assert release_binary.is_file()
+    split_forced = subprocess.run([shell, str(check), "--profile", "debug",
+                                   str(shutil.disk_usage(split_target).free // 1024 + 8 * 1024 * 1024)],
                                   cwd=root, env=split_environment, capture_output=True, text=True)
     assert split_forced.returncode != 0 and "build aborted" in split_forced.stderr, split_forced.stderr
     assert "could not safely clean" not in split_forced.stderr, split_forced.stderr
     assert not (split_target / "debug/xcalygraph").exists()
     assert all(not path.exists() for path in intermediate_artifacts)
+    assert release_binary.is_file() and (split_build / "release").is_dir()
     assert all((directory / "unrelated").read_text() == "keep\n" for directory in (split_target, split_build))
     available_kib = shutil.disk_usage(target).free // 1024
     forced = subprocess.run([shell, str(check), str(available_kib + 8 * 1024 * 1024)],

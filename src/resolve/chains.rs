@@ -12,9 +12,25 @@ pub(super) struct Step<'a> {
     pub tries: usize,
 }
 
+#[derive(Clone, Copy)]
 pub(super) enum ChainFailure {
     Unknown,
     External,
+}
+
+#[derive(Clone)]
+pub(super) struct ChainState {
+    types: Ids,
+    layers: usize,
+}
+
+fn linked_qualifier(qualifier: &str) -> Option<(u32, usize, &str)> {
+    let payload = qualifier
+        .strip_prefix(facts::CHAIN_QUALIFIER_PREFIX)?
+        .strip_prefix('@')?;
+    let (link, fields) = payload.split_once(',').unwrap_or((payload, ""));
+    let (byte, tries) = link.split_once(':')?;
+    Some((byte.parse().ok()?, tries.parse().ok()?, fields))
 }
 
 /// Steps of a tagged chain qualifier payload: head-first `name`, `name()` and trailing `?`
@@ -40,7 +56,9 @@ fn tagged_steps(payload: &str) -> Option<smallvec::SmallVec<[Step<'_>; 4]>> {
 /// and optional access do not change the recorded type.
 pub(super) fn receiver_steps(qualifier: &str) -> Option<smallvec::SmallVec<[Step<'_>; 4]>> {
     if let Some(payload) = qualifier.strip_prefix(crate::domain::facts::CHAIN_QUALIFIER_PREFIX) {
-        return tagged_steps(payload);
+        return (!payload.starts_with('@'))
+            .then(|| tagged_steps(payload))
+            .flatten();
     }
     let text = qualifier.trim();
     let text = text.strip_prefix("new ").map_or(text, str::trim_start);
@@ -201,6 +219,21 @@ impl Index<'_> {
         reference: &Ref,
         steps: &[Step],
     ) -> Result<Ids, ChainFailure> {
+        let state = self.chain_state(file, imports, reference, steps)?;
+        if state.layers == 0 {
+            Ok(state.types)
+        } else {
+            Err(ChainFailure::External)
+        }
+    }
+
+    fn chain_state(
+        &self,
+        file: u32,
+        imports: &Imports,
+        reference: &Ref,
+        steps: &[Step],
+    ) -> Result<ChainState, ChainFailure> {
         let (first, rest) = steps.split_first().ok_or(ChainFailure::Unknown)?;
         let rust = self.file_type(file) == Some(FileType::Rust);
         let mut layers = if rust && first.call {
@@ -224,7 +257,7 @@ impl Index<'_> {
         } else {
             0
         };
-        let mut types = if first.call {
+        let types = if first.call {
             let binding = Binding {
                 scope: reference.scope,
                 name: String::new().into(),
@@ -262,56 +295,145 @@ impl Index<'_> {
                 .checked_sub(first.tries)
                 .ok_or(ChainFailure::Unknown)?;
         }
-        for step in rest {
-            if rust && layers > 0 && step.call && matches!(step.name, "unwrap" | "expect") {
-                layers = (layers - 1)
-                    .checked_sub(step.tries)
-                    .ok_or(ChainFailure::Unknown)?;
-                continue;
-            }
-            if rust && layers > 0 {
+        rest.iter()
+            .try_fold(ChainState { types, layers }, |state, step| {
+                self.advance_chain(state, *step, rust)
+            })
+    }
+
+    fn advance_chain(
+        &self,
+        mut state: ChainState,
+        step: Step<'_>,
+        rust: bool,
+    ) -> Result<ChainState, ChainFailure> {
+        if rust && state.layers > 0 {
+            if !step.call || !matches!(step.name, "unwrap" | "expect") {
                 return Err(ChainFailure::External);
             }
-            let field = (!step.call)
-                .then(|| {
-                    types.iter().find_map(|&part| {
-                        let field_type = *self.field_types.get(&(part, step.name))?;
-                        let owner = self.symbols[part as usize].file;
-                        self.resolve_type(owner, None, None, field_type)
-                            .map(|(types, _)| types)
-                    })
+            state.layers -= 1;
+        } else if let Some(field) = (!step.call)
+            .then(|| {
+                state.types.iter().find_map(|&part| {
+                    let field_type = *self.field_types.get(&(part, step.name))?;
+                    let owner = self.symbols[part as usize].file;
+                    self.resolve_type(owner, None, None, field_type)
+                        .map(|(types, _)| types)
                 })
-                .flatten();
-            types = match field {
-                Some(found) => found,
-                None => {
-                    if rust {
-                        let member = self
-                            .member_result_symbol(&types, step.name)
-                            .ok_or(ChainFailure::Unknown)?;
-                        let owner = self.symbols[member as usize].file;
-                        let scope = Some(member - self.base[owner as usize]);
-                        let result = self.returns.get(&member).ok_or(ChainFailure::Unknown)?;
-                        layers = self.rust_result(owner, scope, result).1;
-                    }
-                    self.member_result(&types, step.name).ok_or(if rust {
-                        ChainFailure::External
-                    } else {
-                        ChainFailure::Unknown
-                    })?
-                }
-            };
-            if rust {
-                layers = layers
-                    .checked_sub(step.tries)
-                    .ok_or(ChainFailure::Unknown)?;
-            }
-        }
-        if layers == 0 {
-            Ok(types)
+            })
+            .flatten()
+        {
+            state.types = field;
+        } else if rust {
+            let member = self
+                .member_result_symbol(&state.types, step.name)
+                .ok_or(ChainFailure::Unknown)?;
+            let owner = self.symbols[member as usize].file;
+            let scope = Some(member - self.base[owner as usize]);
+            let result = self.returns.get(&member).ok_or(ChainFailure::Unknown)?;
+            state.layers = self.rust_result(owner, scope, result).1;
+            state.types = self
+                .member_result(&state.types, step.name)
+                .ok_or(ChainFailure::External)?;
         } else {
-            Err(ChainFailure::External)
+            state.types = self
+                .member_result(&state.types, step.name)
+                .ok_or(ChainFailure::Unknown)?;
         }
+        if rust {
+            state.layers = state
+                .layers
+                .checked_sub(step.tries)
+                .ok_or(ChainFailure::Unknown)?;
+        }
+        Ok(state)
+    }
+
+    /// Linked Rust receivers are evaluated once in lexical byte order. The anchor uses the
+    /// existing step resolver, and each following method or field is applied only once.
+    pub(super) fn linked_rust_chains(
+        &self,
+        file: u32,
+        imports: &Imports,
+        refs: &[Ref],
+    ) -> HashMap<u32, Result<ChainState, ChainFailure>> {
+        let mut states = HashMap::default();
+        let mut links: Vec<_> = refs
+            .iter()
+            .filter_map(|reference| {
+                Some((
+                    reference,
+                    linked_qualifier(reference.qualifier.as_deref()?)?,
+                ))
+            })
+            .collect();
+        if links.is_empty() {
+            return states;
+        }
+        let anchors: HashMap<_, _> = refs
+            .iter()
+            .filter(|reference| reference.kind == RefKind::Call)
+            .map(|reference| (reference.byte, reference))
+            .collect();
+        links.sort_unstable_by_key(|(reference, _)| reference.byte);
+        for (reference, (previous, tries, fields)) in links {
+            let state = (|| {
+                let parent = anchors
+                    .get(&previous)
+                    .filter(|parent| previous < reference.byte && parent.scope == reference.scope)
+                    .ok_or(ChainFailure::Unknown)?;
+                let receiver = match states.get(&previous).cloned() {
+                    Some(state) => state?,
+                    None => {
+                        let steps = parent
+                            .qualifier
+                            .as_deref()
+                            .and_then(receiver_steps)
+                            .ok_or(ChainFailure::Unknown)?;
+                        self.chain_state(file, imports, parent, &steps)?
+                    }
+                };
+                let state = self.advance_chain(
+                    receiver,
+                    Step {
+                        name: parent.name.as_str(),
+                        call: true,
+                        tries,
+                    },
+                    true,
+                )?;
+                if fields.is_empty() {
+                    return Ok(state);
+                }
+                tagged_steps(fields)
+                    .ok_or(ChainFailure::Unknown)?
+                    .into_iter()
+                    .try_fold(state, |state, step| self.advance_chain(state, step, true))
+            })();
+            states.insert(reference.byte, state);
+        }
+        states
+    }
+
+    pub(super) fn linked_chain_outcome(
+        &self,
+        state: &Result<ChainState, ChainFailure>,
+        name: &str,
+    ) -> Option<Outcome> {
+        match state {
+            Ok(state) if state.layers == 0 => self.chain_targets(&state.types, name),
+            Ok(_) | Err(ChainFailure::External) => Some(Outcome::External),
+            Err(ChainFailure::Unknown) => None,
+        }
+    }
+
+    pub(super) fn chain_targets(&self, types: &[u32], name: &str) -> Option<Outcome> {
+        let targets: Targets = types
+            .iter()
+            .flat_map(|&owner| self.members(owner, name))
+            .map(|member| (member, Confidence::Inferred))
+            .collect();
+        (!targets.is_empty()).then_some(Outcome::Targets(targets, Confidence::Inferred))
     }
 }
 

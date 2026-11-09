@@ -5,7 +5,7 @@
 # Usage: scripts/benchmarks/check-instructions.sh BINARY
 #        scripts/benchmarks/check-instructions.sh --bless BINARY ROOT...
 # The baseline is local and machine-bound (.cache/instruction-baseline.tsv: root, instructions).
-# Without a baseline, or where /usr/bin/time reports no instructions, the check passes silently.
+# Missing baselines, missing roots and unavailable counters are reported as skips.
 # A deliberate cost is blessed again after its reason is recorded in the TASK Notes.
 set -euo pipefail
 
@@ -25,6 +25,15 @@ fi
 }
 readonly binary="$1"
 shift
+
+if (( ! bless )) && [[ ! -f "${BASELINE}" ]]; then
+  echo "check-instructions.sh: no local baseline; instructions unchecked" >&2
+  exit 0
+fi
+if ! /usr/bin/time -l true 2>&1 | grep 'instructions retired' >/dev/null; then
+  echo "check-instructions.sh: no retired-instruction count; instructions unchecked" >&2
+  exit "${bless}"
+fi
 
 work="$(mktemp -d "${REPO_ROOT}/.cache/instruction-check.XXXXXXXX")"
 readonly work
@@ -70,11 +79,16 @@ if (( bless )); then
   exit 0
 fi
 
-[[ -f "${BASELINE}" ]] || exit 0
 while IFS=$'\t' read -r root blessed; do
-  [[ -d "${root}" ]] || continue
+  if [[ ! -d "${root}" ]]; then
+    echo "check-instructions.sh: missing corpus $(corpus_name "${root}"); instructions unchecked" >&2
+    continue
+  fi
   count="$(measure "${root}")"
-  [[ -n "${count}" ]] || exit 0
+  if [[ -z "${count}" ]]; then
+    echo "check-instructions.sh: no retired-instruction count; instructions unchecked" >&2
+    exit 0
+  fi
   if (( count * 100 > blessed * (100 + LIMIT_PERCENT) )); then
     # One retry: a single run can pay for cold pages.
     count="$(measure "${root}")"

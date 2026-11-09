@@ -125,9 +125,11 @@ def prepare(root, base, upstream):
             raise ValueError("snapshot identity mismatch; existing evidence retained")
         verify_source(target / "source", files)
     else:
-        required = sum(item["bytes"] for item in files)
-        if shutil.disk_usage(base).free < max(4 * 1024**3, 2 * 1024**3 + required * 3):
-            raise ValueError("insufficient free space for an isolated corpus and graph")
+        block_size = os.statvfs(base).f_frsize
+        source_bytes = sum(item["bytes"] + block_size for item in files) + len(encoded(metadata)) + block_size
+        estimated_bytes = 3 * source_bytes if upstream else source_bytes
+        if shutil.disk_usage(base).free < 2 * 1024**3 + estimated_bytes:
+            raise ValueError("insufficient free space for the estimated snapshot and 2 GiB reserve")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.mkdir()  # Exclusive creation; a collision preserves the other writer's evidence.
         source = target / "source"

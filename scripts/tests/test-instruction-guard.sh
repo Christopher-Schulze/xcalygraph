@@ -12,8 +12,9 @@ printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$HOME" >> "$XCALYGRAPH_GUARD_HOME_LOG"
 chmod +x "${work}/binary"
 export XCALYGRAPH_INSTRUCTION_BASELINE="${work}/baseline.tsv"
 
-# No baseline: passes silently.
-bash "${GUARD}" "${work}/binary"
+# No baseline: report that no measurement was made.
+bash "${GUARD}" "${work}/binary" 2> "${work}/stderr"
+grep -q 'no local baseline; instructions unchecked' "${work}/stderr"
 /usr/bin/time -l true 2>&1 | grep 'instructions retired' >/dev/null || { echo "PASS: instruction guard (no counter)"; exit 0; }
 
 bash "${GUARD}" --bless "${work}/binary" "${work}/root-one" "${work}/root-two"
@@ -65,7 +66,8 @@ grep -q 'more instructions than the baseline on root-two' "${work}/stderr"
 
 # A vanished root is skipped; a usage error is an error.
 printf '%s\t%s\n' "${work}/missing" 1 > "${XCALYGRAPH_INSTRUCTION_BASELINE}"
-bash "${GUARD}" "${work}/binary"
+bash "${GUARD}" "${work}/binary" 2> "${work}/stderr"
+grep -q 'missing corpus missing; instructions unchecked' "${work}/stderr"
 if bash "${GUARD}" "${work}/absent-binary" 2>/dev/null; then
   echo "missing binary passed" >&2
   exit 1

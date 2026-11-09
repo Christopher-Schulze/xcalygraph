@@ -54,11 +54,15 @@ fn javascript_reassigned_receivers_are_not_exact() -> TestResult {
         "class Client { send() {} }\nclass Other { send() {} }\n\
 function straight() { let c = new Client(); c = new Other(); c.send() }\n\
 function branch(flag) { let c = new Client(); if (flag) { c = new Other() } c.send() }\n\
-function single() { const c = new Client(); c.send() }\n",
+function single() { const c = new Client(); c.send() }\n\
+function unknown(other) { let c = new Client(); c = other; c.send() }\n\
+function before(other) { let c = new Client(); c.send(); c = other; }\n",
     )?;
     assert_eq!(calls(root, "straight")?, ["app.Other.send exact"]);
     assert_eq!(calls(root, "branch")?, ["app.Other.send inferred"]);
     assert_eq!(calls(root, "single")?, ["app.Client.send exact"]);
+    assert!(calls(root, "unknown")?.is_empty());
+    assert_eq!(calls(root, "before")?, ["app.Client.send exact"]);
     Ok(())
 }
 
@@ -72,11 +76,13 @@ fn python_reassigned_receivers_are_not_exact() -> TestResult {
 def branch(flag):\n    c = Client()\n    if flag:\n        c = Other()\n    c.send()\n\
 def loop(items):\n    c = Client()\n    for item in items:\n        c.send()\n        c = Other()\n\
 def single():\n    c = Client()\n    c.send()\n\
-def convert(c: Other):\n    c = Client()\n    c.send()\n",
+def convert(c: Other):\n    c = Client()\n    c.send()\n\
+def unknown(other):\n    c = Client()\n    c = other\n    c.send()\n",
     )?;
     assert_eq!(calls(root, "branch")?, ["app.Other.send inferred"]);
     assert_eq!(calls(root, "loop")?, ["app.Client.send inferred"]);
     assert_eq!(calls(root, "single")?, ["app.Client.send exact"]);
     assert_eq!(calls(root, "convert")?, ["app.Client.send exact"]);
+    assert!(calls(root, "unknown")?.is_empty());
     Ok(())
 }

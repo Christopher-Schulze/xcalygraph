@@ -13,18 +13,18 @@ readonly REPO_ROOT
 cd "${REPO_ROOT}"
 cargo fmt --all --check
 check_feature_subset() {
-  bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
+  bash "${REPO_ROOT}/scripts/utils/check-build-space.sh" --profile debug
   RUSTFLAGS="-Dwarnings" cargo check --locked "$@" --bin xcalygraph
 }
 check_feature_subset --no-default-features
 check_feature_subset --no-default-features --features lang-bash
 check_feature_subset --no-default-features --features lang-javascript
 check_feature_subset --no-default-features --features lang-typescript
-bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
+bash "${REPO_ROOT}/scripts/utils/check-build-space.sh" --profile debug
 cargo clippy --all-targets --locked -- -D warnings
-bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
+bash "${REPO_ROOT}/scripts/utils/check-build-space.sh" --profile debug
 cargo test --locked
-bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
+bash "${REPO_ROOT}/scripts/utils/check-build-space.sh" --profile debug
 cargo build --locked --bin xcalygraph --message-format=json > "${work}/build.jsonl"
 binary="$(python3 -I - "${work}/build.jsonl" <<'PYTHON'
 import json
@@ -40,11 +40,16 @@ if len(executables) != 1:
 print(executables[0])
 PYTHON
 )"
-bash "${REPO_ROOT}/scripts/utils/check-build-space.sh"
-CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
-  RUSTFLAGS="-Dwarnings" cargo build --release --locked --bin xcalygraph --message-format=json \
-  > "${work}/release-build.jsonl"
-instruction_binary="$(python3 -I - "${work}/release-build.jsonl" <<'PYTHON'
+if [[ ! -f "${REPO_ROOT}/.cache/instruction-baseline.tsv" ]]; then
+  echo "check-instructions.sh: no local baseline; instructions unchecked" >&2
+elif ! /usr/bin/time -l true 2>&1 | grep 'instructions retired' >/dev/null; then
+  echo "check-instructions.sh: no retired-instruction count; instructions unchecked" >&2
+else
+  bash "${REPO_ROOT}/scripts/utils/check-build-space.sh" --profile release
+  CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+    RUSTFLAGS="-Dwarnings" cargo build --release --locked --bin xcalygraph --message-format=json \
+    > "${work}/release-build.jsonl"
+  instruction_binary="$(python3 -I - "${work}/release-build.jsonl" <<'PYTHON'
 import json
 import sys
 
@@ -58,7 +63,8 @@ if len(executables) != 1:
 print(executables[0])
 PYTHON
 )"
-bash "${REPO_ROOT}/scripts/benchmarks/check-instructions.sh" "${instruction_binary}"
+  bash "${REPO_ROOT}/scripts/benchmarks/check-instructions.sh" "${instruction_binary}"
+fi
 bash "${REPO_ROOT}/scripts/benchmarks/check-scaling.sh" "${binary}"
 [[ "${mode}" == all ]] || exit 0
 bash "${REPO_ROOT}/scripts/tests/test-prune-cache.sh"

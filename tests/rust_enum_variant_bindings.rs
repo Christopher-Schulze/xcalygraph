@@ -121,6 +121,8 @@ fn rust_variant_field_resolves_across_files() -> TestResult {
             "src/main.rs",
             "mod tool;\n\
              use tool::Tool;\n\
+             struct Hammer;\n\
+             impl Hammer { fn hit(self) {} }\n\
              fn run(t: Tool) {\n\
              \x20   match t {\n\
              \x20       tool::Tool::Hammer(h) => h.hit(),\n\
@@ -137,5 +139,36 @@ fn rust_variant_field_resolves_across_files() -> TestResult {
     }
     assert_eq!(calls_of(root, "run")?, ["tool::Hammer::hit exact"]);
     assert_eq!(calls_of(root, "run2")?, ["tool::Hammer::hit exact"]);
+    Ok(())
+}
+
+#[test]
+fn rust_variant_patterns_use_declared_field_positions() -> TestResult {
+    let fixture = Fixture(support::exclusive_dir("rs-variant-positions")?);
+    let root = &fixture.0;
+    fs::write(
+        root.join("main.rs"),
+        "struct First;\nimpl First { fn hit(self) {} }\n\
+         struct Last;\nimpl Last { fn hit(self) {} }\n\
+         enum E { Head(First, Last), Tail(First, First, Last) }\n\
+         fn head(e: E) { match e { E::Head(/* trivia */ head, ..) => head.hit(), _ => {} } }\n\
+         fn tail(e: E) { match e { E::Tail(.., tail) => tail.hit(), _ => {} } }\n\
+         fn wildcard(e: E) { match e { E::Tail(_, _, tail) => tail.hit(), _ => {} } }\n",
+    )?;
+    assert_eq!(calls_of(root, "head")?, ["crate::First::hit exact"]);
+    assert_eq!(calls_of(root, "tail")?, ["crate::Last::hit exact"]);
+    assert_eq!(calls_of(root, "wildcard")?, ["crate::Last::hit exact"]);
+    Ok(())
+}
+
+#[test]
+fn rust_trait_default_methods_keep_their_declared_members() -> TestResult {
+    let fixture = Fixture(support::exclusive_dir("rs-trait-default-member")?);
+    let root = &fixture.0;
+    fs::write(
+        root.join("main.rs"),
+        "trait Captures { fn size(&self) -> usize; fn has_any(&self) -> bool { self.size() > 0 } }\n",
+    )?;
+    assert_eq!(calls_of(root, "has_any")?, ["crate::Captures::size exact"]);
     Ok(())
 }

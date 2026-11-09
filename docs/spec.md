@@ -411,14 +411,14 @@ Environment: `XCALYGRAPH_INDEX_DIR` sets the index base; `HOME` determines insta
 
 ## 11. Performance targets
 
-Reference: Apple Silicon laptop, warm filesystem cache, corpus of 8,000 tracked files.
+Reference: Apple Silicon laptop, warm filesystem cache, corpus of 8,000 tracked files. Each paired measurement records the input identity, baseline, target and regression boundary justified by the guard or measured variation. Compare like operations and counters.
 
 | metric | target |
 |--------|--------|
-| full index build | max 6 s, but as radically fast as at all possible: think innovatively and radically, always keep the whole picture and the focus in view |
-| freshness check without changes | max 60 ms, but as radically fast as at all possible: think innovatively and radically, always keep the whole picture and the focus in view |
-| refresh after a single-file change | max 500 ms, but as radically fast as at all possible: think innovatively and radically, always keep the whole picture and the focus in view |
-| query compute (`find`, `show`) | max 20 ms, but as radically fast as at all possible: think innovatively and radically, always keep the whole picture and the focus in view |
+| full index build | max 6 s |
+| freshness check without changes | max 60 ms |
+| refresh after a single-file change | max 500 ms |
+| query compute (`find`, `show`) | max 20 ms |
 | index size | max 30 MB |
 | bytes written per single-file change | changed fact shard + file table + `derived`; max 20 MB |
 | peak RSS, full build | max 400 MB |

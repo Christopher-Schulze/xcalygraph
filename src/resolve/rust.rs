@@ -8,11 +8,37 @@ use crate::domain::name::Name;
 struct VariantPattern<'a> {
     enum_path: Option<&'a str>,
     variant: &'a str,
-    index: u32,
+    index: i64,
     scrutinee: Option<&'a str>,
 }
 
 impl<'a> Index<'a> {
+    /// Rust impls can live outside the declaring module. Resolve the declared owner there
+    /// before associating it with a same-name type from the crate-wide method table.
+    pub(super) fn rust_impl_owner_matches(&self, owner: u32, method: u32) -> bool {
+        let candidate = &self.symbols[method as usize];
+        let target = &self.symbols[owner as usize];
+        if candidate.parent != NONE && self.symbols[candidate.parent as usize].kind.is_type() {
+            return candidate.parent == owner;
+        }
+        let scope = method - self.base[candidate.file as usize];
+        let Some(facts) = self.facts(candidate.file) else {
+            return false;
+        };
+        let name = facts.symbols[scope as usize].owner.as_str();
+        if candidate.file == target.file
+            && candidate.parent == target.parent
+            && name == target.name.as_str()
+        {
+            return true;
+        }
+        let Some(_guard) = DepthGuard::enter() else {
+            return false;
+        };
+        self.resolve_type(candidate.file, None, Some(scope), name)
+            .is_some_and(|(types, _)| types.as_slice() == [owner])
+    }
+
     pub(super) fn rust_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
         for import in &facts.imports {
             let segments: Vec<&str> = import.spec.split("::").filter(|s| !s.is_empty()).collect();
@@ -563,7 +589,7 @@ impl<'a> Index<'a> {
             .split_once('~')
             .map_or((coded, None), |(head, tail)| (head, Some(tail)));
         let (path, index) = head.rsplit_once('#')?;
-        let index: u32 = index.parse().ok()?;
+        let index = index.parse().ok()?;
         let (enum_path, variant) = match path.rsplit_once("::") {
             Some((head, tail)) if !head.is_empty() && !tail.is_empty() => (Some(head), tail),
             None if !path.is_empty() => (None, path),
@@ -593,25 +619,28 @@ impl<'a> Index<'a> {
             None => self.scrutinee_types(file, imports, scope, binding, pattern.scrutinee?)?,
         };
         enums.retain(|symbol| self.symbols[*symbol as usize].kind == SymKind::Enum);
-        if enums.is_empty() {
+        let &[owner] = enums.as_slice() else {
             return None;
-        }
-        let mut found: Option<&str> = None;
-        for enum_symbol in enums {
-            let Some(field) =
-                self.variant_field_types
-                    .get(&(enum_symbol, pattern.variant, pattern.index))
-            else {
-                continue;
-            };
-            match found {
-                None => found = Some(field),
-                Some(previous) if previous == *field => {}
-                Some(_) => return None,
-            }
-        }
-        self.resolve_type(file, Some(imports), scope, found?)
-            .map(|(types, _)| (types, confidence))
+        };
+        let owner_file = self.symbols[owner as usize].file;
+        let local = owner - self.base[owner_file as usize];
+        let fields = &self.facts(owner_file)?.variant_fields;
+        let group = (local, pattern.variant);
+        let start = fields.partition_point(|field| (field.owner, field.variant.as_str()) < group);
+        let rest = &fields[start..];
+        let end = rest.partition_point(|field| (field.owner, field.variant.as_str()) == group);
+        let fields = &rest[..end];
+        let index = if pattern.index < 0 {
+            i64::from(fields.last()?.index) + 1 + pattern.index
+        } else {
+            pattern.index
+        };
+        let index = u32::try_from(index).ok()?;
+        let field = &fields[fields
+            .binary_search_by_key(&index, |field| field.index)
+            .ok()?];
+        self.resolve_type(owner_file, None, Some(local), field.type_name.as_str())
+            .map(|(types, field_confidence)| (types, confidence.max(field_confidence)))
     }
 
     /// Types of a match scrutinee: a call result like a call binding, else a receiver chain.

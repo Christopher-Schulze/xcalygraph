@@ -490,13 +490,16 @@ fn python_conditional_call_results_type_when_branches_agree() -> io::Result<()> 
          class Req:\n    def __init__(self, flag):\n        self.u = URL() if flag else URL()\n        self.v = URL() if flag else Other()\n\n\
          def agree():\n    r = Req(True)\n    return r.u.host\n\n\
          def disagree():\n    r = Req(True)\n    return r.v.host\n\n\
-         def local():\n    u = URL() if True else URL()\n    return u.host\n",
+         def local():\n    u = URL() if True else URL()\n    return u.host\n\
+         def shadowed():\n    def URL(): return Other()\n    u = URL() if True else URL()\n    return u.host\n\
+         class Shadowed:\n    def __init__(self):\n        def URL(): return Other()\n        self.u = URL() if True else URL()\n\
+         def shadowed_field():\n    return Shadowed().u.host\n",
     )?;
     let graph = graph_of(root.path())?;
     let text = render(&graph);
     for expected in [
         "use.agree -uses-> use.URL.host",
-        "use.local -uses-> use.URL.host",
+        "use.local -uses?-> use.URL.host",
     ] {
         assert!(
             text.lines().any(|line| line.contains(expected)),
@@ -509,6 +512,34 @@ fn python_conditional_call_results_type_when_branches_agree() -> io::Result<()> 
             .any(|line| line.contains("use.disagree") && line.contains("use.URL.host")),
         "disagreeing branches must not type\n{text}"
     );
+    assert!(
+        !text.lines().any(|line| {
+            (line.contains("use.shadowed ") || line.contains("use.shadowed_field "))
+                && line.contains("use.URL.host")
+        }),
+        "{text}"
+    );
+    Ok(())
+}
+
+#[test]
+fn typescript_literal_implementations_use_the_declaration_node() -> io::Result<()> {
+    let root = crate::infra::testdir::TestDir::new("ts-literal-owner")?;
+    fs::write(
+        root.path().join("use.ts"),
+        "interface Handler { run(): string }\n\
+         const outer = { run() { return 123; } }; function caller() { const outer: Handler = { run() { return 'inner'; } }; return outer.run(); }\n\
+         declare const patch: Partial<Handler>;\n\
+         const spread: Handler = { run() { return 'overridden'; }, ...patch };\n\
+         const direct: Handler = { run: () => 'direct' };\n",
+    )?;
+    let text = render(&graph_of(root.path())?);
+    assert!(
+        text.contains("use.direct.run -implements-> use.Handler.run"),
+        "{text}"
+    );
+    assert!(!text.contains("use.outer.run -implements"), "{text}");
+    assert!(!text.contains("use.spread.run -implements"), "{text}");
     Ok(())
 }
 

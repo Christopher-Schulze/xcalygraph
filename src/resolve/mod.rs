@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 154;
+pub const RESOLVE_VERSION: u32 = 156;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -110,8 +110,6 @@ struct Index<'a> {
     returns: HashMap<u32, &'a str>,
     /// Field types per (type symbol, field name).
     field_types: HashMap<(u32, &'a str), &'a str>,
-    /// Rust enum tuple-field types per (enum symbol, variant, index).
-    variant_field_types: HashMap<(u32, &'a str, u32), &'a str>,
     /// Declaration file for a field contributed by a cross-file TypeScript augmentation.
     augmentation_field_files: HashMap<(u32, &'a str), u32>,
     /// Every (type symbol, field name), typed or not.
@@ -257,7 +255,6 @@ impl<'a> Index<'a> {
         self.by_name.clear();
         self.returns.clear();
         self.field_types.clear();
-        self.variant_field_types.clear();
         self.augmentation_field_files.clear();
         self.field_names.clear();
         self.python_exports
@@ -506,7 +503,6 @@ impl<'a> Index<'a> {
             by_name: HashMap::default(),
             returns: HashMap::default(),
             field_types: HashMap::default(),
-            variant_field_types: HashMap::default(),
             augmentation_field_files: HashMap::default(),
             field_names: HashSet::default(),
             implementations: HashMap::default(),
@@ -650,14 +646,6 @@ impl<'a> Index<'a> {
                 {
                     self.returns
                         .insert(base + scope, binding.type_name.as_ref());
-                }
-            }
-            for field in &facts.variant_fields {
-                if !field.type_name.is_empty() {
-                    self.variant_field_types.insert(
-                        (base + field.owner, field.variant.as_str(), field.index),
-                        field.type_name.as_str(),
-                    );
                 }
             }
             for fields in &facts.fields {
@@ -1418,6 +1406,12 @@ impl<'a> Index<'a> {
             .get(&(scope, symbol.name.as_str(), name))
             .cloned()
             .unwrap_or_default();
+        if self.file_type(symbol.file) == Some(FileType::Rust) {
+            return methods
+                .into_iter()
+                .filter(|&method| self.rust_impl_owner_matches(type_symbol, method))
+                .collect();
+        }
         if self.file_type(symbol.file) != Some(FileType::TypeScript) {
             return methods;
         }
@@ -2047,6 +2041,8 @@ impl<'a> Index<'a> {
         let mut mention_owner: Option<(u32, u32)> = None;
         // Taken, not borrowed: dropped when this file is done.
         let references = std::mem::take(&mut *lock(&self.input.refs[file as usize]));
+        let linked_chains = (self.file_type(file) == Some(FileType::Rust))
+            .then(|| self.linked_rust_chains(file, imports, &references));
         for (reference_index, reference) in references.iter().enumerate() {
             let local_reference = u32::try_from(reference_index).ok();
             let source = reference.scope.map_or(file_node, |scope| base + scope);
@@ -2103,12 +2099,20 @@ impl<'a> Index<'a> {
             } else {
                 match reference.kind {
                     RefKind::Call | RefKind::Type => {
-                        let outcome = source_identity.map_or_else(
-                            || self.resolve_ref(file, imports, reference),
-                            |identity| {
-                                self.resolve_source_identity(file, imports, reference, identity)
-                            },
-                        );
+                        let outcome = linked_chains
+                            .as_ref()
+                            .and_then(|chains| chains.get(&reference.byte))
+                            .and_then(|state| self.linked_chain_outcome(state, &reference.name))
+                            .unwrap_or_else(|| {
+                                source_identity.map_or_else(
+                                    || self.resolve_ref(file, imports, reference),
+                                    |identity| {
+                                        self.resolve_source_identity(
+                                            file, imports, reference, identity,
+                                        )
+                                    },
+                                )
+                            });
                         self.without_rust_associated_types(file, reference, outcome)
                     }
                     // A value reference only counts when it certainly names a symbol: no fallback,
@@ -3967,16 +3971,8 @@ impl<'a> Index<'a> {
         {
             match self.chain_type(file, imports, reference, &steps) {
                 Ok(types) => {
-                    let targets: Vec<(u32, Confidence)> = types
-                        .iter()
-                        .flat_map(|&type_symbol| self.members(type_symbol, name))
-                        .map(|member| (member, Confidence::Inferred))
-                        .collect();
-                    if !targets.is_empty() {
-                        return Outcome::Targets(
-                            smallvec::SmallVec::from_vec(targets),
-                            Confidence::Inferred,
-                        );
+                    if let Some(outcome) = self.chain_targets(&types, name) {
+                        return outcome;
                     }
                 }
                 Err(chains::ChainFailure::External) => return Outcome::External,
@@ -4665,9 +4661,17 @@ impl<'a> Index<'a> {
         byte: u32,
     ) -> Option<&'a Binding> {
         let facts = self.facts(file)?;
+        let ordered_writes = matches!(
+            self.file_type(file),
+            Some(FileType::JavaScript | FileType::TypeScript | FileType::Python)
+        );
         let active = |binding: &Binding| {
             *binding.name == *name
                 && binding.line <= line
+                && (!ordered_writes
+                    || byte == facts::NO_BYTE
+                    || binding.value_byte == facts::NO_BYTE
+                    || binding.value_byte <= byte)
                 && (byte == facts::NO_BYTE
                     || binding
                         .visibility
@@ -4952,70 +4956,29 @@ impl<'a> Index<'a> {
                 if reference.kind != RefKind::ImplementLiteral {
                     continue;
                 }
-                let Some(qualifier) = reference.qualifier.as_deref() else {
+                let Some(scope) = reference.scope else {
                     continue;
                 };
-                let Some((const_name, method_name)) = qualifier.split_once('.') else {
-                    continue;
-                };
-                let consts: Ids = self
-                    .by_name
-                    .get(const_name)
-                    .into_iter()
-                    .flatten()
-                    .copied()
-                    .filter(|&symbol| {
-                        self.symbols[symbol as usize].file == file
-                            && matches!(
-                                self.symbols[symbol as usize].kind,
-                                SymKind::Const | SymKind::Var
-                            )
-                    })
-                    .collect();
-                if consts.len() != 1 {
-                    continue;
-                }
-                let methods: Ids = self
-                    .by_name
-                    .get(method_name)
-                    .into_iter()
-                    .flatten()
-                    .copied()
-                    .filter(|&symbol| {
-                        self.symbols[symbol as usize].file == file
-                            && self.symbols[symbol as usize].kind == SymKind::Method
-                            && self.symbols[symbol as usize].parent == consts[0]
-                            && self.symbols[symbol as usize].line == reference.line
-                    })
-                    .collect();
-                if methods.is_empty() {
-                    continue;
-                }
-                let Some((traits, confidence)) = self.resolve_type(
-                    file,
-                    Some(&self.file_imports[file as usize]),
-                    None,
-                    &reference.name,
-                ) else {
+                let method = self.base[file as usize] + scope;
+                let symbol = &self.symbols[method as usize];
+                let declaration = symbol.parent - self.base[file as usize];
+                let Some((traits, confidence)) =
+                    self.resolve_type(file, None, Some(declaration), &reference.name)
+                else {
                     continue;
                 };
                 for &trait_symbol in &traits {
                     if self.symbols[trait_symbol as usize].kind != SymKind::Iface {
                         continue;
                     }
-                    let members = self.members(trait_symbol, method_name);
+                    let members = self.members(trait_symbol, &symbol.name);
                     if members.is_empty() {
                         continue;
                     }
                     for &member in &members {
-                        for &method in &methods {
-                            pairs.push((method, member, confidence, reference.line));
-                        }
+                        pairs.push((method, member, confidence, reference.line));
                     }
-                    index
-                        .entry(trait_symbol)
-                        .or_default()
-                        .extend(methods.iter().copied());
+                    index.entry(trait_symbol).or_default().push(method);
                 }
             }
         }
@@ -5258,7 +5221,12 @@ impl Index<'_> {
         let mut pairs: Vec<(u32, u32)> = Vec::new();
         for (&(scope, owner, _), methods) in &self.methods {
             for &type_symbol in types_by_scope.get(&(scope, owner)).into_iter().flatten() {
+                let rust =
+                    self.file_type(self.symbols[type_symbol as usize].file) == Some(FileType::Rust);
                 pairs.extend(methods.iter().filter_map(|&method| {
+                    if rust && !self.rust_impl_owner_matches(type_symbol, method) {
+                        return None;
+                    }
                     let parent = self.symbols[method as usize].parent;
                     if parent != NONE
                         && self.symbols[parent as usize].flags & facts::FLAG_TYPESCRIPT_AUGMENTATION

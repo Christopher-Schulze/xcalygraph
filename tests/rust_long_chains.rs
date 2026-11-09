@@ -20,7 +20,7 @@ impl Drop for Fixture {
 /// `name conf` of the outgoing `finish` calls of `symbol`.
 fn finish_calls(root: &Path, symbol: &str) -> Result<Vec<String>, Box<dyn Error>> {
     let output = support::command(env!("CARGO_BIN_EXE_xcalygraph"), root)
-        .args(["show", symbol, "--json", "--all", "-C"])
+        .args(["show", symbol, "--json", "--all", "--budget", "8000", "-C"])
         .arg(root)
         .output()?;
     assert!(output.status.success(), "{output:?}");
@@ -44,12 +44,12 @@ fn finish_calls(root: &Path, symbol: &str) -> Result<Vec<String>, Box<dyn Error>
     Ok(found)
 }
 
-fn eighteen_step_chain() -> String {
+fn type_changing_chain(steps: usize) -> String {
     let mut out = String::new();
-    for i in 0..18 {
+    for i in 0..=steps {
         out.push_str(&format!("struct S{i};\n"));
     }
-    for i in 0..17 {
+    for i in 0..steps {
         out.push_str(&format!(
             "impl S{i} {{ fn step{}(self) -> S{} {{ S{} }} }}\n",
             i + 1,
@@ -57,10 +57,10 @@ fn eighteen_step_chain() -> String {
             i + 1
         ));
     }
-    out.push_str("impl S17 { fn finish(self) {} }\n");
+    out.push_str(&format!("impl S{steps} {{ fn finish(self) {{}} }}\n"));
     out.push_str("struct Decoy;\nimpl Decoy { fn finish(self) {} }\n");
     out.push_str("fn run() {\n    S0");
-    for i in 1..18 {
+    for i in 1..=steps {
         out.push_str(&format!(".step{i}()"));
     }
     out.push_str(".finish();\n}\n");
@@ -71,8 +71,8 @@ fn eighteen_step_chain() -> String {
 fn rust_long_type_changing_chain_resolves_final_call() -> TestResult {
     let fixture = Fixture(support::exclusive_dir("rs-long-chain")?);
     let root = &fixture.0;
-    fs::write(root.join("main.rs"), eighteen_step_chain())?;
-    assert_eq!(finish_calls(root, "run")?, ["crate::S17::finish inferred"]);
+    fs::write(root.join("main.rs"), type_changing_chain(80))?;
+    assert_eq!(finish_calls(root, "run")?, ["crate::S80::finish inferred"]);
     Ok(())
 }
 
@@ -90,6 +90,27 @@ fn rust_long_argument_does_not_hide_final_call() -> TestResult {
     assert_eq!(
         finish_calls(root, "run")?,
         ["crate::Built::finish inferred"]
+    );
+    Ok(())
+}
+
+#[test]
+fn rust_long_chain_keeps_intervening_fields_and_try_steps() -> TestResult {
+    let fixture = Fixture(support::exclusive_dir("rs-long-chain-fields")?);
+    let root = &fixture.0;
+    let chain = ".step()?.next".repeat(48);
+    fs::write(
+        root.join("main.rs"),
+        format!(
+            "struct Stage;\nstruct Wrapper {{ next: Stage }}\nstruct Decoy;\n\
+             impl Stage {{ fn step(self) -> Option<Wrapper> {{ Some(Wrapper {{ next: self }}) }} fn finish(self) {{}} }}\n\
+             impl Decoy {{ fn finish(self) {{}} }}\n\
+             fn run() -> Option<()> {{ Stage{chain}.finish(); Some(()) }}\n"
+        ),
+    )?;
+    assert_eq!(
+        finish_calls(root, "run")?,
+        ["crate::Stage::finish inferred"]
     );
     Ok(())
 }
