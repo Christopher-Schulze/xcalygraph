@@ -1851,7 +1851,9 @@ fn assemble(assembly: Assembly) -> Parsed {
             })
             .min_by_key(|(impl_node, _, _)| impl_node.end_byte() - impl_node.start_byte());
         let parent_is_type = parent.is_some_and(|p| symbols[p].kind().is_type());
-        if kind == SymKind::Fn && (enclosing_impl.is_some() || parent_is_type) {
+        let parent_is_fn =
+            parent.is_some_and(|p| matches!(symbols[p].kind(), SymKind::Fn | SymKind::Method));
+        if kind == SymKind::Fn && (enclosing_impl.is_some() || parent_is_type) && !parent_is_fn {
             kind = SymKind::Method;
         }
         let owner = def

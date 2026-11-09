@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 153;
+pub const RESOLVE_VERSION: u32 = 154;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -335,9 +335,19 @@ impl<'a> Index<'a> {
                     current = enclosing.parent;
                 }
                 // The owner of an out-of-line member (`Type::name` inside a namespace) is its
-                // innermost qualifier.
+                // innermost qualifier; of a lexically nested item it is the outermost one.
                 if !symbol.owner.is_empty() && path.first() != Some(&symbol.owner.as_ref()) {
-                    path.insert(0, symbol.owner.as_ref());
+                    let nested_in_fn = symbol.parent.is_some_and(|parent| {
+                        matches!(
+                            facts.symbols[parent as usize].kind(),
+                            SymKind::Fn | SymKind::Method
+                        )
+                    });
+                    if nested_in_fn {
+                        path.push(symbol.owner.as_ref());
+                    } else {
+                        path.insert(0, symbol.owner.as_ref());
+                    }
                 }
                 path.reverse();
                 if is_titled(symbol) {
