@@ -7,7 +7,8 @@ use std::collections::HashSet;
 
 use super::json::{self, KeyVisitor, Kind};
 use crate::domain::facts::{
-    ConfigKey, Coverage, EnvDef, EnvRead, EnvSource, Facts, NO_ARITY, Ref, RefKind, ValueKind,
+    ConfigKey, Coverage, EnvDef, EnvRead, EnvSource, Facts, NO_ARITY, Ref, RefKind, SymKind,
+    Symbol, ValueKind,
 };
 use crate::domain::filetype::{self, Detection, FileType};
 
@@ -509,6 +510,39 @@ fn yaml(path: &str, text: &str, facts: &mut Facts) {
         }
         if kubernetes && sequence && in_env && entry.key == "name" {
             push_env(facts, &entry.value, EnvSource::Kubernetes, entry.line);
+        }
+    }
+    if !facts.config_keys.is_empty() {
+        let parent_idx = facts.symbols.len() as u32;
+        let yaml_name = format!("ConfigYAML:{}", name);
+        facts.symbols.push(Symbol {
+            name: crate::domain::name::Name::new(&yaml_name),
+            kind: Some(SymKind::Mod),
+            parent: None,
+            owner: crate::domain::name::Name::default(),
+            line: 1,
+            end_line: 1,
+            signature: crate::domain::name::Name::default(),
+            doc: Box::from(""),
+            terms: Box::from(""),
+            exported: true,
+            flags: 0,
+        });
+        for key in facts.config_keys.clone() {
+            let child_name = format!("{}.{}", yaml_name, key.path);
+            facts.symbols.push(Symbol {
+                name: crate::domain::name::Name::new(&child_name),
+                kind: Some(SymKind::Var),
+                parent: Some(parent_idx),
+                owner: crate::domain::name::Name::default(),
+                line: key.line,
+                end_line: key.line,
+                signature: crate::domain::name::Name::default(),
+                doc: Box::from(""),
+                terms: Box::from(""),
+                exported: false,
+                flags: 0,
+            });
         }
     }
 }
