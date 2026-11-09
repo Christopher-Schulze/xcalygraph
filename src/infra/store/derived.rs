@@ -107,12 +107,14 @@ pub struct FieldsRecord {
 }
 
 /// Token of the search index: byte offset of its postings and their count; sorted by token text.
+/// `max_score` is an upper bound on the token's BM25F contribution (TASK 232 MaxScore).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct TokenRecord {
     pub token: u32,
     pub start: u32,
     pub count: u32,
+    pub max_score: f32,
 }
 
 /// Term frequency of one token per field of one node, 4 bits per field (capped at 15);
@@ -349,6 +351,7 @@ pub fn build<R>(mut graph: Graph, sink: impl FnOnce(&[&[u8]]) -> R) -> R {
             token: strings.id(token),
             start: *start,
             count: *count,
+            max_score: 0.0,
         })
         .collect();
     // Views into the records above: the image is the only copy of the section bytes.
