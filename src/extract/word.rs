@@ -21,6 +21,18 @@ pub struct Masks {
     pub high_bit: u64,
 }
 
+/// SIMD variant dispatch (differential: NEON/AVX2 must match portable).
+#[allow(dead_code)]
+pub fn masks_for_block_simd(bytes: &[u8]) -> Masks {
+    // Portable path today; NEON/AVX2 kernels plug in here.
+    masks_for_block(bytes)
+}
+/// Explicit portable implementation (reference for differential test).
+#[allow(dead_code)]
+pub fn masks_for_block_portable(bytes: &[u8]) -> Masks {
+    masks_for_block(bytes)
+}
+
 /// Builds masks for the first `min(len,64)` bytes (portable scalar).
 #[allow(dead_code)]
 pub fn masks_for_block(bytes: &[u8]) -> Masks {
@@ -99,5 +111,18 @@ mod tests {
         }
         assert_eq!(m1.identifier, expected_id);
         assert_eq!(m1.whitespace, expected_ws);
+    }
+    #[test]
+    fn simd_and_portable_agree_on_all_bytes() {
+        for len in [0usize, 1, 63, 64, 65, 128] {
+            let data: Vec<u8> = (0..len).map(|i| ((i * 37 + 11) % 256) as u8).collect();
+            assert_eq!(masks_for_block(&data), masks_for_block_simd(&data));
+            assert_eq!(masks_for_block(&data), masks_for_block_portable(&data));
+        }
+        // All byte values differential
+        let all: Vec<u8> = (0u32..256).map(|v| v as u8).collect();
+        for chunk in all.chunks(64) {
+            assert_eq!(masks_for_block(chunk), masks_for_block_simd(chunk));
+        }
     }
 }
