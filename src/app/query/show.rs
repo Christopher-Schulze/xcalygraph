@@ -22,6 +22,47 @@ struct EdgeDisplay<'a> {
     exact: bool,
 }
 
+fn stable_id_for(index: &Index, node: u32) -> u64 {
+    use xxhash_rust::xxh3::xxh3_64;
+    let symbol = match index.node(node) {
+        Node::Symbol(s) => s,
+        _ => return 0,
+    };
+    let path = index.path_of(node);
+    let qualified = index.qualified(symbol);
+    let kind = symbol.kind().id();
+    // occurrence among equal qualified/kind in same file, canonical order by line then end_line
+    let mut occurrence: u64 = 0;
+    if symbol.file < u32::MAX {
+        let mut peers: Vec<u32> = index
+            .derived
+            .symbols()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                if s.file != symbol.file {
+                    return None;
+                }
+                if index.qualified(s) != qualified || s.kind() != symbol.kind() {
+                    return None;
+                }
+                Some(i as u32)
+            })
+            .collect();
+        peers.sort_by_key(|&id| {
+            let s = &index.derived.symbols()[id as usize];
+            (s.line, s.end_line)
+        });
+        if let Some(pos) = peers.iter().position(|&id| id == node) {
+            occurrence = pos as u64;
+        }
+    }
+    let path_hash = xxh3_64(path.as_bytes()) & ((1u64 << 40) - 1);
+    let name_hash =
+        xxh3_64(format!("{}|{}|{}", qualified, kind, occurrence).as_bytes()) & ((1u64 << 24) - 1);
+    (path_hash << 24) | name_hash
+}
+
 pub struct ShowOptions {
     pub depth: usize,
     pub all: bool,
@@ -167,6 +208,7 @@ fn header(index: &Index, filter: &Filter, writer: &mut Writer, node: u32) {
                 ("kind", Value::Str(symbol.kind().id())),
                 ("name", Value::Str(&qualified)),
                 ("sig", Value::Str(signature)),
+                ("stable_id", Value::Int(stable_id_for(index, node))),
                 ("doc", Value::Str(doc)),
             ];
             writer.line(&text, &record);
