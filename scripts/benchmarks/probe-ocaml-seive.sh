@@ -4,7 +4,8 @@
 # parser.c and reports its size and extraction time; reject if saving < 25 MB
 # for all language functions.
 set -euo pipefail
-PARSER="/Users/christopher/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-rust-0.24.2/src/parser.c"
+CARGO_HOME="${CARGO_HOME:-$HOME/.cargo/registry/src}"
+PARSER="$(find "$CARGO_HOME" -path "*tree-sitter-rust*/src/parser.c" 2>/dev/null | head -n 1)"
 if [[ ! -f "$PARSER" ]]; then
   echo "parser.c not found at $PARSER" >&2
   exit 1
