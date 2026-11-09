@@ -117,6 +117,16 @@ pub struct TokenRecord {
     pub max_score: f32,
 }
 
+/// Posting block of ~128 entries with a stored block bound (TASK 232).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct BlockRecord {
+    pub token: u32,
+    pub block: u32,
+    pub bound: f32,
+    pub _pad: u32,
+}
+
 /// Term frequency of one token per field of one node, 4 bits per field (capped at 15);
 /// posting lists are sorted by node and stored as varint pairs (node delta, packed).
 #[derive(Debug, Clone, Copy)]
