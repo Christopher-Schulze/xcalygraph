@@ -43,11 +43,18 @@ fn stable_id_survives_insert_before() -> Result<(), Box<dyn std::error::Error>> 
     fn extract(text: &str) -> String {
         for line in text.lines() {
             if line.contains("stable_id") {
-                let start = line.find("\"stable_id\":").unwrap() + 12;
-                let end = line[start..]
-                    .find(',')
-                    .unwrap_or_else(|| line[start..].find('}').unwrap());
-                return line[start..start + end].trim().trim_matches('"').to_owned();
+                let Some(pos) = line.find("\"stable_id\":") else {
+                    continue;
+                };
+                let start = pos + 12;
+                let Some(rem) = line.get(start..) else {
+                    continue;
+                };
+                let end = rem.find(',').or_else(|| rem.find('}')).unwrap_or(rem.len());
+                let Some(slice) = line.get(start..start + end) else {
+                    continue;
+                };
+                return slice.trim().trim_matches('"').to_owned();
             }
         }
         String::new()
