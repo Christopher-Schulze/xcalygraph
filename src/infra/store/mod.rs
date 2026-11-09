@@ -35,6 +35,28 @@ pub fn index_dir(base: &Path, canonical_root: &Path) -> PathBuf {
 #[allow(dead_code)]
 pub const SEGMENTS: u16 = 128;
 
+/// Stable symbol ID for TASK 228: top bits locate the segment.
+#[allow(dead_code)]
+pub fn stable_id_for(path: &str, name_hash: u64) -> u64 {
+    // Top 7 bits reserved for segment when SEGMENTS=128 (but keep 40+24 layout).
+    (xxh3_64(path.as_bytes()) << 24) | (name_hash & 0xFF_FFFF)
+}
+
+/// Streaming segment writer skeleton (TASK 228): collects per-segment file lists
+/// in path order without holding the whole image.
+#[allow(dead_code)]
+pub fn segment_buckets(paths: &[&str]) -> Vec<Vec<usize>> {
+    let mut buckets: Vec<Vec<usize>> = vec![Vec::new(); usize::from(SEGMENTS)];
+    for (i, p) in paths.iter().enumerate() {
+        buckets[segment_of(p) as usize].push(i);
+    }
+    // Canonical order per bucket
+    for b in &mut buckets {
+        b.sort_unstable_by(|&a, &b| paths[a].cmp(paths[b]));
+    }
+    buckets
+}
+
 #[allow(dead_code)]
 pub fn segment_of(path: &str) -> u16 {
     (xxh3_64(path.as_bytes()) % u64::from(SEGMENTS)) as u16
