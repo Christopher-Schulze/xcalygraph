@@ -39,13 +39,17 @@ work="$(mktemp -d "${REPO_ROOT}/.cache/instruction-check.XXXXXXXX")"
 readonly work
 trap 'rm -rf -- "${work}"' EXIT
 
-# Retired instructions of one fresh build, empty when the platform does not report them.
+# Retired instructions of one fresh build on a platform with a working counter.
 measure() {
   local run count status
   run="$(mktemp -d "${work}/run.XXXXXXXX")"
   if count="$(RAYON_NUM_THREADS=1 HOME="${run}" XCALYGRAPH_INDEX_DIR="${run}/index" /usr/bin/time -l "${binary}" index -C "$1" 2>&1 >/dev/null |
     awk '/instructions retired/ { print $1 }')"; then
     rm -rf -- "${run}"
+    if [[ ! "${count}" =~ ^[1-9][0-9]*$ ]]; then
+      echo "check-instructions.sh: missing or invalid retired-instruction count on $(corpus_name "$1")" >&2
+      return 1
+    fi
     printf '%s\n' "${count}"
   else
     status=$?
@@ -84,17 +88,17 @@ while IFS=$'\t' read -r root blessed; do
     echo "check-instructions.sh: missing corpus $(corpus_name "${root}"); instructions unchecked" >&2
     continue
   fi
-  count="$(measure "${root}")"
-  if [[ -z "${count}" ]]; then
-    echo "check-instructions.sh: no retired-instruction count; instructions unchecked" >&2
-    exit 0
-  fi
-  if (( count * 100 > blessed * (100 + LIMIT_PERCENT) )); then
-    # One retry: a single run can pay for cold pages.
+  best=0
+  counts=()
+  # A normal result needs one run. An over-limit result needs two more fresh builds to confirm it.
+  for _attempt in 1 2 3; do
     count="$(measure "${root}")"
-  fi
-  if (( count * 100 > blessed * (100 + LIMIT_PERCENT) )); then
-    echo "check-instructions.sh: $(( (count - blessed) * 100 / blessed )) % more instructions than the baseline on $(corpus_name "${root}"): ${blessed} -> ${count}" >&2
+    counts+=("${count}")
+    if (( best == 0 || count < best )); then best="${count}"; fi
+    if (( best * 100 <= blessed * (100 + LIMIT_PERCENT) )); then break; fi
+  done
+  if (( best * 100 > blessed * (100 + LIMIT_PERCENT) )); then
+    echo "check-instructions.sh: $(( (best - blessed) * 100 / blessed )) % more instructions than the baseline on $(corpus_name "${root}"): ${blessed} -> ${best} (samples: ${counts[*]})" >&2
     exit 1
   fi
 done < "${BASELINE}"

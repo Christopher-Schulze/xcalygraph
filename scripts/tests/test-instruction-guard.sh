@@ -47,6 +47,36 @@ printf '%s\t%s\n%s\t%s\n' "${work}/root-one" "$(( blessed_one * 100 ))" \
   "${work}/root-two" "$(( blessed_two * 100 ))" > "${XCALYGRAPH_INSTRUCTION_BASELINE}"
 bash "${GUARD}" "${work}/binary"
 
+# Use real instruction counts for two costly runs followed by a normal run.
+cat > "${work}/variable-binary" <<'BASH'
+#!/bin/bash
+set -euo pipefail
+read -r runs < "${XCALYGRAPH_GUARD_RUNS}"
+runs=$(( runs + 1 ))
+printf '%s\n' "${runs}" > "${XCALYGRAPH_GUARD_RUNS}"
+iterations=1000
+if (( runs <= XCALYGRAPH_GUARD_SLOW_RUNS )); then iterations=10000; fi
+for (( index=0; index<iterations; index++ )); do :; done
+BASH
+chmod +x "${work}/variable-binary"
+export XCALYGRAPH_GUARD_RUNS="${work}/runs"
+printf '0\n' > "${XCALYGRAPH_GUARD_RUNS}"
+XCALYGRAPH_GUARD_SLOW_RUNS=0 XCALYGRAPH_INSTRUCTION_BASELINE="${work}/variable-baseline.tsv" \
+  bash "${GUARD}" --bless "${work}/variable-binary" "${work}/root-one"
+printf '0\n' > "${XCALYGRAPH_GUARD_RUNS}"
+XCALYGRAPH_GUARD_SLOW_RUNS=2 XCALYGRAPH_INSTRUCTION_BASELINE="${work}/variable-baseline.tsv" \
+  bash "${GUARD}" "${work}/variable-binary"
+[[ $(cat "${XCALYGRAPH_GUARD_RUNS}") == 3 ]]
+
+printf '0\n' > "${XCALYGRAPH_GUARD_RUNS}"
+if XCALYGRAPH_GUARD_SLOW_RUNS=3 XCALYGRAPH_INSTRUCTION_BASELINE="${work}/variable-baseline.tsv" \
+  bash "${GUARD}" "${work}/variable-binary" 2> "${work}/stderr"; then
+  echo "repeatable regression passed the guard" >&2
+  exit 1
+fi
+[[ $(cat "${XCALYGRAPH_GUARD_RUNS}") == 3 ]]
+grep -q 'more instructions than the baseline on root-one' "${work}/stderr"
+
 # Regressions on both the first and last configured roots fail with that root's name.
 printf '%s\t%s\n%s\t%s\n' "${work}/root-one" 1 \
   "${work}/root-two" "$(( blessed_two * 100 ))" > "${XCALYGRAPH_INSTRUCTION_BASELINE}"
