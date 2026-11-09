@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 152;
+pub const RESOLVE_VERSION: u32 = 153;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -110,6 +110,8 @@ struct Index<'a> {
     returns: HashMap<u32, &'a str>,
     /// Field types per (type symbol, field name).
     field_types: HashMap<(u32, &'a str), &'a str>,
+    /// Rust enum tuple-field types per (enum symbol, variant, index).
+    variant_field_types: HashMap<(u32, &'a str, u32), &'a str>,
     /// Declaration file for a field contributed by a cross-file TypeScript augmentation.
     augmentation_field_files: HashMap<(u32, &'a str), u32>,
     /// Every (type symbol, field name), typed or not.
@@ -255,6 +257,7 @@ impl<'a> Index<'a> {
         self.by_name.clear();
         self.returns.clear();
         self.field_types.clear();
+        self.variant_field_types.clear();
         self.augmentation_field_files.clear();
         self.field_names.clear();
         self.python_exports
@@ -493,6 +496,7 @@ impl<'a> Index<'a> {
             by_name: HashMap::default(),
             returns: HashMap::default(),
             field_types: HashMap::default(),
+            variant_field_types: HashMap::default(),
             augmentation_field_files: HashMap::default(),
             field_names: HashSet::default(),
             implementations: HashMap::default(),
@@ -636,6 +640,14 @@ impl<'a> Index<'a> {
                 {
                     self.returns
                         .insert(base + scope, binding.type_name.as_ref());
+                }
+            }
+            for field in &facts.variant_fields {
+                if !field.type_name.is_empty() {
+                    self.variant_field_types.insert(
+                        (base + field.owner, field.variant.as_str(), field.index),
+                        field.type_name.as_str(),
+                    );
                 }
             }
             for fields in &facts.fields {
@@ -4289,7 +4301,7 @@ impl<'a> Index<'a> {
                     return Receiver::External;
                 }
                 None if chains::call_binding(&binding.type_name).is_some()
-                    || *binding.type_name == *facts::PATTERN_BINDING =>
+                    || binding.type_name.starts_with(facts::PATTERN_BINDING) =>
                 {
                     return Receiver::Unknown;
                 }
@@ -4604,6 +4616,13 @@ impl<'a> Index<'a> {
             let callee_scope = Some(callee - self.base[callee_file as usize]);
             let (types, _) = self.resolve_result_type(callee_file, callee_scope, result)?;
             return Some((types, Confidence::Inferred));
+        }
+        if self.file_type(file) == Some(FileType::Rust)
+            && let Some(coded) = binding.type_name.strip_prefix(facts::PATTERN_BINDING)
+            && !coded.is_empty()
+            && let Some(found) = self.rust_variant_field_type(file, imports, scope, binding, coded)
+        {
+            return Some(found);
         }
         let (types, type_confidence) =
             self.resolve_type(file, Some(imports), scope, &binding.type_name)?;

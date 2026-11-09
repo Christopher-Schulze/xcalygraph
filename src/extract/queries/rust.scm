@@ -85,13 +85,17 @@
 
 (parameter pattern: (identifier) @binding.name type: (_) @binding.type) @binding
 (let_declaration pattern: (identifier) @binding.name) @binding
-; Names bound by a tuple-struct pattern: unknown type, limited to their arm or consequence.
-(tuple_struct_pattern type: (_) [
+; Names bound by a tuple-struct pattern: typed from the enum variant declaration when the
+; pattern path and match scrutinee identify it, limited to their arm or consequence.
+(tuple_struct_pattern type: (_) @binding.variant [
   (identifier) @binding.name @binding.pattern @binding
   (ref_pattern (identifier) @binding.name @binding.pattern @binding)
   (mut_pattern (identifier) @binding.name @binding.pattern @binding)
   (ref_pattern (mut_pattern (identifier) @binding.name @binding.pattern @binding))
 ])
+; Tuple fields of enum variants, one match per field: `Variant(T0, T1)` yields two.
+(enum_variant name: (identifier) @variant.name
+  body: (ordered_field_declaration_list type: (_) @variant.type @variant))
 (let_declaration pattern: (identifier) @binding.name type: (_) @binding.type) @binding
 ; Loop variables over a named collection: `for x in items`, `&items`, `items.iter()`.
 (for_expression

@@ -4,7 +4,7 @@ use super::codec::{DecodeError, DecodeResult, Decoder, Encoder};
 use crate::domain::facts::{
     AssetMeta, Binding, ConfigKey, Coverage, EnvDef, EnvRead, EnvSource, Facts, FieldName, Fields,
     GoEmbed, Import, JuliaCallArgument, Manifest, Ref, RefKind, RustTargetRoot, SourceIdentity,
-    SourceIdentityKind, SymKind, Symbol, TextSegment, ValueKind,
+    SourceIdentityKind, SymKind, Symbol, TextSegment, ValueKind, VariantField,
 };
 
 /// Search terms as a token list, so each token is interned once in the shard's string table.
@@ -240,6 +240,13 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
             }
         }
         encoder.strs(&fields.types);
+    }
+    encoder.var_usize(facts.variant_fields.len());
+    for field in &facts.variant_fields {
+        encoder.var_u32(field.owner);
+        encoder.str(&field.variant);
+        encoder.var_u32(field.index);
+        encoder.str(&field.type_name);
     }
     encoder.var_usize(facts.env_defs.len());
     for def in &facts.env_defs {
@@ -496,6 +503,16 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             owner,
             names,
             types: decoder.strings()?,
+        });
+    }
+    let count = decoder.len()?;
+    facts.variant_fields.reserve_exact(count);
+    for _ in 0..count {
+        facts.variant_fields.push(VariantField {
+            owner: decoder.var_u32()?,
+            variant: decoder.string()?.into(),
+            index: decoder.var_u32()?,
+            type_name: decoder.string()?,
         });
     }
     let count = decoder.len()?;
@@ -951,6 +968,12 @@ mod tests {
                 owner: 0,
                 names: vec![FieldName::Text("db".to_owned())],
                 types: vec!["DB".to_owned()],
+            }],
+            variant_fields: vec![VariantField {
+                owner: 0,
+                variant: "Connected".into(),
+                index: 0,
+                type_name: "Conn".to_owned(),
             }],
             env_defs: vec![EnvDef {
                 name: "PORT".to_owned(),

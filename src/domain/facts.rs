@@ -719,6 +719,15 @@ pub struct Fields {
     pub types: Vec<String>,
 }
 
+/// One tuple field of one enum variant: `Variant(T0, T1)` yields two entries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VariantField {
+    pub owner: u32,
+    pub variant: Name,
+    pub index: u32,
+    pub type_name: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum EnvSource {
@@ -918,6 +927,7 @@ pub struct Facts {
     pub bindings: Vec<Binding>,
     pub envs: Vec<EnvRead>,
     pub fields: Vec<Fields>,
+    pub variant_fields: Vec<VariantField>,
     pub env_defs: Vec<EnvDef>,
     pub config_keys: Vec<ConfigKey>,
     pub texts: Vec<TextSegment>,

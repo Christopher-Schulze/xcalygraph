@@ -27,7 +27,7 @@ use tree_sitter::{
 
 use crate::domain::facts::{
     self, Binding, Coverage, EnvRead, Facts, FieldName, Fields, Import, JuliaCallArgument, Ref,
-    RefKind, SourceIdentity, SourceIdentityKind, SymKind, Symbol,
+    RefKind, SourceIdentity, SourceIdentityKind, SymKind, Symbol, VariantField,
 };
 use crate::domain::hash::FastMap;
 
@@ -425,6 +425,14 @@ struct RawBinding {
 #[derive(Default)]
 struct RawField {
     name: Option<FieldName>,
+    type_name: String,
+    position: usize,
+}
+
+#[derive(Default)]
+struct RawVariantField {
+    variant: Option<Name>,
+    index: Option<u32>,
     type_name: String,
     position: usize,
 }
@@ -876,6 +884,7 @@ fn collect(
     let mut bindings: FastMap<usize, RawBinding> = FastMap::default();
     let mut returns: Vec<(usize, String)> = Vec::new();
     let mut fields: FastMap<usize, RawField> = FastMap::default();
+    let mut variants: FastMap<usize, RawVariantField> = FastMap::default();
     let mut envs: FastMap<usize, (String, usize, u32)> = FastMap::default();
     let mut package = None;
     let mut entry = false;
@@ -1267,7 +1276,25 @@ fn collect(
                     } else if let Some(node) = get("binding.range") {
                         entry.type_name = Some(format!("range:{}", text(node)).into());
                     } else if get("binding.pattern").is_some() {
-                        entry.type_name = Some(Name::new(facts::PATTERN_BINDING));
+                        #[cfg(feature = "lang-rust")]
+                        let coded = if path.ends_with(".rs") {
+                            get("binding.variant").and_then(|variant| {
+                                super::lang::rust::variant_pattern_binding(
+                                    source,
+                                    primary_node,
+                                    variant,
+                                )
+                            })
+                        } else {
+                            None
+                        };
+                        #[cfg(not(feature = "lang-rust"))]
+                        let coded: Option<String> = None;
+                        entry.type_name = Some(
+                            coded
+                                .map(Name::from)
+                                .unwrap_or_else(|| Name::new(facts::PATTERN_BINDING)),
+                        );
                     } else if let Some(node) = get("binding.call")
                         && (!path.ends_with(".rs") || !entry.declared)
                     {
@@ -1374,6 +1401,34 @@ fn collect(
                         && let Some(callee) = agreeing_callee(node, source)
                     {
                         entry.type_name = declared_type(path, &callee).unwrap_or_default();
+                    }
+                }
+                "variant" => {
+                    // One tuple field of one enum variant; Rust only, one match per field.
+                    if !path.ends_with(".rs") {
+                        continue;
+                    }
+                    let entry = variants.entry(key).or_default();
+                    entry.position = primary_node.start_byte();
+                    if let Some(node) = get("variant.name") {
+                        entry.variant = normalize_captured_name(path, node, text(node));
+                    }
+                    entry.type_name = declared_type(path, text(primary_node)).unwrap_or_default();
+                    if let Some(parent) = primary_node.parent() {
+                        let mut cursor = parent.walk();
+                        let mut position = 0u32;
+                        for child in parent.children(&mut cursor) {
+                            if child.id() == key {
+                                entry.index = Some(position);
+                                break;
+                            }
+                            if child.is_named()
+                                && child.kind() != "attribute_item"
+                                && child.kind() != "visibility_modifier"
+                            {
+                                position += 1;
+                            }
+                        }
                     }
                 }
                 "env" => {
@@ -1572,6 +1627,7 @@ fn collect(
         bindings,
         returns,
         fields,
+        variants,
         envs,
         scope_index,
         locals,
@@ -1691,6 +1747,7 @@ struct Assembly<'a, 'tree> {
     bindings: FastMap<usize, RawBinding>,
     returns: Vec<(usize, String)>,
     fields: FastMap<usize, RawField>,
+    variants: FastMap<usize, RawVariantField>,
     envs: FastMap<usize, (String, usize, u32)>,
     scope_index: ScopeIndex<'tree>,
     locals: Vec<LocalCapture<'tree>>,
@@ -1714,6 +1771,7 @@ fn assemble(assembly: Assembly) -> Parsed {
         mut bindings,
         returns,
         fields,
+        variants,
         envs,
         scope_index,
         locals,
@@ -2471,6 +2529,31 @@ fn assemble(assembly: Assembly) -> Parsed {
             }),
         }
     }
+    let mut variant_fields: Vec<VariantField> = Vec::new();
+    let mut raw_variants: Vec<RawVariantField> = variants.into_values().collect();
+    raw_variants.sort_by_key(|variant| variant.position);
+    for variant in raw_variants {
+        let (Some(name), Some(index), Some(mut owner)) =
+            (variant.variant, variant.index, scope_of(variant.position))
+        else {
+            continue;
+        };
+        while symbols[owner as usize].kind() != SymKind::Enum {
+            let Some(parent) = symbols[owner as usize].parent else {
+                break;
+            };
+            owner = parent;
+        }
+        if symbols[owner as usize].kind() != SymKind::Enum || variant.type_name.is_empty() {
+            continue;
+        }
+        variant_fields.push(VariantField {
+            owner,
+            variant: name,
+            index,
+            type_name: variant.type_name,
+        });
+    }
     let mut facts_envs: Vec<EnvRead> = envs
         .into_values()
         .filter(|(name, _, _)| !name.is_empty())
@@ -2524,6 +2607,7 @@ fn assemble(assembly: Assembly) -> Parsed {
             bindings: facts_bindings,
             envs: facts_envs,
             fields: grouped,
+            variant_fields,
             ..Facts::default()
         },
         spans,
@@ -2537,7 +2621,15 @@ fn is_primary(name: &str) -> bool {
         || name.starts_with("reference.")
         || matches!(
             name,
-            "impl" | "import" | "binding" | "return" | "field" | "env" | "package" | "literal"
+            "impl"
+                | "import"
+                | "binding"
+                | "return"
+                | "field"
+                | "variant"
+                | "env"
+                | "package"
+                | "literal"
         )
 }
 

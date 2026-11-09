@@ -2,7 +2,8 @@
 
 use super::Pack;
 use crate::domain::facts::{
-    FLAG_ENTRY, FLAG_RUST_CFG_NOT_UNIX, FLAG_RUST_CFG_UNIX, FLAG_TEST, Import, SymKind,
+    FLAG_ENTRY, FLAG_RUST_CFG_NOT_UNIX, FLAG_RUST_CFG_UNIX, FLAG_TEST, Import, PATTERN_BINDING,
+    SymKind, normalize_space,
 };
 use crate::domain::filetype::FileType;
 use crate::domain::name::Name;
@@ -263,6 +264,71 @@ fn split_top_level(text: &str) -> Vec<&str> {
         .into_iter()
         .filter(|part| !part.trim().is_empty())
         .collect()
+}
+
+/// Binding identity for a tuple-struct pattern: `pattern:PATH#INDEX` plus the match
+/// scrutinee (`~EXPR`) when the pattern is the direct arm pattern, so resolution types
+/// unqualified variants through the scrutinee. Nested patterns (`Some(Ok(x))`,
+/// `A(x) | B(x)`, `if let`) carry no scrutinee: the outer expression never types them.
+pub fn variant_pattern_binding(source: &[u8], binding: Node, variant: Node) -> Option<String> {
+    let path = normalize_space(variant.utf8_text(source).unwrap_or_default());
+    if path.is_empty() {
+        return None;
+    }
+    let mut node = binding;
+    let tuple = loop {
+        node = node.parent()?;
+        match node.kind() {
+            "tuple_struct_pattern" => break node,
+            "ref_pattern" | "mut_pattern" => {}
+            _ => return None,
+        }
+    };
+    let typed = tuple.child_by_field_name("type")?;
+    let mut index = None;
+    let mut position = 0u32;
+    let mut cursor = tuple.walk();
+    for child in tuple.children(&mut cursor) {
+        if !child.is_named() || child.id() == typed.id() {
+            continue;
+        }
+        if child.start_byte() <= binding.start_byte() && binding.end_byte() <= child.end_byte() {
+            index = Some(position);
+            break;
+        }
+        position += 1;
+    }
+    let index = index?;
+    let mut coded = format!("{PATTERN_BINDING}{path}#{index}");
+    if let Some(scrutinee) = match_scrutinee(tuple) {
+        let scrutinee = normalize_space(scrutinee.utf8_text(source).unwrap_or_default());
+        if !scrutinee.is_empty() && scrutinee.len() <= 120 {
+            coded.push('~');
+            coded.push_str(&scrutinee);
+        }
+    }
+    Some(coded)
+}
+
+/// Scrutinee of the `match` whose arm directly holds `tuple`, if that chain is exact.
+fn match_scrutinee(tuple: Node) -> Option<Node> {
+    let arm_pattern = tuple.parent()?;
+    if arm_pattern.kind() != "match_pattern" {
+        return None;
+    }
+    let arm = arm_pattern.parent()?;
+    if arm.kind() != "match_arm" || arm.child_by_field_name("pattern")?.id() != arm_pattern.id() {
+        return None;
+    }
+    let block = arm.parent()?;
+    if block.kind() != "match_block" {
+        return None;
+    }
+    let matched = block.parent()?;
+    if matched.kind() != "match_expression" {
+        return None;
+    }
+    matched.child_by_field_name("value")
 }
 
 #[cfg(test)]

@@ -4,6 +4,14 @@ use super::Ids;
 use super::*;
 use crate::domain::name::Name;
 
+/// Parsed tuple-struct pattern identity: `PATH#INDEX` plus the match scrutinee.
+struct VariantPattern<'a> {
+    enum_path: Option<&'a str>,
+    variant: &'a str,
+    index: u32,
+    scrutinee: Option<&'a str>,
+}
+
 impl<'a> Index<'a> {
     pub(super) fn rust_imports(&self, file: u32, facts: &Facts, imports: &mut Imports) {
         for import in &facts.imports {
@@ -537,6 +545,112 @@ impl<'a> Index<'a> {
             }
             layers += 1;
             result = inner;
+        }
+    }
+
+    /// Field type of a tuple-struct pattern binding: `pattern:PATH#INDEX` plus the match
+    /// scrutinee (`~EXPR`) for unqualified variants, proven through the variant table.
+    /// `Ok`/`Err`/`Some` stay unresolved: generic arguments live in no fact.
+    pub(super) fn rust_variant_field_type(
+        &self,
+        file: u32,
+        imports: &Imports,
+        scope: Option<u32>,
+        binding: &Binding,
+        coded: &str,
+    ) -> Option<(Ids, Confidence)> {
+        let (head, scrutinee) = coded
+            .split_once('~')
+            .map_or((coded, None), |(head, tail)| (head, Some(tail)));
+        let (path, index) = head.rsplit_once('#')?;
+        let index: u32 = index.parse().ok()?;
+        let (enum_path, variant) = match path.rsplit_once("::") {
+            Some((head, tail)) if !head.is_empty() && !tail.is_empty() => (Some(head), tail),
+            None if !path.is_empty() => (None, path),
+            _ => return None,
+        };
+        let scrutinee = scrutinee.filter(|text| !text.is_empty());
+        let pattern = VariantPattern {
+            enum_path,
+            variant,
+            index,
+            scrutinee,
+        };
+        self.variant_table_field(file, imports, scope, binding, &pattern)
+    }
+
+    /// Declared variant-field type through the enum of a qualified path or scrutinee.
+    fn variant_table_field(
+        &self,
+        file: u32,
+        imports: &Imports,
+        scope: Option<u32>,
+        binding: &Binding,
+        pattern: &VariantPattern,
+    ) -> Option<(Ids, Confidence)> {
+        let (mut enums, confidence) = match pattern.enum_path {
+            Some(path) => self.resolve_type(file, Some(imports), scope, path)?,
+            None => self.scrutinee_types(file, imports, scope, binding, pattern.scrutinee?)?,
+        };
+        enums.retain(|symbol| self.symbols[*symbol as usize].kind == SymKind::Enum);
+        if enums.is_empty() {
+            return None;
+        }
+        let mut found: Option<&str> = None;
+        for enum_symbol in enums {
+            let Some(field) =
+                self.variant_field_types
+                    .get(&(enum_symbol, pattern.variant, pattern.index))
+            else {
+                continue;
+            };
+            match found {
+                None => found = Some(field),
+                Some(previous) if previous == *field => {}
+                Some(_) => return None,
+            }
+        }
+        self.resolve_type(file, Some(imports), scope, found?)
+            .map(|(types, _)| (types, confidence))
+    }
+
+    /// Types of a match scrutinee: a call result like a call binding, else a receiver chain.
+    fn scrutinee_types(
+        &self,
+        file: u32,
+        imports: &Imports,
+        scope: Option<u32>,
+        binding: &Binding,
+        scrutinee: &str,
+    ) -> Option<(Ids, Confidence)> {
+        if scrutinee.contains('(') {
+            let receiver = Binding {
+                scope,
+                name: String::new().into(),
+                type_name: scrutinee.into(),
+                line: binding.line,
+                visibility: None,
+                value_byte: binding.value_byte,
+                declared: false,
+            };
+            return self.binding_type(file, imports, scope, &receiver);
+        }
+        let chain: Vec<&str> = scrutinee.trim_start_matches('*').split('.').collect();
+        if chain.is_empty() || !chain.iter().all(|segment| is_identifier(segment)) {
+            return None;
+        }
+        let reference = Ref {
+            kind: RefKind::Type,
+            name: String::new().into(),
+            qualifier: None,
+            scope,
+            line: binding.line,
+            byte: binding.value_byte,
+            arity: facts::NO_ARITY,
+        };
+        match self.receiver_type(file, imports, &reference, &chain) {
+            Receiver::Known(types, confidence) => Some((types, confidence)),
+            _ => None,
         }
     }
 }
