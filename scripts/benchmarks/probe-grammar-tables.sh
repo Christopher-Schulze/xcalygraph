@@ -1,27 +1,23 @@
 #!/usr/bin/env bash
-# Probe grammar table sizes for TASK 231 decision (outside product).
-# Sums parser.c sizes for all tree-sitter crates in Cargo.lock to estimate INTEGER_TABLE saving.
+# Grammar table inventory for the TASK 231 decision (outside product).
+# Sums the generated parser.c source bytes of every tree-sitter grammar in
+# the cargo registry. This bounds the INTEGER_TABLE saving from above:
+# extracted tables cannot exceed their source, and the binary saving needs
+# a separate load measurement once a sieve prototype exists.
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-LOCK="$ROOT/Cargo.lock"
-if [[ ! -f "$LOCK" ]]; then echo "no lock" >&2; exit 1; fi
+REGISTRY="${CARGO_HOME:-$HOME/.cargo/registry/src}"
 TOTAL=0
-for crate in tree-sitter-go tree-sitter-rust tree-sitter-python tree-sitter-typescript tree-sitter-javascript; do
-  # Find any parser.c under cargo registry
-  FOUND=$(find "${CARGO_HOME:-$HOME/.cargo/registry/src}" -path "*${crate}*/src/parser.c" 2>/dev/null | head -n 1 || true)
-  if [[ -n "$FOUND" && -f "$FOUND" ]]; then
-    SZ=$(wc -c < "$FOUND" | tr -d ' ')
-    TOTAL=$((TOTAL + SZ))
-    echo "$crate: $SZ bytes"
-  else
-    echo "$crate: not found"
-  fi
-done
-echo "total sampled: $TOTAL bytes"
-echo "estimated all grammars (40 langs): $((TOTAL * 8)) bytes (8x sampling ~ 25 MB threshold)"
-if (( TOTAL * 8 > 25*1024*1024 )); then
-  echo "PASS: INTEGER_TABLE path pays (>25 MB)"
-else
-  echo "FAIL: below threshold" >&2
-  exit 1
+COUNT=0
+while IFS= read -r parser; do
+  SZ=$(wc -c < "$parser" | tr -d ' ')
+  TOTAL=$((TOTAL + SZ))
+  COUNT=$((COUNT + 1))
+  echo "$parser: $SZ bytes"
+done < <(find "$REGISTRY" -path "*/tree-sitter-*/src/parser.c" 2>/dev/null | sort)
+if ((COUNT == 0)); then
+  echo "no tree-sitter parser.c found under $REGISTRY" >&2
+  exit 2
 fi
+echo "grammars: $COUNT"
+echo "total parser.c bytes: $TOTAL"
+echo "upper bound only: no INTEGER_TABLE saving measured (TASK 231 open)"

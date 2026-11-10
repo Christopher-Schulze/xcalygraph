@@ -107,24 +107,12 @@ pub struct FieldsRecord {
 }
 
 /// Token of the search index: byte offset of its postings and their count; sorted by token text.
-/// `max_score` is an upper bound on the token's BM25F contribution (TASK 232 MaxScore).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct TokenRecord {
     pub token: u32,
     pub start: u32,
     pub count: u32,
-    pub max_score: f32,
-}
-
-/// Posting block of ~128 entries with a stored block bound (TASK 232).
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-pub struct BlockRecord {
-    pub token: u32,
-    pub block: u32,
-    pub bound: f32,
-    pub _pad: u32,
 }
 
 /// Term frequency of one token per field of one node, 4 bits per field (capped at 15);
@@ -154,16 +142,6 @@ pub struct LengthRecord {
     pub lengths: [u8; FIELDS],
 }
 
-/// Flat directory fingerprint per file (TASK 232): stable hash of the path,
-/// plus its symbol count, for quiet and maxscore checks without decoding facts.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-pub struct FingerprintRecord {
-    pub path_hash: u64,
-    pub file: u32,
-    pub entry_count: u32,
-}
-
 mod section {
     pub const STRINGS: usize = 0;
     pub const STRING_OFFSETS: usize = 1;
@@ -186,8 +164,7 @@ mod section {
     pub const STALE: usize = 18;
     pub const AMBIGUOUS: usize = 19;
     pub const INTERFACE_GROUPS: usize = 20;
-    pub const FINGERPRINTS: usize = 21;
-    pub const COUNT: usize = 22;
+    pub const COUNT: usize = 21;
 }
 
 #[derive(Default)]
@@ -361,7 +338,6 @@ pub fn build<R>(mut graph: Graph, sink: impl FnOnce(&[&[u8]]) -> R) -> R {
             token: strings.id(token),
             start: *start,
             count: *count,
-            max_score: 0.0,
         })
         .collect();
     // Views into the records above: the image is the only copy of the section bytes.
@@ -405,17 +381,6 @@ pub fn build<R>(mut graph: Graph, sink: impl FnOnce(&[&[u8]]) -> R) -> R {
         .map(|&(part, canonical)| [part, canonical])
         .collect();
     views[section::INTERFACE_GROUPS] = bytemuck::cast_slice(&interface_groups);
-    let fingerprints: Vec<FingerprintRecord> = graph
-        .files
-        .iter()
-        .enumerate()
-        .map(|(i, f)| FingerprintRecord {
-            path_hash: xxhash_rust::xxh3::xxh3_64(f.path.as_bytes()),
-            file: i as u32,
-            entry_count: f.symbol_count,
-        })
-        .collect();
-    views[section::FINGERPRINTS] = bytemuck::cast_slice(&fingerprints);
     views[section::STRINGS] = &strings.blob;
     views[section::STRING_OFFSETS] = bytemuck::cast_slice(&strings.offsets);
     drop(strings.ids);
@@ -787,9 +752,6 @@ impl Derived {
             && derived.cast::<u32>(section::AMBIGUOUS).is_some()
             && derived
                 .cast::<[u32; 2]>(section::INTERFACE_GROUPS)
-                .is_some()
-            && derived
-                .cast::<FingerprintRecord>(section::FINGERPRINTS)
                 .is_some()
             && derived.container.section_count() == section::COUNT
             && derived.forward_offsets().len() == derived.node_count() + 1

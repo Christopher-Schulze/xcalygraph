@@ -586,126 +586,6 @@ fn binding_place(root: Node, position: usize) -> Option<BindingPlace> {
 /// different type can reach its uses: a conditional write after an earlier one may leave the
 /// earlier value in place, and a later write inside a loop flows back to the loop's start.
 /// Such bindings keep their type but lose the declared (exact) status.
-fn infer_stream_callback_bindings(
-    root: Node,
-    source: &[u8],
-    bindings: &mut FastMap<usize, RawBinding>,
-) {
-    fn first_arrow_param_identifier<'a>(
-        arrow: Node<'a>,
-        source: &'a [u8],
-    ) -> Option<(Node<'a>, String)> {
-        let param = arrow.child_by_field_name("parameter").or_else(|| {
-            arrow
-                .named_child(0)
-                .filter(|n| n.kind() == "formal_parameters")
-        })?;
-        match param.kind() {
-            "identifier" => {
-                let name = param.utf8_text(source).ok()?.to_owned();
-                Some((param, name))
-            }
-            "required_parameter" | "optional_parameter" => {
-                if param.child_by_field_name("type").is_some() {
-                    return None;
-                }
-                let pattern = param.child_by_field_name("pattern")?;
-                if pattern.kind() == "identifier" {
-                    let name = pattern.utf8_text(source).ok()?.to_owned();
-                    Some((pattern, name))
-                } else {
-                    None
-                }
-            }
-            "formal_parameters" => {
-                let child = param.named_child(0)?;
-                match child.kind() {
-                    "identifier" => {
-                        let name = child.utf8_text(source).ok()?.to_owned();
-                        Some((child, name))
-                    }
-                    "required_parameter" | "optional_parameter" => {
-                        if child.child_by_field_name("type").is_some() {
-                            return None;
-                        }
-                        if let Some(pattern) = child.child_by_field_name("pattern")
-                            && pattern.kind() == "identifier"
-                        {
-                            let name = pattern.utf8_text(source).ok()?.to_owned();
-                            return Some((pattern, name));
-                        }
-                        None
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
-        }
-    }
-
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        for i in 0..node.named_child_count() {
-            if let Some(child) = node.named_child(u32::try_from(i).unwrap_or(u32::MAX)) {
-                stack.push(child);
-            }
-        }
-        if node.kind() != "call_expression" {
-            continue;
-        }
-        let Some(func) = node.child_by_field_name("function") else {
-            continue;
-        };
-        let func_text = func.utf8_text(source).unwrap_or("");
-        let callee_name = if let Some(prop) = func.child_by_field_name("property") {
-            prop.utf8_text(source).unwrap_or("")
-        } else {
-            func_text
-        };
-        let inferred = match callee_name {
-            "stream" | "streamText" => "StreamingApi",
-            "streamSSE" => "SSEStreamingApi",
-            _ => continue,
-        };
-        let Some(args) = node.child_by_field_name("arguments") else {
-            continue;
-        };
-        for arg_index in 0..args.named_child_count() {
-            let Ok(arg_index_u32) = u32::try_from(arg_index) else {
-                continue;
-            };
-            let Some(arg) = args.named_child(arg_index_u32) else {
-                continue;
-            };
-            if arg.kind() != "arrow_function" {
-                continue;
-            }
-            if let Some((param_node, name)) = first_arrow_param_identifier(arg, source) {
-                let id = param_node.id();
-                if bindings.contains_key(&id) {
-                    continue;
-                }
-                let pos = param_node.start_byte();
-                let line = param_node.start_position().row as u32 + 1;
-                bindings.insert(
-                    id,
-                    RawBinding {
-                        name: Some(Name::new(&name)),
-                        type_name: Some(inferred.to_owned().into()),
-                        declared: false,
-                        call: false,
-                        try_result: false,
-                        position: pos,
-                        line,
-                        visibility: None,
-                        reassignment: false,
-                    },
-                );
-            }
-        }
-    }
-}
-
 fn unprove_rebound_bindings(root: Node, bindings: &mut FastMap<usize, RawBinding>) {
     let mut by_name: FastMap<&str, Vec<usize>> = FastMap::default();
     for (&key, raw) in bindings.iter() {
@@ -1793,9 +1673,6 @@ fn collect(
         Coverage::Complete
     };
     envs.retain(|_, (name, _, _)| !assigned.contains(name));
-    if super::bindings::javascript(path) {
-        infer_stream_callback_bindings(root, source, &mut bindings);
-    }
     if path.ends_with(".py") || super::bindings::javascript(path) {
         unprove_rebound_bindings(root, &mut bindings);
     }

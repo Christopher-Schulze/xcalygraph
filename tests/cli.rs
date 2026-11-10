@@ -4262,7 +4262,7 @@ fn map_and_audit_json_preserve_typed_facts_and_provenance() -> TestResult {
     assert_eq!(map_text.status.code(), Some(0));
     let map_text = String::from_utf8(map_text.stdout)?;
     assert!(
-        map_text.starts_with("repo-ü 7 files 13 symbols go:2\n"),
+        map_text.starts_with("repo-ü 7 files 7 symbols go:2\n"),
         "{map_text}"
     );
     assert!(map_text.contains("src 1f 2s"), "{map_text}");
@@ -4284,7 +4284,7 @@ fn map_and_audit_json_preserve_typed_facts_and_provenance() -> TestResult {
         map_json.lines().any(|line| {
             line.starts_with("{\"t\":\"root\"")
                 && line.contains("\"n\":7")
-                && line.contains("\"symbols\":13")
+                && line.contains("\"symbols\":7")
                 && line.contains("repo-ü")
         }),
         "{map_json}"

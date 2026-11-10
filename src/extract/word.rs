@@ -21,19 +21,10 @@ pub struct Masks {
     pub high_bit: u64,
 }
 
-/// SIMD variant dispatch (differential: NEON/AVX2 must match portable).
-#[allow(dead_code)]
-pub fn masks_for_block_simd(bytes: &[u8]) -> Masks {
-    // Portable path today; NEON/AVX2 kernels plug in here.
-    masks_for_block(bytes)
-}
-/// Explicit portable implementation (reference for differential test).
-#[allow(dead_code)]
-pub fn masks_for_block_portable(bytes: &[u8]) -> Masks {
-    masks_for_block(bytes)
-}
-
 /// Builds masks for the first `min(len,64)` bytes (portable scalar).
+/// NEON/AVX2 kernels plug in here once they exist; until then there is
+/// deliberately no dispatch wrapper, so no test can compare a function
+/// against itself.
 #[allow(dead_code)]
 pub fn masks_for_block(bytes: &[u8]) -> Masks {
     let mut m = Masks::default();
@@ -59,21 +50,27 @@ pub fn masks_for_block(bytes: &[u8]) -> Masks {
 }
 
 /// Finds word runs from identifier mask bits (portable).
-/// Yields `(start, len)` in the 64-byte block.
+/// Yields `(start, len)` in the 64-byte block. A fully set mask yields
+/// one `(0, 64)` run; the shift never overflows.
 #[allow(dead_code)]
 pub fn word_runs(mask: u64) -> impl Iterator<Item = (u8, u8)> {
     let mut rem = mask;
-    let mut pos = 0u8;
+    let mut pos: u32 = 0;
     std::iter::from_fn(move || {
         if rem == 0 {
             return None;
         }
-        let trailing = rem.trailing_zeros() as u8;
-        let run = (rem >> trailing).trailing_ones() as u8;
+        let trailing = rem.trailing_zeros();
+        let run = (rem >> trailing).trailing_ones();
         let start = pos + trailing;
         pos = start + run;
-        rem >>= trailing + run;
-        Some((start, run))
+        let consumed = trailing + run;
+        if consumed >= 64 {
+            rem = 0;
+        } else {
+            rem >>= consumed;
+        }
+        Some((start as u8, run as u8))
     })
 }
 
@@ -113,16 +110,18 @@ mod tests {
         assert_eq!(m1.whitespace, expected_ws);
     }
     #[test]
-    fn simd_and_portable_agree_on_all_bytes() {
-        for len in [0usize, 1, 63, 64, 65, 128] {
-            let data: Vec<u8> = (0..len).map(|i| ((i * 37 + 11) % 256) as u8).collect();
-            assert_eq!(masks_for_block(&data), masks_for_block_simd(&data));
-            assert_eq!(masks_for_block(&data), masks_for_block_portable(&data));
-        }
-        // All byte values differential
-        let all: Vec<u8> = (0u32..256).map(|v| v as u8).collect();
-        for chunk in all.chunks(64) {
-            assert_eq!(masks_for_block(chunk), masks_for_block_simd(chunk));
-        }
+    fn full_block_yields_one_run_without_shift_overflow() {
+        // Regression: `rem >>= 64` panicked on a fully set mask.
+        let runs: Vec<(u8, u8)> = word_runs(u64::MAX).collect();
+        assert_eq!(runs, [(0, 64)]);
+        let full = [b'a'; 64];
+        let masks = masks_for_block(&full);
+        assert_eq!(masks.identifier, u64::MAX);
+        let runs: Vec<(u8, u8)> = word_runs(masks.identifier).collect();
+        assert_eq!(runs, [(0, 64)]);
+        // Trailing run to the block end.
+        let runs: Vec<(u8, u8)> = word_runs(!0u64 << 60).collect();
+        assert_eq!(runs, [(60, 4)]);
+        assert!(word_runs(0).next().is_none());
     }
 }
