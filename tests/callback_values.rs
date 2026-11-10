@@ -674,8 +674,8 @@ fn python_default_values_are_uses_of_the_enclosing_binding() -> Result<(), Box<d
 fn untyped_callback_param_never_infers_streaming_type_by_callee_name() -> Result<(), Box<dyn Error>>
 {
     // Regression lock for the reverted name-based Hono rule: a callee merely
-    // named `stream` (or `worker.stream`) must not type an untyped callback
-    // parameter as StreamingApi when its visible signature says OtherApi.
+    // named `stream` (including a reassigned binding or member) must not type an
+    // untyped callback parameter as StreamingApi when the callee expects OtherApi.
     // A future signature-based rule must keep these negatives green while
     // adding positives only from resolved callee signatures.
     let fixture = Fixture(support::exclusive_dir("hono-callback-infer")?);
@@ -690,9 +690,15 @@ fn untyped_callback_param_never_infers_streaming_type_by_callee_name() -> Result
          export function correct() { return stream((x: OtherApi) => x.write('other')); }\n\
          const worker = { stream(cb: (x: OtherApi) => string) { return cb(new OtherApi()); } };\n\
          export function wrongMember() { return worker.stream((x) => x.write('other')); }\n\
-         export async function shadowed(c: any) { const f = stream; return f(c, async (s) => { await s.write(\"hi\"); }); }\n",
+         function streamFirst(cb: (x: StreamingApi) => string) { return cb(new StreamingApi()); }\n\
+         function streamSecond(cb: (x: OtherApi) => string) { return cb(new OtherApi()); }\n\
+         export function reassigned() {\n\
+             let stream: typeof streamFirst | typeof streamSecond = streamFirst;\n\
+             stream = streamSecond;\n\
+             return stream((x) => x.write('other'));\n\
+         }\n",
     )?;
-    for name in ["local.wrong", "local.wrongMember", "local.shadowed"] {
+    for name in ["local.wrong", "local.wrongMember", "local.reassigned"] {
         let out = support::command(env!("CARGO_BIN_EXE_xcalygraph"), &fixture.0)
             .args(["show", name, "--json", "--all", "--no-tests", "-C"])
             .arg(&root)
@@ -723,6 +729,11 @@ fn untyped_callback_param_never_infers_streaming_type_by_callee_name() -> Result
         .arg("--index-dir")
         .arg(fixture.0.join("index"))
         .output()?;
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let text = String::from_utf8(out.stdout)?;
     assert!(
         text.contains("OtherApi.write"),
