@@ -253,6 +253,7 @@ Resolution order for a reference, first hit wins:
 | layers | longest-path level per module on the condensed module DAG |
 | entrypoints | Go `main` in package `main`; Rust `main` of bin targets; `main` of Java, Kotlin, Scala, C#, C, C++, Dart and Zig; Swift `@main` and `main.swift`; Python `if __name__ == "__main__"` blocks; manifest entrypoints; executable files with shebang |
 | env surface | per variable: definition sites (env def facts) and read sites |
+| named sites | source owner and line for configuration keys and inferred document mentions; sorted by name, no symbols or additional search postings |
 | tasks | Makefile targets, package scripts, CI jobs and compose services with what they run (`runs`) |
 | contracts | API operations (OpenAPI, Protobuf, GraphQL) with their implementing handlers |
 | asset refs | referenced files and assets with their referrers |
@@ -286,6 +287,8 @@ Sections open with `areas`: at most 12 top-level folders by file count (`.` for 
 Sections in priority order: root line (name, files per language, symbol count) -> modules (tree by path, depth max 3; files, symbols, top 3 symbols by rank; max 40 lines) -> entrypoints -> tasks -> hubs (top 10 by rank) -> api contracts -> cycles -> layers -> external dependencies (top 15 by use count) -> env vars (name, read count, definition sources, first read location). Sections other than modules hold max 10 lines; the budget cuts from the lowest-priority section upward.
 
 ### 7.2 find
+
+Named evidence: up to two atomic `~ NAME` bundles before search hits for uppercase environment identifiers and dotted config keys. A unique eligible definition, a reader, a test reaching that reader directly or through one caller, its run command when supported, and a matching document mention or heading cite their source sites. A shared environment name is not proof that the definition reaches the reader (`<definition?`); document matches are inferred (`<doc?`). `--exact` drops inferred associations. `-definition`, `-read`, `-t` and `-doc` indicate no role selected under the filters, not global absence. JSON Lines: `evidence` with `name`, `roles` (`role`, `path`, `line`, `confidence`; test `relation` and optional intermediary, run `command`) and optional `unavailable`.
 
 Documents: the words of a section (Markdown, text, reStructuredText, Org, AsciiDoc, LaTeX, HTML, PDF, DOCX, XLSX, PPTX, OpenDocument, RTF, legacy DOC, XLS and PPT, first 2,000 rows of CSV and TSV) are the search terms of its heading in a field of their own, up to 256 distinct terms; a longer section or text without headings continues in sections named by their first line, or by their first word when continuing within a line. Every continuation retains the original line locator and heading parent. Section symbols count half their role weight.
 
@@ -352,7 +355,7 @@ Record-specific fields: `root` uses `n` for files and `symbols` for symbols; `mo
 
 | field | type | description |
 |-------|------|-------------|
-| `t` | string | record type: `sym`, `file`, `source`, `edge`, `chain`, `sec`, `note`, `more`, `root`, `mod`, `cycle`, `layer`, `ext`, `env` |
+| `t` | string | record type: `sym`, `file`, `source`, `edge`, `chain`, `evidence`, `sec`, `note`, `more`, `root`, `mod`, `cycle`, `layer`, `ext`, `env` |
 | `path` | string | root-relative path |
 | `text` | string | source line (`source` records) |
 | `line`, `end`, `new_line` | int | 1-based source or current line |

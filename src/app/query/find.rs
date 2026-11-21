@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use super::output::{Value, Writer};
-use super::{Filter, Index, Node, path, show};
+use super::{Filter, Index, Node, evidence, path, show};
 use crate::domain::filetype::FileType;
 use crate::domain::search::{self, B, FIELD_WEIGHTS, FIELDS, K1};
 use crate::infra::store::derived::PostingRecord;
@@ -33,8 +33,6 @@ const TESTS: usize = 2;
 const CARD_INDENT: usize = 2;
 /// Hits of a text answer with their full signature.
 const DETAILED_HITS: usize = 2;
-/// Environment star lines per answer.
-const MAX_STARS: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hit {
@@ -330,65 +328,6 @@ pub fn render(index: &Index, hits: &[Hit], json: bool, budget: usize) -> String 
     writer.finish()
 }
 
-/// One `~` line per environment variable the query names: where it is read, the test reaching the
-/// reader and a matching document heading, each with its site; `-doc` and `-t` mark no match.
-fn env_stars(index: &Index, filter: &Filter, query: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    for word in query.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')) {
-        let named = word.len() >= 3
-            && word
-                .bytes()
-                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
-        if !named || lines.len() >= MAX_STARS {
-            continue;
-        }
-        let reads: Vec<_> = index
-            .derived
-            .envs()
-            .iter()
-            .filter(|env| {
-                env.source == 0
-                    && index.string(env.name) == word
-                    && filter.includes(index, env.node)
-            })
-            .collect();
-        let Some(read) = reads.first() else {
-            continue;
-        };
-        let mut line = format!("~ {word} <read {}:{}", index.path_of(read.node), read.line);
-        match super::show::tests_of(index, filter, read.node).first() {
-            Some(test) => line.push_str(&format!(
-                " <t{} {}:{}",
-                if test.2 { "" } else { "?" },
-                index.path_of(test.0.node),
-                index.line_of(test.0.node)
-            )),
-            None => line.push_str(" -t"),
-        }
-        let document = index
-            .derived
-            .symbols()
-            .iter()
-            .enumerate()
-            .find(|(_, symbol)| {
-                !filter.exact
-                    && symbol.kind() == crate::domain::facts::SymKind::Heading
-                    && filter.symbol(index, symbol)
-                    && crate::domain::filetype::contains_word(index.string(symbol.name), word)
-            });
-        match document {
-            Some((node, symbol)) => line.push_str(&format!(
-                " <doc? {}:{}",
-                index.path_of(node as u32),
-                symbol.line
-            )),
-            None => line.push_str(" -doc"),
-        }
-        lines.push(line);
-    }
-    lines
-}
-
 /// Hits with their full signature; later ones print `line name`, and the budget this frees shows
 /// further hits: more required facts per answer at the same tokens. JSON keeps its fields.
 fn detailed_hits(json: bool) -> usize {
@@ -450,35 +389,26 @@ pub fn render_answer(
     json: bool,
     budget: usize,
 ) -> String {
-    let stars = if json {
-        Vec::new()
-    } else {
-        env_stars(index, filter, query)
-    };
-    if !stars.is_empty() {
-        let mut writer = Writer::new(false, budget);
-        for star in &stars {
-            writer.line(star, &[]);
-        }
-        if writer.is_full() {
-            writer.skip(hits.len());
-            return writer.finish();
-        }
-        let mut answer = writer.finish();
-        let reserved = answer.len().div_ceil(super::output::BYTES_PER_TOKEN);
-        let rest = render_answer_body(
-            index,
-            filter,
-            root,
-            hits,
-            query,
-            json,
-            budget.saturating_sub(reserved),
-        );
-        answer.push_str(&rest);
-        return answer;
+    let mut probe = Writer::new(json, budget);
+    if exact_symbol_name(query).is_none() {
+        evidence::write_bundles(index, filter, &mut probe, query, hits);
     }
-    render_answer_body(index, filter, root, hits, query, json, budget)
+    if probe.is_full() {
+        probe.skip(hits.len());
+        return probe.finish();
+    }
+    let mut reply = probe.finish();
+    let body = render_answer_body(
+        index,
+        filter,
+        root,
+        hits,
+        query,
+        json,
+        budget.saturating_sub(reply.len().div_ceil(super::output::BYTES_PER_TOKEN)),
+    );
+    reply.push_str(&body);
+    reply
 }
 
 fn render_answer_body(

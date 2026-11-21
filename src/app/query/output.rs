@@ -22,6 +22,7 @@ pub enum Value<'a> {
     Int(u64),
     Float(f32),
     Strings(&'a [String]),
+    Objects(&'a [Vec<(&'a str, Value<'a>)>]),
 }
 
 /// A semantic query fact with text and JSON Lines views derived from the same fields.
@@ -247,6 +248,17 @@ pub fn json_object(fields: &[(&str, Value)]) -> String {
                         rendered.push(',');
                     }
                     rendered.push_str(&json_string(value));
+                }
+                rendered.push(']');
+                rendered
+            }
+            Value::Objects(objects) => {
+                let mut rendered = String::from("[");
+                for (position, object) in objects.iter().enumerate() {
+                    if position > 0 {
+                        rendered.push(',');
+                    }
+                    rendered.push_str(json_object(object).trim_end());
                 }
                 rendered.push(']');
                 rendered

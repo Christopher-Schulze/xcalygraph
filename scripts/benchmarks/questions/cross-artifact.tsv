@@ -1,14 +1,13 @@
-httpx	SSL_CERT_FILE certificate environment variable	read	httpx/_config.py
-httpx	SSL_CERT_FILE certificate environment variable	doc	docs/environment_variables.md
-sqlc	SQLCCACHE cache directory environment	read	internal/cache/cache.go
-sqlc	SQLCCACHE cache directory environment	doc	docs/reference/environment-variables.md
-ripgrep	RIPGREP_CONFIG_PATH config file environment	read	crates/core/flags/config.rs
-ripgrep	RIPGREP_CONFIG_PATH config file environment	doc	GUIDE.md
-sqlc	SQLCDEBUG debug option environment	doc	docs/reference/environment-variables.md
-httpx	SSL_CERT_DIR certificate directory environment	doc	docs/environment_variables.md
-httpx	SSL_CERT_DIR certificate directory environment	read	httpx/_config.py
-cobra	BASH_COMP_DEBUG_FILE completion debug log	doc	site/content/completions/_index.md
-sqlc	lint ci workflow	run	.github/workflows
-express	lint ci workflow package	run	package.json
-cobra	BASH_COMP_DEBUG_FILE completion debug log	read	completions.go
-httpx	SSLKEYLOGFILE key log environment	read	absent
+id	corpus	kind	name	question	required	forbidden
+httpx-ca-file	httpx	bundle	SSL_CERT_FILE	SSL_CERT_FILE certificate environment variable	read=httpx/_config.py:34|httpx/_config.py:35;test=tests/test_config.py:12;document=docs/advanced/ssl.md:72|docs/advanced/ssl.md:74|docs/environment_variables.md:55	
+httpx-ca-dir	httpx	bundle	SSL_CERT_DIR	SSL_CERT_DIR certificate directory environment	read=httpx/_config.py:36|httpx/_config.py:37;test=tests/test_config.py:12;document=docs/advanced/ssl.md:72|docs/advanced/ssl.md:74|docs/environment_variables.md:69	
+httpx-keylog	httpx	negative	SSLKEYLOGFILE	SSLKEYLOGFILE key log environment	read=absent	read
+sqlc-cache	sqlc	bundle	SQLCCACHE	SQLCCACHE cache directory environment	read=internal/cache/cache.go:39;document=docs/reference/environment-variables.md:29|docs/reference/environment-variables.md:31	
+sqlc-debug	sqlc	bundle	SQLCDEBUG	SQLCDEBUG debug option environment	read=internal/sqlcdebug/sqlcdebug.go:133;document=docs/reference/environment-variables.md:52|docs/reference/environment-variables.md:54	
+sqlc-experiment	sqlc	bundle	SQLCEXPERIMENT	SQLCEXPERIMENT enable experimental features	read=internal/opts/experiment.go:36;document=docs/reference/environment-variables.md:3	
+sqlc-auth	sqlc	bundle	SQLC_AUTH_TOKEN	SQLC_AUTH_TOKEN project credentials	read=internal/config/env.go:10;document=docs/howto/push.md:21|docs/howto/verify.md:73	
+ripgrep-config	ripgrep	bundle	RIPGREP_CONFIG_PATH	RIPGREP_CONFIG_PATH config file environment	read=crates/core/flags/config.rs:17;document=GUIDE.md:548|FAQ.md:446	
+cobra-completion	cobra	bundle	BASH_COMP_DEBUG_FILE	BASH_COMP_DEBUG_FILE completion debug log	read=completions.go:960;document=site/content/completions/_index.md:261|site/content/completions/_index.md:266	
+express-mode	express	bundle	NODE_ENV	NODE_ENV development production environment	read=lib/application.js:91;writer=test/app.js:77|test/app.js:93|test/app.js:109;test=test/app.js:85|test/app.js:101|test/app.js:117	
+express-lint	express	chain	lint	lint ci workflow package	caller=.github/workflows/ci.yml:26;definition=package.json:92	
+sqlc-authors	sqlc	chain	authors	authors sqlite query schema	query=examples/authors/sqlite/query.sql:1;schema=examples/authors/sqlite/schema.sql:1	

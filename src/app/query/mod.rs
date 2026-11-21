@@ -1,6 +1,7 @@
 //! Query commands over the mapped derived index (`docs/spec.md` section 7).
 
 pub mod audit;
+mod evidence;
 pub mod find;
 pub mod impact;
 pub mod map;

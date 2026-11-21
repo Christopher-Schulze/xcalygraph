@@ -326,7 +326,7 @@ pub fn verification(
     let reachable = found
         .iter()
         .take(cap)
-        .map(|test| (test.0.node, test.2))
+        .map(|test| (test.edge.node, test.exact))
         .collect();
     if let Some((command, _)) = super::impact::run_lines(index, &reachable).first() {
         let prefix = "  ".repeat(indent);
@@ -549,24 +549,34 @@ fn tests(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: us
     write_tests(index, writer, &tests_of(index, filter, node), cap, 0);
 }
 
-/// Tests of a symbol, direct ones and through a caller: (edge, through a caller, exact).
-pub(super) fn tests_of<'a>(
-    index: &'a Index,
-    filter: &Filter,
-    node: u32,
-) -> Vec<(&'a EdgeRecord, bool, bool)> {
-    let mut found: Vec<(&EdgeRecord, bool, bool)> = Vec::new();
+pub(super) struct TestLink<'a> {
+    pub edge: &'a EdgeRecord,
+    pub caller: Option<&'a EdgeRecord>,
+    pub exact: bool,
+}
+
+/// Tests of a symbol, direct ones and through one caller.
+pub(super) fn tests_of<'a>(index: &'a Index, filter: &Filter, node: u32) -> Vec<TestLink<'a>> {
+    let mut found: Vec<TestLink<'_>> = Vec::new();
     let mut positions: HashMap<u32, usize> = HashMap::new();
     for edge in index.derived.incoming(node).iter().filter(|edge| {
         edge.kind() == EdgeKind::Tests && filter.edge(edge) && filter.includes(index, edge.node)
     }) {
         if let Some(&position) = positions.get(&edge.node) {
-            if edge.is_exact() && !found[position].2 {
-                found[position] = (edge, false, true);
+            if edge.is_exact() && !found[position].exact {
+                found[position] = TestLink {
+                    edge,
+                    caller: None,
+                    exact: true,
+                };
             }
         } else {
             positions.insert(edge.node, found.len());
-            found.push((edge, false, edge.is_exact()));
+            found.push(TestLink {
+                edge,
+                caller: None,
+                exact: edge.is_exact(),
+            });
         }
     }
     for caller in index
@@ -585,12 +595,20 @@ pub(super) fn tests_of<'a>(
             {
                 let exact = caller.is_exact() && edge.is_exact();
                 if let Some(&position) = positions.get(&edge.node) {
-                    if exact && !found[position].2 {
-                        found[position] = (edge, true, true);
+                    if exact && !found[position].exact {
+                        found[position] = TestLink {
+                            edge,
+                            caller: Some(caller),
+                            exact,
+                        };
                     }
                 } else {
                     positions.insert(edge.node, found.len());
-                    found.push((edge, true, exact));
+                    found.push(TestLink {
+                        edge,
+                        caller: Some(caller),
+                        exact,
+                    });
                 }
             }
         }
@@ -601,27 +619,27 @@ pub(super) fn tests_of<'a>(
 fn write_tests(
     index: &Index,
     writer: &mut Writer,
-    found: &[(&EdgeRecord, bool, bool)],
+    found: &[TestLink<'_>],
     cap: usize,
     indent: usize,
 ) {
-    for (shown, (edge, indirect, exact)) in found.iter().enumerate() {
+    for (shown, test) in found.iter().enumerate() {
         if shown >= cap {
             writer.skip(found.len() - shown);
             break;
         }
-        let marker = if *indirect { "t2" } else { "t" };
+        let marker = if test.caller.is_some() { "t2" } else { "t" };
         write_edge(
             index,
             writer,
-            edge,
+            test.edge,
             EdgeDisplay {
                 marker,
                 relation: "test",
                 depth: 0,
                 indent,
                 site: true,
-                exact: *exact,
+                exact: test.exact,
             },
         );
     }

@@ -9,6 +9,23 @@ use crate::domain::name::Name;
 pub type NodeId = u32;
 pub const NONE: u32 = u32::MAX;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum SiteKind {
+    Definition = 1,
+    Document = 2,
+}
+
+impl SiteKind {
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(Self::Definition),
+            2 => Some(Self::Document),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum EdgeKind {
@@ -176,6 +193,9 @@ pub const FLAG_TYPESCRIPT_GLOBAL_INTERFACE: u8 = 32;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Graph {
     pub files: Vec<GraphFile>,
+    /// A configuration key or named document reference: owner node, source line, name, kind.
+    /// These sites are not symbols. A matching document reference is inferred evidence.
+    pub sites: Vec<(NodeId, u32, Name, SiteKind)>,
     pub symbols: Vec<GraphSymbol>,
     pub edges: Vec<Edge>,
     pub modules: Vec<Module>,

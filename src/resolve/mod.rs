@@ -35,13 +35,13 @@ use crate::domain::facts::{
 use crate::domain::filetype::FileType;
 use crate::domain::graph::{
     self, Confidence, Edge, EdgeKind, EnvSite, External, FieldList, Graph, GraphFile, GraphSymbol,
-    NONE,
+    NONE, SiteKind,
 };
 use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 166;
+pub const RESOLVE_VERSION: u32 = 167;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -160,6 +160,7 @@ struct Imports {
 
 struct Resolved {
     edges: Vec<Edge>,
+    evidence: Vec<(u32, u32, Name, SiteKind)>,
     ambiguous_names: Vec<Name>,
     stale: Vec<(u32, u32, Name)>,
     /// Modules this file imports (module import graph).
@@ -191,6 +192,10 @@ pub fn build(files: &[FileRecord], mut facts: Vec<Option<Box<Facts>>>) -> Graph 
     move_search_text(&mut graph, &mut facts);
     // Before the caller builds anything from the graph: the facts are the largest allocation.
     facts.into_par_iter().for_each(drop);
+    graph.sites.sort_unstable_by(|left, right| {
+        (&left.2, left.3, left.0, left.1).cmp(&(&right.2, right.3, right.0, right.1))
+    });
+    graph.sites.dedup();
     graph
 }
 
@@ -2026,6 +2031,7 @@ impl<'a> Index<'a> {
     fn resolve_file(&self, file: u32, imports: &Imports) -> Resolved {
         let mut resolved = Resolved {
             edges: Vec::new(),
+            evidence: Vec::new(),
             ambiguous_names: Vec::new(),
             stale: Vec::new(),
             imported_modules: imports.modules.clone(),
@@ -2035,8 +2041,19 @@ impl<'a> Index<'a> {
         let Some(facts) = self.facts(file) else {
             return resolved;
         };
-        let base = self.base[file as usize];
         let file_node = self.symbols.len() as u32 + file;
+        let is_document = self.input.files[file as usize].role == Role::Doc;
+        if !is_document {
+            for key in &facts.config_keys {
+                resolved.evidence.push((
+                    file_node,
+                    key.line,
+                    Name::new(&key.path),
+                    SiteKind::Definition,
+                ));
+            }
+        }
+        let base = self.base[file as usize];
         let file_is_test = self.input.files[file as usize].role == Role::Test;
         let mut mention_owner: Option<(u32, u32)> = None;
         // Taken, not borrowed: dropped when this file is done.
@@ -2046,6 +2063,22 @@ impl<'a> Index<'a> {
         for (reference_index, reference) in references.iter().enumerate() {
             let local_reference = u32::try_from(reference_index).ok();
             let source = reference.scope.map_or(file_node, |scope| base + scope);
+            if is_document
+                && reference.kind == RefKind::Mention
+                && reference.name.len() >= 3
+                && reference.name.bytes().any(|byte| byte.is_ascii_uppercase())
+                && reference
+                    .name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+            {
+                resolved.evidence.push((
+                    source,
+                    reference.line,
+                    Name::new(&reference.name),
+                    SiteKind::Document,
+                ));
+            }
             let source_rust_cfg = if self.file_type(file) == Some(FileType::Rust)
                 && source < self.symbols.len() as u32
             {
@@ -5064,6 +5097,7 @@ impl<'a> Index<'a> {
                 }
             }
             edges.extend(outcome.edges);
+            graph.sites.extend(outcome.evidence);
             let module = self.modules.file_module[file];
             let mut seen = HashSet::default();
             for external in outcome.externals {

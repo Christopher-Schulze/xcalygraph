@@ -180,12 +180,15 @@ fn a_named_environment_variable_shows_its_reader_test_and_document() -> TestResu
     )?;
     let text = query(&root, &["find", "APP_TOKEN", "token"])?;
     let star = text.lines().next().unwrap_or_default();
-    assert!(star.starts_with("~ APP_TOKEN <read cfg.py:4"), "{text}");
-    assert!(star.contains("<t tests/test_cfg.py:3"), "{text}");
+    assert!(
+        star.starts_with("~ APP_TOKEN ") && star.contains("<read cfg.py:4"),
+        "{text}"
+    );
+    assert!(star.contains("<t tests/test_cfg.py:4"), "{text}");
     assert!(star.contains("<doc? docs/env.md:3"), "{text}");
     let text = query(&root, &["find", "LONE_VALUE"])?;
     assert!(
-        text.lines().next().unwrap_or_default().ends_with("-t -doc"),
+        text.lines().next().unwrap_or_default().ends_with("-doc -t"),
         "{text}"
     );
     fs::remove_dir_all(root)?;
@@ -223,6 +226,88 @@ fn environment_documents_require_a_whole_identifier_and_obey_filters() -> TestRe
 }
 
 #[test]
+fn named_evidence_connects_definition_reader_test_and_document_in_both_formats() -> TestResult {
+    let root = support::exclusive_dir("evidence-bundle")?;
+    write(
+        &root,
+        &[
+            (
+                ".env.example",
+                b"APP_TOKEN=example\nUNRELATED_SETTING=elsewhere\n",
+            ),
+            (
+                "cfg.py",
+                b"import os\n\ndef read_setting():\n    return os.environ.get(\"APP_TOKEN\")\n\ndef create_context():\n    return read_setting()\n",
+            ),
+            (
+                "tests/test_cfg.py",
+                b"from cfg import create_context\n\ndef test_context():\n    assert create_context()\n",
+            ),
+            (
+                "docs/env.md",
+                b"# Settings\n\nUse `APP_TOKEN` to authenticate.\n",
+            ),
+            ("a.json", br#"{"server":{"port":8010,"host":"local"},"APP_TOKEN":"not an environment definition"}"#),
+            ("b.json", br#"{"server":{"port":8020}}"#),
+        ],
+    )?;
+    let text = query(&root, &["find", "APP_TOKEN"])?;
+    let bundle = text.lines().next().unwrap_or_default();
+    for role in [
+        "<definition? .env.example:1",
+        "<read cfg.py:4",
+        "<t2 tests/test_cfg.py:4",
+        "<via create_context cfg.py:7",
+        "<doc? docs/env.md:3",
+    ] {
+        assert!(bundle.contains(role), "{text}");
+    }
+    let json = query(&root, &["find", "APP_TOKEN", "--json"])?;
+    let bundle = json.lines().next().unwrap_or_default();
+    assert!(
+        bundle.starts_with("{\"t\":\"evidence\",\"name\":\"APP_TOKEN\""),
+        "{json}"
+    );
+    for role in [
+        "\"role\":\"definition\",\"path\":\".env.example\",\"line\":1",
+        "\"role\":\"read\",\"path\":\"cfg.py\",\"line\":4",
+        "\"role\":\"test\",\"relation\":\"t2\",\"path\":\"tests/test_cfg.py\",\"line\":4",
+        "\"role\":\"document\",\"relation\":\"doc\",\"path\":\"docs/env.md\",\"line\":3,\"confidence\":\"inferred\"",
+    ] {
+        assert!(bundle.contains(role), "{json}");
+    }
+    assert_eq!(json, query(&root, &["find", "APP_TOKEN", "--json"])?);
+    let exact = query(&root, &["find", "APP_TOKEN", "--exact", "--no-tests"])?;
+    let bundle = exact.lines().next().unwrap_or_default();
+    assert!(
+        bundle.contains("<read cfg.py:4")
+            && bundle.contains("-definition")
+            && bundle.contains("-doc -t"),
+        "{exact}"
+    );
+    let config = query(&root, &["find", "server.host", "--exact"])?;
+    assert!(
+        config.starts_with("~ server.host <definition a.json:1 -read"),
+        "{config}"
+    );
+    let ambiguous = query(&root, &["find", "server.port"])?;
+    assert!(!ambiguous.starts_with("~ server.port"), "{ambiguous}");
+    let filtered = query(&root, &["find", "server.port", "-p", "b.json"])?;
+    assert!(
+        filtered.starts_with("~ server.port <definition b.json:1 -read"),
+        "{filtered}"
+    );
+    let unrelated = query(&root, &["find", "UNRELATED_SETTING"])?;
+    assert!(unrelated.contains("definition"), "{unrelated}");
+    assert!(
+        unrelated.contains("-read") && unrelated.contains("-doc"),
+        "{unrelated}"
+    );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
 fn environment_stars_fit_the_entire_answer_budget() -> TestResult {
     let root = support::exclusive_dir("env-star-budget")?;
     write(
@@ -235,10 +320,32 @@ fn environment_stars_fit_the_entire_answer_budget() -> TestResult {
     let full = query(&root, &["find", "APP_TOKEN", "-b", "600"])?;
     assert!(full.contains("<read config\\\\escaped.py:3"), "{full}");
     for budget in [1usize, 2, 3, 10, 20, 40, 100, 600] {
-        let text = query(&root, &["find", "APP_TOKEN", "-b", &budget.to_string()])?;
+        let mut args = vec!["find", "APP_TOKEN", "APP_TOKEN", "-b"];
+        let limit = budget.to_string();
+        args.push(&limit);
+        let text = query(&root, &args)?;
         assert!(text.len() <= budget * 3, "budget {budget}: {text:?}");
+        assert!(
+            text.lines()
+                .filter(|line| line.starts_with("~ APP_TOKEN "))
+                .count()
+                <= 1,
+            "{text}"
+        );
         if text.contains("<read") {
-            assert!(text.contains("config\\\\escaped.py"), "{text}");
+            assert!(text.contains("config\\\\escaped.py:3"), "{text}");
+        }
+        args.push("--json");
+        let json = query(&root, &args)?;
+        assert!(json.len() <= budget * 3, "budget {budget}: {json:?}");
+        for record in json
+            .lines()
+            .filter(|line| line.starts_with("{\"t\":\"evidence\""))
+        {
+            assert!(
+                record.contains(r#""path":"config\\escaped.py","line":3"#) && record.ends_with('}'),
+                "{record}"
+            );
         }
     }
     fs::remove_dir_all(root)?;

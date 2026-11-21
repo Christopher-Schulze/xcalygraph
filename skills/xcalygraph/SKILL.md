@@ -16,7 +16,7 @@ Indexes the current repository on first use (seconds, nothing to set up) and ref
 - Words inside documents (Markdown, text, PDF, Word, Excel, PowerPoint, OpenDocument): `find` too, the hit names the section or page.
 - Exact text, config values, logs: `rg` or read the file.
 
-Every further call costs far more than a longer answer: stop as soon as the output settles the question; read a cited `path:line` only if it does not.
+Stop if the answer suffices; otherwise read the cited `path:line`.
 
 ## Commands
 
@@ -29,7 +29,7 @@ Useful flags: `-p GLOB` (only under a path), `-l go,rust`, `-k fn,method`, `--ex
 ## Reading the output
 
 - `<line> <signature>` lines group under file paths (`<line> <name>` after the first two hits); `:N` = same file as the line above; `?` = inferred, not proven. A printed `path:line` works as NAME. Indented below the top hit: `<line> <code>` from its body, `+N lines` left out, `<` caller, `>` callee, `t` test, `r` command to run it.
-- Card: `m` member, `f` fields, `^` supertype, `v` implementation, `<` caller, `>` callee, `t` test, `t2` test via a caller, `e` env read, `!` notice. Environment `<doc?` is a heading-name match; `-doc` means none selected.
+- Card: `m` member, `f` fields, `^` supertype, `v` implementation, `<` caller, `>` callee, `t` test, `t2` test via a caller, `e` env read, `!` notice. Named settings can have a `~ NAME` bundle (`evidence` in JSON): definition, read, test, doc and test command. `-role` means none selected, not globally absent.
 - `impact`: `t` test reaching the change, `r` command to run it, `c` file without an edge that changed with it (`shared/commits`); `moved?`, `sig?`, `uncertain?` mark inferred diff facts.
 - `+N more` means truncated: narrow with `-p`/`-k` or raise `-b`.
 

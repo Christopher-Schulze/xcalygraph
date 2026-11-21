@@ -8,7 +8,9 @@ use super::codec::{Decoder, Encoder};
 use super::container::Container;
 use crate::domain::facts::{Coverage, FLAG_TYPESCRIPT_AUGMENTATION, SymKind};
 use crate::domain::filetype::FileType;
-use crate::domain::graph::{Confidence, EdgeKind, FLAG_TYPESCRIPT_GLOBAL_INTERFACE, Graph};
+use crate::domain::graph::{
+    Confidence, EdgeKind, FLAG_TYPESCRIPT_GLOBAL_INTERFACE, Graph, SiteKind,
+};
 use crate::domain::hash::FastMap;
 use crate::domain::name::Name;
 use crate::domain::role::Role;
@@ -100,6 +102,22 @@ pub struct EnvRecord {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct SiteRecord {
+    pub name: u32,
+    pub node: u32,
+    pub line: u32,
+    pub kind: u8,
+    pub pad: [u8; 3],
+}
+
+impl SiteRecord {
+    pub fn kind(&self) -> Option<SiteKind> {
+        SiteKind::from_u8(self.kind)
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct FieldsRecord {
     pub symbol: u32,
     /// Comma-separated field tokens.
@@ -164,7 +182,8 @@ mod section {
     pub const STALE: usize = 18;
     pub const AMBIGUOUS: usize = 19;
     pub const INTERFACE_GROUPS: usize = 20;
-    pub const COUNT: usize = 21;
+    pub const SITES: usize = 21;
+    pub const COUNT: usize = 22;
 }
 
 #[derive(Default)]
@@ -354,6 +373,18 @@ pub fn build<R>(mut graph: Graph, sink: impl FnOnce(&[&[u8]]) -> R) -> R {
     views[section::ENVS] = bytemuck::cast_slice(&envs);
     views[section::FIELDS] = bytemuck::cast_slice(&fields);
     views[section::TOKENS] = bytemuck::cast_slice(&tokens);
+    let sites: Vec<SiteRecord> = graph
+        .sites
+        .iter()
+        .map(|(file, line, name, kind)| SiteRecord {
+            name: strings.id(name),
+            node: *file,
+            line: *line,
+            kind: *kind as u8,
+            pad: [0; 3],
+        })
+        .collect();
+    views[section::SITES] = bytemuck::cast_slice(&sites);
     views[section::POSTINGS] = &index.postings;
     views[section::LENGTHS] = bytemuck::cast_slice(&index.lengths);
     views[section::AVERAGES] = bytemuck::cast_slice(&index.averages);
@@ -741,6 +772,7 @@ impl Derived {
                 .is_some()
             && derived.cast::<ExternalRecord>(section::EXTERNALS).is_some()
             && derived.cast::<EnvRecord>(section::ENVS).is_some()
+            && derived.cast::<SiteRecord>(section::SITES).is_some()
             && derived.cast::<FieldsRecord>(section::FIELDS).is_some()
             && derived.cast::<TokenRecord>(section::TOKENS).is_some()
             && derived.cast::<LengthRecord>(section::LENGTHS).is_some()
@@ -836,6 +868,10 @@ impl Derived {
 
     pub fn envs(&self) -> &[EnvRecord] {
         self.slice(section::ENVS)
+    }
+
+    pub fn sites(&self) -> &[SiteRecord] {
+        self.slice(section::SITES)
     }
 
     pub fn fields(&self) -> &[FieldsRecord] {
