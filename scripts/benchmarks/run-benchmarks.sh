@@ -22,10 +22,9 @@ hyperfine_command() {
 }
 
 hyperfine_append_command() {
-  local command target
-  command="$(hyperfine_command printf '%s' "$1")" || return
-  target="$(hyperfine_command "$2")" || return
-  printf '%s >> %s\n' "${command}" "${target}"
+  # Hyperfine's no-shell mode also applies to prepare commands in 1.x.
+  # shellcheck disable=SC2016
+  hyperfine_command /bin/sh -c 'printf "%s" "$1" >> "$2"' hyperfine-append "$1" "$2"
 }
 
 directory_kb() {
