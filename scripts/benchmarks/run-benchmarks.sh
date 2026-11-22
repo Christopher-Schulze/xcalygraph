@@ -7,7 +7,7 @@
 #   Corpora are read-only: the single-file refresh runs on a copy below .cache/.
 #   --upstream adds the Graphify baseline on the same copy: graphify update . for the full build,
 #   peak RSS and graphify-out size, then again after the same single-file change.
-# Requires: hyperfine, jq, rsync, python3; graphify for --upstream; the release build is made here.
+# Requires: hyperfine, jq, rsync, python3, /usr/bin/time; graphify for --upstream.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
@@ -242,18 +242,33 @@ readonly BENCHMARK_HOME="${WORK}/home"
 mkdir -p "${BENCHMARK_HOME}"
 printf 'binary_sha256\t%s\n' "$(python3 -I -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${BINARY}")" > "${WORK}/identity.tsv"
 
+case "$(uname -s)" in
+  Darwin) time_command=(/usr/bin/time -l) ;;
+  Linux) time_command=(/usr/bin/time -f $'%e real\n%M max_rss_kib') ;;
+  *) echo "run-benchmarks.sh: unsupported timer platform" >&2; exit 1 ;;
+esac
+
+elapsed_ms() {
+  awk '$2 == "real" { printf "%.0f", $1 * 1000 }'
+}
+
+peak_rss_mib() {
+  awk '/maximum resident set size/ { printf "%.0f", $1 / 1048576 }
+       $2 == "max_rss_kib" { printf "%.0f", $1 / 1024 }'
+}
+
 # Mean wall time in milliseconds of a command, from hyperfine's JSON export.
 mean_ms() {
   local json
   json="$(mktemp "${WORK}/timing-${corpus_number}.json.XXXXXXXX")" || return 1
   hyperfine -N --warmup 3 --runs 15 --export-json "${json}" "$@" >"${json}.log" 2>&1 || return 1
-  jq -er '.results[0].summary.time_wall_clock.mean * 10000 | round / 10' "${json}"
+  jq -er '(.results[0].summary.time_wall_clock.mean // .results[0].mean) | numbers | . * 10000 | round / 10' "${json}"
 }
 
 # Measure Graphify's full build before the verified edit; return its three result columns.
 upstream_build_columns() {
   local copy="$1" build upstream_kb
-  if ! build="$( { cd "${copy}" && /usr/bin/time -l env HOME="${BENCHMARK_HOME}" PYTHONHASHSEED=0 PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 graphify update . >/dev/null ; } 2>&1 )"; then
+  if ! build="$( { cd "${copy}" && "${time_command[@]}" env HOME="${BENCHMARK_HOME}" PYTHONHASHSEED=0 PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 graphify update . >/dev/null ; } 2>&1 )"; then
     printf '%s\n' "${build}" > "${copy}.upstream-full.time"
     echo "run-benchmarks.sh: upstream extraction failed; inspect ${copy}.upstream-full.time" >&2
     return 1
@@ -261,21 +276,21 @@ upstream_build_columns() {
   printf '%s\n' "${build}" > "${copy}.upstream-full.time"
   upstream_kb="$(directory_kb "${copy}/graphify-out")" || return 1
   printf ' %12s %9s %9s' \
-    "$(awk '/ real / { printf "%.0f", $1 * 1000 }' <<<"${build}")" \
-    "$(awk '/maximum resident set size/ { printf "%.0f", $1 / 1048576 }' <<<"${build}")" \
+    "$(elapsed_ms <<<"${build}")" \
+    "$(peak_rss_mib <<<"${build}")" \
     "${upstream_kb}"
 }
 
 # Measure Graphify's incremental refresh after the xcalygraph probe proves the same edit.
 upstream_change_column() {
   local copy="$1" change
-  if ! change="$( { cd "${copy}" && /usr/bin/time -l env HOME="${BENCHMARK_HOME}" PYTHONHASHSEED=0 PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 graphify update . >/dev/null ; } 2>&1 )"; then
+  if ! change="$( { cd "${copy}" && "${time_command[@]}" env HOME="${BENCHMARK_HOME}" PYTHONHASHSEED=0 PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 graphify update . >/dev/null ; } 2>&1 )"; then
     printf '%s\n' "${change}" > "${copy}.upstream-change.time"
     echo "run-benchmarks.sh: upstream refresh failed; inspect ${copy}.upstream-change.time" >&2
     return 1
   fi
   printf '%s\n' "${change}" > "${copy}.upstream-change.time"
-  printf ' %12s' "$(awk '/ real / { printf "%.0f", $1 * 1000 }' <<<"${change}")"
+  printf ' %12s' "$(elapsed_ms <<<"${change}")"
   rm -rf "${copy}/graphify-out"
 }
 
@@ -297,11 +312,15 @@ print("corpus\t" + sys.argv[1] + "\t" + "\t".join(json.dumps(value, ensure_ascii
 PYTHON
   index="${WORK}/index-${corpus_number}"
   [[ ! -e "${index}" && ! -L "${index}" ]] || { echo "run-benchmarks.sh: index path already exists" >&2; exit 1; }
-  build="$( { /usr/bin/time -l env HOME="${BENCHMARK_HOME}" "${BINARY}" index -C "${path}" --index-dir "${index}" >"${WORK}/out" ; } 2>&1 )"
+  if ! build="$( { "${time_command[@]}" env HOME="${BENCHMARK_HOME}" "${BINARY}" index -C "${path}" --index-dir "${index}" >"${WORK}/out" ; } 2>&1 )"; then
+    printf '%s\n' "${build}" > "${WORK}/corpus-${corpus_number}.full.time"
+    echo "run-benchmarks.sh: extraction failed; inspect ${WORK}/corpus-${corpus_number}.full.time" >&2
+    exit 1
+  fi
   printf '%s\n' "${build}" > "${WORK}/corpus-${corpus_number}.full.time"
   files="$(awk '{ print $2 }' "${WORK}/out")"
-  build_ms="$(awk '/ real / { printf "%.0f", $1 * 1000 }' <<<"${build}")"
-  rss_mb="$(awk '/maximum resident set size/ { printf "%.0f", $1 / 1048576 }' <<<"${build}")"
+  build_ms="$(elapsed_ms <<<"${build}")"
+  rss_mb="$(peak_rss_mib <<<"${build}")"
   fresh_command="$(hyperfine_command "${BINARY}" index -C "${path}" --index-dir "${index}")"
   fresh_ms="$(mean_ms "${fresh_command}")"
   index_kb="$(directory_kb "${index}")"
