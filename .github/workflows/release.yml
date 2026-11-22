@@ -1,49 +1,48 @@
-# Builds release archives for every platform of docs/spec.md section 10 on a version tag and
-# publishes them with SHA256SUMS and the installer script to the GitHub release of that tag.
+# Checks release tooling on main and version tags. Version tags also build the platform
+# archives of docs/spec.md section 10 and publish them with SHA256SUMS and the installer.
 name: release
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+    paths:
+      - .github/workflows/release.yml
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - scripts/**
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - { runner: macos-15, target: aarch64-apple-darwin }
-          - { runner: macos-15, target: x86_64-apple-darwin }
-          - { runner: ubuntu-24.04, target: x86_64-unknown-linux-musl }
-          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
-    runs-on: ${{ matrix.runner }}
+  verify:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - name: Linux tools
-        if: contains(matrix.target, 'musl')
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes hyperfine jq musl-tools pipx python3 ripgrep rsync shellcheck tar time
+          sudo apt-get install --no-install-recommends --yes hyperfine jq python3 python3-venv ripgrep rsync shellcheck tar time
           python3 --version
-          pipx --version
           hyperfine --version
           rg --version
           jq --version
           rsync --version | head -n 1
           shellcheck --version
       - name: Graphify
-        if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
-          pipx install --python python3 "graphifyy==0.9.97"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.local/bin:$PATH"
+          graphify_venv="$RUNNER_TEMP/xcalygraph-graphify"
+          python3 -m venv "$graphify_venv"
+          "$graphify_venv/bin/python" -m pip install "graphifyy==0.9.97"
+          test "$(head -n 1 "$graphify_venv/bin/graphify")" = "#!$graphify_venv/bin/python"
+          echo "$graphify_venv/bin" >> "$GITHUB_PATH"
+          export PATH="$graphify_venv/bin:$PATH"
           test "$(graphify --version)" = "graphify 0.9.97"
           graphify --version
-      - name: Toolchain
-        run: rustup target add ${{ matrix.target }}
       - name: Validate release tag
+        if: github.ref_type == 'tag'
         run: |
           version="$(cargo metadata --locked --no-deps --format-version 1 | python3 -c '
           import json
@@ -57,13 +56,31 @@ jobs:
           ')"
           bash scripts/utils/validate-release-tag.sh "${GITHUB_REF_NAME}" "${version}"
       - name: Supply chain
-        if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
           cargo install --locked cargo-deny cargo-audit
           scripts/audits/check-supply-chain.sh
       - name: Gate
-        if: matrix.target == 'x86_64-unknown-linux-musl'
         run: scripts/tests/test.sh --all
+
+  build:
+    if: github.ref_type == 'tag'
+    strategy:
+      matrix:
+        include:
+          - { runner: macos-15, target: aarch64-apple-darwin }
+          - { runner: macos-15, target: x86_64-apple-darwin }
+          - { runner: ubuntu-24.04, target: x86_64-unknown-linux-musl }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Linux build tools
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes jq musl-tools python3 tar
+      - name: Toolchain
+        run: rustup target add ${{ matrix.target }}
       - name: Build
         run: scripts/build/build-release.sh ${{ matrix.target }}
       - uses: actions/upload-artifact@v7
@@ -72,7 +89,10 @@ jobs:
           path: dist/*.tar.gz
 
   publish:
-    needs: build
+    if: github.ref_type == 'tag'
+    needs: [verify, build]
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
