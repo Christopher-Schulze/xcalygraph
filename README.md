@@ -46,6 +46,7 @@ Both install the binary to `~/.local/bin`, the agent skill to `~/.agents/skills/
 ```sh
 xcalygraph map                      # layout, entrypoints, tasks, hubs
 xcalygraph find "where are requests authenticated"
+xcalygraph find XCALYGRAPH_INDEX_DIR # configuration evidence in this repository
 xcalygraph impact --diff            # what your uncommitted changes affect
 ```
 
@@ -54,7 +55,7 @@ xcalygraph impact --diff            # what your uncommitted changes affect
 | command | answers |
 |---|---|
 | `map` | How is this repository laid out and run? Languages, largest modules with their top symbols, entrypoints, tasks (Makefile, scripts, CI jobs, services) with what they run, hubs, API operations and framework routes with their handlers, cycles, layers, external dependencies, env vars. |
-| `find TERMS...` | Where is X? Ranked symbols and files (BM25F over names, parents, paths, signatures, docs and the words of each body, combined with graph rank). |
+| `find TERMS...` | Where is X? Ranked symbols and files (BM25F plus graph rank). A named environment variable or qualified configuration key can show its definition, reads, writes, documentation and relevant tests together. |
 | `show NAME` | What is X? Signature, doc, members, fields, supertypes, implementations, callers, callees, tests, env reads. |
 | `impact NAME... \| --diff [REV]` | What does this change affect? Dependents, tests reaching them, test commands to run. |
 | `path FROM TO` | How does A reach B? The shortest dependency path. |
@@ -137,14 +138,14 @@ walk (gitignore aware, parallel) -> stat diff -> hash candidates -> extract chan
 
 - **Extraction** runs one generic tree-sitter query engine. Each language is a query file plus small hooks.
 - **Resolution** follows each language's module rules: lexical scope, imports, the same module, receiver typing through bindings, call results and field chains, then interface and trait dispatch.
-- **Storage**: indexes are disposable and live in the system temp directory, never in your repository; `xcalygraph ls` lists them, `xcalygraph clean` removes them, and a lost index costs one full build. Writes are atomic and unchanged files are never rewritten.
+- **Storage**: indexes are disposable. They default to the system temp directory and fall back to `.xcalygraph/` in the repository when the shared location fails. `xcalygraph ls` lists indexes, and `xcalygraph clean` removes them. Writes are atomic and unchanged fact shards are reused.
 - **Correctness gates**: golden fact and edge fixtures per language, byte-identical output across thread counts, edge precision and recall against compiler indexes, and a retrieval evaluation against Graphify.
 
 xcalygraph is a clean-room Rust rewrite of a selected subset of [Graphify](https://github.com/Graphify-Labs/graphify), redesigned around one question: how much useful, verifiable context does the agent get per token?
 
 ## Status
 
-Early development: `main` is heading for 0.2.0, the latest release is 0.1.1. Commands, output format and index format may still change between minor versions; `update` keeps binary and skill in step, and indexes rebuild themselves when their format changes.
+The release installer and `xcalygraph update` use published [GitHub Releases](https://github.com/Christopher-Schulze/xcalygraph/releases). Build from source to try work on `main` ahead of the latest release. Run `xcalygraph version` to see the binary, index format and installed skill versions. Format changes trigger an index rebuild.
 
 ## License
 
