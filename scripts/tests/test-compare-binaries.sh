@@ -2,7 +2,10 @@
 # One binary against itself reports no difference; a deliberately slowed copy is detected.
 # Usage: scripts/tests/test-compare-binaries.sh BINARY
 set -euo pipefail
-(( $# == 1 )) && [[ -x "$1" ]] || { echo "usage: test-compare-binaries.sh BINARY" >&2; exit 2; }
+if ! (( $# == 1 )) || ! [[ -x "$1" ]]; then
+  echo "usage: test-compare-binaries.sh BINARY" >&2
+  exit 2
+fi
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && /bin/pwd -P)"
 work="$(mktemp -d "${REPO_ROOT}/.cache/test-compare-binaries.XXXXXXXX")"
 trap 'rm -rf -- "${work}"' EXIT

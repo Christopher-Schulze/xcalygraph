@@ -15,7 +15,10 @@ if [[ "${1:-}" == "--times" ]]; then
   features=stage-stats
   shift
 fi
-(( $# == 1 )) && [[ -d "$1" ]] || { echo "usage: measure-allocations.sh [--times] ROOT" >&2; exit 2; }
+if ! (( $# == 1 )) || ! [[ -d "$1" ]]; then
+  echo "usage: measure-allocations.sh [--times] ROOT" >&2
+  exit 2
+fi
 
 target_dir="${CARGO_TARGET_DIR:-${REPO_ROOT}/target}"
 (cd "${REPO_ROOT}" && CARGO_TARGET_DIR="${target_dir}" \

@@ -9,10 +9,10 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && /bin/pwd -P)"
 readonly REPO_ROOT
-(( $# == 3 )) && [[ -f "$1" && -d "$2" && ! -e "$3" ]] || {
+if ! (( $# == 3 )) || ! [[ -f "$1" && -d "$2" && ! -e "$3" ]]; then
   echo "usage: compare-edge-dumps.sh ROOTS_TSV BASELINE_DIR NEW_OUTPUT_DIR" >&2
   exit 2
-}
+fi
 readonly ROOTS="$1" BASELINE="$2" OUTPUT="$3"
 
 cd "${REPO_ROOT}"

@@ -19,10 +19,10 @@ if [[ "${1:-}" == "--bless" ]]; then
   bless=1
   shift
 fi
-(( $# >= 1 + bless )) && [[ -x "$1" ]] || {
+if ! (( $# >= 1 + bless )) || ! [[ -x "$1" ]]; then
   echo "usage: check-instructions.sh [--bless] BINARY [ROOT...]" >&2
   exit 2
-}
+fi
 readonly binary="$1"
 shift
 

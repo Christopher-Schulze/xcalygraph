@@ -253,7 +253,11 @@ for corpus in "${corpora[@]}"; do
     while IFS= read -r term; do terms+=(-e "${term}"); done < <(rg_terms "${question}")
     rg_out=""
     if (( ${#terms[@]} > 0 )); then
-      rg_out="$(cd "${root}" && rg -n -i --no-heading --max-columns 200 "${terms[@]}" . 2>/dev/null || true)"
+      rg_out="$(
+        if cd "${root}"; then
+          rg -n -i --no-heading --max-columns 200 "${terms[@]}" . 2>/dev/null || true
+        fi
+      )"
     fi
     spent="$(printf '%s' "${rg_out}" | tokens)"
     # A stale expectation names a file that is gone; the question then counts as a miss.

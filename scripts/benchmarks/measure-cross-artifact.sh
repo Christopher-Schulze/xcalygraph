@@ -3,7 +3,10 @@
 # Usage: scripts/benchmarks/measure-cross-artifact.sh BINARY [BUDGET] [text|json]
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && /bin/pwd -P)"
-(( $# >= 1 && $# <= 3 )) && [[ -x "$1" ]] || { echo "usage: measure-cross-artifact.sh BINARY [BUDGET] [text|json]" >&2; exit 2; }
+if ! (( $# >= 1 && $# <= 3 )) || ! [[ -x "$1" ]]; then
+  echo "usage: measure-cross-artifact.sh BINARY [BUDGET] [text|json]" >&2
+  exit 2
+fi
 python3 - "${REPO_ROOT}" "$1" "${2:-600}" "${3:-text}" <<'PY'
 import csv
 import json

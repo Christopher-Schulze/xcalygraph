@@ -64,10 +64,10 @@ snapshot="$(env HOME="${WORK}/home" bash scripts/utils/prepare-corpus.sh "${ROOT
 readonly snapshot
 env HOME="${WORK}/home" "${BINARY}" index -C "${snapshot}" --index-dir "${WORK}/index" | tee "${WORK}/index.txt"
 stores=("${WORK}"/index/*)
-(( ${#stores[@]} == 1 )) && [[ -d "${stores[0]}" ]] || {
+if ! (( ${#stores[@]} == 1 )) || ! [[ -d "${stores[0]}" ]]; then
   echo "measure-query-compute.sh: expected one index" >&2
   exit 1
-}
+fi
 python3 -I - "${BINARY}" "${WORK}/questions.tsv" "${snapshot}/../snapshot.json" \
   src/app/query/find.rs src/app/query/names.rs src/app/query/show.rs \
   src/app/query/mod.rs src/app/query/output.rs src/app/query/benchmark.rs src/domain/search.rs \

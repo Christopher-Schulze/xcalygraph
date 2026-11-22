@@ -12,7 +12,10 @@ if [[ "${1:-}" == "--patterns" ]]; then
   patterns=(XCALYGRAPH_COST_PATTERNS=1)
   shift
 fi
-(( $# == 1 )) && [[ -d "$1" ]] || { echo "usage: measure-query-cost.sh [--patterns] ROOT" >&2; exit 2; }
+if ! (( $# == 1 )) || ! [[ -d "$1" ]]; then
+  echo "usage: measure-query-cost.sh [--patterns] ROOT" >&2
+  exit 2
+fi
 
 cd "${REPO_ROOT}"
 env "${patterns[@]}" XCALYGRAPH_COST_ROOT="$1" \

@@ -2,10 +2,10 @@
 # Run the gate checks inside the owned, content-guarded verification target.
 # Usage: scripts/tests/test-execution.sh WORK_DIRECTORY product|all
 set -euo pipefail
-(( $# == 2 )) && [[ "$2" == product || "$2" == all ]] || {
+if ! (( $# == 2 )) || ! [[ "$2" == product || "$2" == all ]]; then
   echo "usage: test-execution.sh WORK_DIRECTORY product|all" >&2
   exit 2
-}
+fi
 readonly work="$1" mode="$2"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && printf '%s.' "$PWD")"
 REPO_ROOT="${REPO_ROOT%.}"

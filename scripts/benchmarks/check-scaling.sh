@@ -7,7 +7,10 @@
 # Where /usr/bin/time reports no retired instructions (Linux), it says so and passes.
 set -euo pipefail
 
-(( $# == 1 )) && [[ -x "$1" ]] || { echo "usage: check-scaling.sh BINARY" >&2; exit 2; }
+if ! (( $# == 1 )) || ! [[ -x "$1" ]]; then
+  echo "usage: check-scaling.sh BINARY" >&2
+  exit 2
+fi
 readonly binary="$1"
 readonly MAX_RATIO=6
 # GNU time (Linux) rejects -l; BSD time (macOS) reports retired instructions with it.

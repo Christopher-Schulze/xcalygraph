@@ -7,7 +7,10 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && /bin/pwd -P)"
 readonly REPO_ROOT
-(( $# >= 1 && $# <= 2 )) && [[ -x "$1" ]] || { echo "usage: measure-behavior.sh BINARY [BUDGET]" >&2; exit 2; }
+if ! (( $# >= 1 && $# <= 2 )) || ! [[ -x "$1" ]]; then
+  echo "usage: measure-behavior.sh BINARY [BUDGET]" >&2
+  exit 2
+fi
 readonly binary="$1" budget="${2:-600}"
 work="$(mktemp -d "${TMPDIR:-/tmp}/xcalygraph-behavior.XXXXXXXX")"
 trap 'rm -rf -- "${work}"' EXIT
