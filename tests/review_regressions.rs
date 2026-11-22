@@ -10,6 +10,30 @@ const BINARY: &str = env!("CARGO_BIN_EXE_xcalygraph");
 
 type TestResult = Result<(), Box<dyn Error>>;
 
+#[test]
+fn grouped_go_fields_keep_source_order() -> TestResult {
+    use std::fmt::Write as _;
+
+    let root = support::exclusive_dir("grouped-go-fields")?;
+    let mut source = String::from("package store\n");
+    for record in 0..16 {
+        writeln!(
+            source,
+            "type Record{record} struct {{\nA, B, C, D, E, F int\nWhole int\n}}"
+        )?;
+    }
+    write(&root, &[("records.go", source.as_bytes())])?;
+    for record in 0..16 {
+        let answer = query(&root, &["show", &format!("Record{record}")])?;
+        assert!(
+            answer.lines().any(|line| line == "f A,B,C,D,E,F,Whole"),
+            "{answer}"
+        );
+    }
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
 fn write(root: &Path, files: &[(&str, &[u8])]) -> TestResult {
     for (path, content) in files {
         let path = root.join(path);

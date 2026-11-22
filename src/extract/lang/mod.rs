@@ -160,6 +160,8 @@ const PACKS: &[&Pack] = &[
 
 /// One lazily compiled query per pack: a refresh compiles only the languages it extracts.
 static QUERIES: [OnceLock<Option<Query>>; PACKS.len()] = [const { OnceLock::new() }; PACKS.len()];
+static QUERIES_WITHOUT_TEST_CALLBACKS: [OnceLock<Option<Query>>; PACKS.len()] =
+    [const { OnceLock::new() }; PACKS.len()];
 
 /// Whether extraction of this file type records local bindings (`@binding.name`), so a local
 /// variable can shadow a same-named function. Without them a bare name is not evidence of the
@@ -188,14 +190,45 @@ pub fn lookup(
     file_type: FileType,
     path: &str,
 ) -> Option<(&'static Pack, Language, &'static Query)> {
+    lookup_for_source(file_type, path, None)
+}
+
+pub(super) fn lookup_for_source(
+    file_type: FileType,
+    path: &str,
+    source: Option<&[u8]>,
+) -> Option<(&'static Pack, Language, &'static Query)> {
     let index = PACKS.iter().position(|pack| {
         pack.file_type == file_type
             && (pack.suffixes.is_empty()
                 || pack.suffixes.iter().any(|suffix| path.ends_with(suffix)))
     })?;
     let pack = PACKS[index];
-    let query = QUERIES[index]
-        .get_or_init(|| Query::new(&(pack.language)(""), pack.query).ok())
+    // Named callbacks only survive extraction when a test-role file has an environment fact.
+    // The process.env query requires the literal receiver, so missing bytes rule out that fact.
+    let skip_callbacks = matches!(file_type, FileType::JavaScript | FileType::TypeScript)
+        && source.is_some_and(|source| {
+            !super::engine::js_test_role(path) || memchr::memmem::find(source, b"process").is_none()
+        });
+    let queries = if skip_callbacks {
+        &QUERIES_WITHOUT_TEST_CALLBACKS
+    } else {
+        &QUERIES
+    };
+    let query = queries[index]
+        .get_or_init(|| {
+            let mut query = Query::new(&(pack.language)(""), pack.query).ok()?;
+            if skip_callbacks {
+                for pattern in 0..query.pattern_count() {
+                    let start = query.start_byte_for_pattern(pattern);
+                    let end = query.end_byte_for_pattern(pattern);
+                    if pack.query[start..end].contains("@test.declaration") {
+                        query.disable_pattern(pattern);
+                    }
+                }
+            }
+            Some(query)
+        })
         .as_ref()?;
     Some((pack, (pack.language)(path), query))
 }

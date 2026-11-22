@@ -1468,14 +1468,13 @@ fn collect(
                         continue;
                     }
                     // Java and Go permit several field names in one declaration.
-                    let field_key = if path.ends_with(".java") || path.ends_with(".go") {
-                        get("field.name").map_or(key, |node| node.id())
-                    } else {
-                        key
-                    };
-                    let entry = fields.entry(field_key).or_default();
-                    entry.position = primary_node.start_byte();
-                    if let Some(node) = get("field.name") {
+                    let name = get("field.name");
+                    let position = name
+                        .filter(|_| path.ends_with(".java") || path.ends_with(".go"))
+                        .unwrap_or(primary_node);
+                    let entry = fields.entry(position.id()).or_default();
+                    entry.position = position.start_byte();
+                    if let Some(node) = name {
                         if let Some(literal) = get("field.literal") {
                             #[cfg(feature = "lang-typescript")]
                             {
@@ -1971,8 +1970,7 @@ fn js_env_access(node: Node) -> (bool, bool) {
     }
 }
 
-#[cfg(any(feature = "lang-typescript", feature = "lang-javascript"))]
-fn js_test_role(path: &str) -> bool {
+pub(super) fn js_test_role(path: &str) -> bool {
     use crate::domain::filetype::FileType;
     crate::domain::role::is_test_path(
         if [".ts", ".tsx", ".mts", ".cts"]

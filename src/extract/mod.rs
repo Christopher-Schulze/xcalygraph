@@ -41,7 +41,7 @@ use crate::domain::role::{self, Role};
 /// Bumped whenever extraction code changes output, so existing indexes rebuild.
 /// Rows of a CSV or TSV file that reach search.
 const CSV_INDEXED_ROWS: usize = 2000;
-const EXTRACTION_VERSION: u32 = 185;
+const EXTRACTION_VERSION: u32 = 186;
 
 /// Extraction version stored in the index: [`EXTRACTION_VERSION`] combined with a hash of every
 /// compiled-in query, so a changed query re-extracts without a manual bump.
@@ -195,7 +195,7 @@ fn extract_inner(record: &FileRecord, content: &[u8], capture_identities: bool) 
     let grammar = record
         .file_type
         .filter(|_| !toc)
-        .and_then(|file_type| lang::lookup(file_type, &record.path));
+        .and_then(|file_type| lang::lookup_for_source(file_type, &record.path, Some(content)));
     let parsed_with_grammar = grammar.is_some();
     let parsed = grammar
         .map(|(pack, language, query)| {
