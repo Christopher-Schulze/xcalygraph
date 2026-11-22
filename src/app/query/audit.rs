@@ -9,7 +9,7 @@ use crate::domain::facts::Coverage;
 use crate::domain::facts::{
     EnvSource, FLAG_DECLARATION, FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST, SymKind,
 };
-use crate::domain::graph::EdgeKind;
+use crate::domain::graph::{EdgeKind, is_env_definition, is_env_read};
 use crate::domain::history::History;
 use crate::domain::role::Role;
 
@@ -577,7 +577,7 @@ fn drift(index: &Index, filter: &Filter, root: &std::path::Path) -> Vec<AuditFac
     let envs = index.derived.envs();
     let defined: BTreeSet<&str> = envs
         .iter()
-        .filter(|env| env.source != 0 && filter.includes(index, env.node))
+        .filter(|env| is_env_definition(env.source) && filter.includes(index, env.node))
         .map(|env| index.string(env.name))
         .collect();
     if defined.is_empty() {
@@ -585,13 +585,13 @@ fn drift(index: &Index, filter: &Filter, root: &std::path::Path) -> Vec<AuditFac
     }
     let read: BTreeSet<&str> = envs
         .iter()
-        .filter(|env| env.source == 0 && filter.includes(index, env.node))
+        .filter(|env| is_env_read(env.source) && filter.includes(index, env.node))
         .map(|env| index.string(env.name))
         .collect();
     let mut lines = Vec::new();
     for env in envs
         .iter()
-        .filter(|env| env.source == 0 && filter.includes(index, env.node))
+        .filter(|env| is_env_read(env.source) && filter.includes(index, env.node))
     {
         let name = index.string(env.name);
         if !defined.contains(name) {
@@ -606,15 +606,12 @@ fn drift(index: &Index, filter: &Filter, root: &std::path::Path) -> Vec<AuditFac
     // Unread definitions count only for runtime configuration: CI and Dockerfile variables are
     // often read by tools and base images, not by the code.
     let runtime = |source: u32| {
-        u8::try_from(source)
-            .ok()
-            .and_then(EnvSource::from_u8)
-            .is_some_and(|source| {
-                matches!(
-                    source,
-                    EnvSource::EnvExample | EnvSource::Compose | EnvSource::Kubernetes
-                )
-            })
+        crate::domain::graph::env_definition_source(source).is_some_and(|source| {
+            matches!(
+                source,
+                EnvSource::EnvExample | EnvSource::Compose | EnvSource::Kubernetes
+            )
+        })
     };
     let unread: BTreeSet<&str> = envs
         .iter()

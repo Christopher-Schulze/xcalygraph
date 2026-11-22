@@ -11,4 +11,4 @@ ref 8 Call Repo qualifier=- scope=Open-Store args=0
 ref 8 Call new qualifier=Repo scope=Open-Store args=0
 ref 9 Call Count qualifier=$r scope=Open-Store args=0
 ref 11 Call Open-Store qualifier=- scope=-
-env 6 STORE_URL scope=Open-Store
+env 6 STORE_URL access=read scope=Open-Store

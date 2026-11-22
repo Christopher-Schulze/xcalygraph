@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::output::{Value, Writer};
 use super::{Filter, Index, Node};
-use crate::domain::graph::EdgeKind;
+use crate::domain::graph::{EdgeKind, is_env_write};
 use crate::infra::store::derived::EdgeRecord;
 
 /// Lines per section unless `--all`.
@@ -646,26 +646,31 @@ fn write_tests(
 }
 
 fn envs(index: &Index, filter: &Filter, writer: &mut Writer, node: u32, cap: usize) {
-    let reads: Vec<_> = index
+    let sites: Vec<_> = index
         .derived
         .envs()
         .iter()
-        .filter(|env| env.source == 0)
+        .filter(|env| env.source == 0 || is_env_write(env.source))
         .filter(|env| filter.includes(index, env.node))
         .filter(|env| env.node == node)
         .collect();
-    for (shown, env) in reads.iter().enumerate() {
+    for (shown, env) in sites.iter().enumerate() {
         if shown >= cap {
-            writer.skip(reads.len() - shown);
+            writer.skip(sites.len() - shown);
             break;
         }
         let name = index.string(env.name);
         let path = index.path_of(env.node);
+        let write = is_env_write(env.source);
         writer.line(
-            &format!("e {name} {path}:{}", env.line),
+            &format!(
+                "{} {name} {path}:{}",
+                if write { "w" } else { "e" },
+                env.line
+            ),
             &[
                 ("t", Value::Str("edge")),
-                ("rel", Value::Str("env")),
+                ("rel", Value::Str(if write { "env_write" } else { "env" })),
                 ("name", Value::Str(name)),
                 ("path", Value::Str(path)),
                 ("line", Value::Int(u64::from(env.line))),

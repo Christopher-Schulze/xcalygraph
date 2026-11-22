@@ -684,12 +684,19 @@ impl Index<'_> {
                 })
         };
         // An empty spec is a local `export { a as b }`, which binds nothing in this file.
-        for import in facts
+        for (position, import) in facts
             .imports
             .iter()
-            .filter(|import| !import.spec.is_empty())
+            .enumerate()
+            .filter(|(_, import)| !import.spec.is_empty())
         {
-            let Some(selected) = self.js_import_target(file, &import.spec) else {
+            let require = u32::try_from(position).ok().is_some_and(|index| {
+                facts.source_identity(
+                    crate::domain::facts::SourceIdentityKind::CommonJsRequire,
+                    index,
+                ) == Some("unshadowed")
+            });
+            let Some(selected) = self.js_import_target(file, &import.spec, require) else {
                 if self
                     .js_tables
                     .deno_may_remap(&self.input.files[file as usize].path, &import.spec)
@@ -798,16 +805,16 @@ impl Index<'_> {
     }
 
     pub(super) fn js_module(&self, file: u32, spec: &str) -> Option<u32> {
-        self.js_import_target(file, spec)
+        self.js_import_target(file, spec, false)
             .map(|target| self.module_of(target.type_file))
     }
 
-    fn js_import_target(&self, file: u32, spec: &str) -> Option<JsImportTarget> {
-        let path = &self.input.files[file as usize].path;
+    fn js_import_target(&self, file: u32, spec: &str, require: bool) -> Option<JsImportTarget> {
+        let path = self.input.files[file as usize].path.as_str();
         if self.js_tables.deno_may_remap(path, spec) {
             return None;
         }
-        self.js_import_target_unmapped(file, spec)
+        self.js_import_target_unmapped(file, spec, require)
     }
 
     /// A unique in-root package explicitly named as a workspace dependency is a possible Node
@@ -857,7 +864,7 @@ impl Index<'_> {
                     return None;
                 }
                 return self
-                    .js_import_target_unmapped(file, spec)
+                    .js_import_target_unmapped(file, spec, false)
                     .map(|target| target.type_file);
             }
             if dir.is_empty() {
@@ -867,7 +874,12 @@ impl Index<'_> {
         }
     }
 
-    fn js_import_target_unmapped(&self, file: u32, spec: &str) -> Option<JsImportTarget> {
+    fn js_import_target_unmapped(
+        &self,
+        file: u32,
+        spec: &str,
+        require: bool,
+    ) -> Option<JsImportTarget> {
         let path = &self.input.files[file as usize].path;
         let dir = parent_dir(path);
         let typescript = self.file_type(file) != Some(FileType::JavaScript);
@@ -875,6 +887,18 @@ impl Index<'_> {
         let mut bases: Vec<String> = Vec::new();
         if spec.starts_with('.') {
             bases.push(normalize(&join(dir, spec)));
+            if require
+                && (spec == ".." || spec.ends_with("/.."))
+                && !typescript
+                && self.commonjs_context(file)
+            {
+                let directory = normalize_in_root(dir, spec)?;
+                if directory.is_empty() {
+                    bases.push("index".to_owned());
+                } else {
+                    bases.push(format!("{directory}/index"));
+                }
+            }
         } else {
             let unproven =
                 tables.alias_bases(&self.input.files[file as usize].path, spec, &mut bases);
@@ -1512,6 +1536,62 @@ mod tests {
             })
             .collect();
         assert_eq!(callers, ["esm.mjs", "explicit.cjs"]);
+        Ok(())
+    }
+
+    #[test]
+    fn commonjs_parent_directory_forwards_a_callable_to_a_named_test() -> std::io::Result<()> {
+        use crate::domain::graph::EdgeKind;
+        use crate::infra::testdir::TestDir;
+
+        let root = TestDir::new("javascript-commonjs-directory-test")?;
+        root.write("index.js", "module.exports = require('./lib/factory');\n")?;
+        root.write("lib/factory.js", "module.exports = function build() {};\n")?;
+        root.write(
+            "test/application.js",
+            "var factory = require('..')\nit('uses the factory', function () { factory(); return process.env.MODE; })\n",
+        )?;
+        root.write("helper/index.cjs", "exports.work = function work() {};\n")?;
+        root.write(
+            "test/static.js",
+            "import factory from '..';\nexport function call() { factory(); }\n",
+        )?;
+        root.write(
+            "client.cjs",
+            "const helper = require('./helper');\nhelper.work();\n",
+        )?;
+        let graph = super::super::tests::graph_of(root.path())?;
+        let imports: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Imports)
+            .map(|edge| {
+                let symbols = graph.symbols.len();
+                (
+                    graph.files[edge.source as usize - symbols].path.as_str(),
+                    graph.files[edge.target as usize - symbols].path.as_str(),
+                )
+            })
+            .collect();
+        assert!(imports.contains(&("test/application.js", "index.js")));
+        assert!(!imports.contains(&("test/static.js", "index.js")));
+        assert!(!imports.contains(&("client.cjs", "helper/index.cjs")));
+        let tests: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Tests)
+            .map(|edge| {
+                let source = &graph.symbols[edge.source as usize];
+                let target = &graph.symbols[edge.target as usize];
+                assert_eq!(source.name.as_str(), "uses the factory");
+                (
+                    graph.files[source.file as usize].path.as_str(),
+                    graph.files[target.file as usize].path.as_str(),
+                    target.name.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(tests, [("test/application.js", "lib/factory.js", "build")]);
         Ok(())
     }
 }

@@ -26,8 +26,9 @@ use tree_sitter::{
 };
 
 use crate::domain::facts::{
-    self, Binding, Coverage, EnvRead, Facts, FieldName, Fields, Import, JuliaCallArgument, Ref,
-    RefKind, SourceIdentity, SourceIdentityKind, SymKind, Symbol, VariantField,
+    self, Binding, Coverage, EnvAccess, EnvRead, Facts, FieldName, Fields, Import,
+    JuliaCallArgument, Ref, RefKind, SourceIdentity, SourceIdentityKind, SymKind, Symbol,
+    VariantField,
 };
 use crate::domain::hash::FastMap;
 
@@ -73,6 +74,8 @@ pub struct Definition<'a> {
     pub text: &'a str,
     /// Text of attribute, decorator and annotation nodes directly before the definition.
     pub decorations: &'a str,
+    /// Source-proven test declaration in a JavaScript/TypeScript test-role file.
+    pub test_declaration: bool,
     /// Flags inherited from the enclosing definition.
     pub inherited: u8,
     /// Kind and visibility of the enclosing definition.
@@ -141,6 +144,8 @@ struct RawDef<'tree> {
     owner: Option<String>,
     /// Last clause of a multi-clause definition (Elixir `def f(nil)` then `def f(x)`).
     last_clause: Option<Node<'tree>>,
+    /// Named `it`, `test` or direct `it.each` callback in a test-role JS/TS file.
+    test_declaration: bool,
 }
 
 #[derive(Default)]
@@ -930,6 +935,8 @@ fn collect(
         }
     };
     let mut defs: FastMap<usize, RawDef> = FastMap::default();
+    let mut test_definitions: Vec<RawDef> = Vec::new();
+    let mut setup_suites: FastMap<usize, RawDef> = FastMap::default();
     let mut impls: Vec<(Node, String, Option<String>)> = Vec::new();
     let mut literal_impls: Vec<(Node, Node, String)> = Vec::new();
     let mut refs: FastMap<usize, RawRef> = FastMap::default();
@@ -938,7 +945,7 @@ fn collect(
     let mut returns: Vec<(usize, String)> = Vec::new();
     let mut fields: FastMap<usize, RawField> = FastMap::default();
     let mut variants: FastMap<usize, RawVariantField> = FastMap::default();
-    let mut envs: FastMap<usize, (String, usize, u32)> = FastMap::default();
+    let mut envs = FastMap::default();
     let mut package = None;
     let mut entry = false;
     // Variables assigned in the file (Bash): their reads are no environment reads.
@@ -1017,6 +1024,45 @@ fn collect(
                 name: text(capture.node).to_owned(),
                 bounds: None,
             });
+        }
+        #[cfg(any(feature = "lang-typescript", feature = "lang-javascript"))]
+        if captures
+            .iter()
+            .any(|capture| names[capture.index as usize] == "test.declaration")
+        {
+            let get = |wanted: &str| {
+                captures
+                    .iter()
+                    .find(|capture| names[capture.index as usize] == wanted)
+                    .map(|capture| capture.node)
+            };
+            if let (Some(callee), Some(title), Some(arguments)) = (
+                get("test.callee"),
+                get("test.title"),
+                get("test.declaration").and_then(|node| node.child_by_field_name("arguments")),
+            ) {
+                let mut walker = arguments.walk();
+                let mut children = arguments.named_children(&mut walker);
+                let is_direct = matches!(text(callee), "it" | "test");
+                let is_each = text(callee) == "each"
+                    && get("test.object").is_some_and(|object| text(object) == "it");
+                if (is_direct || is_each)
+                    && js_test_role(path)
+                    && let Some(function) = children.nth(1)
+                    && matches!(function.kind(), "function_expression" | "arrow_function")
+                    && let Some(name) = super::lang::typescript::string_literal(title, source)
+                {
+                    test_definitions.push(RawDef {
+                        node: Some(function),
+                        kind: Some(SymKind::Fn),
+                        name: name.into(),
+                        name_node: function.id(),
+                        test_declaration: true,
+                        ..RawDef::default()
+                    });
+                }
+            }
+            continue;
         }
         let Some((primary, primary_node)) = captures.iter().find_map(|capture| {
             let name = names[capture.index as usize];
@@ -1498,7 +1544,24 @@ fn collect(
                 "env" => {
                     if let Some(node) = get("env.name") {
                         let name = unquote(text(node)).to_owned();
-                        envs.insert(key, (name, primary_node.start_byte(), line));
+                        let javascript = get("_process").is_some();
+                        let (read, write) = if javascript {
+                            js_env_access(primary_node)
+                        } else {
+                            (true, false)
+                        };
+                        envs.insert(
+                            key,
+                            RawEnv {
+                                name,
+                                node: primary_node,
+                                line,
+                                javascript,
+                                read,
+                                write,
+                                setup: false,
+                            },
+                        );
                     }
                 }
                 "entry" => entry = true,
@@ -1672,10 +1735,103 @@ fn collect(
     } else {
         Coverage::Complete
     };
-    envs.retain(|_, (name, _, _)| !assigned.contains(name));
+    let js_bound = |name: &str, position| {
+        let encloses = |mut node: Node<'_>| {
+            while let Some(parent) = node.parent() {
+                if matches!(
+                    parent.kind(),
+                    "statement_block"
+                        | "function_expression"
+                        | "function_declaration"
+                        | "arrow_function"
+                        | "generator_function"
+                        | "method_definition"
+                        | "catch_clause"
+                        | "for_in_statement"
+                ) {
+                    return (parent.start_byte()..parent.end_byte()).contains(&position);
+                }
+                node = parent;
+            }
+            true
+        };
+        locals
+            .iter()
+            .any(|local| local.name == name && encloses(local.node))
+            || defs
+                .values()
+                .any(|def| def.name.as_str() == name && def.node.is_some_and(encloses))
+            || imports.values().any(|import| {
+                import.alias.as_deref() == Some(name)
+                    || (import.alias.is_none() && import.names.iter().any(|local| local == name))
+            })
+    };
+    test_definitions.retain(|definition| {
+        definition.node.is_some_and(|callback| {
+            let callee = callback
+                .parent()
+                .and_then(|args| args.parent())
+                .and_then(|call| call.child_by_field_name("function"));
+            let Some(callee) = callee else { return false };
+            let name = if callee.kind() == "identifier" {
+                text(callee)
+            } else {
+                "it"
+            };
+            !js_bound(name, callee.start_byte())
+        })
+    });
+    envs.retain(|_, access| {
+        !assigned.contains(&access.name)
+            && (!access.javascript || !js_bound("process", access.node.start_byte()))
+    });
+    if !test_definitions.is_empty() {
+        let test_suites: HashSet<_> = test_definitions
+            .iter()
+            .filter_map(|definition| js_test_suite(definition.node?))
+            .map(|suite| suite.id())
+            .collect();
+        for access in envs
+            .values_mut()
+            .filter(|access| access.javascript && access.write && !access.read)
+        {
+            if let Some((suite, title, hook)) = js_setup_suite(access.node, source)
+                && test_suites.contains(&suite.id())
+                && !js_bound(text(hook), hook.start_byte())
+                && !js_bound("describe", suite.start_byte())
+            {
+                setup_suites.entry(suite.id()).or_insert_with(|| RawDef {
+                    node: Some(suite),
+                    kind: Some(SymKind::Mod),
+                    name: title.into(),
+                    name_node: suite.id(),
+                    ..RawDef::default()
+                });
+                access.setup = true;
+            }
+        }
+        let mut env_positions: Vec<_> = envs
+            .values()
+            .filter(|access| access.javascript)
+            .map(|access| access.node.start_byte())
+            .collect();
+        env_positions.sort_unstable();
+        test_definitions.retain(|definition| {
+            definition.node.is_some_and(|callback| {
+                js_test_suite(callback).is_some_and(|suite| setup_suites.contains_key(&suite.id()))
+                    || env_positions
+                        .get(
+                            env_positions
+                                .partition_point(|&position| position < callback.start_byte()),
+                        )
+                        .is_some_and(|&position| position < callback.end_byte())
+            })
+        });
+    }
     if path.ends_with(".py") || super::bindings::javascript(path) {
         unprove_rebound_bindings(root, &mut bindings);
     }
+    test_definitions.extend(setup_suites.into_values());
     let doc = file_doc(root, source);
     let mut parsed = assemble(Assembly {
         hooks,
@@ -1684,6 +1840,7 @@ fn collect(
         capture_identities,
         package,
         defs,
+        test_definitions,
         impls,
         literal_impls,
         refs,
@@ -1797,6 +1954,132 @@ fn collect(
     parsed
 }
 
+/// Read and write participation of a JavaScript environment access.
+fn js_env_access(node: Node) -> (bool, bool) {
+    let Some(parent) = node.parent() else {
+        return (true, false);
+    };
+    match parent.kind() {
+        "update_expression" if parent.child_by_field_name("argument") == Some(node) => (true, true),
+        "assignment_expression" if parent.child_by_field_name("left") == Some(node) => {
+            (false, true)
+        }
+        "augmented_assignment_expression" if parent.child_by_field_name("left") == Some(node) => {
+            (true, true)
+        }
+        _ => (true, false),
+    }
+}
+
+#[cfg(any(feature = "lang-typescript", feature = "lang-javascript"))]
+fn js_test_role(path: &str) -> bool {
+    use crate::domain::filetype::FileType;
+    crate::domain::role::is_test_path(
+        if [".ts", ".tsx", ".mts", ".cts"]
+            .iter()
+            .any(|ext| path.ends_with(ext))
+        {
+            FileType::TypeScript
+        } else {
+            FileType::JavaScript
+        },
+        path,
+    )
+}
+
+struct RawEnv<'tree> {
+    name: String,
+    node: Node<'tree>,
+    line: u32,
+    javascript: bool,
+    read: bool,
+    write: bool,
+    setup: bool,
+}
+
+fn js_test_suite(test: Node<'_>) -> Option<Node<'_>> {
+    let call = test.parent()?.parent()?;
+    let statement = call
+        .parent()
+        .filter(|node| node.kind() == "expression_statement")?;
+    let body = statement
+        .parent()
+        .filter(|node| node.kind() == "statement_block")?;
+    body.parent()
+        .filter(|suite| suite.child_by_field_name("body") == Some(body))
+}
+
+/// Only direct assignments in a setup callback registered directly inside a named suite.
+/// Cleanup, callbacks passed to helpers, and assignments in conditional statements stay ordinary writes.
+fn js_setup_suite<'tree>(
+    access: Node<'tree>,
+    source: &[u8],
+) -> Option<(Node<'tree>, String, Node<'tree>)> {
+    let assignment = access.parent()?;
+    let statement = assignment
+        .parent()
+        .filter(|node| node.kind() == "expression_statement")?;
+    let body = statement
+        .parent()
+        .filter(|node| node.kind() == "statement_block")?;
+    let callback = body.parent()?;
+    if !matches!(callback.kind(), "function_expression" | "arrow_function")
+        || callback.child_by_field_name("body") != Some(body)
+    {
+        return None;
+    }
+    let arguments = callback
+        .parent()
+        .filter(|node| node.kind() == "arguments")?;
+    if arguments.named_child_count() != 1 {
+        return None;
+    }
+    let hook = arguments
+        .parent()
+        .filter(|node| node.kind() == "call_expression")?;
+    let callee = hook
+        .child_by_field_name("function")
+        .filter(|node| node.kind() == "identifier")?;
+    if !matches!(
+        callee.utf8_text(source).ok()?,
+        "before" | "beforeAll" | "beforeEach"
+    ) {
+        return None;
+    }
+    let hook_callee = callee;
+    let hook_statement = hook
+        .parent()
+        .filter(|node| node.kind() == "expression_statement")?;
+    let suite_body = hook_statement
+        .parent()
+        .filter(|node| node.kind() == "statement_block")?;
+    let suite = suite_body.parent()?;
+    if !matches!(suite.kind(), "function_expression" | "arrow_function")
+        || suite.child_by_field_name("body") != Some(suite_body)
+    {
+        return None;
+    }
+    let arguments = suite.parent().filter(|node| node.kind() == "arguments")?;
+    if arguments.named_child_count() != 2 || arguments.named_child(1) != Some(suite) {
+        return None;
+    }
+    let declaration = arguments
+        .parent()
+        .filter(|node| node.kind() == "call_expression")?;
+    let callee = declaration
+        .child_by_field_name("function")
+        .filter(|node| node.kind() == "identifier")?;
+    if callee.utf8_text(source).ok()? != "describe" {
+        return None;
+    }
+    let literal = arguments
+        .named_child(0)
+        .filter(|node| node.kind() == "string")?;
+    let title = literal.utf8_text(source).ok()?;
+    let title = title.get(1..title.len().checked_sub(1)?)?;
+    (!title.is_empty() && !title.contains('\\')).then(|| (suite, title.to_owned(), hook_callee))
+}
+
 struct Assembly<'a, 'tree> {
     hooks: &'a Hooks,
     path: &'a str,
@@ -1804,6 +2087,7 @@ struct Assembly<'a, 'tree> {
     capture_identities: bool,
     package: Option<String>,
     defs: FastMap<usize, RawDef<'tree>>,
+    test_definitions: Vec<RawDef<'tree>>,
     impls: Vec<(Node<'tree>, String, Option<String>)>,
     literal_impls: Vec<(Node<'tree>, Node<'tree>, String)>,
     refs: FastMap<usize, RawRef>,
@@ -1812,7 +2096,7 @@ struct Assembly<'a, 'tree> {
     returns: Vec<(usize, String)>,
     fields: FastMap<usize, RawField>,
     variants: FastMap<usize, RawVariantField>,
-    envs: FastMap<usize, (String, usize, u32)>,
+    envs: FastMap<usize, RawEnv<'tree>>,
     scope_index: ScopeIndex<'tree>,
     locals: Vec<LocalCapture<'tree>>,
     python_list_locals: Vec<(usize, String)>,
@@ -1828,6 +2112,7 @@ fn assemble(assembly: Assembly) -> Parsed {
         capture_identities,
         package,
         defs,
+        test_definitions,
         impls,
         literal_impls,
         refs,
@@ -1846,6 +2131,7 @@ fn assemble(assembly: Assembly) -> Parsed {
     let text = |node: Node| node.utf8_text(source).unwrap_or_default();
     let mut defs: Vec<RawDef> = defs
         .into_values()
+        .chain(test_definitions)
         .filter(|def| def.node.is_some())
         .collect();
     defs.sort_by_key(|def| {
@@ -1939,6 +2225,7 @@ fn assemble(assembly: Assembly) -> Parsed {
             name: &def.name,
             text: node_text,
             decorations: &decorations,
+            test_declaration: def.test_declaration,
             inherited,
             parent: parent.map(|p| (symbols[p].kind(), symbols[p].exported)),
             in_trait_impl: enclosing_impl.is_some_and(|(_, _, trait_name)| trait_name.is_some()),
@@ -2681,16 +2968,45 @@ fn assemble(assembly: Assembly) -> Parsed {
     variant_fields.sort_unstable_by(|a, b| {
         (a.owner, &a.variant, a.index).cmp(&(b.owner, &b.variant, b.index))
     });
-    let mut facts_envs: Vec<EnvRead> = envs
-        .into_values()
-        .filter(|(name, _, _)| !name.is_empty())
-        .map(|(name, position, line)| EnvRead {
+    let mut facts_envs = Vec::with_capacity(envs.len());
+    for RawEnv {
+        name,
+        node,
+        line,
+        read,
+        write,
+        setup,
+        ..
+    } in envs.into_values()
+    {
+        if name.is_empty() {
+            continue;
+        }
+        let scope = scope_of(node.start_byte());
+        if read && write {
+            facts_envs.push(EnvRead {
+                name: name.clone(),
+                scope,
+                line,
+                access: EnvAccess::Read,
+            });
+        }
+        facts_envs.push(EnvRead {
             name,
-            scope: scope_of(position),
+            scope,
             line,
-        })
-        .collect();
-    facts_envs.sort_by(|a, b| (a.line, &a.name, a.scope).cmp(&(b.line, &b.name, b.scope)));
+            access: if setup {
+                EnvAccess::SetupWrite
+            } else if write {
+                EnvAccess::Write
+            } else {
+                EnvAccess::Read
+            },
+        });
+    }
+    facts_envs.sort_by(|a, b| {
+        (a.line, &a.name, a.scope, a.access).cmp(&(b.line, &b.name, b.scope, b.access))
+    });
     let spans = if ranges.len() == symbols.len() {
         ranges
     } else {

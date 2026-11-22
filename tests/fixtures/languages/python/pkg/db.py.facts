@@ -14,4 +14,4 @@ bind 8 "url": str declared scope=__init__
 bind 11 "": list declared scope=query
 bind 11 "sql": str declared scope=query
 bind 15 "": Database declared scope=connect
-env 16 DB_URL scope=connect
+env 16 DB_URL access=read scope=connect

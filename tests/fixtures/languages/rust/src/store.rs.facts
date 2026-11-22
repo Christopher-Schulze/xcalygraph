@@ -86,5 +86,5 @@ bind 68 "other": Store declared scope=load
 bind 69 "row":  inferred scope=load
 bind 80 "store": Store::open() inferred scope=opens
 fields Store rows:HashMap client:Client
-env 45 DB_URL scope=open
-env 46 BUILD_TAG scope=open
+env 45 DB_URL access=read scope=open
+env 46 BUILD_TAG access=read scope=open

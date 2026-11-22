@@ -2,9 +2,9 @@
 
 use super::codec::{DecodeError, DecodeResult, Decoder, Encoder};
 use crate::domain::facts::{
-    AssetMeta, Binding, ConfigKey, Coverage, EnvDef, EnvRead, EnvSource, Facts, FieldName, Fields,
-    GoEmbed, Import, JuliaCallArgument, Manifest, Ref, RefKind, RustTargetRoot, SourceIdentity,
-    SourceIdentityKind, SymKind, Symbol, TextSegment, ValueKind, VariantField,
+    AssetMeta, Binding, ConfigKey, Coverage, EnvAccess, EnvDef, EnvRead, EnvSource, Facts,
+    FieldName, Fields, GoEmbed, Import, JuliaCallArgument, Manifest, Ref, RefKind, RustTargetRoot,
+    SourceIdentity, SourceIdentityKind, SymKind, Symbol, TextSegment, ValueKind, VariantField,
 };
 
 /// Search terms as a token list, so each token is interned once in the shard's string table.
@@ -219,6 +219,7 @@ pub fn encode(encoder: &mut Encoder, facts: &Facts) {
         encoder.str(&env.name);
         opt_index(encoder, env.scope);
         encoder.var_u32(env.line);
+        encoder.u8(env.access as u8);
     }
     encoder.var_usize(facts.fields.len());
     for fields in &facts.fields {
@@ -472,6 +473,12 @@ pub fn decode(decoder: &mut Decoder) -> DecodeResult<Facts> {
             name: decoder.string()?,
             scope: read_opt_index(decoder)?,
             line: decoder.var_u32()?,
+            access: match decoder.u8()? {
+                0 => EnvAccess::Read,
+                1 => EnvAccess::Write,
+                2 => EnvAccess::SetupWrite,
+                _ => return Err(DecodeError("env access")),
+            },
         });
     }
     let count = decoder.len()?;
@@ -963,6 +970,7 @@ mod tests {
                 name: "DB_URL".to_owned(),
                 scope: None,
                 line: 20,
+                access: EnvAccess::Read,
             }],
             fields: vec![Fields {
                 owner: 0,

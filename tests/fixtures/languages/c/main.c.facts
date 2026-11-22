@@ -25,4 +25,4 @@ bind 7 "store": store_t declared scope=apply
 bind 8 "row": row declared scope=apply
 bind 13 "path": char declared scope=main
 bind 14 "store": store_t declared scope=main
-env 13 STORE_PATH scope=main
+env 13 STORE_PATH access=read scope=main

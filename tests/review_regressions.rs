@@ -353,6 +353,129 @@ fn environment_stars_fit_the_entire_answer_budget() -> TestResult {
 }
 
 #[test]
+fn a_documented_environment_variable_reports_absence_without_a_fixture_read() -> TestResult {
+    let root = support::exclusive_dir("env-star-documented-absence")?;
+    write(
+        &root,
+        &[
+            (
+                "tests/keylog.py",
+                b"import os\nos.environ['SSLKEYLOGFILE'] = '/tmp/test-keylog'\n",
+            ),
+            (
+                "docs/env.md",
+                b"# Environment\n\nUse `SSLKEYLOGFILE` only for TLS debugging.\n",
+            ),
+            (
+                "docs/config.md",
+                b"# Config\n\nSet `server.host` in the example.\n",
+            ),
+        ],
+    )?;
+    let text = query(&root, &["find", "SSLKEYLOGFILE"])?;
+    let star = text.lines().next().unwrap_or_default();
+    assert!(star.contains("<doc? docs/env.md:3"), "{text}");
+    assert!(star.contains("-read"), "{text}");
+    assert!(!star.contains("<read"), "{text}");
+    let json = query(&root, &["find", "SSLKEYLOGFILE", "--json"])?;
+    let bundle = json.lines().next().unwrap_or_default();
+    assert!(
+        bundle.contains("\"role\":\"document\",\"relation\":\"doc\""),
+        "{json}"
+    );
+    assert!(
+        bundle.contains("\"unavailable\":[\"definition\",\"read\",\"write\",\"test\"]"),
+        "{json}"
+    );
+    let exact = query(&root, &["find", "SSLKEYLOGFILE", "--exact"])?;
+    assert!(!exact.contains("-read"), "{exact}");
+    let dotted = query(&root, &["find", "server.host"])?;
+    assert!(!dotted.starts_with("~ server.host "), "{dotted}");
+    assert!(!dotted.contains("-read"), "{dotted}");
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn environment_bundle_joins_setup_with_the_test_that_reaches_the_reader() -> TestResult {
+    let root = support::exclusive_dir("environment-suite-setup")?;
+    write(
+        &root,
+        &[
+            (
+                "service.js",
+                b"function readMode() { return process.env.APP_MODE; }\nfunction initialize() { return readMode(); }\nmodule.exports = function build() { return initialize(); };\n",
+            ),
+            (
+                "test/service.js",
+                b"var build = require('../service');\n\
+                  describe('unrelated', function () {\n\
+                    before(() => { process.env.APP_MODE = 'unrelated'; });\n\
+                    it('never reaches the reader', () => {});\n\
+                  });\n\
+                  describe('cleanup only', function () {\n\
+                    after(() => { process.env.APP_MODE = 'cleanup'; });\n\
+                    it('does not run setup', () => { build(); });\n\
+                  });\n\
+                  describe('matching', function () {\n\
+                    before(() => { process.env.APP_MODE = 'selected'; });\n\
+                    it('runs matching setup', () => { build(); });\n\
+                  });\n\
+                  describe('local hook', function () {\n\
+                    const before = callback => callback;\n\
+                    before(() => { process.env.SHADOW_MODE = 'not setup'; });\n\
+                    it('calls a local hook', () => { build(); });\n\
+                  });\n",
+            ),
+            ("test/support/env.js", b"process.env.APP_MODE = 'bootstrap';\n"),
+            (
+                "test/local.js",
+                b"function it(title, fn) { return fn(); }\nit('not a framework test', () => {});\n",
+            ),
+            (
+                "shadow.js",
+                b"function local(process) { return process.env.SHADOW_MODE; }\nfunction actual() { return process.env.REAL_MODE; }\n",
+            ),
+        ],
+    )?;
+    let text = query(&root, &["find", "APP_MODE"])?;
+    let bundle = text.lines().next().unwrap_or_default();
+    assert!(bundle.contains("<read service.js:1"), "{text}");
+    assert!(bundle.contains("<write test/service.js:11"), "{text}");
+    assert!(bundle.contains("<t3? test/service.js:12"), "{text}");
+    assert!(bundle.contains("<via build service.js:3"), "{text}");
+    assert!(bundle.contains("<via service.js:2"), "{text}");
+    let json = query(&root, &["find", "APP_MODE", "--json"])?;
+    let bundle = json.lines().next().unwrap_or_default();
+    assert!(
+        bundle.contains(r#""role":"write","path":"test/service.js","line":11"#),
+        "{json}"
+    );
+    assert!(
+        bundle.contains(r#""path":"test/service.js","line":12,"confidence":"inferred""#),
+        "{json}"
+    );
+    assert!(
+        bundle.contains(r#""reader_call_path":"service.js","reader_call_line":2"#),
+        "{json}"
+    );
+    let exact = query(&root, &["find", "APP_MODE", "--exact"])?;
+    let bundle = exact.lines().next().unwrap_or_default();
+    assert!(
+        bundle.contains("-write") && !bundle.contains("<t3?"),
+        "{exact}"
+    );
+    let shadow = query(&root, &["find", "SHADOW_MODE"])?;
+    assert!(!shadow.starts_with("~ SHADOW_MODE "), "{shadow}");
+    let real = query(&root, &["find", "REAL_MODE"])?;
+    assert!(real.contains("<read shadow.js:2"), "{real}");
+    let local = query(&root, &["show", "test/local.js", "--json"])?;
+    assert!(!local.contains("not a framework test"), "{local}");
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
 fn environment_star_marks_an_inferred_test_relation() -> TestResult {
     let root = support::exclusive_dir("env-star-inferred-test")?;
     write(

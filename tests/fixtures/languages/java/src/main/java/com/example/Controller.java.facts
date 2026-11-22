@@ -38,4 +38,4 @@ bind 35 "user": User declared scope=changed
 bind 38 "": void declared scope=main
 bind 38 "args": String declared scope=main
 fields Controller PREFIX:String LIMIT:int users:UserService
-env 27 APP_NAME scope=toString
+env 27 APP_NAME access=read scope=toString

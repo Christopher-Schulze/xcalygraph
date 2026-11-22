@@ -334,7 +334,7 @@ pub fn build<R>(mut graph: Graph, sink: impl FnOnce(&[&[u8]]) -> R) -> R {
             name: strings.id(&env.name),
             node: env.node,
             line: env.line,
-            source: u32::from(env.source),
+            source: env.source,
         })
         .collect();
     let fields: Vec<FieldsRecord> = graph

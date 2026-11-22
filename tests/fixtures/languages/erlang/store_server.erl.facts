@@ -7,4 +7,4 @@ ref 6 Call start_link qualifier=gen_server scope=start_link args=4
 ref 9 Call getenv qualifier=os scope=init args=1
 ref 13 Call get qualifier=maps scope=handle_call args=2
 ref 13 Call get qualifier=store_repo scope=handle_call args=2
-env 9 STORE_URL scope=init
+env 9 STORE_URL access=read scope=init

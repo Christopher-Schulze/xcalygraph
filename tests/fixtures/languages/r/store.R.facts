@@ -8,4 +8,4 @@ ref 5 Value path qualifier=- scope=open_store
 ref 6 Call filter qualifier=dplyr scope=open_store args=3
 ref 6 Value rows qualifier=- scope=open_store
 ref 8 Call open_store qualifier=- scope=- args=1
-env 4 STORE_URL scope=open_store
+env 4 STORE_URL access=read scope=open_store

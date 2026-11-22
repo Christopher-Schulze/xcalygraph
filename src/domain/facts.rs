@@ -182,9 +182,11 @@ pub enum RefKind {
     Value,
     /// Method of an interface-annotated object literal (name is the interface).
     ImplementLiteral,
+    /// Environment-like token in a document example, used only as named evidence.
+    EnvMention,
 }
 
-pub const REF_KINDS: [RefKind; 11] = [
+pub const REF_KINDS: [RefKind; 12] = [
     RefKind::Call,
     RefKind::Type,
     RefKind::Inherit,
@@ -196,6 +198,7 @@ pub const REF_KINDS: [RefKind; 11] = [
     RefKind::Contract,
     RefKind::Value,
     RefKind::ImplementLiteral,
+    RefKind::EnvMention,
 ];
 
 impl RefKind {
@@ -654,11 +657,20 @@ pub struct JuliaCallArgument {
     pub binding: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum EnvAccess {
+    Read = 0,
+    Write = 1,
+    /// Assignment in a test suite's setup callback; its scope is the suite.
+    SetupWrite = 2,
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvRead {
     pub name: String,
     pub scope: Option<u32>,
     pub line: u32,
+    pub access: EnvAccess,
 }
 
 /// A field key, including JavaScript strings that cannot be represented as UTF-8.

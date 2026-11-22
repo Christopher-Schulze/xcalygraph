@@ -11,4 +11,4 @@ ref 11 Call helper qualifier=- scope=open_store args=1
 ref 13 Call count_rows qualifier=- scope=open_store args=1
 ref 16 Type repo_t qualifier=- scope=count_rows
 ref 23 Call open_store qualifier=- scope=main args=1
-env 12 STORE_URL scope=open_store
+env 12 STORE_URL access=read scope=open_store

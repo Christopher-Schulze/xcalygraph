@@ -16,4 +16,4 @@ ref 15 Call WriteLine qualifier=Console scope=Report args=1
 bind 8 "repository": Repo declared scope=Main
 bind 9 "row": Row declared scope=Main
 bind 14 "row": Row declared scope=Report
-env 10 APP_URL scope=Main
+env 10 APP_URL access=read scope=Main

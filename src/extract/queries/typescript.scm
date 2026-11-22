@@ -5,6 +5,16 @@
 ; Each shorthand binding is a separate exported declaration, not the factory's implementation.
 ((export_statement (lexical_declaration (variable_declarator name: (object_pattern (shorthand_property_identifier_pattern) @name @definition.constant)))) @_top (#parent? @_top "program"))
 (function_declaration name: (identifier) @name) @definition.function
+; Bound at engine collection to `it`, `test` and direct `it.each`, with a decoded string title.
+(call_expression
+  function: (identifier) @test.callee
+  arguments: (arguments (string) @test.title . [(function_expression) (arrow_function)] .)) @test.declaration
+(call_expression
+  function: (call_expression
+    function: (member_expression
+      object: (identifier) @test.object
+      property: (property_identifier) @test.callee))
+  arguments: (arguments (string) @test.title . [(function_expression) (arrow_function)] .)) @test.declaration
 (function_declaration return_type: (type_annotation (_) @return.type)) @return
 (generator_function_declaration name: (identifier) @name) @definition.function
 (function_signature name: (identifier) @name) @definition.function

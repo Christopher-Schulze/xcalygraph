@@ -25,4 +25,4 @@ bind 18 "": self declared scope=make
 bind 20 "$repository": MemoryRepository declared scope=make
 bind 26 "$row": Row declared scope=format_row
 fields Controller repository:Repo
-env 15 APP_URL scope=show
+env 15 APP_URL access=read scope=show

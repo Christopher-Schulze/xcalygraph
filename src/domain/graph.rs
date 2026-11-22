@@ -1,6 +1,6 @@
 //! Resolved knowledge graph: files, symbols, edges and derived data (`docs/spec.md` section 6).
 
-use super::facts::{FieldName, SymKind};
+use super::facts::{EnvAccess, FieldName, SymKind};
 use super::filetype::FileType;
 use super::role::Role;
 use crate::domain::name::Name;
@@ -176,8 +176,40 @@ pub struct EnvSite {
     pub name: String,
     pub node: NodeId,
     pub line: u32,
-    /// 0 for reads; the `EnvSource` discriminant for definitions.
-    pub source: u8,
+    /// 0 for reads; the `EnvSource` discriminant for definitions; `ENV_WRITE_FLAG` for writes.
+    pub source: u32,
+}
+
+/// Flag in `EnvSite.source` and `EnvRecord.source`; definition sources occupy the low byte.
+pub const ENV_WRITE_FLAG: u32 = 1 << 31;
+pub const ENV_SETUP_WRITE: u32 = ENV_WRITE_FLAG | 1;
+
+/// Definitions never carry the write flag.
+pub fn is_env_definition(source: u32) -> bool {
+    source != 0 && !is_env_write(source)
+}
+/// A source-proven environment assignment.
+pub fn is_env_write(source: u32) -> bool {
+    source & ENV_WRITE_FLAG != 0
+}
+/// Reads retain their original zero encoding.
+pub fn is_env_read(source: u32) -> bool {
+    source == 0
+}
+/// A valid definition discriminant, never a write.
+pub fn env_definition_source(source: u32) -> Option<super::facts::EnvSource> {
+    is_env_definition(source)
+        .then(|| u8::try_from(source).ok())
+        .flatten()
+        .and_then(super::facts::EnvSource::from_u8)
+}
+/// The extraction access to its persisted source namespace.
+pub fn env_access_source(access: EnvAccess) -> u32 {
+    match access {
+        EnvAccess::Read => 0,
+        EnvAccess::Write => ENV_WRITE_FLAG,
+        EnvAccess::SetupWrite => ENV_SETUP_WRITE,
+    }
 }
 
 /// Symbol field names for cards.

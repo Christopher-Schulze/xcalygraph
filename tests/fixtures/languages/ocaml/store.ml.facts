@@ -20,4 +20,4 @@ ref 12 Type int qualifier=- scope=c_open
 ref 12 Type string qualifier=- scope=c_open
 ref 13 Call find qualifier=Repo scope=-
 ref 13 Value r qualifier=- scope=-
-env 9 STORE_URL scope=open_store
+env 9 STORE_URL access=read scope=open_store

@@ -53,5 +53,5 @@ bind 60 "r": Row declared scope=load
 bind 61 "reader": Reader declared scope=load
 fields Row ID:int Name:string
 fields Store rows:Row client:db.Client
-env 42 DB_URL scope=NewStore
-env 64 STORE_MODE scope=load
+env 42 DB_URL access=read scope=NewStore
+env 64 STORE_MODE access=read scope=load

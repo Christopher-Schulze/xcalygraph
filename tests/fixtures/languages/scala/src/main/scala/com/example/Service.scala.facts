@@ -30,4 +30,4 @@ bind 15 "": Unit declared scope=main
 bind 15 "args": Array declared scope=main
 bind 16 "service": Service declared scope=main
 fields Service repository:Repository
-env 17 APP_URL scope=main
+env 17 APP_URL access=read scope=main

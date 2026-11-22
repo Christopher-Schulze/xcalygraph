@@ -6,9 +6,11 @@ use std::path::Path;
 use super::output::{OutputFact, Value, Writer, json_object};
 use super::{Filter, Index};
 use crate::domain::facts::Coverage;
-use crate::domain::facts::{EnvSource, FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST, SymKind};
+use crate::domain::facts::{FLAG_ENTRY, FLAG_GENERATED, FLAG_TEST, SymKind};
 use crate::domain::filetype::FileType;
-use crate::domain::graph::{EdgeKind, ModuleEdge};
+use crate::domain::graph::{
+    EdgeKind, ModuleEdge, env_definition_source, is_env_definition, is_env_read, is_env_write,
+};
 use crate::domain::role::Role;
 
 const MODULE_LINES: usize = 40;
@@ -885,7 +887,7 @@ fn envs(index: &Index, filter: &Filter) -> Vec<MapFact> {
     }
     let mut usages: BTreeMap<&str, Usage> = BTreeMap::new();
     for env in index.derived.envs() {
-        if !filter.includes(index, env.node) {
+        if is_env_write(env.source) || !filter.includes(index, env.node) {
             continue;
         }
         let usage = usages.entry(index.string(env.name)).or_insert(Usage {
@@ -893,16 +895,19 @@ fn envs(index: &Index, filter: &Filter) -> Vec<MapFact> {
             sources: Vec::new(),
             first: None,
         });
-        if env.source == 0 {
+        if is_env_definition(env.source) {
+            if let Some(source) = env_definition_source(env.source)
+                && !usage.sources.contains(&source.id())
+            {
+                usage.sources.push(source.id());
+            }
+        } else {
+            debug_assert!(is_env_read(env.source));
             usage.reads += 1;
             let site = (index.path_of(env.node), env.line);
             if usage.first.is_none_or(|first| site < first) {
                 usage.first = Some(site);
             }
-        } else if let Some(source) = u8::try_from(env.source).ok().and_then(EnvSource::from_u8)
-            && !usage.sources.contains(&source.id())
-        {
-            usage.sources.push(source.id());
         }
     }
     let mut ordered: Vec<(&str, Usage)> = usages.into_iter().collect();

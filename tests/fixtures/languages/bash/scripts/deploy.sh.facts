@@ -7,6 +7,6 @@ ref 17 Call build qualifier=- scope=deploy
 ref 18 Call rsync qualifier=- scope=deploy
 ref 19 Call notify qualifier=- scope=deploy
 ref 22 Call deploy qualifier=- scope=-
-env 6 HOME scope=-
-env 8 DEPLOY_TARGET scope=-
-env 18 REMOTE_HOST scope=deploy
+env 6 HOME access=read scope=-
+env 8 DEPLOY_TARGET access=read scope=-
+env 18 REMOTE_HOST access=read scope=deploy

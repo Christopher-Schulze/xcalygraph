@@ -41,7 +41,7 @@ use crate::domain::role::Role;
 use modules::ModuleMap;
 
 /// Bumped whenever resolution or derived data change; a mismatch re-derives the index.
-pub const RESOLVE_VERSION: u32 = 167;
+pub const RESOLVE_VERSION: u32 = 171;
 
 /// Maximum implementations a dispatched call fans out to (resolution step 6).
 const MAX_DISPATCH: usize = 10;
@@ -2064,13 +2064,13 @@ impl<'a> Index<'a> {
             let local_reference = u32::try_from(reference_index).ok();
             let source = reference.scope.map_or(file_node, |scope| base + scope);
             if is_document
-                && reference.kind == RefKind::Mention
-                && reference.name.len() >= 3
-                && reference.name.bytes().any(|byte| byte.is_ascii_uppercase())
-                && reference
-                    .name
-                    .bytes()
-                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+                && (reference.kind == RefKind::EnvMention
+                    || (reference.kind == RefKind::Mention
+                        && reference.name.len() >= 3
+                        && reference.name.bytes().any(|byte| byte.is_ascii_uppercase())
+                        && reference.name.bytes().all(|byte| {
+                            byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'
+                        })))
             {
                 resolved.evidence.push((
                     source,
@@ -2078,6 +2078,9 @@ impl<'a> Index<'a> {
                     Name::new(&reference.name),
                     SiteKind::Document,
                 ));
+            }
+            if reference.kind == RefKind::EnvMention {
+                continue;
             }
             let source_rust_cfg = if self.file_type(file) == Some(FileType::Rust)
                 && source < self.symbols.len() as u32
@@ -5143,7 +5146,7 @@ impl<'a> Index<'a> {
                         .scope
                         .map_or(symbol_count + file as u32, |scope| base + scope),
                     line: env.line,
-                    source: 0,
+                    source: graph::env_access_source(env.access),
                 });
             }
             for def in &facts.env_defs {
@@ -5151,7 +5154,7 @@ impl<'a> Index<'a> {
                     name: def.name.clone(),
                     node: symbol_count + file as u32,
                     line: def.line,
-                    source: def.source as u8,
+                    source: u32::from(def.source as u8),
                 });
             }
             for fields in &facts.fields {

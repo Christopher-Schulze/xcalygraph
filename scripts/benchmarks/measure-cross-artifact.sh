@@ -20,42 +20,88 @@ if budget < 1 or mode not in ('text', 'json'):
     sys.exit('expected a positive budget and text or json')
 
 
-def evidence(answer, name):
+def evidence(answer, name, relation=None):
+    aliases = {'doc': 'document', 't': 'test', 't2': 'test', 't3': 'test', 'write': 'writer'}
+
+    def bundle(present, missing):
+        roles = {}
+        for role, site in [*present, *((role, 'absent') for role in missing)]:
+            role = aliases.get(role, role)
+            roles.setdefault(role, set()).add(site)
+        return roles
+
     if mode == 'json':
         records = [json.loads(line) for line in answer.splitlines()]
         bundles = []
         for record in records:
             if record.get('t') == 'evidence' and record['name'] == name:
-                roles = {r['role']: f"{r['path']}:{r['line']}" for r in record['roles']}
-                roles.update((r, 'absent') for r in record.get('unavailable', []))
-                bundles.append(roles)
-        return bundles, [' '.join(r['hops']) for r in records if r.get('t') == 'chain']
-    aliases = {'doc': 'document', 't': 'test', 't2': 'test'}
+                bundles.append(bundle(
+                    [(r['role'], f"{r['path']}:{r['line']}") for r in record['roles']],
+                    record.get('unavailable', []),
+                ))
+        chains, origin = [], None
+        for record in records:
+            kind = record.get('t')
+            if kind == 'chain':
+                chains.append([hop.split(maxsplit=1)[0] for hop in record['hops']])
+            elif kind == 'sym':
+                origin = f"{record['path']}:{record['line']}"
+            elif kind == 'file':
+                origin = None
+            elif (kind == 'edge' and origin and relation
+                  and record.get('rel') == 'out' and record.get('kind') == relation):
+                chains.append([origin, f"{record['path']}:{record['line']}"])
+        return bundles, chains
     bundles, chains = [], []
+    path, origin = None, None
     for line in answer.splitlines():
+        if relation:
+            if not line.startswith((' ', '~', '+')):
+                path, origin = line, None
+            elif path and (symbol := re.match(r'^  (\d+) ', line)):
+                origin = f'{path}:{symbol[1]}'
+            elif origin and (edge := re.search(
+                rf'^ +> (?:.* )?(\S+:\d+) {re.escape(relation)}\??$', line
+            )):
+                chains.append([origin, edge[1]])
         if line.startswith(f'~ {name} '):
-            roles = {aliases.get(role, role): site for role, site in re.findall(
-                r' <(\w+)\?? (\S+:\d+)(?= |$)', line)}
-            roles.update((aliases.get(role, role), 'absent') for role in re.findall(
-                r' -(definition|read|doc|t)(?= |$)', line))
+            roles = bundle(
+                re.findall(r' <(\w+)\?? (\S+:\d+)(?= |$)', line),
+                re.findall(r' -(definition|read|write|doc|t)(?= |$)', line),
+            )
             if roles:
                 bundles.append(roles)
-            else:
-                chains.append(line)
-        elif line.startswith('~ '):
-            chains.append(line)
+                continue
+        if line.startswith('~ '):
+            hops, last_path = [], ''
+            for label in re.split(r' >\d+\?? ', line[2:]):
+                location = re.search(r'(?:^| )(\S*):(\d+)$', label)
+                if location:
+                    path, number = location.groups()
+                    last_path = path or last_path
+                    hops.append(f'{last_path}:{number}')
+            if len(hops) >= 2:
+                chains.append(hops)
     return bundles, chains
 
 
 def score(case, answer):
-    bundles, chains = evidence(answer, case['name'])
-    required = [term.split('=', 1) for term in case['required'].split(';') if term]
+    relation = 'runs' if case['kind'] == 'runs' else None
+    bundles, chains = evidence(answer, case['name'], relation)
+    alternatives = [[term.split('=', 1) for term in group.split(';')]
+                    for group in case['required'].split('||')]
     forbidden = case['forbidden'].split(';') if case['forbidden'] else []
-    bad = sum(any(bundle.get(role) not in (None, 'absent') for role in forbidden) for bundle in bundles)
-    if case['kind'] == 'chain':
-        met = any(all(locator in chain for _, locator in required) for chain in chains)
+    bad = sum(any(sites - {'absent'} for role, sites in bundle.items() if role in forbidden)
+              or any('absent' in sites and len(sites) > 1 for sites in bundle.values())
+              for bundle in bundles)
+    if case['kind'] in ('chain', 'runs'):
+        met = any(all(locator in chain for _, locator in required)
+                  for chain in chains for required in alternatives)
     else:
-        met = any(all(bundle.get(role) in locators.split('|') for role, locators in required) for bundle in bundles)
+        met = any(all(len(bundle.get(role, ())) == 1
+                      and bundle[role] <= set(locators.split('|'))
+                      for role, locators in required)
+                  for bundle in bundles for required in alternatives)
     return met and not bad, bad
 
 

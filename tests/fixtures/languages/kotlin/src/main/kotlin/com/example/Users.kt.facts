@@ -50,4 +50,4 @@ bind 32 "": String declared scope=shout
 bind 34 "args": Array declared scope=main
 fields User id:Long name:String
 fields UserService db:Db
-env 35 TOKEN scope=main
+env 35 TOKEN access=read scope=main

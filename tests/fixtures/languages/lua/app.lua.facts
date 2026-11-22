@@ -10,4 +10,4 @@ ref 9 Call get qualifier=repo scope=find args=2
 ref 13 Call getenv qualifier=os scope=new args=1
 ref 15 Call put qualifier=repo scope=new args=3
 ref 16 Call insert qualifier=- scope=new args=2
-env 13 APP_URL scope=new
+env 13 APP_URL access=read scope=new

@@ -1,0 +1,12 @@
+sym 1-1 const saved parent=- owner= priv flags=0 sig="const saved = process.env.NODE_ENV" doc=""
+sym 4-4 const bracket parent=- owner= priv flags=0 sig="const bracket = process.env['NODE_ENV']" doc=""
+sym 6-6 const compoundRight parent=- owner= priv flags=0 sig="const compoundRight = process.env.NODE_ENV" doc=""
+env 1 NODE_ENV access=read scope=saved
+env 2 NODE_ENV access=write scope=-
+env 3 NODE_ENV access=write scope=-
+env 4 NODE_ENV access=read scope=bracket
+env 5 NODE_ENV access=read scope=-
+env 5 NODE_ENV access=write scope=-
+env 6 NODE_ENV access=read scope=compoundRight
+env 7 NODE_ENV access=read scope=-
+env 7 NODE_ENV access=write scope=-

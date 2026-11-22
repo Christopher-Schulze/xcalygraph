@@ -29,5 +29,5 @@ ref 44 Call on_output qualifier=- scope=-
 ref 8 Call cleanup qualifier=- scope=-
 ref 9 Call cleanup qualifier=- scope=-
 ref 10 Call cleanup qualifier=- scope=-
-env 17 OPTARG scope=-
-env 29 DYNAMIC_OPTIONS scope=-
+env 17 OPTARG access=read scope=-
+env 29 DYNAMIC_OPTIONS access=read scope=-

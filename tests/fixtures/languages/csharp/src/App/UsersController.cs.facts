@@ -30,4 +30,4 @@ bind 23 "": void declared scope=Main
 bind 23 "args": string declared scope=Main
 bind 25 "controller": UsersController declared scope=Main
 fields UsersController repository:Repo
-env 26 APP_URL scope=Main
+env 26 APP_URL access=read scope=Main

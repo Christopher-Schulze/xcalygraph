@@ -7,7 +7,8 @@ use std::collections::HashSet;
 
 use super::json::{self, KeyVisitor, Kind};
 use crate::domain::facts::{
-    ConfigKey, Coverage, EnvDef, EnvRead, EnvSource, Facts, NO_ARITY, Ref, RefKind, ValueKind,
+    ConfigKey, Coverage, EnvAccess, EnvDef, EnvRead, EnvSource, Facts, NO_ARITY, Ref, RefKind,
+    ValueKind,
 };
 use crate::domain::filetype::{self, Detection, FileType};
 
@@ -682,6 +683,7 @@ fn dockerfile(text: &str, facts: &mut Facts) {
                             name,
                             scope: None,
                             line,
+                            access: EnvAccess::Read,
                         });
                     }
                 }

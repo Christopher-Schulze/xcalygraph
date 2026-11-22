@@ -288,7 +288,7 @@ Sections in priority order: root line (name, files per language, symbol count) -
 
 ### 7.2 find
 
-Named evidence: up to two atomic `~ NAME` bundles before search hits for uppercase environment identifiers and dotted config keys. A unique eligible definition, a reader, a test reaching that reader directly or through one caller, its run command when supported, and a matching document mention or heading cite their source sites. A shared environment name is not proof that the definition reaches the reader (`<definition?`); document matches are inferred (`<doc?`). `--exact` drops inferred associations. `-definition`, `-read`, `-t` and `-doc` indicate no role selected under the filters, not global absence. JSON Lines: `evidence` with `name`, `roles` (`role`, `path`, `line`, `confidence`; test `relation` and optional intermediary, run `command`) and optional `unavailable`.
+Named evidence: up to two atomic `~ NAME` bundles before search hits for uppercase environment identifiers and dotted config keys. Roles: unique eligible definition, reader, writer, test with source-located call path, supported run command, document mention or heading. Test links: `t` direct, `t2` one caller, `t3` two callers for inferred suite-setup evidence. A setup writer is a unique direct assignment in `before`, `beforeAll` or `beforeEach` sharing a named JavaScript or TypeScript suite with the test. Same-name definitions and document mentions are inferred; `--exact` drops inferred associations. Missing roles indicate no evidence selected under filters. JSON Lines: `evidence` with `name`, `roles` (`role`, `path`, `line`, `confidence`; test `relation` and optional call sites, run `command`) and optional `unavailable`.
 
 Documents: the words of a section (Markdown, text, reStructuredText, Org, AsciiDoc, LaTeX, HTML, PDF, DOCX, XLSX, PPTX, OpenDocument, RTF, legacy DOC, XLS and PPT, first 2,000 rows of CSV and TSV) are the search terms of its heading in a field of their own, up to 256 distinct terms; a longer section or text without headings continues in sections named by their first line, or by their first word when continuing within a line. Every continuation retains the original line locator and heading parent. Section symbols count half their role weight.
 
@@ -365,7 +365,7 @@ Record-specific fields: `root` uses `n` for files and `symbols` for symbols; `mo
 | `new_path` | string | current path of an inferred moved definition |
 | `sig_change` | string | `changed` when an inferred move also changed its exported signature |
 | `doc` | string | doc sentence |
-| `rel` | string | edge role (`in`, `out`, `sup`, `sub`, `test`, `env`, `run`, `chg`), map relation (`entry`, `task`, `hub`, `api`) or audit relation from section 7.7 |
+| `rel` | string | edge role (`in`, `out`, `sup`, `sub`, `test`, `env`, `env_write`, `run`, `chg`), map relation (`entry`, `task`, `hub`, `api`) or audit relation from section 7.7 |
 | `conf` | string | `exact` or `inferred` |
 | `score` | float | ranking score (`find`) |
 | `n` | int | record-specific count or depth |

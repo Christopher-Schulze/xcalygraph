@@ -26,4 +26,4 @@ bind 16 "repo": openRepo() inferred scope=makeService
 bind 17 "memory": MemoryRepo declared scope=makeService
 bind 19 "other": store.MemoryRepo declared scope=makeService
 fields Service repo:Repo
-env 11 DEFAULT_ID scope=find
+env 11 DEFAULT_ID access=read scope=find

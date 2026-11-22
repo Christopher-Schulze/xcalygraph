@@ -15,4 +15,4 @@ ref 13 Type Repo qualifier=- scope=handle_call
 ref 13 Call get qualifier=Repo scope=handle_call args=2
 ref 17 Type Store.Repo qualifier=- scope=handle_cast
 ref 17 Call put qualifier=Store.Repo scope=handle_cast args=3
-env 8 STORE_URL scope=init
+env 8 STORE_URL access=read scope=init

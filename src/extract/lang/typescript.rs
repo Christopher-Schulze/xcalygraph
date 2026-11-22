@@ -1619,7 +1619,21 @@ fn take_identity_part(value: &str) -> Option<(&str, &str)> {
 }
 
 /// Decode ECMAScript string content into UTF-16 without replacing unpaired surrogates.
-#[cfg(feature = "lang-typescript")]
+#[cfg(any(feature = "lang-typescript", feature = "lang-javascript"))]
+pub(in crate::extract) fn string_literal(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let text = node.utf8_text(source).ok()?;
+    let quote = text.chars().next()?;
+    if !matches!(quote, '\'' | '"') {
+        return None;
+    }
+    let content = text.strip_prefix(quote)?.strip_suffix(quote)?;
+    if !content.contains('\\') {
+        return Some(content.to_owned());
+    }
+    String::from_utf16(&decode_string_content(content)?).ok()
+}
+
+#[cfg(any(feature = "lang-typescript", feature = "lang-javascript"))]
 fn decode_string_content(content: &str) -> Option<Vec<u16>> {
     let mut chars = content.chars().peekable();
     let mut units = Vec::with_capacity(content.len());
@@ -1721,7 +1735,7 @@ fn decode_identifier_name(name: &str) -> Option<String> {
     Some(decoded)
 }
 
-#[cfg(feature = "lang-typescript")]
+#[cfg(any(feature = "lang-typescript", feature = "lang-javascript"))]
 fn read_hex(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, count: usize) -> Option<u32> {
     let mut value = 0;
     for _ in 0..count {
@@ -1734,7 +1748,10 @@ fn read_hex(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, count: usize) 
 /// `private`, `protected` or `#private`.
 /// Overload signatures (`function scale(x: number): number;`) declare the implementation that
 /// follows them.
-fn flags(definition: &Definition, _: &FileContext) -> u8 {
+fn flags(definition: &Definition, _context: &FileContext) -> u8 {
+    if definition.test_declaration {
+        return crate::domain::facts::FLAG_TEST;
+    }
     if definition.node_kind == "function_signature" {
         FLAG_DECLARATION
     } else {

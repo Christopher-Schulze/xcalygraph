@@ -16,4 +16,4 @@ bind 12 "Path": string declared scope=Open
 bind 18 "Path": string declared scope=Open
 bind 19 "Url": string declared scope=Open
 fields TStore FRows:TRepo
-env 21 STORE_URL scope=Open
+env 21 STORE_URL access=read scope=Open

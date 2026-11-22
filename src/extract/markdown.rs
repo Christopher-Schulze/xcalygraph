@@ -35,6 +35,18 @@ pub fn extract(text: &str) -> Facts {
         if let Some(marker) = fence {
             if trimmed.starts_with(marker) {
                 fence = None;
+            } else if !trimmed.is_empty() {
+                for name in uppercase_mentions(line) {
+                    facts.refs.push(Ref {
+                        kind: RefKind::EnvMention,
+                        name: name.into(),
+                        qualifier: None,
+                        scope: open.last().map(|&(_, symbol)| symbol),
+                        line: number,
+                        arity: facts::NO_ARITY,
+                        byte: facts::NO_BYTE,
+                    });
+                }
             }
             continue;
         }
@@ -180,6 +192,40 @@ fn mentions(line: &str) -> Vec<String> {
     found
 }
 
+/// Whole uppercase environment-like tokens inside a fenced example, not paths or mixed-case code.
+fn uppercase_mentions(line: &str) -> Vec<&str> {
+    let bytes = line.as_bytes();
+    let mut found = Vec::new();
+    let mut start = 0;
+    while start < bytes.len() {
+        let is_alphanumeric = bytes[start].is_ascii_alphanumeric() || bytes[start] == b'_';
+        if !is_alphanumeric {
+            start += 1;
+            continue;
+        }
+        let end = (start..bytes.len())
+            .find(|&at| !(bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_'))
+            .unwrap_or(bytes.len());
+        let candidate = &line[start..end];
+        let path_boundary = |byte: u8| matches!(byte, b'.' | b'/' | b'\\' | b'-');
+        if candidate.len() >= 3
+            && !candidate.ends_with('_')
+            && start
+                .checked_sub(1)
+                .is_none_or(|at| !path_boundary(bytes[at]))
+            && (end == bytes.len() || !path_boundary(bytes[end]))
+            && candidate.bytes().any(|byte| byte.is_ascii_uppercase())
+            && candidate
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+        {
+            found.push(candidate);
+        }
+        start = end;
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -201,7 +247,7 @@ mod tests {
 
     #[test]
     fn headings_links_and_mentions() {
-        let text = "# Guide\n\nIntro text about `Store`.\nSee [api](docs/api.md#x) and [site](https://x.io).\n\n## Usage\n\nCall `store.Get()` from `src/store.go`, not `-v` or `a b`.\n\n```go\n# not a heading [x](y.md)\n```\n### Deep\n![logo](assets/logo.png)\n# Next\n";
+        let text = "# Guide\n\nIntro text about `Store`.\nSee [api](docs/api.md#x) and [site](https://x.io).\n\n## Usage\n\nCall `store.Get()` from `src/store.go`, not `-v` or `a b`.\n\n```go\n# not a heading [x](y.md)\nexport BASH_COMP_DEBUG_FILE=/tmp/debug\nexport LOWER_case=/tmp/debug\nexport LOWER_=/tmp/debug\n/path/FENCED_PATH\nOTHER.FENCED_DOT\n```\n### Deep\n![logo](assets/logo.png)\n# Next\n";
         let facts = extract(text);
         let headings: Vec<(&str, u32, u32, Option<u32>)> = facts
             .symbols
@@ -218,10 +264,10 @@ mod tests {
         assert_eq!(
             headings,
             [
-                ("Guide", 1, 14, None),
-                ("Usage", 6, 14, Some(0)),
-                ("Deep", 13, 14, Some(1)),
-                ("Next", 15, 15, None)
+                ("Guide", 1, 19, None),
+                ("Usage", 6, 19, Some(0)),
+                ("Deep", 18, 19, Some(1)),
+                ("Next", 20, 20, None),
             ]
         );
         let refs: Vec<(RefKind, &str, Option<u32>)> = facts
@@ -236,9 +282,11 @@ mod tests {
                 (RefKind::Path, "docs/api.md#x", Some(0)),
                 (RefKind::Mention, "store.Get", Some(1)),
                 (RefKind::Mention, "src/store.go", Some(1)),
+                (RefKind::EnvMention, "BASH_COMP_DEBUG_FILE", Some(1)),
                 (RefKind::Path, "assets/logo.png", Some(2)),
             ]
         );
+        assert_eq!(facts.refs[4].line, 12);
         assert_eq!(
             facts.doc,
             "Intro text about `Store`. See [api](docs/api.md#x) and [site](https://x.io)."

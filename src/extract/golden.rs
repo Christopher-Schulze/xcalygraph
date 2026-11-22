@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::domain::corpus::FileRecord;
-use crate::domain::facts::Facts;
+use crate::domain::facts::{EnvAccess, Facts};
 use crate::domain::role::{self, FileFacts};
 use crate::extract::extract;
 
@@ -100,9 +100,14 @@ pub fn render(facts: &Facts) -> String {
     for env in &facts.envs {
         let _ = writeln!(
             out,
-            "env {} {} scope={}",
+            "env {} {} access={} scope={}",
             env.line,
             env.name,
+            match env.access {
+                EnvAccess::Read => "read",
+                EnvAccess::Write => "write",
+                EnvAccess::SetupWrite => "setup-write",
+            },
             scope(env.scope)
         );
     }

@@ -28,5 +28,5 @@ bind 10 "path": String declared scope=open_store
 bind 16 "r": Repo declared scope=size
 bind 20 "io": IO declared scope=show
 bind 20 "r": Repo declared scope=show
-env 14 STORE_URL scope=open_store
-env 18 STORE_URL scope=-
+env 14 STORE_URL access=read scope=open_store
+env 18 STORE_URL access=read scope=-

@@ -29,7 +29,7 @@ Useful flags: `-p GLOB` (only under a path), `-l go,rust`, `-k fn,method`, `--ex
 ## Reading the output
 
 - `<line> <signature>` lines group under file paths (`<line> <name>` after the first two hits); `:N` = same file as the line above; `?` = inferred, not proven. A printed `path:line` works as NAME. Indented below the top hit: `<line> <code>` from its body, `+N lines` left out, `<` caller, `>` callee, `t` test, `r` command to run it.
-- Card: `m` member, `f` fields, `^` supertype, `v` implementation, `<` caller, `>` callee, `t` test, `t2` test via a caller, `e` env read, `!` notice. Named settings can have a `~ NAME` bundle (`evidence` in JSON): definition, read, test, doc and test command. `-role` means none selected, not globally absent.
+- Card: `m` member, `f` fields, `^` supertype, `v` implementation, `t` test, `t2` one caller, `e` env read, `w` env write, `!` notice. `~ NAME` (`evidence` in JSON) bundles setting roles. `t3` cites two callers and suite setup. `-role` means none selected under the filters.
 - `impact`: `t` test reaching the change, `r` command to run it, `c` file without an edge that changed with it (`shared/commits`); `moved?`, `sig?`, `uncertain?` mark inferred diff facts.
 - `+N more` means truncated: narrow with `-p`/`-k` or raise `-b`.
 

@@ -16,4 +16,4 @@ ref 8 Call helper qualifier=- scope=open-store
 ref 9 Call check qualifier=util scope=open-store
 ref 11 Call open-store qualifier=- scope=with-store
 ref 11 Call var qualifier=- scope=with-store
-env 7 STORE_URL scope=open-store
+env 7 STORE_URL access=read scope=open-store

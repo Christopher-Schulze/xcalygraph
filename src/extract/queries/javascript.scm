@@ -3,6 +3,16 @@
 ((lexical_declaration (variable_declarator name: (identifier) @name) @definition.constant) @_top (#parent? @_top "program"))
 ((export_statement (lexical_declaration (variable_declarator name: (identifier) @name) @definition.constant)) @_top (#parent? @_top "program"))
 (function_declaration name: (identifier) @name) @definition.function
+; Bound at engine collection to `it`, `test` and direct `it.each`, with a decoded string title.
+(call_expression
+  function: (identifier) @test.callee
+  arguments: (arguments (string) @test.title . [(function_expression) (arrow_function)] .)) @test.declaration
+(call_expression
+  function: (call_expression
+    function: (member_expression
+      object: (identifier) @test.object
+      property: (property_identifier) @test.callee))
+  arguments: (arguments (string) @test.title . [(function_expression) (arrow_function)] .)) @test.declaration
 (generator_function_declaration name: (identifier) @name) @definition.function
 ((lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function) @_top (#parent? @_top "program"))
 ((export_statement (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @definition.function)) @_top (#parent? @_top "program"))
