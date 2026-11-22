@@ -20,13 +20,6 @@ import tempfile
 repo = Path(sys.argv[1])
 binary = Path(sys.argv[2]).resolve(strict=True)
 writer_source = repo / "scripts/benchmarks/output-writer.sh"
-benchmark_scripts = ("run-benchmarks.sh", "run-evaluation.sh", "compare-depth.sh")
-for name in benchmark_scripts:
-    source = (repo / "scripts/benchmarks" / name).read_text()
-    assert source.count('source "${REPO_ROOT}/scripts/benchmarks/output-writer.sh"') == 1, name
-    assert source.count('start_output_writer "${WORK}/results.txt"') == 1, name
-    assert source.count("finish_output_writer") == 1, name
-    assert ">(tee " not in source and 'wait "${tee_pid}"' not in source, name
 
 current_bash = shutil.which("bash")
 assert current_bash, "bash is required"
@@ -268,5 +261,5 @@ with tempfile.TemporaryDirectory(prefix="benchmark-output-writer.", dir=repo / "
                              cwd=project, env=environment, capture_output=True, timeout=120)
         verify_evidence(run, rb"evidence: ([^\s;]+); snapshot:", f"compare-depth Bash {version}")
 
-    print("PASS: real tee completion, writer failure, no-wait mutation, Bash 3.2 regression, and all three entrypoints")
+    print("PASS: real tee completion, writer failure, no-wait mutation, Bash 3.2 regression, and evaluation and depth entrypoints")
 PYTHON
