@@ -485,23 +485,33 @@ fn may_quote_a_statement(bytes: &[u8]) -> bool {
     })
 }
 
-/// Source ranges of the comments in ascending order; each node kind is tested once.
-fn comment_ranges(root: Node<'_>) -> Vec<std::ops::Range<usize>> {
+/// Source ranges of comments that can mask a quote, in ascending order.
+fn comment_ranges(root: Node<'_>, bytes: &[u8]) -> Vec<std::ops::Range<usize>> {
     let mut comment_kinds = vec![None; root.language().node_kind_count()];
     let mut ranges = Vec::new();
     let mut cursor = root.walk();
+    let mut quotes = memchr::memchr3_iter(b'"', b'\'', b'`', bytes).peekable();
     loop {
         let node = cursor.node();
-        // Error nodes carry a kind id outside the language's table.
-        let comment = comment_kinds
-            .get_mut(usize::from(node.kind_id()))
-            .is_some_and(|kind: &mut Option<bool>| {
-                *kind.get_or_insert_with(|| node.kind().contains("comment"))
-            });
-        if comment {
-            ranges.push(node.byte_range());
-        } else if cursor.goto_first_child() {
-            continue;
+        let start = node.start_byte();
+        while quotes.peek().is_some_and(|&quote| quote < start) {
+            quotes.next();
+        }
+        let Some(&quote) = quotes.peek() else {
+            return ranges;
+        };
+        if quote < node.end_byte() {
+            // Error nodes carry a kind id outside the language's table.
+            let comment = comment_kinds
+                .get_mut(usize::from(node.kind_id()))
+                .is_some_and(|kind: &mut Option<bool>| {
+                    *kind.get_or_insert_with(|| node.kind().contains("comment"))
+                });
+            if comment {
+                ranges.push(node.byte_range());
+            } else if cursor.goto_first_child() {
+                continue;
+            }
         }
         while !cursor.goto_next_sibling() {
             if !cursor.goto_parent() {
@@ -514,7 +524,7 @@ fn comment_ranges(root: Node<'_>) -> Vec<std::ops::Range<usize>> {
 fn string_literals<'a>(text: &'a str, root: Option<Node<'_>>) -> Vec<(usize, &'a str)> {
     let mut literals = Vec::new();
     let bytes = text.as_bytes();
-    let comments = root.map_or_else(Vec::new, comment_ranges);
+    let comments = root.map_or_else(Vec::new, |root| comment_ranges(root, bytes));
     let mut next_comment = 0;
     let mut index = 0;
     while index < bytes.len() {
