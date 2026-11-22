@@ -25,10 +25,11 @@ jobs:
         if: contains(matrix.target, 'musl')
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes hyperfine jq musl-tools pipx python3 rsync shellcheck tar
+          sudo apt-get install --no-install-recommends --yes hyperfine jq musl-tools pipx python3 ripgrep rsync shellcheck tar
           python3 --version
           pipx --version
           hyperfine --version
+          rg --version
           jq --version
           rsync --version | head -n 1
           shellcheck --version

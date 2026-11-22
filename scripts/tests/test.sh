@@ -37,7 +37,7 @@ export RUSTUP_HOME="${TOOLCHAIN_HOME}" CARGO_HOME="${PACKAGE_HOME}"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 RUSTFLAGS="-Dwarnings"
 
 required_tools=(cargo git python3)
-[[ "${mode}" == product ]] || required_tools+=(graphify shellcheck hyperfine jq rsync)
+[[ "${mode}" == product ]] || required_tools+=(graphify shellcheck hyperfine jq rg rsync)
 for tool in "${required_tools[@]}"; do
   command -v "${tool}" >/dev/null || { echo "test.sh: ${tool} is required" >&2; exit 1; }
 done

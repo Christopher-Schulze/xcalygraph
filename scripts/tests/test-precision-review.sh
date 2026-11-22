@@ -29,7 +29,8 @@ with tempfile.TemporaryDirectory(prefix="precision-review-test.", dir=cache) as 
     (source / "asset.bin").write_bytes(b"\x00\xffbinary data")
     prepared = subprocess.run(["bash", str(repo / "scripts/utils/prepare-corpus.sh"),
                                str(source), str(work / "snapshots")], capture_output=True,
-                              text=True, check=True)
+                              text=True)
+    assert prepared.returncode == 0, prepared.stderr
     snapshot = Path(prepared.stdout.strip())
     digest = json.loads((snapshot.parent / "snapshot.json").read_text())["source_sha256"]
     run = work / "run"
